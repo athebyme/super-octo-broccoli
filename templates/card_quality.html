@@ -3,18 +3,14 @@
 {% block content %}
 <div x-data="cardQualityPage()" x-init="init()">
 <style>
-  .cq-row{display:flex;gap:16px;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s}
-  .cq-row:last-child{border-bottom:none}
-  .cq-row:hover{background:var(--bg)}
-  .cq-row--weak{border-left:3px solid var(--accent);padding-left:12px}
+  .cq-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--border)}
+  .cq-row:first-child{border-top:none}
   .cq-thumb{flex:0 0 48px;width:48px;height:48px;border-radius:8px;overflow:hidden;background:var(--border);display:flex;align-items:center;justify-content:center}
   .cq-thumb img{width:100%;height:100%;object-fit:cover}
   .cq-thumb-ph{font-size:9px;color:var(--text-muted);text-align:center}
-  .cq-main{flex:1 1 auto;min-width:0}
-  .cq-title{font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .cq-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
-  .cq-ratings{flex:0 0 auto}
-  .cq-actions{flex:0 0 auto;display:flex;gap:8px}
+  .cq-actionbar{position:sticky;bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+    padding:10px 16px;box-shadow:0 4px 16px rgba(0,0,0,0.08);z-index:20}
 </style>
   <div class="sh-page-header"><div class="sh-page-header-content">
     <div><h1 class="sh-page-title">Качество карточек</h1>
@@ -87,64 +83,80 @@
     </template>
   </div>
 
-  {# ── Группа: требуют внимания ── #}
+  {# ── Фильтры по причинам ── #}
+  <div x-show="!loading" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
+    <button class="sh-btn sh-btn--sm"
+            :class="!activeReason ? 'sh-btn--accent' : 'sh-btn--white-outline'"
+            @click="setReason(null)">
+      Все · <span x-text="summary.need_attention ?? 0"></span>
+    </button>
+    <template x-for="rc in reasonChips" :key="rc.code">
+      <button class="sh-btn sh-btn--sm"
+              :class="activeReason === rc.code ? 'sh-btn--accent' : 'sh-btn--white-outline'"
+              @click="setReason(rc.code)"
+              x-text="rc.label + ' · ' + rc.count"></button>
+    </template>
+  </div>
+
+  {# ── Очередь исправлений ── #}
   <div x-show="!loading" class="sh-card" style="margin-bottom:20px">
     <div class="sh-card-header">
-      <h3 class="sh-card-title">Требуют внимания · <span x-text="weakItems.length"></span></h3>
+      <h3 class="sh-card-title">Очередь исправлений · <span x-text="items.length"></span></h3>
+      <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" @change="toggleAll($event.target.checked)"> выбрать все
+      </label>
     </div>
-    <template x-if="weakItems.length === 0">
-      <div class="sh-empty"><p class="sh-empty-title">Слабых карточек нет — каталог в порядке</p></div>
+    <template x-if="items.length === 0">
+      <div class="sh-empty"><p class="sh-empty-title">По этому фильтру карточек нет</p></div>
     </template>
-    <template x-for="it in weakItems" :key="it.product_id">
-      <div class="cq-row cq-row--weak" @click="openDetail(it.product_id)">
+    <template x-for="it in items" :key="it.product_id">
+      <div class="cq-row">
+        <input type="checkbox" :checked="!!selectedMap[it.product_id]"
+               @change="toggleSelect(it.product_id)" style="flex-shrink:0">
         <div class="cq-thumb">
           <template x-if="firstPhoto(it)"><img :src="firstPhoto(it)" alt="" loading="lazy"></template>
           <template x-if="!firstPhoto(it)"><span class="cq-thumb-ph">нет фото</span></template>
         </div>
-        <div class="cq-main">
-          <div class="cq-title"><b x-text="it.nm_id"></b> · <span x-text="it.title || '—'"></span></div>
-          <div class="cq-chips">
-            <template x-for="chip in weakChips(it)" :key="chip.name">
-              <span class="sh-badge" :class="chip.cls" x-text="chip.label"></span>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:baseline;gap:8px">
+            <span style="font-weight:600" x-text="it.title || ('Артикул ' + it.nm_id)"></span>
+            <span style="font-size:12px;color:var(--text-muted)" x-text="it.nm_id"></span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">
+            <template x-for="r in (it.attention_reasons || [])" :key="r">
+              <span class="sh-badge sh-badge--yellow" x-text="reasonLabel(r)"></span>
             </template>
           </div>
         </div>
-        <div class="cq-ratings">
-          <span x-html="wbBadge(it.wb_product_rating, 10)"></span>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-weight:600" x-text="'score ' + (it.quality_score ?? '—')"></div>
+          <div style="font-size:12px;color:var(--accent)"
+               x-show="it.quality_impact" x-text="'→ +' + Math.round(it.quality_impact)"></div>
         </div>
-        <div :style="gaugeStyle(it.quality_score, 40)" x-text="it.quality_score ?? '—'"></div>
-        <div class="cq-actions" @click.stop>
-          <button class="sh-btn sh-btn--accent sh-btn--sm" @click="openAndImprove(it.product_id)">Улучшить</button>
-          <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button>
-        </div>
+        <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button>
       </div>
     </template>
+    <div style="display:flex;justify-content:center;gap:8px;padding:12px" x-show="pages > 1">
+      <button class="sh-btn sh-btn--ghost sh-btn--sm" :disabled="page <= 1"
+              @click="page--; load()">← Назад</button>
+      <span style="font-size:12px;color:var(--text-muted);align-self:center"
+            x-text="page + ' / ' + pages"></span>
+      <button class="sh-btn sh-btn--ghost sh-btn--sm" :disabled="page >= pages"
+              @click="page++; load()">Вперёд →</button>
+    </div>
   </div>
 
-  {# ── Группа: в порядке (свёрнута) ── #}
-  <div x-show="!loading" class="sh-card" x-data="{ open: false }">
-    <div class="sh-card-header" style="cursor:pointer" @click="open = !open">
-      <h3 class="sh-card-title">В порядке · <span x-text="okItems.length"></span></h3>
-      <span class="sh-btn sh-btn--ghost sh-btn--sm" x-text="open ? 'Свернуть' : 'Показать'"></span>
-    </div>
-    <div x-show="open" x-cloak>
-      <template x-for="it in okItems" :key="it.product_id">
-        <div class="cq-row" @click="openDetail(it.product_id)">
-          <div class="cq-thumb">
-            <template x-if="firstPhoto(it)"><img :src="firstPhoto(it)" alt="" loading="lazy"></template>
-            <template x-if="!firstPhoto(it)"><span class="cq-thumb-ph">нет фото</span></template>
-          </div>
-          <div class="cq-main">
-            <div class="cq-title"><b x-text="it.nm_id"></b> · <span x-text="it.title || '—'"></span></div>
-          </div>
-          <div class="cq-ratings"><span x-html="wbBadge(it.wb_product_rating, 10)"></span></div>
-          <div :style="gaugeStyle(it.quality_score, 40)" x-text="it.quality_score ?? '—'"></div>
-          <div class="cq-actions" @click.stop>
-            <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button>
-          </div>
-        </div>
-      </template>
-    </div>
+  {# ── Панель массовых действий ── #}
+  <div x-show="selectedCount > 0" x-cloak class="cq-actionbar">
+    <span style="font-size:13px">Выбрано: <b x-text="selectedCount"></b></span>
+    <a class="sh-btn sh-btn--white-outline sh-btn--sm"
+       :href="'/card-quality/bulk-improve?ids=' + selectedList().join(',')">⚡ Данные поставщика</a>
+    <a class="sh-btn sh-btn--white-outline sh-btn--sm"
+       :href="'/card-quality/standard-photos-bulk?ids=' + selectedList().join(',')">📸 Дополнить фото</a>
+    <button class="sh-btn sh-btn--accent sh-btn--sm" @click="fixWithAI()"
+            :disabled="aiHandoffRunning"
+            x-text="aiHandoffRunning ? 'Передаю…' : '🤖 Исправить с ИИ'"></button>
+    <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="clearSelection()">Сброс</button>
   </div>
 
   {# ── Slideover деталь ── #}
@@ -206,9 +218,9 @@
             {# Действия #}
             <div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap">
               <button class="sh-btn sh-btn--accent sh-btn--sm" @click="startImprove(detail.product_id)" :disabled="improveRunning">⚡ Улучшить карточку</button>
-              <button class="sh-btn sh-btn--primary sh-btn--sm" @click="aiAnalyze(detail.product_id)" :disabled="aiRunning">🤖 Глубокий AI-анализ</button>
+              <button class="sh-btn sh-btn--primary sh-btn--sm" @click="fixWithAI([detail.product_id])"
+                      :disabled="aiHandoffRunning">🤖 Исправить с ИИ</button>
             </div>
-            <div x-show="aiRunning" style="font-size:12px;color:var(--text-secondary);margin-top:8px" x-text="aiStatus"></div>
 
             {# Статус improve #}
             <div x-show="improveRunning || improveStatus" class="text-gray-500 text-xs" style="margin-top:8px" x-text="improveStatus"></div>
@@ -362,20 +374,22 @@ function cardQualityPage() {
     items: [], summary: {}, detail: null, drawer: false, loading: true,
     DIM_LABELS: { characteristics:'характеристики', photos:'фото', description:'описание',
                   title:'заголовок', brand:'бренд', barcodes:'штрихкоды', price:'цена', category:'категория', subject_id:'категория' },
-    refreshing: false, aiRunning: false, aiStatus: '', _poll: null, _trendChart: null,
+    refreshing: false, _trendChart: null,
     improveRunning: false, improveStatus: '', applyRunning: false,
-    supplierDiff: null, proposal: {}, selected: {}, _improvePoll: null,
+    supplierDiff: null, proposal: {}, selected: {},
     history: [], historyLoading: false,
-    get needAttention() { return this.weakItems.length; },
-    get weakItems() {
-      return this.items.filter(it =>
-        (it.quality_score != null && it.quality_score < 50) ||
-        (it.wb_product_rating != null && it.wb_product_rating < 6));
+    page: 1, pages: 1, activeReason: null,
+    selectedMap: {}, aiHandoffRunning: false,
+    get selectedCount() { return Object.keys(this.selectedMap).length; },
+    get reasonChips() {
+      const rc = (this.summary && this.summary.reason_counts) || {};
+      const labels = (this.summary && this.summary.reason_labels) || {};
+      return Object.entries(rc).filter(([, n]) => n > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([code, count]) => ({ code, count, label: labels[code] || code }));
     },
-    get okItems() {
-      return this.items.filter(it => !(
-        (it.quality_score != null && it.quality_score < 50) ||
-        (it.wb_product_rating != null && it.wb_product_rating < 6)));
+    reasonLabel(code) {
+      return ((this.summary && this.summary.reason_labels) || {})[code] || code;
     },
     get distSegments() {
       const d = (this.summary && this.summary.distribution) || {};
@@ -388,22 +402,84 @@ function cardQualityPage() {
       const total = defs.reduce((s, x) => s + x.count, 0) || 1;
       return defs.map(x => ({ ...x, pct: (x.count / total * 100) }));
     },
-    async init() { await this.load(); },
+    setReason(code) {
+      this.activeReason = code; this.page = 1; this.clearSelection(); this.load();
+      const url = new URL(window.location);
+      if (code) url.searchParams.set('reason', code); else url.searchParams.delete('reason');
+      history.replaceState(null, '', url);
+    },
+    toggleSelect(id) {
+      if (this.selectedMap[id]) delete this.selectedMap[id]; else this.selectedMap[id] = true;
+    },
+    toggleAll(on) {
+      this.selectedMap = {};
+      if (on) this.items.forEach(it => { this.selectedMap[it.product_id] = true; });
+    },
+    clearSelection() { this.selectedMap = {}; },
+    selectedList() { return Object.keys(this.selectedMap).map(Number); },
     async load() {
       this.loading = true;
       try {
-        const r = await fetch('/api/card-quality/list?sort=quality_score&order=asc&per_page=100');
+        let url = '/api/card-quality/list?sort=impact&order=desc&per_page=50&page=' + this.page;
+        if (this.activeReason) url += '&reason=' + encodeURIComponent(this.activeReason);
+        const r = await fetch(url);
         const d = await r.json();
         this.items = d.items || []; this.summary = d.summary || {};
+        this.pages = d.pages || 1;
       } finally {
         this.loading = false;
+      }
+    },
+    async init() {
+      const params = new URLSearchParams(window.location.search);
+      this.activeReason = params.get('reason') || null;
+      await this.load();
+    },
+    async fixWithAI(ids) {
+      ids = ids || this.selectedList();
+      if (!ids.length) return;
+      if (ids.length > 50) {
+        this.$store.toasts.info('Выберите не более 50 карточек за раз');
+        return;
+      }
+      this.aiHandoffRunning = true;
+      try {
+        const hdrs = {'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}'};
+        const cr = await fetch('/agents/api/conversations', {
+          method: 'POST', headers: hdrs,
+          body: JSON.stringify({title: 'Качество карточек'}),
+        });
+        const cd = await cr.json();
+        const cid = cd.conversation && cd.conversation.id;
+        if (!cid) { this.$store.toasts.error('Не удалось создать диалог'); return; }
+        const chosen = this.items.filter(it => ids.includes(it.product_id));
+        const arts = chosen.map(it => it.nm_id || it.vendor_code).filter(Boolean)
+          .slice(0, 10).join(', ');
+        const reasons = new Set();
+        chosen.forEach(it => (it.attention_reasons || [])
+          .forEach(r => reasons.add(this.reasonLabel(r))));
+        const message = 'Улучши карточки (' + ids.length + ' шт.)' +
+          (arts ? ': артикулы ' + arts : '') +
+          (reasons.size ? '. Основные проблемы: ' + Array.from(reasons).join(', ') : '') +
+          '. Составь план исправления контента.';
+        const mr = await fetch('/agents/api/conversations/' + cid + '/messages', {
+          method: 'POST', headers: hdrs,
+          body: JSON.stringify({message: message, product_ids: ids, entity_kind: 'product'}),
+        });
+        if (!mr.ok) {
+          const err = await mr.json().catch(() => ({}));
+          this.$store.toasts.error(err.error || 'Не удалось передать карточки помощнику');
+          return;
+        }
+        window.location.href = '/agents?conversation=' + cid;
+      } finally {
+        this.aiHandoffRunning = false;
       }
     },
     async openDetail(id) {
       this.drawer = true; this.detail = null;
       this.supplierDiff = null; this.proposal = {}; this.selected = {};
       this.improveRunning = false; this.improveStatus = '';
-      if (this._improvePoll) { clearInterval(this._improvePoll); this._improvePoll = null; }
       const r = await fetch('/api/card-quality/' + id);
       const d = await r.json(); this.detail = d.data;
       this.$nextTick(() => this.renderTrend());
@@ -425,21 +501,6 @@ function cardQualityPage() {
       await fetch('/api/card-quality/refresh', {method:'POST', headers:{'X-CSRFToken':'{{ csrf_token() }}'}});
       this.$store.toasts.info('Обновление рейтингов запущено — данные появятся через несколько минут');
       this.refreshing = false;
-    },
-    async aiAnalyze(id) {
-      this.aiRunning = true; this.aiStatus = 'Запуск агентов…';
-      const r = await fetch('/api/card-quality/' + id + '/ai-analyze', {method:'POST', headers:{'X-CSRFToken':'{{ csrf_token() }}'}});
-      const d = await r.json();
-      if (!d.success) { this.aiStatus = d.error || 'Ошибка'; this.aiRunning = false; return; }
-      const taskId = Object.values(d.task_ids)[0];
-      this._poll = setInterval(async () => {
-        const s = await (await fetch('/agents/api/tasks/' + taskId + '/status')).json();
-        const t = s.task; this.aiStatus = 'Статус: ' + t.status;
-        if (t.status !== 'queued' && t.status !== 'running') {
-          clearInterval(this._poll); this.aiRunning = false;
-          this.aiStatus = (t.result && t.result.recommendations) ? t.result.recommendations.join(' · ') : 'Готово';
-        }
-      }, 3000);
     },
     renderTrend() {
       const el = this.$refs.trendChart;
@@ -507,50 +568,17 @@ function cardQualityPage() {
         const d = await r.json();
         if (!d.success) { this.improveStatus = d.error || 'Ошибка'; this.improveRunning = false; return; }
         this.supplierDiff = d.supplier_diff || null;
-        const taskIds = d.task_ids || {};
-        if (Object.keys(taskIds).length === 0) {
-          // Агенты офлайн: всё равно запрашиваем детерминированное предложение
-          // (стандартные фото не зависят от агентов), передавая пустой task_ids.
-          try {
-            const pr = await fetch('/api/card-quality/' + id + '/proposal',
-              {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({task_ids: {}})});
-            const pd = await pr.json();
-            if (pd && pd.proposal) this.proposal = pd.proposal;
-            if (pd && pd.supplier_diff && !this.supplierDiff) this.supplierDiff = pd.supplier_diff;
-          } catch (e) { /* проглатываем: офлайн-ветка не должна падать */ }
-          this.improveRunning = false;
-          const hasSomething = Object.keys(this.proposal || {}).length || this.supplierDiff;
-          this.improveStatus = hasSomething ? '' : 'AI-агенты офлайн, нет предложений';
-          if (!hasSomething) this.$store.toasts.info('Нет данных поставщика и агенты офлайн');
-          return;
-        }
-        this.improveStatus = 'AI-агенты анализируют фото…';
-        this._waitTasks(id, taskIds);
-      } catch (e) { this.improveStatus = 'Ошибка сети'; this.improveRunning = false; }
-    },
-    _waitTasks(id, taskIds) {
-      const ids = Object.values(taskIds);
-      this._improvePoll = setInterval(async () => {
         try {
-          const states = await Promise.all(ids.map(t =>
-            fetch('/agents/api/tasks/' + t + '/status').then(r => r.json()).then(s => s.task.status)));
-          const done = states.every(s => s !== 'queued' && s !== 'running');
-          if (done) {
-            clearInterval(this._improvePoll); this._improvePoll = null;
-            const pr = await fetch('/api/card-quality/' + id + '/proposal',
-              {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({task_ids: taskIds})});
-            const pd = await pr.json();
-            this.proposal = pd.proposal || {};
-            if (pd.supplier_diff && !this.supplierDiff) this.supplierDiff = pd.supplier_diff;
-            this.improveRunning = false;
-            this.improveStatus = Object.keys(this.proposal).length ? '' : 'Дополнительных предложений нет';
-          }
-        } catch (e) {
-          clearInterval(this._improvePoll); this._improvePoll = null;
-          this.improveRunning = false; this.improveStatus = 'Ошибка при опросе агентов';
-          this.$store.toasts.error('Ошибка при опросе агентов');
-        }
-      }, 3000);
+          const pr = await fetch('/api/card-quality/' + id + '/proposal', {method:'POST'});
+          const pd = await pr.json();
+          if (pd && pd.proposal) this.proposal = pd.proposal;
+          if (pd && pd.supplier_diff && !this.supplierDiff) this.supplierDiff = pd.supplier_diff;
+        } catch (e) { /* проглатываем: предложение — best-effort поверх диффа поставщика */ }
+        this.improveRunning = false;
+        const hasSomething = Object.keys(this.proposal || {}).length || this.supplierDiff;
+        this.improveStatus = hasSomething ? '' : 'Нет предложений по улучшению';
+        if (!hasSomething) this.$store.toasts.info('Нет данных поставщика и нет предложений по фото');
+      } catch (e) { this.improveStatus = 'Ошибка сети'; this.improveRunning = false; }
     },
     async applySelected(id) {
       if (!this.anySelected || this.applyRunning) return;
@@ -586,10 +614,6 @@ function cardQualityPage() {
       } catch (e) { this.$store.toasts.error('Ошибка сети'); }
       finally { this.applyRunning = false; }
     },
-    async openAndImprove(id) {
-      await this.openDetail(id);
-      await this.startImprove(id);
-    },
     wbBadge(v, scale) {
       if (v === null || v === undefined) return '<span style="color:#9a9a9a">—</span>';
       const col = scale === 10 ? (v>=8?'#15803d':v>=6?'#b45309':'#b91c1c') : (v>=4.5?'#15803d':v>=3.5?'#b45309':'#b91c1c');
@@ -605,17 +629,6 @@ function cardQualityPage() {
       const p = (it && it.photos) || [];
       return p.length ? p[0] : null;
     },
-    weakChips(it) {
-      const dims = (it && it.dimensions) || {};
-      return Object.keys(dims)
-        .filter(name => dims[name].status === 'warning' || dims[name].status === 'error')
-        .sort((a, b) => (dims[b].weight * (100 - dims[b].score)) - (dims[a].weight * (100 - dims[a].score)))
-        .map(name => ({
-          name,
-          label: this.DIM_LABELS[name] || name,
-          cls: dims[name].status === 'error' ? 'sh-badge--red' : 'sh-badge--yellow',
-        }));
-    },
     gaugeRing(v, size) {
       const val = (v ?? 0);
       const col = val >= 70 ? '#16a34a' : val >= 50 ? '#d97706' : '#dc2626';
@@ -630,11 +643,6 @@ function cardQualityPage() {
     },
     improveWeak() {
       window.location.href = "{{ url_for('card_quality_bulk_improve_page') }}";
-    },
-    gaugeStyle(v, size) {
-      const col = (v??0)>=70?'#16a34a':(v??0)>=50?'#d97706':'#dc2626';
-      const s = size||40;
-      return `display:inline-flex;align-items:center;justify-content:center;width:${s}px;height:${s}px;border-radius:50%;color:#fff;font-weight:600;font-size:${Math.round(s/3)}px;background:${col}`;
     },
   };
 }
