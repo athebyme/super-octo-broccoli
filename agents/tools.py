@@ -181,6 +181,32 @@ def create_platform_tools(platform_client) -> ToolRegistry:
     )
 
     registry.register(
+        name='get_card_quality',
+        description=('Качество карточек WB (read-only): Quality Score, причины «требует '
+                     'внимания» (мало фото, слабые характеристики/описание/заголовок, '
+                     'нет просмотров, низкая конверсия/выкуп/рейтинг), потенциал фикса '
+                     'и метрики воронки за 30 дней. Либо по product_ids (до 50), '
+                     'либо топ проблемных, опционально по причине.'),
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID продавца'},
+                'product_ids': {'type': 'array', 'items': {'type': 'integer'},
+                                'description': 'ID карточек Product (до 50)'},
+                'reason': {'type': 'string',
+                           'enum': ['few_photos', 'weak_chars', 'weak_description',
+                                    'weak_title', 'no_views', 'low_cart_conv',
+                                    'low_buyout', 'low_rating', 'no_sales_signal'],
+                           'description': 'Фильтр по одной причине'},
+                'limit': {'type': 'integer',
+                          'description': 'Максимум карточек (default 30, max 50)'},
+            },
+            'required': ['seller_id'],
+        },
+        handler=lambda seller_id, product_ids=None, reason=None, limit=30:
+            platform_client.get_card_quality_brief(seller_id, product_ids, reason, limit),
+    )
+
+    registry.register(
         name='update_product',
         description='Обновить данные товара: заголовок, описание, бренд, категорию WB, SEO-заголовок и др.',
         parameters={

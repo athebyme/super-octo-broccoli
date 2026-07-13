@@ -300,6 +300,19 @@ class PlatformClient:
             'GET', f'/sellers/{seller_id}/products/query', params=allowed,
         )
 
+    def get_card_quality_brief(self, seller_id: int, product_ids=None,
+                               reason: str = None, limit: int = 30) -> dict:
+        """Качество карточек: причины, impact, воронка (read-only, до 50)."""
+        params = {'limit': min(int(limit or 30), 50)}
+        if reason:
+            params['reason'] = reason
+        payload = {}
+        if product_ids:
+            payload['product_ids'] = _validated_product_ids(product_ids, 50)
+        return self._request(
+            'POST', f'/sellers/{seller_id}/products/quality-brief',
+            params=params, json=payload)
+
     def update_product(self, seller_id: int, product_id: int,
                        updates: dict) -> dict:
         return self._request('PATCH',

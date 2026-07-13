@@ -495,6 +495,59 @@ class CatalogQuerySkill(BaseAgent):
         }
 
 
+class QualityAuditSkill(BaseAgent):
+    """Deterministic card-quality audit: причины, приоритеты, кандидаты на фикс."""
+
+    agent_name = 'quality-audit'
+    max_iterations = 1
+    tool_allowlist = ()
+    system_prompt = 'Read-only deterministic card quality audit.'
+
+    def build_task_prompt(self, task: dict) -> str:
+        return 'Используй типизированный execute_task.'
+
+    def execute_task(self, task: dict) -> dict:
+        data = self.parse_input_data(task)
+        params = data.get('params') or {}
+        product_ids = params.get('product_ids') or data.get('product_ids') or None
+        reason = params.get('reason') or None
+        limit = int(params.get('limit') or 30)
+
+        brief = self.platform.get_card_quality_brief(
+            int(task['seller_id']), product_ids, reason, limit)
+        products = brief.get('products') or []
+        labels = brief.get('reason_labels') or {}
+        usage = {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0,
+                 'api_requests': 1, 'mode': 'deterministic_aggregate'}
+
+        if not products:
+            return {'status': 'completed',
+                    'message': 'Проблемных карточек по заданному фильтру не найдено.',
+                    'total': 0, 'reason_summary': [], 'cards': [],
+                    'selected_product_ids': [], 'entity_kind': 'product',
+                    '_usage': usage}
+
+        reason_counter = {}
+        for p in products:
+            for r in p.get('attention_reasons') or []:
+                reason_counter[r] = reason_counter.get(r, 0) + 1
+        ordered = sorted(reason_counter.items(), key=lambda t: (-t[1], t[0]))
+        top = '; '.join(f'{labels.get(r, r)}: {n}' for r, n in ordered[:4])
+        return {
+            'status': 'completed',
+            'message': (f'Карточек с проблемами: {len(products)}. Главное: {top}. '
+                        'Первые в списке — с наибольшим потенциалом фикса.'),
+            'total': len(products),
+            'reason_summary': [
+                {'reason': r, 'label': labels.get(r, r), 'count': n}
+                for r, n in ordered],
+            'cards': products,
+            'selected_product_ids': [p['id'] for p in products],
+            'entity_kind': 'product',
+            '_usage': usage,
+        }
+
+
 class CardInsightSkill(BaseAgent):
     """One compact Flash analysis for the typed entity opened in the UI."""
 
@@ -992,6 +1045,7 @@ SKILL_CLASSES: dict[str, Type[BaseAgent]] = {
     'supplier-audit': SupplierAuditSkill,
     'batch-audit': BatchAuditSkill,
     'catalog-query': CatalogQuerySkill,
+    'quality-audit': QualityAuditSkill,
     'card-insight': CardInsightSkill,
     'content-writer': ContentWriterSkill,
     'description-writer': ContentWriterSkill,
@@ -1096,6 +1150,7 @@ class UnifiedSellerAgent(BaseAgent):
             'supplier-audit': ('audit_imported_supplier', 'Агрегированный аудит карточек поставщика'),
             'batch-audit': ('audit_selection', 'Пакетный аудит выбранных карточек без LLM'),
             'catalog-query': ('filter_imported_catalog', 'Read-only фильтры импортированного каталога'),
+            'quality-audit': ('audit_card_quality', 'Качество карточек WB: причины и приоритеты фикса'),
             'card-insight': ('analyze_card', 'Анализ выбранной карточки'),
             'content-writer': ('rewrite_content', 'Редактирование названия и описания'),
             'system-context': ('inspect_system', 'Настройки, API и журналы'),

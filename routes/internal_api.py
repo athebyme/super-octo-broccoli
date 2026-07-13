@@ -417,6 +417,71 @@ def internal_query_products(seller_id):
     })
 
 
+@internal_api_bp.route('/sellers/<int:seller_id>/products/quality-brief', methods=['POST'])
+@_authenticate_agent
+def internal_products_quality_brief(seller_id):
+    """Качество карточек для агентного рантайма (read-only).
+
+    Body {'product_ids': [...]} (до 50) — явная выборка; без него — топ
+    проблемных по quality_impact, опционально ?reason=<код>. Protected
+    fields (цены/остатки/ключи) не возвращаются.
+    """
+    _, error = _assigned_task_for_seller(seller_id)
+    if error:
+        return error
+    from services.card_quality_scorer import ATTENTION_REASONS, REASON_LABELS
+
+    body = request.get_json(silent=True) or {}
+    raw_ids = body.get('product_ids') or []
+    if not isinstance(raw_ids, list):
+        return jsonify({'error': 'product_ids must be a list'}), 400
+    ids = [int(x) for x in raw_ids if str(x).isdigit()][:50]
+    reason = (request.args.get('reason') or '').strip()
+    if reason and reason not in ATTENTION_REASONS:
+        return jsonify({'error': 'unknown reason'}), 400
+    limit = min(max(request.args.get('limit', 30, type=int), 1), 50)
+
+    q = Product.query.filter_by(seller_id=seller_id, is_active=True)
+    if ids:
+        q = q.filter(Product.id.in_(ids))
+    else:
+        q = q.filter(Product.attention_reasons.isnot(None),
+                     Product.attention_reasons != '')
+        if reason:
+            q = q.filter(Product.attention_reasons.like(f'%{reason}%'))
+    rows = q.order_by(Product.quality_impact.desc().nullslast()).limit(limit).all()
+
+    def _top_recommendations(p):
+        try:
+            dims = json.loads(p.quality_breakdown_json) if p.quality_breakdown_json else {}
+        except (ValueError, TypeError):
+            dims = {}
+        cand = [(d.get('weight', 0) * (100 - d.get('score', 0)), d.get('hint'))
+                for d in dims.values() if isinstance(d, dict) and d.get('hint')]
+        cand.sort(key=lambda t: -t[0])
+        return [hint for _, hint in cand[:3]]
+
+    return jsonify({
+        'reason_labels': REASON_LABELS,
+        'total': len(rows),
+        'products': [{
+            'id': p.id,
+            'nm_id': p.nm_id,
+            'vendor_code': p.vendor_code,
+            'title': html.unescape(p.title or '')[:180],
+            'quality_score': p.quality_score,
+            'quality_impact': p.quality_impact,
+            'attention_reasons': [r for r in (p.attention_reasons or '').split(',') if r],
+            'wb_rating': p.nm_rating,
+            'wb_views_30d': p.wb_views_30d,
+            'wb_orders_30d': p.wb_orders_30d,
+            'wb_cart_conv': p.wb_cart_conv,
+            'wb_buyout_rate': p.wb_buyout_rate,
+            'recommendations': _top_recommendations(p),
+        } for p in rows],
+    })
+
+
 @internal_api_bp.route('/sellers/<int:seller_id>/products/<int:product_id>', methods=['PATCH'])
 @_authenticate_agent
 def internal_update_product(seller_id, product_id):
