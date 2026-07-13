@@ -64,7 +64,6 @@ class StandardPhotosProposalTest(unittest.TestCase):
         with patch('routes.card_quality.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
              patch('routes.card_quality.Product') as MockProduct, \
-             patch('routes.card_quality.AgentTask') as MockTask, \
              patch('routes.card_quality.build_proposal_from_tasks', return_value={}), \
              patch('routes.card_quality.get_enrichment_service') as mock_es, \
              patch('routes.card_quality.get_standard_media', return_value=std_media) as mock_gsm, \
@@ -72,8 +71,6 @@ class StandardPhotosProposalTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=std_composed) as mock_compose:
 
             MockProduct.query.filter_by.return_value.first.return_value = product
-            # Нет задач агентов
-            MockTask.query.filter_by.return_value.first.return_value = None
             mock_es.return_value.find_supplier_data.return_value = None
 
             resp = self.client.post('/api/card-quality/101/proposal',
@@ -121,7 +118,6 @@ class StandardPhotosProposalTest(unittest.TestCase):
         with patch('routes.card_quality.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
              patch('routes.card_quality.Product') as MockProduct, \
-             patch('routes.card_quality.AgentTask') as MockTask, \
              patch('routes.card_quality.build_proposal_from_tasks', return_value={}), \
              patch('routes.card_quality.get_enrichment_service') as mock_es, \
              patch('routes.card_quality.get_standard_media', return_value=[]), \
@@ -129,7 +125,6 @@ class StandardPhotosProposalTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=[]):
 
             MockProduct.query.filter_by.return_value.first.return_value = product
-            MockTask.query.filter_by.return_value.first.return_value = None
             mock_es.return_value.find_supplier_data.return_value = None
 
             resp = self.client.post('/api/card-quality/101/proposal',
@@ -159,7 +154,6 @@ class StandardPhotosProposalTest(unittest.TestCase):
         with patch('routes.card_quality.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
              patch('routes.card_quality.Product') as MockProduct, \
-             patch('routes.card_quality.AgentTask') as MockTask, \
              patch('routes.card_quality.build_proposal_from_tasks', return_value={}), \
              patch('routes.card_quality.get_enrichment_service') as mock_es, \
              patch('routes.card_quality.get_standard_media', return_value=[{'filename': 'logo.jpg',
@@ -171,7 +165,6 @@ class StandardPhotosProposalTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=std_composed):
 
             MockProduct.query.filter_by.return_value.first.return_value = product
-            MockTask.query.filter_by.return_value.first.return_value = None
             mock_es.return_value.find_supplier_data.return_value = None
 
             resp = self.client.post('/api/card-quality/101/proposal',
@@ -199,7 +192,6 @@ class StandardPhotosProposalTest(unittest.TestCase):
         with patch('routes.card_quality.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
              patch('routes.card_quality.Product') as MockProduct, \
-             patch('routes.card_quality.AgentTask') as MockTask, \
              patch('routes.card_quality.build_proposal_from_tasks', return_value={}), \
              patch('routes.card_quality.get_enrichment_service') as mock_es, \
              patch('routes.card_quality.get_standard_media', return_value=[{'filename': 'logo.jpg',
@@ -211,7 +203,6 @@ class StandardPhotosProposalTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=[std_url]):
 
             MockProduct.query.filter_by.return_value.first.return_value = product
-            MockTask.query.filter_by.return_value.first.return_value = None
             mock_es.return_value.find_supplier_data.return_value = None
 
             resp = self.client.post('/api/card-quality/101/proposal',
