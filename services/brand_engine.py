@@ -10,6 +10,7 @@ Brand Engine — централизованный движок валидаци�
 
 Pipeline: normalize → alias lookup → fuzzy → marketplace API → category check.
 """
+import json
 import logging
 import threading
 import time
@@ -89,6 +90,8 @@ class BrandEngine:
         self._cache_ttl: int = 300  # 5 минут
         # Progress tracking for async sync
         self._sync_progress: Dict[int, dict] = {}  # marketplace_id -> progress info
+        self._sync_lock_guard = threading.Lock()
+        self._sync_locks: Dict[int, threading.Lock] = {}
 
     def init_app(self, app):
         self._app = app
@@ -630,7 +633,7 @@ class BrandEngine:
         """Получить текущий прогресс синхронизации брендов."""
         return self._sync_progress.get(marketplace_id)
 
-    def sync_marketplace_brands_async(self, marketplace_id: int, api_key: str, app=None):
+    def sync_marketplace_brands_async(self, marketplace_id: int, app=None):
         """
         Запуск синхронизации брендов в фоновом потоке.
 
@@ -663,9 +666,26 @@ class BrandEngine:
         def run_sync():
             try:
                 with app.app_context():
-                    from services.wb_api_client import WildberriesAPIClient
-                    with WildberriesAPIClient(api_key) as wb_client:
-                        self.sync_marketplace_brands(marketplace_id, wb_client)
+                    from services.marketplace_service import MarketplaceService
+                    wb_client = MarketplaceService.get_wb_client(marketplace_id)
+                    if not wb_client:
+                        raise RuntimeError('Marketplace API key is not configured')
+                    try:
+                        result = self.sync_marketplace_brands(
+                            marketplace_id, wb_client,
+                        )
+                        if result.get('skipped'):
+                            self._sync_progress[marketplace_id].update({
+                                'status': 'done',
+                                'phase': 'done',
+                                'message': (
+                                    'Синхронизация уже выполняется другим процессом.'
+                                ),
+                            })
+                    finally:
+                        close = getattr(wb_client, 'close', None)
+                        if callable(close):
+                            close()
             except Exception as e:
                 logger.error(f"Brand sync background task failed: {e}", exc_info=True)
                 self._sync_progress[marketplace_id].update({
@@ -678,6 +698,84 @@ class BrandEngine:
         return True
 
     def sync_marketplace_brands(self, marketplace_id: int, marketplace_client) -> dict:
+        """Serialize syncs and always leave a durable terminal status."""
+        with self._sync_lock_guard:
+            sync_lock = self._sync_locks.setdefault(
+                marketplace_id, threading.Lock(),
+            )
+        if not sync_lock.acquire(blocking=False):
+            return {'skipped': True, 'reason': 'brand_sync_already_running'}
+        lock_fd = None
+        try:
+            # Gunicorn workers have separate Python locks. A process-shared
+            # advisory lock prevents admin/manual sync from overlapping the
+            # singleton scheduler in the same container.
+            import fcntl
+            import os
+            lock_path = os.environ.get(
+                'BRAND_SYNC_LOCK_FILE',
+                '/tmp/seller-platform-brand-sync.lock',
+            )
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(lock_fd)
+                lock_fd = None
+                return {
+                    'skipped': True,
+                    'reason': 'brand_sync_already_running',
+                }
+            return self._sync_marketplace_brands_guarded(
+                marketplace_id, marketplace_client,
+            )
+        finally:
+            if lock_fd is not None:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(lock_fd)
+            sync_lock.release()
+
+    def _sync_marketplace_brands_guarded(
+        self, marketplace_id: int, marketplace_client,
+    ) -> dict:
+        try:
+            return self._sync_marketplace_brands(marketplace_id, marketplace_client)
+        except Exception as error:
+            logger.error(
+                'Brand sync for marketplace #%s failed unexpectedly: %s',
+                marketplace_id, error, exc_info=True,
+            )
+            try:
+                from models import db, Marketplace
+                db.session.rollback()
+                marketplace = Marketplace.query.get(marketplace_id)
+                if marketplace:
+                    marketplace.brands_sync_status = (
+                        'partial'
+                        if marketplace.brands_synced_at
+                        or marketplace.brands_sync_checkpoint
+                        else 'failed'
+                    )
+                    marketplace.brands_sync_error = (
+                        f'{type(error).__name__}: brand reference sync failed'
+                    )
+                    db.session.commit()
+            except Exception:
+                logger.exception('Could not persist failed brand sync status')
+            progress = self._sync_progress.setdefault(marketplace_id, {})
+            progress.update({
+                'status': 'error',
+                'phase': 'done',
+                'message': 'Синхронизация справочника брендов завершилась ошибкой.',
+            })
+            return {
+                'errors': 1,
+                'error': f'{type(error).__name__}: brand reference sync failed',
+            }
+
+    def _sync_marketplace_brands(self, marketplace_id: int, marketplace_client) -> dict:
         """
         Синхронизация справочника брендов маркетплейса в БД.
 
@@ -686,7 +784,7 @@ class BrandEngine:
         """
         from models import (
             db, Brand, BrandAlias, Marketplace, MarketplaceBrand,
-            MarketplaceCategory,
+            MarketplaceCategory, BrandCategoryLink,
         )
 
         marketplace = Marketplace.query.get(marketplace_id)
@@ -708,7 +806,10 @@ class BrandEngine:
         logger.info(f"Starting brand sync for marketplace #{marketplace_id}...")
         stats = {
             'created': 0, 'updated': 0, 'mp_created': 0, 'mp_updated': 0,
-            'errors': 0, 'total_fetched': 0,
+            'aliases_created': 0, 'aliases_reactivated': 0,
+            'category_links_created': 0, 'category_links_updated': 0,
+            'category_links_removed': 0, 'errors': 0, 'total_fetched': 0,
+            'categories_completed_this_run': 0,
         }
 
         # --- Phase 1: Получаем включённые категории ---
@@ -718,7 +819,7 @@ class BrandEngine:
             marketplace_id=marketplace_id,
             is_enabled=True,
             is_available=True,
-        ).all()
+        ).order_by(MarketplaceCategory.subject_id.asc()).all()
 
         if not enabled_cats:
             logger.warning(f"No enabled categories for marketplace #{marketplace_id}")
@@ -731,39 +832,139 @@ class BrandEngine:
             db.session.commit()
             return stats
 
-        subject_ids = [c.subject_id for c in enabled_cats if c.subject_id]
+        subject_ids = sorted({
+            int(c.subject_id) for c in enabled_cats if c.subject_id
+        })
         total_cats = len(subject_ids)
         logger.info(f"Found {total_cats} enabled categories for brand sync")
+
+        checkpoint = None
+        try:
+            checkpoint = json.loads(marketplace.brands_sync_checkpoint or 'null')
+        except (TypeError, ValueError):
+            checkpoint = None
+        if not isinstance(checkpoint, dict) or checkpoint.get('subject_ids') != subject_ids:
+            checkpoint = {
+                'subject_ids': subject_ids,
+                'next_index': 0,
+                'started_at': sync_started_at.isoformat(),
+            }
+        try:
+            next_index = int(checkpoint.get('next_index') or 0)
+        except (TypeError, ValueError):
+            next_index = 0
+        if next_index < 0 or next_index >= total_cats:
+            next_index = 0
+            checkpoint['started_at'] = sync_started_at.isoformat()
+        remaining_subject_ids = subject_ids[next_index:]
 
         # --- Phase 2: Загрузка брендов по категориям ---
         # WB API: GET /api/content/v1/brands использует subjectId + next cursor.
         update_progress(
             phase='fetching',
+            categories_done=next_index,
             categories_total=total_cats,
-            message=f'Загрузка брендов из {total_cats} категорий...',
+            message=(
+                f'Загрузка брендов: продолжение с категории '
+                f'{next_index + 1}/{total_cats}...'
+            ),
         )
 
-        all_brands = {}  # ext_id -> name
+        all_brands = {}  # ext_id -> name from trusted category snapshots
+        brand_subject_ids = {}  # ext_id -> set[subject_id]
+        subject_brand_ids = {}  # subject_id -> set[ext_id]
+        trusted_subject_ids = []
         fetch_complete = False
         fetch_errors = []
 
         def on_progress(done, total, brands_count):
             update_progress(
-                categories_done=done,
-                categories_total=total,
+                categories_done=next_index + done,
+                categories_total=total_cats,
                 brands_found=brands_count,
-                message=f'Категории: {done}/{total}, найдено брендов: {brands_count}',
+                message=(
+                    f'Категории: {next_index + done}/{total_cats}, '
+                    f'найдено брендов: {brands_count}'
+                ),
             )
 
         try:
             result = marketplace_client.fetch_all_brands(
-                subject_ids=subject_ids,
+                subject_ids=remaining_subject_ids,
                 top=5000,
                 progress_callback=on_progress,
             )
             data = result.get('data', [])
             fetch_complete = result.get('complete') is True
             fetch_errors = result.get('errors') or []
+            subject_snapshots = result.get('subject_brands')
+            completed_subject_ids = result.get('completed_subject_ids')
+            if not isinstance(subject_snapshots, dict) or not isinstance(
+                completed_subject_ids, list,
+            ):
+                fetch_errors.append({
+                    'code': 'invalid_subject_snapshot_contract',
+                    'error': 'WB brand result has no category membership',
+                })
+                subject_snapshots = {}
+                completed_subject_ids = []
+
+            for expected_subject_id, raw_subject_id in zip(
+                remaining_subject_ids, completed_subject_ids,
+            ):
+                try:
+                    subject_id = int(raw_subject_id)
+                except (TypeError, ValueError):
+                    break
+                if subject_id != expected_subject_id:
+                    fetch_errors.append({
+                        'subject_id': expected_subject_id,
+                        'code': 'non_contiguous_subject_snapshot',
+                    })
+                    break
+                snapshot = (
+                    subject_snapshots.get(subject_id)
+                    if subject_id in subject_snapshots
+                    else subject_snapshots.get(str(subject_id))
+                )
+                if not isinstance(snapshot, list) or not snapshot:
+                    fetch_errors.append({
+                        'subject_id': subject_id,
+                        'code': 'empty_subject_snapshot',
+                        'error': 'Empty WB brand snapshot was not applied',
+                    })
+                    break
+
+                parsed_brand_ids = set()
+                parsed_snapshot = []
+                for brand_data in snapshot:
+                    try:
+                        ext_id = int(brand_data.get('id'))
+                    except (AttributeError, TypeError, ValueError):
+                        parsed_snapshot = []
+                        break
+                    name = str(brand_data.get('name') or '').strip()
+                    if ext_id <= 0 or not name:
+                        parsed_snapshot = []
+                        break
+                    previous_name = all_brands.get(ext_id)
+                    if previous_name and previous_name != name:
+                        parsed_snapshot = []
+                        break
+                    parsed_snapshot.append((ext_id, name))
+                    parsed_brand_ids.add(ext_id)
+                if not parsed_snapshot:
+                    fetch_errors.append({
+                        'subject_id': subject_id,
+                        'code': 'invalid_subject_snapshot',
+                    })
+                    break
+                for ext_id, name in parsed_snapshot:
+                    all_brands[ext_id] = name
+                    brand_subject_ids.setdefault(ext_id, set()).add(subject_id)
+                subject_brand_ids[subject_id] = parsed_brand_ids
+                trusted_subject_ids.append(subject_id)
+
             stats['errors'] += len(fetch_errors)
 
             # Диагностика
@@ -773,18 +974,13 @@ class BrandEngine:
             debug_info = {
                 'method': 'fetch_all_brands (per-category cursor pagination)',
                 'total_brands': len(data) if isinstance(data, list) else 'N/A',
+                'categories_completed': len(trusted_subject_ids),
                 'sample': sample,
             }
             if hasattr(marketplace_client, '_fetch_debug') and marketplace_client._fetch_debug:
                 debug_info['first_request'] = marketplace_client._fetch_debug
             update_progress(_debug_first_response=debug_info)
 
-            if isinstance(data, list):
-                for brand_data in data:
-                    ext_id = brand_data.get('id')
-                    name = brand_data.get('name', '')
-                    if ext_id and name:
-                        all_brands[ext_id] = name
         except Exception as e:
             logger.error(f"Failed to fetch brands: {e}", exc_info=True)
             stats['errors'] += 1
@@ -794,28 +990,34 @@ class BrandEngine:
             })
 
         stats['total_fetched'] = len(all_brands)
-        logger.info(f"Fetched {len(all_brands)} unique brands from {total_cats} categories")
+        stats['categories_completed_this_run'] = len(trusted_subject_ids)
+        logger.info(
+            "Fetched %s unique brands from %s complete categories",
+            len(all_brands), len(trusted_subject_ids),
+        )
 
         # Never merge a partial or empty upstream sweep into the last-good
         # registry. This keeps usable bindings and freshness internally
         # consistent while the next scheduled run retries the snapshot.
-        if not fetch_complete or fetch_errors or not all_brands:
-            if all_brands:
-                marketplace.brands_sync_status = 'partial'
-                marketplace.brands_sync_error = (
-                    f'Incomplete brand sweep; errors={stats["errors"]}'
-                )
-                progress_status = 'done'
-            else:
-                marketplace.brands_sync_status = 'failed'
-                marketplace.brands_sync_error = (
-                    str(fetch_errors[:3])[:2000]
-                    if fetch_errors else 'Brand sweep returned no usable data'
-                )
-                progress_status = 'error'
+        if not trusted_subject_ids or not all_brands:
+            marketplace.brands_sync_status = (
+                'partial'
+                if not fetch_complete and marketplace.brands_synced_at
+                else 'failed'
+            )
+            marketplace.brands_sync_error = 'Brand sweep returned no usable data'
+            if fetch_errors:
+                marketplace.brands_sync_error += f'; {str(fetch_errors[:3])[:1800]}'
+            marketplace.brands_sync_checkpoint = (
+                json.dumps(checkpoint, ensure_ascii=True, separators=(',', ':'))
+                if marketplace.brands_sync_status == 'partial' else None
+            )
             db.session.commit()
             update_progress(
-                status=progress_status,
+                status=(
+                    'error' if marketplace.brands_sync_status == 'failed'
+                    else 'done'
+                ),
                 phase='done',
                 message=(
                     f'Справочник не обновлён: найдено {stats["total_fetched"]}, '
@@ -850,12 +1052,56 @@ class BrandEngine:
         bindings_by_brand_id = {
             binding.brand_id: binding for binding in marketplace_bindings
         }
+        category_names = {
+            int(category.subject_id): category.subject_name
+            for category in enabled_cats if category.subject_id
+        }
+        existing_links = BrandCategoryLink.query.join(
+            MarketplaceBrand,
+            MarketplaceBrand.id == BrandCategoryLink.marketplace_brand_id,
+        ).filter(
+            MarketplaceBrand.marketplace_id == marketplace_id,
+            BrandCategoryLink.category_id.in_(trusted_subject_ids),
+        ).all()
+        links_by_key = {
+            (link.marketplace_brand_id, int(link.category_id)): link
+            for link in existing_links
+        }
+
+        def upsert_category_links(mp_brand, external_id):
+            for subject_id in brand_subject_ids.get(external_id, ()):
+                key = (mp_brand.id, subject_id)
+                link = links_by_key.get(key)
+                desired_available = mp_brand.status == 'verified'
+                category_name = category_names.get(subject_id)
+                if not link:
+                    link = BrandCategoryLink(
+                        marketplace_brand_id=mp_brand.id,
+                        category_id=subject_id,
+                        category_name=category_name,
+                        is_available=desired_available,
+                        verified_at=sync_started_at,
+                    )
+                    db.session.add(link)
+                    links_by_key[key] = link
+                    stats['category_links_created'] += 1
+                else:
+                    changed = (
+                        link.is_available != desired_available
+                        or link.category_name != category_name
+                    )
+                    link.is_available = desired_available
+                    link.category_name = category_name
+                    link.verified_at = sync_started_at
+                    if changed:
+                        stats['category_links_updated'] += 1
 
         normalized_names = {
             normalize_for_comparison(name) for _, name in brand_items
         }
         brands_by_normalized_name = {}
-        aliases_by_normalized_name = set()
+        aliases_by_normalized_name = {}
+        save_error_baseline = stats['errors']
         normalized_names_list = list(normalized_names)
         for chunk_start in range(0, len(normalized_names_list), 500):
             chunk = normalized_names_list[chunk_start:chunk_start + 500]
@@ -863,12 +1109,60 @@ class BrandEngine:
                 Brand.name_normalized.in_(chunk),
             ).all():
                 brands_by_normalized_name[brand.name_normalized] = brand
-            aliases_by_normalized_name.update(
-                alias.alias_normalized
+            aliases_by_normalized_name.update({
+                alias.alias_normalized: alias
                 for alias in BrandAlias.query.filter(
                     BrandAlias.alias_normalized.in_(chunk),
                 ).all()
-            )
+            })
+        brands_by_id = {
+            brand.id: brand for brand in brands_by_normalized_name.values()
+        }
+        alias_brand_ids = {
+            alias.brand_id for alias in aliases_by_normalized_name.values()
+        }
+        missing_brand_ids = alias_brand_ids.difference(brands_by_id)
+        if missing_brand_ids:
+            brands_by_id.update({
+                brand.id: brand for brand in Brand.query.filter(
+                    Brand.id.in_(missing_brand_ids),
+                ).all()
+            })
+
+        def ensure_marketplace_alias(brand_id, name, name_norm):
+            """Make an upstream canonical name exact-resolvable without takeover."""
+            named_brand = brands_by_normalized_name.get(name_norm)
+            if named_brand is not None and named_brand.id != brand_id:
+                raise ValueError(
+                    f'canonical brand name conflict for {name!r}'
+                )
+
+            alias = aliases_by_normalized_name.get(name_norm)
+            if alias is None:
+                alias = BrandAlias(
+                    brand_id=brand_id,
+                    alias=name,
+                    alias_normalized=name_norm,
+                    source='marketplace_sync',
+                    confidence=1.0,
+                )
+                db.session.add(alias)
+                aliases_by_normalized_name[name_norm] = alias
+                stats['aliases_created'] += 1
+                return
+
+            if alias.brand_id != brand_id:
+                raise ValueError(
+                    f'canonical brand alias conflict for {name!r}'
+                )
+            if alias.is_active:
+                return
+            if alias.source != 'marketplace_sync':
+                raise ValueError(
+                    f'inactive managed brand alias blocks {name!r}'
+                )
+            alias.is_active = True
+            stats['aliases_reactivated'] += 1
 
         for batch_start in range(0, len(brand_items), save_batch_size):
             batch = brand_items[batch_start:batch_start + save_batch_size]
@@ -881,6 +1175,9 @@ class BrandEngine:
                     # normalized display name so a rename updates, not duplicates.
                     mp_brand = bindings_by_external_id.get(str(ext_id))
                     if mp_brand:
+                        ensure_marketplace_alias(
+                            mp_brand.brand_id, name, name_norm,
+                        )
                         previous_status = mp_brand.status
                         if mp_brand.status == 'pending':
                             mp_brand.status = 'verified'
@@ -895,11 +1192,24 @@ class BrandEngine:
                         mp_brand.marketplace_brand_name = name
                         mp_brand.last_seen_at = sync_started_at
                         mp_brand.is_available = desired_available
+                        upsert_category_links(mp_brand, ext_id)
                         continue
 
                     # Глобальный бренд
+                    existing_alias = aliases_by_normalized_name.get(name_norm)
                     brand = brands_by_normalized_name.get(name_norm)
+                    if brand is None and existing_alias is not None:
+                        if not existing_alias.is_active:
+                            raise ValueError(
+                                f'inactive managed brand alias blocks {name!r}'
+                            )
+                        brand = brands_by_id.get(existing_alias.brand_id)
+                        if brand is None:
+                            raise ValueError(
+                                f'canonical brand alias target is missing for {name!r}'
+                            )
                     if brand:
+                        ensure_marketplace_alias(brand.id, name, name_norm)
                         if brand.status == 'pending':
                             brand.status = 'verified'
                         brand.updated_at = datetime.utcnow()
@@ -913,22 +1223,24 @@ class BrandEngine:
                         db.session.add(brand)
                         db.session.flush()
                         brands_by_normalized_name[name_norm] = brand
-
-                        if name_norm not in aliases_by_normalized_name:
-                            alias = BrandAlias(
-                                brand_id=brand.id,
-                                alias=name,
-                                alias_normalized=name_norm,
-                                source='marketplace_sync',
-                                confidence=1.0,
-                            )
-                            db.session.add(alias)
-                            aliases_by_normalized_name.add(name_norm)
+                        brands_by_id[brand.id] = brand
 
                         stats['created'] += 1
 
+                        ensure_marketplace_alias(brand.id, name, name_norm)
+
                     # Привязка к маркетплейсу
                     mp_brand = bindings_by_brand_id.get(brand.id)
+
+                    if (
+                        mp_brand
+                        and mp_brand.marketplace_brand_id is not None
+                        and str(mp_brand.marketplace_brand_id) != str(ext_id)
+                    ):
+                        raise ValueError(
+                            f'canonical brand {name!r} is already bound to '
+                            'another marketplace ID'
+                        )
 
                     if not mp_brand:
                         mp_brand = MarketplaceBrand(
@@ -942,8 +1254,10 @@ class BrandEngine:
                             last_seen_at=sync_started_at,
                         )
                         db.session.add(mp_brand)
+                        db.session.flush()
                         bindings_by_brand_id[brand.id] = mp_brand
                         bindings_by_external_id[str(ext_id)] = mp_brand
+                        marketplace_bindings.append(mp_brand)
                         stats['mp_created'] += 1
                     else:
                         previous_status = mp_brand.status
@@ -966,6 +1280,8 @@ class BrandEngine:
                         if changed:
                             stats['mp_updated'] += 1
 
+                    upsert_category_links(mp_brand, ext_id)
+
                 except Exception as e:
                     logger.warning(f"Failed to save brand '{name}': {e}")
                     stats['errors'] += 1
@@ -984,29 +1300,80 @@ class BrandEngine:
                 message=f'Сохранено: {saved}/{len(all_brands)} брендов...',
             )
 
-        self.invalidate_cache()
+        save_succeeded = stats['errors'] == save_error_baseline
+        if save_succeeded:
+            binding_external_ids = {
+                binding.id: int(binding.marketplace_brand_id)
+                for binding in marketplace_bindings
+                if binding.marketplace_brand_id is not None
+            }
+            for link in existing_links:
+                upstream_ids = subject_brand_ids.get(int(link.category_id), set())
+                external_id = binding_external_ids.get(link.marketplace_brand_id)
+                if external_id not in upstream_ids:
+                    if link.is_available:
+                        stats['category_links_removed'] += 1
+                    link.is_available = False
+                    link.verified_at = sync_started_at
 
-        reference_changed = stats['mp_created'] + stats['mp_updated']
+        checkpoint_next_index = (
+            next_index + len(trusted_subject_ids)
+            if save_succeeded else next_index
+        )
+        run_complete = (
+            save_succeeded
+            and fetch_complete
+            and not fetch_errors
+            and checkpoint_next_index == total_cats
+        )
+        if run_complete:
+            available_binding_ids = {
+                row[0] for row in db.session.query(
+                    BrandCategoryLink.marketplace_brand_id,
+                ).join(
+                    MarketplaceBrand,
+                    MarketplaceBrand.id == BrandCategoryLink.marketplace_brand_id,
+                ).filter(
+                    MarketplaceBrand.marketplace_id == marketplace_id,
+                    BrandCategoryLink.category_id.in_(subject_ids),
+                    BrandCategoryLink.is_available.is_(True),
+                ).all()
+            }
+            for binding in marketplace_bindings:
+                desired_available = (
+                    binding.status == 'verified'
+                    and binding.id in available_binding_ids
+                )
+                if binding.is_available != desired_available:
+                    binding.is_available = desired_available
+                    stats['mp_updated'] += 1
+
+        reference_changed = (
+            stats['mp_created'] + stats['mp_updated']
+            + stats['aliases_created'] + stats['aliases_reactivated']
+            + stats['category_links_created']
+            + stats['category_links_updated']
+            + stats['category_links_removed']
+        )
         if reference_changed:
             marketplace.brands_version = (marketplace.brands_version or 0) + 1
-        # An empty response is not a trustworthy complete snapshot. Keep the
-        # last-good bindings and freshness marker, and expose the failed sweep.
-        if fetch_complete and stats['total_fetched'] > 0 and stats['errors'] == 0:
+        if run_complete:
             marketplace.brands_sync_status = 'success'
             marketplace.brands_sync_error = None
             marketplace.brands_synced_at = sync_started_at
-        elif stats['total_fetched']:
+            marketplace.brands_sync_checkpoint = None
+        else:
+            checkpoint['next_index'] = checkpoint_next_index
+            marketplace.brands_sync_checkpoint = json.dumps(
+                checkpoint, ensure_ascii=True, separators=(',', ':'),
+            )
             marketplace.brands_sync_status = 'partial'
             marketplace.brands_sync_error = (
-                f'Incomplete brand sweep; errors={stats["errors"]}'
-            )
-        else:
-            marketplace.brands_sync_status = 'failed'
-            marketplace.brands_sync_error = (
-                str(fetch_errors[:3])[:2000]
-                if fetch_errors else 'Brand sweep returned no usable data'
+                f'Brand sweep checkpoint {checkpoint_next_index}/{total_cats}; '
+                f'errors={stats["errors"]}'
             )
         db.session.commit()
+        self.invalidate_cache()
 
         progress_status = (
             'error' if marketplace.brands_sync_status == 'failed' else 'done'
@@ -1036,12 +1403,14 @@ class BrandEngine:
     # ------------------------------------------------------------------
 
     def validate_brand_for_category(self, marketplace_brand_id: int, category_id: int,
-                                     marketplace_client=None) -> bool:
+                                     marketplace_client=None) -> Optional[bool]:
         """Проверить и сохранить допустимость бренда в категории маркетплейса."""
         from models import db, MarketplaceBrand, BrandCategoryLink
 
         mp_brand = MarketplaceBrand.query.get(marketplace_brand_id)
         if not mp_brand:
+            return False
+        if mp_brand.status != 'verified':
             return False
 
         link = BrandCategoryLink.query.filter_by(
@@ -1055,7 +1424,7 @@ class BrandEngine:
                 return link.is_available
 
         if not marketplace_client:
-            return link.is_available if link else True
+            return None
 
         try:
             result = marketplace_client.search_brands(
@@ -1071,7 +1440,7 @@ class BrandEngine:
                 for wb in wb_brands
             )
             if not is_available and result.get('complete') is not True:
-                return link.is_available if link else None
+                return None
 
             if link:
                 link.is_available = is_available
@@ -1090,7 +1459,7 @@ class BrandEngine:
 
         except Exception as e:
             logger.warning(f"Category validation failed: {e}")
-            return True
+            return None
 
     # ------------------------------------------------------------------
     # Brand management

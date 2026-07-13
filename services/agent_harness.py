@@ -211,12 +211,14 @@ def get_model_policy(seller_id: int) -> dict:
     provider = (settings.ai_provider if settings else None) or 'deepseek'
     primary_model = (settings.ai_model if settings else None) or 'deepseek-v4-pro'
     single_model = settings.agent_single_model if settings else False
+    execution_model = primary_model if single_model else 'deepseek-v4-flash'
     return {
         'single_model': bool(single_model),
         'provider': provider,
         'primary_model': primary_model,
-        'fast_model': primary_model if single_model else 'deepseek-v4-flash',
-        'write_model': primary_model,
+        'fast_model': execution_model,
+        # Compatibility field for already persisted plan metadata.
+        'write_model': execution_model,
     }
 
 

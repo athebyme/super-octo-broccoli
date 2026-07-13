@@ -957,12 +957,9 @@ class WBProductImporter:
                               'detail': f'Загрузка конфигурации WB ({len(unique_subjects)} кат.)...'})
             for sid in unique_subjects:
                 try:
-                    if sid not in self._chars_config_cache:
-                        cfg = self.api_client.get_card_characteristics_config(sid)
-                        self._chars_config_cache[sid] = cfg.get('data', [])
+                    wb_chars = self._get_live_characteristics_config(sid)
                     # Кеш размеров тоже заполняем из уже загруженных данных
                     if sid not in self._category_sizes_cache:
-                        wb_chars = self._chars_config_cache.get(sid, [])
                         has_sizes = any(
                             (c.get('name') or '').lower() in ('размер', 'рос. размер', 'размер пользователя')
                             for c in wb_chars
@@ -1535,109 +1532,93 @@ class WBProductImporter:
             existing_nm_id,
         )
 
+    def _get_live_characteristics_config(self, wb_subject_id: int) -> List[Dict[str, Any]]:
+        """Return a validated live WB characteristic schema for one subject.
+
+        An unavailable or malformed schema is a safety boundary: card preparation
+        must stop instead of treating it as a category without characteristics.
+        """
+        if not wb_subject_id:
+            raise ValueError("Не указан subject_id для загрузки характеристик WB")
+
+        cache = getattr(self, '_chars_config_cache', None)
+        if cache is None:
+            cache = {}
+            self._chars_config_cache = cache
+
+        if wb_subject_id in cache:
+            wb_chars = cache[wb_subject_id]
+        else:
+            if not getattr(self, 'api_client', None):
+                raise ValueError(
+                    f"Не настроен WB API client для загрузки характеристик subject_id={wb_subject_id}"
+                )
+            try:
+                response = self.api_client.get_card_characteristics_config(wb_subject_id)
+            except Exception as exc:
+                raise ValueError(
+                    f"Не удалось получить конфигурацию характеристик WB "
+                    f"для subject_id={wb_subject_id}: {exc}"
+                ) from exc
+
+            if not isinstance(response, dict):
+                raise ValueError(
+                    f"WB вернул некорректную конфигурацию характеристик "
+                    f"для subject_id={wb_subject_id}"
+                )
+            wb_chars = response.get('data')
+
+        if (
+            not isinstance(wb_chars, list)
+            or not wb_chars
+            or any(not isinstance(char, dict) for char in wb_chars)
+        ):
+            raise ValueError(
+                f"WB вернул пустую или некорректную конфигурацию характеристик "
+                f"для subject_id={wb_subject_id}"
+            )
+
+        cache[wb_subject_id] = wb_chars
+        return wb_chars
+
     def _category_supports_sizes(self, wb_subject_id: int) -> bool:
         """
         Проверяет, поддерживает ли WB-категория размеры.
         Результат кешируется на время жизни importer-а.
         """
-        if not wb_subject_id or not self.api_client:
+        if not wb_subject_id:
             return False
 
         # Кеш: один API-вызов на категорию вместо N
         if wb_subject_id in self._category_sizes_cache:
             return self._category_sizes_cache[wb_subject_id]
 
-        try:
-            chars_config = self.api_client.get_card_characteristics_config(wb_subject_id)
-            wb_chars = chars_config.get('data', [])
+        wb_chars = self._get_live_characteristics_config(wb_subject_id)
+        for char in wb_chars:
+            char_name = (char.get('name') or '').lower()
+            if char_name in ('размер', 'рос. размер', 'размер пользователя'):
+                logger.info(f"Категория {wb_subject_id}: поддерживает размеры")
+                self._category_sizes_cache[wb_subject_id] = True
+                return True
 
-            for char in wb_chars:
-                char_name = (char.get('name') or '').lower()
-                if char_name in ('размер', 'рос. размер', 'размер пользователя'):
-                    logger.info(f"Категория {wb_subject_id}: поддерживает размеры")
-                    self._category_sizes_cache[wb_subject_id] = True
-                    return True
-
-            self._category_sizes_cache[wb_subject_id] = False
-            return False
-        except Exception as e:
-            logger.warning(f"Не удалось проверить размеры для категории {wb_subject_id}: {e}")
-            self._category_sizes_cache[wb_subject_id] = False
-            return False
-
-    # Маппинг неофициальных/альтернативных названий стран → WB-валидные названия
-    # WB использует справочник стран с конкретными названиями
-    COUNTRY_NORMALIZATION_MAP = {
-        # Англия / UK / England → Великобритания
-        'англия': 'Великобритания',
-        'england': 'Великобритания',
-        'uk': 'Великобритания',
-        'united kingdom': 'Великобритания',
-        'great britain': 'Великобритания',
-        'британия': 'Великобритания',
-        # США варианты
-        'usa': 'США',
-        'u.s.a.': 'США',
-        'united states': 'США',
-        'соединенные штаты': 'США',
-        'соединённые штаты': 'США',
-        'америка': 'США',
-        # Южная Корея
-        'korea': 'Южная Корея',
-        'south korea': 'Южная Корея',
-        'корея': 'Южная Корея',
-        # Прочие
-        'prc': 'Китай',
-        'china': 'Китай',
-        'japan': 'Япония',
-        'germany': 'Германия',
-        'france': 'Франция',
-        'italy': 'Италия',
-        'spain': 'Испания',
-        'sweden': 'Швеция',
-        'austria': 'Австрия',
-        'canada': 'Канада',
-        'hong kong': 'Гонконг',
-        'taiwan': 'Тайвань',
-        'thailand': 'Таиланд',
-        'india': 'Индия',
-        'holland': 'Нидерланды',
-        'голландия': 'Нидерланды',
-        'чехия': 'Чешская Республика',
-        'czech republic': 'Чешская Республика',
-        'белоруссия': 'Беларусь',
-    }
+        self._category_sizes_cache[wb_subject_id] = False
+        return False
 
     @staticmethod
     def _sanitize_country(country: str) -> str:
         """
-        Нормализует страну производства для WB API.
-        WB не принимает составные значения типа 'Россия-Китай',
-        а также неофициальные названия ('Англия' вместо 'Великобритания').
+        Очищает пробелы, не изменяя семантику страны.
+
+        Составные значения и алиасы не переписываются: они должны
+        пройти точную case-insensitive проверку по WB-словарю.
 
         Returns:
-            Валидное название страны
+            Исходное название страны без краевых пробелов
         """
         if not country:
             return ''
 
-        # Разбиваем по разделителям: '-', '/', ','
-        import re
-        parts = re.split(r'[-/,;]', country)
-        parts = [p.strip() for p in parts if p.strip()]
-
-        if not parts:
-            return country.strip()
-
-        # Берём первую страну
-        first_country = parts[0]
-
-        # Нормализуем через маппинг
-        normalized = WBProductImporter.COUNTRY_NORMALIZATION_MAP.get(first_country.lower())
-        if normalized:
-            return normalized
-
-        return first_country
+        return str(country).strip()
 
     @staticmethod
     def _extract_dimensions_from_text(text: str) -> Dict:
@@ -1798,7 +1779,8 @@ class WBProductImporter:
             }
             chars['Пол'] = gender_map.get(gender.lower(), gender)
 
-        # Страна производства (WB не принимает составные: "Россия-Китай")
+        # Страна производства передаётся целиком: точный WB-словарь ниже
+        # отклонит составное или неофициальное значение без автоисправления.
         if imported_product.country:
             chars['Страна производства'] = WBProductImporter._sanitize_country(imported_product.country)
 
@@ -1870,12 +1852,10 @@ class WBProductImporter:
                 pass
 
         # AI-определённые физические размеры (длина, диаметр, объём и т.д.)
-        # Маппинг: внутренний ключ → список возможных WB-названий (от точного к общему)
-        # WB разные категории называют одну характеристику по-разному
+        # WB разные категории называют одну характеристику по-разному.
         # Маппинг: внутренний ключ → список WB-названий для создания промежуточных chars.
-        # ВАЖНО: короткое базовое имя ПЕРВЫМ — оно лучше матчится через
-        # нормализованное частичное совпадение ("диаметр" in "диаметр секс игрушки").
-        # Более точные имена идут после — для категорий где WB-имя точно совпадает.
+        # Builder применит только точное имя/явный semantic alias/точное имя без unit;
+        # специфичное WB-имя не выбирается по substring или первому слову.
         _DIM_TO_WB = {
             'length_cm': ['Длина', 'Длина, см', 'Длина изделия, см'],
             'width_cm': ['Ширина', 'Ширина, см', 'Ширина изделия, см'],
@@ -2214,22 +2194,11 @@ class WBProductImporter:
                 validation_cache=self._get_wb_validation_cache(),
             )
 
-        # Получаем конфигурацию характеристик WB (кешируем per subject_id)
+        # Получаем live-конфигурацию характеристик WB (кешируем per subject_id).
+        # Ошибка/пустой ответ должны остановить подготовку карточки: иначе ниже
+        # невозможно достоверно сопоставить имена и проверить required coverage.
         sid = imported_product.wb_subject_id
-        try:
-            if sid in self._chars_config_cache:
-                wb_chars_list = self._chars_config_cache[sid]
-            else:
-                chars_config = self.api_client.get_card_characteristics_config(sid)
-                wb_chars_list = chars_config.get('data', [])
-                self._chars_config_cache[sid] = wb_chars_list
-        except Exception as e:
-            logger.error(f"Не удалось получить конфигурацию характеристик: {e}")
-            return []
-
-        if not wb_chars_list:
-            logger.warning(f"Пустая конфигурация характеристик для subject_id={imported_product.wb_subject_id}")
-            return []
+        wb_chars_list = self._get_live_characteristics_config(sid)
 
         # Загружаем справочники WB из БД для характеристик с пустым dictionary
         wb_directories = self._load_wb_directories()
@@ -2271,10 +2240,9 @@ class WBProductImporter:
         # Словарь алиасов: наши названия характеристик -> WB названия
         # Решает проблему несовпадения имён между данными поставщика и WB API
         # Алиасы строят маппинг: наше_название -> wb_название (lowercased).
-        # Сначала пробуем точное совпадение по алиасу, потом partial matching.
+        # Сначала пробуем точное имя, затем явный семантический алиас.
         # ВАЖНО: алиас должен указывать на ТОЧНОЕ имя WB-характеристики (lowercase).
-        # Если указать просто 'материал', а в WB есть 'материал изделия' — не найдёт.
-        # Поэтому для неоднозначных случаев лучше полагаться на partial matching (шаг 2).
+        # Substring/fuzzy/prefix совпадения нельзя автоматически применять перед WB.
         _CHAR_ALIASES = {
             # === Цвет ===
             'цвет товара': 'цвет',
@@ -2282,13 +2250,11 @@ class WBProductImporter:
             'основной цвет': 'цвет',
 
             # === Материал / Состав ===
-            # WB называет по-разному в разных категориях:
-            # "Материал изделия", "Материал презерватива", "Состав", "Материал"
-            # Partial matching (шаг 2) ловит "материал" in "материал изделия"/"материал презерватива"
+            # WB называет по-разному в разных категориях; алиас применим только
+            # когда его полное целевое имя присутствует в live-схеме.
             'материал товара': 'материал изделия',
             'основной материал': 'материал изделия',
             'состав материала': 'материал изделия',
-            # 'состав' и 'материал' обрабатываются через partial matching
 
             # === Страна ===
             'страна': 'страна производства',
@@ -2300,8 +2266,6 @@ class WBProductImporter:
 
             # === Пол ===
             'пол товара': 'пол',
-            'назначение': 'пол',
-            'для кого': 'пол',
             'целевой пол': 'пол',
 
             # === Комплектация ===
@@ -2309,9 +2273,7 @@ class WBProductImporter:
             'в комплекте': 'комплектация',
 
             # === Размеры / Габариты ===
-            # WB категории секс-товаров используют специфические имена:
-            # "Общая длина секс игрушки", "Диаметр секс игрушки"
-            # Partial matching (шаг 2) ловит "длина" in "общая длина секс игрушки"
+            # WB категории могут использовать специфические полные имена.
             'длина товара': 'длина',
             'длина изделия': 'длина',
             'общая длина': 'длина',
@@ -2346,8 +2308,7 @@ class WBProductImporter:
             'элемент питания': 'тип элемента питания',
 
             # === Особенности ===
-            # WB: "Особенности секс игрушки", "Особенности презерватива"
-            # Partial matching ловит "особенности" in "особенности секс игрушки"
+            # WB: "Особенности секс игрушки", "Особенности презерватива".
             'особенности товара': 'особенности',
             'feature': 'особенности',
             'описание особенностей': 'особенности',
@@ -2396,7 +2357,8 @@ class WBProductImporter:
             if char_name.startswith('_'):
                 continue
 
-            # Санитизация: WB не принимает составные страны ("Россия-Китай")
+            # Убираем только краевые пробелы. Составные страны и aliases должны
+            # быть отклонены точной проверкой словаря, а не переписаны.
             if char_name.lower() in ('страна производства', 'страна'):
                 if isinstance(char_value, str):
                     char_value = self._sanitize_country(char_value)
@@ -2413,14 +2375,7 @@ class WBProductImporter:
                     if wb_char:
                         logger.debug(f"Характеристика '{char_name}' -> алиас '{alias}'")
 
-            # Шаг 2: Частичное совпадение
-            if not wb_char:
-                for wb_name, wb_data in wb_chars_by_name.items():
-                    if char_name_lower in wb_name or wb_name in char_name_lower:
-                        wb_char = wb_data
-                        break
-
-            # Шаг 3: Нормализация единиц измерения
+            # Шаг 2: точное совпадение после удаления только единицы измерения.
             if not wb_char:
                 _UNIT_RE = re.compile(r'[,(]\s*(?:см|мм|г|гр|кг|мл|л|шт|м)\s*\)?$', re.IGNORECASE)
                 char_norm = _UNIT_RE.sub('', char_name_lower).strip()
@@ -2437,23 +2392,6 @@ class WBProductImporter:
                                 wb_char = wb_data
                                 break
 
-                    if not wb_char and char_norm:
-                        for wb_name, wb_data in wb_chars_by_name.items():
-                            wb_norm = _UNIT_RE.sub('', wb_name).strip()
-                            if char_norm in wb_norm or wb_norm in char_norm:
-                                wb_char = wb_data
-                                break
-
-            # Шаг 4: Пробуем по первому слову (для длинных названий)
-            if not wb_char and ' ' in char_name_lower:
-                first_word = char_name_lower.split()[0]
-                if len(first_word) >= 4:  # Минимум 4 символа чтобы не ловить "тип", "вид" и т.д.
-                    for wb_name, wb_data in wb_chars_by_name.items():
-                        if wb_name.startswith(first_word):
-                            wb_char = wb_data
-                            logger.debug(f"Характеристика '{char_name}' -> совпадение по первому слову с '{wb_name}'")
-                            break
-
             if not wb_char:
                 logger.debug(f"Характеристика '{char_name}' не найдена в WB конфиге (subject_id={imported_product.wb_subject_id})")
                 continue
@@ -2463,7 +2401,7 @@ class WBProductImporter:
                 continue
 
             # Дедупликация: пропускаем если эта WB-характеристика уже добавлена
-            # (например, "Состав", "Материал", "Материал изделия" все маппятся на одну WB-характеристику)
+            # (например, точное имя и его явный semantic alias).
             if char_id in used_char_ids:
                 logger.debug(f"Характеристика '{char_name}' -> id={char_id} уже добавлена, пропускаем дубликат")
                 continue
@@ -2578,16 +2516,7 @@ class WBProductImporter:
         if not wb_subject_id:
             return []
 
-        try:
-            if wb_subject_id in self._chars_config_cache:
-                wb_chars_list = self._chars_config_cache[wb_subject_id]
-            else:
-                chars_config = self.api_client.get_card_characteristics_config(wb_subject_id)
-                wb_chars_list = chars_config.get('data', [])
-                self._chars_config_cache[wb_subject_id] = wb_chars_list
-        except Exception as exc:
-            logger.warning(f"Не удалось проверить обязательные характеристики subject={wb_subject_id}: {exc}")
-            return []
+        wb_chars_list = self._get_live_characteristics_config(wb_subject_id)
 
         present_ids = set()
         for char in characteristics or []:

@@ -145,6 +145,41 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         ])
         self.assertEqual(set(result['directories_used']), {'category'})
 
+    def test_characteristic_and_subject_ids_reject_numeric_coercion(self):
+        from services.marketplace_validator import validate_wb_characteristics
+
+        for raw_id in (True, float(self.MATERIAL_ID), str(self.MATERIAL_ID)):
+            with self.subTest(charc_id=raw_id):
+                result = validate_wb_characteristics(self.SUBJECT_ID, [{
+                    'id': raw_id,
+                    'value': ['Силикон'],
+                }])
+                self.assertFalse(result['valid'])
+                self.assertEqual(result['issues'][0]['code'], 'invalid_payload')
+
+        for raw_subject_id in (
+            True, float(self.SUBJECT_ID), str(self.SUBJECT_ID),
+        ):
+            with self.subTest(subject_id=raw_subject_id):
+                result = validate_wb_characteristics(raw_subject_id, [{
+                    'id': self.MATERIAL_ID,
+                    'value': ['Силикон'],
+                }])
+                self.assertFalse(result['valid'])
+
+    def test_rollback_characteristic_ids_reject_numeric_coercion(self):
+        from services.marketplace_validator import (
+            WBCharacteristicValidationError,
+            require_wb_characteristic_ids,
+        )
+
+        for raw_id in (True, float(self.MATERIAL_ID), str(self.MATERIAL_ID)):
+            with self.subTest(charc_id=raw_id):
+                with self.assertRaises(WBCharacteristicValidationError):
+                    require_wb_characteristic_ids(
+                        self.SUBJECT_ID, [raw_id],
+                    )
+
     def test_fuzzy_and_substring_characteristic_names_are_rejected(self):
         from services.marketplace_validator import (
             WBCharacteristicValidationError,
@@ -204,6 +239,38 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         self.assertFalse(unavailable['valid'])
         self.assertEqual(unavailable['issues'][0]['code'], 'category_unavailable')
 
+    def test_admin_disabled_marketplace_or_category_fails_closed(self):
+        from services.marketplace_validator import validate_wb_characteristics
+
+        marketplace = Marketplace.query.filter_by(code='wb').one()
+        category = MarketplaceCategory.query.filter_by(
+            subject_id=self.SUBJECT_ID,
+        ).one()
+        payload = [{
+            'id': self.MATERIAL_ID,
+            'value': ['Силикон'],
+        }]
+
+        marketplace.is_active = False
+        db.session.commit()
+        inactive = validate_wb_characteristics(self.SUBJECT_ID, payload)
+        self.assertFalse(inactive['valid'])
+        self.assertEqual(inactive['issues'][0]['code'], 'marketplace_inactive')
+
+        marketplace.is_active = True
+        category.is_enabled = False
+        db.session.commit()
+        disabled = validate_wb_characteristics(self.SUBJECT_ID, payload)
+        self.assertFalse(disabled['valid'])
+        self.assertEqual(disabled['issues'][0]['code'], 'category_disabled')
+
+        category.is_enabled = True
+        category.is_leaf = False
+        db.session.commit()
+        parent = validate_wb_characteristics(self.SUBJECT_ID, payload)
+        self.assertFalse(parent['valid'])
+        self.assertEqual(parent['issues'][0]['code'], 'category_not_leaf')
+
     def test_unavailable_characteristic_is_not_writable(self):
         from services.marketplace_validator import validate_wb_characteristics
 
@@ -248,6 +315,48 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         self.assertFalse(result['valid'])
         self.assertEqual(result['issues'][0]['code'], 'dictionary_not_synced')
 
+    def test_composition_alias_is_treated_as_material_and_requires_dictionary(self):
+        from services.marketplace_validator import validate_wb_characteristics
+
+        characteristic = MarketplaceCategoryCharacteristic.query.filter_by(
+            charc_id=self.MATERIAL_ID,
+        ).one()
+        characteristic.name = 'Состав'
+        characteristic.dictionary_json = None
+        db.session.commit()
+
+        result = validate_wb_characteristics(self.SUBJECT_ID, [{
+            'id': self.MATERIAL_ID,
+            'value': ['наилучшем виде'],
+        }])
+
+        self.assertFalse(result['valid'])
+        self.assertEqual(result['issues'][0]['code'], 'dictionary_not_synced')
+
+    def test_legacy_disabled_required_characteristic_is_still_required_on_create(self):
+        from services.marketplace_validator import (
+            WBCharacteristicValidationError,
+            build_wb_create_characteristics,
+        )
+
+        characteristic = MarketplaceCategoryCharacteristic.query.filter_by(
+            charc_id=self.MATERIAL_ID,
+        ).one()
+        characteristic.required = True
+        characteristic.is_enabled = False
+        db.session.commit()
+
+        with self.assertRaises(WBCharacteristicValidationError) as raised:
+            build_wb_create_characteristics(self.SUBJECT_ID, [{
+                'id': self.GENDER_ID,
+                'value': ['Женский'],
+            }])
+
+        self.assertEqual(
+            raised.exception.result['issues'][0]['code'],
+            'required_characteristic_missing',
+        )
+
     def test_gender_requires_category_allowlist_even_if_global_kinds_has_value(self):
         from services.marketplace_validator import validate_wb_characteristics
 
@@ -267,6 +376,53 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             result['issues'][0]['code'],
             'category_dictionary_not_configured',
         )
+
+    def test_global_directory_wins_for_global_characteristic(self):
+        from services.marketplace_validator import validate_wb_characteristics
+
+        marketplace = Marketplace.query.filter_by(code='wb').one()
+        category = MarketplaceCategory.query.filter_by(
+            subject_id=self.SUBJECT_ID,
+        ).one()
+        color_id = 12
+        db.session.add(MarketplaceCategoryCharacteristic(
+            marketplace_id=marketplace.id,
+            category_id=category.id,
+            charc_id=color_id,
+            name='Цвет',
+            charc_type=1,
+            max_count=1,
+            # Category payload не должен подменять общий справочник WB.
+            dictionary_json=json.dumps(
+                [{'value': 'Локальный цвет'}], ensure_ascii=False),
+            is_enabled=True,
+            is_available=True,
+        ))
+        db.session.add(MarketplaceDirectory(
+            marketplace_id=marketplace.id,
+            directory_type='colors',
+            data_json=json.dumps(
+                [{'name': 'Красный'}], ensure_ascii=False),
+            items_count=1,
+            synced_at=datetime.utcnow(),
+            sync_status='success',
+        ))
+        db.session.commit()
+
+        valid = validate_wb_characteristics(self.SUBJECT_ID, [{
+            'id': color_id,
+            'value': ['красный'],
+        }])
+        invalid = validate_wb_characteristics(self.SUBJECT_ID, [{
+            'id': color_id,
+            'value': ['Локальный цвет'],
+        }])
+
+        self.assertTrue(valid['valid'], valid['issues'])
+        self.assertEqual(valid['normalized'][0]['value'], ['Красный'])
+        self.assertEqual(valid['directories_used'], ['colors'])
+        self.assertFalse(invalid['valid'])
+        self.assertEqual(invalid['issues'][0]['code'], 'value_not_allowed')
 
     def test_optional_invalid_value_is_not_persisted_by_marketplace_validator(self):
         from services.marketplace_validator import MarketplaceValidator
@@ -421,6 +577,34 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         self.assertEqual(chars[999], ['Существующее значение'])
         self.assertEqual(chars[self.MATERIAL_ID], ['Пластик'])
 
+    def test_update_card_persists_exact_snapshot_callback_before_http(self):
+        from services.wb_api_client import WildberriesAPIClient
+
+        response = MagicMock()
+        response.json.return_value = {'error': False}
+        events = []
+        snapshot_context = {}
+        client = WildberriesAPIClient('test-key')
+        client.get_card_by_nm_id = MagicMock(return_value=self._full_card())
+
+        def make_request(*_args, **_kwargs):
+            self.assertEqual(events, ['history'])
+            return response
+
+        client._make_request = MagicMock(side_effect=make_request)
+        client.update_card(
+            1001,
+            {'title': 'Новое название'},
+            snapshot_context=snapshot_context,
+            before_send_callback=lambda exact: events.append(
+                'history' if exact == snapshot_context else 'mismatch'
+            ),
+        )
+
+        self.assertEqual(events, ['history'])
+        self.assertEqual(snapshot_context['before']['title'], 'Карточка')
+        self.assertEqual(snapshot_context['after']['title'], 'Новое название')
+
     def test_empty_characteristic_object_is_an_empty_patch_not_erase(self):
         from services.wb_api_client import WildberriesAPIClient
 
@@ -458,33 +642,34 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         )
 
         with self.assertRaises(WBValidationError):
+            from services.wb_validators import _mark_wb_card_as_fetched
+            full_card = self._full_card()
+            full_card['characteristics'] = None
+            _mark_wb_card_as_fetched(full_card)
             prepare_card_for_update(
-                self._full_card(),
+                full_card,
                 {'characteristics': None},
             )
 
-    def test_prepare_maps_legacy_named_characteristics_before_wire_cleanup(self):
-        from services.wb_validators import prepare_card_for_update
+    def test_legacy_named_full_card_cannot_be_signed_as_fresh_wb_source(self):
+        from services.wb_validators import (
+            WBValidationError,
+            prepare_card_for_update,
+        )
 
         full_card = self._full_card()
         full_card['characteristics'] = {
             'Материал изделия': 'силикон',
             'Пол': 'женский',
         }
-
-        prepared = prepare_card_for_update(
-            full_card,
-            {'description': 'Новое описание'},
-        )
-
-        self.assertEqual(prepared['characteristics'], [
-            {'id': self.MATERIAL_ID, 'value': ['Силикон']},
-            {'id': self.GENDER_ID, 'value': ['Женский']},
-        ])
+        with self.assertRaises(WBValidationError):
+            prepare_card_for_update(
+                full_card,
+                {'description': 'Новое описание'},
+            )
 
     def test_direct_batch_cannot_bypass_admin_dictionary_validation(self):
-        from services.marketplace_validator import WBCharacteristicValidationError
-        from services.wb_api_client import WildberriesAPIClient
+        from services.wb_api_client import WildberriesAPIClient, WBAPIException
 
         client = WildberriesAPIClient('test-key')
         client._make_request = MagicMock()
@@ -494,20 +679,59 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             'value': ['наилучшем виде'],
         }]
 
-        with self.assertRaises(WBCharacteristicValidationError):
+        with self.assertRaises(WBAPIException):
             client.update_cards_batch([card])
 
         client._make_request.assert_not_called()
 
+    def test_direct_batch_rejects_spoofed_internal_marker(self):
+        from services.wb_api_client import WildberriesAPIClient, WBAPIException
+        from services.wb_validators import WB_CHARACTERISTICS_CHANGED_KEY
+
+        client = WildberriesAPIClient('test-key')
+        client._make_request = MagicMock()
+        card = self._full_card()
+        card['characteristics'] = [{
+            'id': self.MATERIAL_ID,
+            'value': ['наилучшем виде'],
+        }]
+        card[WB_CHARACTERISTICS_CHANGED_KEY] = []
+
+        with self.assertRaises(WBAPIException):
+            client.update_cards_batch([card])
+
+        client._make_request.assert_not_called()
+
+    def test_prepared_batch_context_detects_characteristic_mutation(self):
+        from services.wb_api_client import WildberriesAPIClient, WBAPIException
+        from services.wb_validators import (
+            _mark_wb_card_as_fetched,
+            prepare_card_for_update,
+        )
+
+        client = WildberriesAPIClient('test-key')
+        client._make_request = MagicMock()
+        full_card = self._full_card()
+        _mark_wb_card_as_fetched(full_card)
+        prepared = prepare_card_for_update(
+            full_card,
+            {'description': 'Новое описание'},
+        )
+        prepared['characteristics'][1]['value'] = ['наилучшем виде']
+
+        with self.assertRaises(WBAPIException):
+            client.update_cards_batch([prepared])
+
+        client._make_request.assert_not_called()
+
     def test_direct_batch_rejects_null_characteristics_and_missing_subject(self):
-        from services.marketplace_validator import WBCharacteristicValidationError
         from services.wb_api_client import WildberriesAPIClient, WBAPIException
 
         client = WildberriesAPIClient('test-key')
         client._make_request = MagicMock()
         null_card = self._full_card()
         null_card['characteristics'] = None
-        with self.assertRaises(WBCharacteristicValidationError):
+        with self.assertRaises(WBAPIException):
             client.update_cards_batch([null_card])
 
         no_subject = self._full_card()
@@ -523,6 +747,182 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         empty_card['characteristics'] = []
         with self.assertRaises(WBAPIException):
             client.update_cards_batch([empty_card])
+
+        client._make_request.assert_not_called()
+
+    def test_direct_batch_rejects_missing_characteristics_and_subject_spoof(self):
+        from services.wb_api_client import WildberriesAPIClient, WBAPIException
+
+        client = WildberriesAPIClient('test-key')
+        client._make_request = MagicMock()
+
+        without_characteristics = self._full_card()
+        without_characteristics.pop('characteristics')
+        with self.assertRaises(WBAPIException):
+            client.update_cards_batch([without_characteristics])
+
+        spoofed_category = self._full_card()
+        spoofed_category['subjectID'] = 999999
+        with self.assertRaises(WBAPIException):
+            client.update_cards_batch([spoofed_category])
+
+        client._make_request.assert_not_called()
+
+    def test_prepared_batch_accepts_scalar_cleaned_before_context_signing(self):
+        from services.wb_api_client import WildberriesAPIClient
+        from services.wb_validators import (
+            _mark_wb_card_as_fetched,
+            prepare_card_for_update,
+        )
+
+        response = MagicMock()
+        response.json.return_value = {'error': False}
+        client = WildberriesAPIClient('test-key')
+        client._make_request = MagicMock(return_value=response)
+        full_card = self._full_card()
+        full_card['characteristics'][1]['value'] = 'Силикон'
+        _mark_wb_card_as_fetched(full_card)
+
+        prepared = prepare_card_for_update(
+            full_card,
+            {'description': 'Новое описание'},
+        )
+        client.update_cards_batch([prepared])
+
+        sent = client._make_request.call_args.kwargs['json'][0]
+        self.assertEqual(
+            sent['characteristics'][1]['value'],
+            ['Силикон'],
+        )
+
+    def test_prepared_batch_context_cannot_be_transplanted_to_other_nm_id(self):
+        from services.wb_api_client import WildberriesAPIClient, WBAPIException
+        from services.wb_validators import (
+            _mark_wb_card_as_fetched,
+            prepare_card_for_update,
+        )
+
+        client = WildberriesAPIClient('test-key')
+        client._make_request = MagicMock()
+        full_card = self._full_card()
+        _mark_wb_card_as_fetched(full_card)
+        prepared = prepare_card_for_update(
+            full_card,
+            {'description': 'Новое описание'},
+        )
+        prepared['nmID'] = 1002
+
+        with self.assertRaises(WBAPIException):
+            client.update_cards_batch([prepared])
+
+        client._make_request.assert_not_called()
+
+    def test_prepare_cannot_rebind_fetched_source_to_other_nm_id(self):
+        from services.wb_validators import (
+            WBValidationError,
+            _mark_wb_card_as_fetched,
+            prepare_card_for_update,
+        )
+
+        full_card = self._full_card()
+        _mark_wb_card_as_fetched(full_card)
+        with self.assertRaises(WBValidationError):
+            prepare_card_for_update(
+                full_card,
+                {'nmID': 1002, 'title': 'Новое название'},
+            )
+
+    def test_safe_batch_helper_uses_entire_fresh_wb_card(self):
+        from services.wb_validators import prepare_batch_cards_safe
+
+        product = SimpleNamespace(
+            nm_id=1001,
+            vendor_code='VC-1001',
+            subject_id=self.SUBJECT_ID,
+        )
+        fresh = self._full_card()
+        fresh['characteristics'].append({
+            'id': 998,
+            'value': ['Добавлено параллельно в WB'],
+        })
+        from services.wb_validators import _mark_wb_card_as_fetched
+        _mark_wb_card_as_fetched(fresh)
+        client = MagicMock()
+        client.fetch_cards_by_nm_ids.return_value = {1001: fresh}
+
+        cards, product_map, skipped = prepare_batch_cards_safe(
+            [product],
+            lambda _product, _full_card: {'title': 'Новое название'},
+            client,
+            seller_id=1,
+        )
+
+        self.assertEqual(skipped, [])
+        self.assertIs(product_map[1001], product)
+        self.assertEqual(cards[0]['title'], 'Новое название')
+        self.assertIn(998, [item['id'] for item in cards[0]['characteristics']])
+        client.fetch_cards_by_nm_ids.assert_called_once_with(
+            [1001], log_to_db=True, seller_id=1)
+
+    def test_update_boundaries_treat_error_true_as_failure(self):
+        from services.wb_api_client import WildberriesAPIClient, WBAPIException
+        from services.wb_validators import (
+            _mark_wb_card_as_fetched,
+            prepare_card_for_update,
+        )
+
+        response = MagicMock()
+        response.json.return_value = {
+            'error': True,
+            'errorText': 'WB rejected',
+        }
+        client = WildberriesAPIClient('test-key')
+        client.get_card_by_nm_id = MagicMock(return_value=self._full_card())
+        client._make_request = MagicMock(return_value=response)
+
+        with self.assertRaises(WBAPIException):
+            client.update_card(1001, {'title': 'Новое название'})
+
+        full_card = self._full_card()
+        _mark_wb_card_as_fetched(full_card)
+        prepared = prepare_card_for_update(
+            full_card, {'title': 'Новое название'})
+        with self.assertRaises(WBAPIException):
+            client.update_cards_batch([prepared])
+
+    def test_single_title_update_blocks_invalid_existing_material(self):
+        from services.marketplace_validator import WBCharacteristicValidationError
+        from services.wb_api_client import WildberriesAPIClient
+
+        full_card = self._full_card()
+        full_card['characteristics'][1]['value'] = ['наилучшем виде']
+        client = WildberriesAPIClient('test-key')
+        client.get_card_by_nm_id = MagicMock(return_value=full_card)
+        client._make_request = MagicMock()
+
+        with self.assertRaises(WBCharacteristicValidationError):
+            client.update_card(1001, {'title': 'Новое название'})
+
+        client._make_request.assert_not_called()
+
+    def test_prepared_title_update_blocks_invalid_existing_material(self):
+        from services.marketplace_validator import WBCharacteristicValidationError
+        from services.wb_api_client import WildberriesAPIClient
+        from services.wb_validators import (
+            _mark_wb_card_as_fetched,
+            prepare_card_for_update,
+        )
+
+        full_card = self._full_card()
+        full_card['characteristics'][1]['value'] = ['наилучшем виде']
+        _mark_wb_card_as_fetched(full_card)
+        prepared = prepare_card_for_update(
+            full_card, {'title': 'Новое название'})
+        client = WildberriesAPIClient('test-key')
+        client._make_request = MagicMock()
+
+        with self.assertRaises(WBCharacteristicValidationError):
+            client.update_cards_batch([prepared])
 
         client._make_request.assert_not_called()
 
@@ -546,6 +946,36 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
                 }],
             )
 
+        client._make_request.assert_not_called()
+
+    def test_create_card_requires_admin_required_characteristics(self):
+        from services.marketplace_validator import WBCharacteristicValidationError
+        from services.wb_api_client import WildberriesAPIClient
+
+        material = MarketplaceCategoryCharacteristic.query.filter_by(
+            charc_id=self.MATERIAL_ID,
+        ).one()
+        material.required = True
+        db.session.commit()
+        client = WildberriesAPIClient('test-key')
+        client._make_request = MagicMock()
+
+        with self.assertRaises(WBCharacteristicValidationError) as caught:
+            client.create_product_card(
+                self.SUBJECT_ID,
+                [{
+                    'vendorCode': 'VC-REQUIRED',
+                    'sizes': [{
+                        'techSize': '0',
+                        'skus': ['1234567890123'],
+                    }],
+                }],
+            )
+
+        self.assertEqual(
+            caught.exception.result['issues'][0]['code'],
+            'required_characteristic_missing',
+        )
         client._make_request.assert_not_called()
 
     def test_create_batch_canonicalizes_characteristics(self):

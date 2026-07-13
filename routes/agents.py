@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 def register_agents_routes(app):
     """Регистрирует маршруты дашборда агентов."""
 
+    def _task_seller_scope():
+        """Return seller scope; only an explicit admin may use global scope."""
+        if current_user.is_admin:
+            return None
+        if not current_user.seller:
+            abort(403)
+        return current_user.seller.id
+
     # ── Дашборд ─────────────────────────────────────────────────────
 
     @app.route('/agents')
@@ -189,12 +197,12 @@ def register_agents_routes(app):
     @login_required
     def agent_task_detail(task_id):
         """Детальный просмотр задачи со всеми шагами."""
+        seller_id = _task_seller_scope()
         task = agent_service.get_task(task_id)
         if not task:
             abort(404)
 
-        seller_id = current_user.seller.id if current_user.seller else None
-        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+        if seller_id is not None and task.seller_id != seller_id:
             abort(403)
 
         steps = agent_service.get_task_steps(task_id)
@@ -210,14 +218,14 @@ def register_agents_routes(app):
     @login_required
     def agents_api_list_tasks():
         """API: список задач с фильтрацией (для AJAX-обновления)."""
-        seller_id = current_user.seller.id if current_user.seller else None
+        seller_id = _task_seller_scope()
         status = request.args.get('status')
         agent_id = request.args.get('agent_id')
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 20, type=int), 100)
 
         tasks, total = agent_service.list_tasks(
-            seller_id=seller_id if not current_user.is_admin else None,
+            seller_id=seller_id,
             agent_id=agent_id,
             status=status,
             limit=per_page,
@@ -233,10 +241,10 @@ def register_agents_routes(app):
     @login_required
     def agents_api_task_status(task_id):
         """API: статус конкретной задачи (для polling)."""
+        seller_id = _task_seller_scope()
         task = agent_service.get_task(task_id)
         if not task:
             return jsonify({'error': 'Not found'}), 404
-        seller_id = current_user.seller.id if current_user.seller else None
         if not current_user.is_admin and (not seller_id or task.seller_id != seller_id):
             return jsonify({'error': 'Access denied'}), 403
         steps = agent_service.get_task_steps(task_id, limit=50)
@@ -257,10 +265,10 @@ def register_agents_routes(app):
     @login_required
     def agents_api_stats():
         """API: статистика агентов."""
-        seller_id = current_user.seller.id if current_user.seller else None
+        seller_id = _task_seller_scope()
         days = request.args.get('days', 7, type=int)
         stats = agent_service.get_agent_stats(
-            seller_id=seller_id if not current_user.is_admin else None,
+            seller_id=seller_id,
             days=days,
         )
         return jsonify(stats)
@@ -418,11 +426,11 @@ def register_agents_routes(app):
     @login_required
     def agent_task_cancel(task_id):
         """Отменить задачу."""
+        seller_id = _task_seller_scope()
         task = agent_service.get_task(task_id)
         if not task:
             abort(404)
-        seller_id = current_user.seller.id if current_user.seller else None
-        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+        if seller_id is not None and task.seller_id != seller_id:
             abort(403)
 
         agent_service.cancel_task(task_id)
@@ -477,11 +485,11 @@ def register_agents_routes(app):
     @login_required
     def agent_task_rollback(task_id):
         """Откатить все изменения, сделанные задачей агента."""
+        seller_id = _task_seller_scope()
         task = agent_service.get_task(task_id)
         if not task:
             abort(404)
-        seller_id = current_user.seller.id if current_user.seller else None
-        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+        if seller_id is not None and task.seller_id != seller_id:
             abort(403)
 
         try:
@@ -510,12 +518,12 @@ def register_agents_routes(app):
         """API: получить историю изменений задачи (для отображения в UI)."""
         from models import AgentChangeSnapshot
 
+        seller_id = _task_seller_scope()
         task = agent_service.get_task(task_id)
         if not task:
             return jsonify({'error': 'Task not found'}), 404
 
-        seller_id = current_user.seller.id if current_user.seller else None
-        if seller_id and task.seller_id != seller_id and not current_user.is_admin:
+        if seller_id is not None and task.seller_id != seller_id:
             return jsonify({'error': 'Access denied'}), 403
 
         snapshots = AgentChangeSnapshot.query.filter_by(task_id=task_id).order_by(

@@ -1020,13 +1020,10 @@ def migrate(db_path):
         # Marketplace reference freshness/version metadata. Keep this wired
         # into the comprehensive path as well as the standalone migration.
         try:
-            try:
-                from migrate_add_marketplace_reference_freshness import apply_migration
-            except ImportError:
-                from migrations.migrate_add_marketplace_reference_freshness import apply_migration
-            total_added += apply_migration(conn, verbose=False)
-        except sqlite3.OperationalError as exc:
-            print(f"   ! Marketplace reference freshness skipped: {exc}")
+            from migrate_add_marketplace_reference_freshness import apply_migration
+        except ImportError:
+            from migrations.migrate_add_marketplace_reference_freshness import apply_migration
+        total_added += apply_migration(conn, verbose=False)
 
         # ============================================================
         # Auto-publish tables

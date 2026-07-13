@@ -12,6 +12,25 @@ from models import Product, ImportedProduct, EnrichmentJob
 from services.supplier_enrichment import get_enrichment_service
 
 logger = logging.getLogger(__name__)
+MAX_SUPPLIER_BULK_PRODUCTS = 200
+
+
+def _bounded_unique_product_ids(raw_ids, limit=MAX_SUPPLIER_BULK_PRODUCTS):
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ValueError('product_ids must be a non-empty array')
+    if len(raw_ids) > limit:
+        raise ValueError(f'Maximum {limit} product_ids per request')
+    normalized = []
+    seen = set()
+    for index, value in enumerate(raw_ids):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f'product_ids[{index}] must be a positive integer'
+            )
+        if value not in seen:
+            normalized.append(value)
+            seen.add(value)
+    return normalized
 
 
 def register_enrichment_routes(app):
@@ -179,8 +198,17 @@ def register_enrichment_routes(app):
                 if photo_result.get('uploaded', 0) > 0:
                     combined_fields.append('photos')
 
+                text_fields_requested = any(
+                    field != 'photos' for field in fields
+                )
+                text_success = (
+                    text_result.get('success', False)
+                    if text_fields_requested else True
+                )
                 return jsonify({
-                    'success': text_result.get('success', False) or photo_result.get('success', False),
+                    'success': bool(
+                        text_success and photo_result.get('success', False)
+                    ),
                     'fields_applied': combined_fields,
                     'photos': photo_result,
                     'error': text_result.get('error') or photo_result.get('error'),
@@ -488,23 +516,38 @@ def register_enrichment_routes(app):
             return jsonify({'error': 'WB API key not configured'}), 400
 
         data = request.get_json(silent=True) or {}
-        product_ids = data.get('product_ids', [])
+        raw_product_ids = data.get('product_ids', [])
         fields = data.get('fields', [])
         photo_strategy = data.get('photo_strategy', 'replace')
 
-        if not product_ids or not fields:
+        if not raw_product_ids or not fields:
             return jsonify({'error': 'product_ids and fields are required'}), 400
 
+        try:
+            product_ids = _bounded_unique_product_ids(raw_product_ids)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
         allowed_fields = {'title', 'brand', 'description', 'characteristics', 'dimensions', 'photos'}
-        fields = [f for f in fields if f in allowed_fields]
+        if not isinstance(fields, list):
+            return jsonify({'error': 'fields must be an array'}), 400
+        fields = list(dict.fromkeys(
+            field for field in fields if field in allowed_fields
+        ))
         if not fields:
             return jsonify({'error': 'No valid fields'}), 400
+        if photo_strategy not in {'replace', 'append', 'only_if_empty'}:
+            return jsonify({'error': 'Invalid photo_strategy'}), 400
 
         seller_id = current_user.seller.id
-        valid_ids = [
-            pid for pid in product_ids
-            if Product.query.filter_by(id=pid, seller_id=seller_id).first()
-        ]
+        available_ids = {
+            product.id
+            for product in Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.id.in_(product_ids),
+            ).all()
+        }
+        valid_ids = [pid for pid in product_ids if pid in available_ids]
 
         if not valid_ids:
             return jsonify({'error': 'No valid products found'}), 400

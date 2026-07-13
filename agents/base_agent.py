@@ -23,13 +23,14 @@ import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
 from .config import AgentConfig
 from .llm import (
     BaseLLM, create_llm, create_fallback_llm, create_step_namer_llm,
-    create_llm_from_profile,
+    create_llm_from_profile, llm_retry_attempt_limit,
 )
 from .platform_client import PlatformClient
 from .tools import ToolRegistry, create_platform_tools
@@ -55,7 +56,7 @@ class _UnavailableLLM(BaseLLM):
     def chat_with_tools(self, system, messages, tools, temperature=None, max_tokens=None):
         self._raise()
 
-    def structured_output(self, system, prompt, schema):
+    def structured_output(self, system, prompt, schema, max_tokens=None):
         self._raise()
 
 # Файл liveness для Docker healthcheck
@@ -66,6 +67,13 @@ LIVENESS_INTERVAL_SECONDS = 30
 # (грубая оценка: ~4 символа ≈ 1 токен, лимит ~80k токенов → ~300k символов,
 #  оставляем запас для системного промпта и ответа)
 CONTEXT_CHAR_LIMIT = 120_000
+
+# Structured calls need enough room for at least a small valid JSON object.
+# The provider output cap is still bounded by AgentConfig.MAX_TOKENS.
+STRUCTURED_MIN_OUTPUT_TOKENS = 64
+STRUCTURED_OUTPUT_TOKENS_PER_ITEM = 128
+STRUCTURED_MESSAGE_OVERHEAD_TOKENS = 256
+TOOL_BATCH_MIN_CHUNK_TOKEN_BUDGET = 6000
 
 # Макс. число провалов задачи перед пропуском (dead letter protection)
 MAX_TASK_FAILURES = 3
@@ -200,6 +208,42 @@ def _touch_liveness():
 def _estimate_context_size(messages: list[dict]) -> int:
     """Примерная оценка размера контекста в символах."""
     return sum(len(m.get('content', '')) for m in messages)
+
+
+def _estimate_structured_input_tokens(
+    system: str, prompt: str, schema: dict,
+) -> int:
+    """Conservative practical estimate for a Russian/JSON structured input.
+
+    Two UTF-8 bytes per token plus a fixed margin avoids the severe
+    over-reservation of a byte-for-token estimate while covering message
+    framing and the provider's JSON contract wrapper.
+    """
+    schema_text = json.dumps(
+        schema, ensure_ascii=False, sort_keys=True, indent=2,
+    )
+    request_text = '\n'.join((str(system or ''), str(prompt or ''), schema_text))
+    byte_count = len(request_text.encode('utf-8'))
+    return (
+        (byte_count + 1) // 2
+        + STRUCTURED_MESSAGE_OVERHEAD_TOKENS
+    )
+
+
+def _estimate_chat_input_tokens(
+    system: str, messages: list[dict], tools: list[dict] = None,
+) -> int:
+    """Estimate the next complete chat request, including repeated context."""
+    request_text = '\n'.join((
+        str(system or ''),
+        json.dumps(messages or [], ensure_ascii=False, separators=(',', ':')),
+        json.dumps(tools or [], ensure_ascii=False, separators=(',', ':')),
+    ))
+    byte_count = len(request_text.encode('utf-8'))
+    return (
+        (byte_count + 1) // 2
+        + STRUCTURED_MESSAGE_OVERHEAD_TOKENS
+    )
 
 
 def _summarize_old_messages(messages: list[dict]) -> list[dict]:
@@ -632,6 +676,33 @@ class BaseAgent(ABC):
         usage_totals = {}
         cancel_event = threading.Event()
 
+        selected_ids = set()
+        invalid_selection = None
+        for index, product_id in enumerate(product_ids):
+            if (
+                not isinstance(product_id, int)
+                or isinstance(product_id, bool)
+                or product_id <= 0
+            ):
+                invalid_selection = (
+                    f'product_ids[{index}] должен быть положительным integer'
+                )
+                break
+            if product_id in selected_ids:
+                invalid_selection = f'Повторяющийся product_id: {product_id}'
+                break
+            selected_ids.add(product_id)
+        if invalid_selection:
+            return {
+                'status': 'failed',
+                'processed': 0,
+                'saved': 0,
+                'failed': total,
+                'message': invalid_selection,
+                'errors': [{'error': invalid_selection}],
+                '_usage': _build_usage({}, mode='structured_batch_preflight'),
+            }
+
         def _is_cancelled() -> bool:
             if cancel_event.is_set():
                 return True
@@ -670,6 +741,44 @@ class BaseAgent(ABC):
                 '_usage': _build_usage(usage_totals, mode='structured_batch'),
             }
 
+        fetched_ids = []
+        invalid_prefetch = None
+        if not isinstance(all_products, list):
+            invalid_prefetch = 'Batch prefetch вернул данные неверного типа'
+        else:
+            for item in all_products:
+                product_id = item.get('id') if isinstance(item, dict) else None
+                if (
+                    not isinstance(product_id, int)
+                    or isinstance(product_id, bool)
+                    or product_id not in selected_ids
+                    or product_id in fetched_ids
+                ):
+                    invalid_prefetch = (
+                        'Batch prefetch вернул посторонний или '
+                        'повторяющийся product_id'
+                    )
+                    break
+                fetched_ids.append(product_id)
+        missing_ids = sorted(selected_ids - set(fetched_ids))
+        if invalid_prefetch or missing_ids:
+            message = invalid_prefetch or (
+                'Не удалось загрузить выбранные товары: '
+                + ', '.join(str(product_id) for product_id in missing_ids[:20])
+            )
+            return {
+                'status': 'failed',
+                'processed': 0,
+                'saved': 0,
+                'failed': total,
+                'message': message,
+                'errors': [{
+                    'error': message,
+                    **({'missing_product_ids': missing_ids} if missing_ids else {}),
+                }],
+                '_usage': _build_usage({}, mode='structured_batch_preflight'),
+            }
+
         # Индекс для быстрого поиска
         products_by_id = {p['id']: p for p in all_products}
 
@@ -681,18 +790,117 @@ class BaseAgent(ABC):
         )))
         if api_budget:
             chunks = chunks[:api_budget]
+        run_token_budget = max(0, int(getattr(
+            self, '_run_token_budget_override',
+            getattr(self.config, 'RUN_TOKEN_BUDGET', 0),
+        )))
+        configured_output_cap = max(
+            1, int(getattr(self.config, 'MAX_TOKENS', 4096)),
+        )
+        chunk_token_budgets = [None] * len(chunks)
+        if run_token_budget and chunks:
+            estimated_inputs = []
+            minimum_outputs = []
+            for chunk_ids in chunks:
+                chunk_products = [products_by_id[product_id]
+                                  for product_id in chunk_ids]
+                try:
+                    preview_prompt = self.build_structured_prompt(chunk_products)
+                    preview_schema = self.batch_result_schema()
+                    estimated_inputs.append(_estimate_structured_input_tokens(
+                        self.system_prompt, preview_prompt, preview_schema,
+                    ))
+                    minimum_outputs.append(min(
+                        configured_output_cap,
+                        max(
+                            STRUCTURED_MIN_OUTPUT_TOKENS,
+                            len(chunk_ids) * STRUCTURED_OUTPUT_TOKENS_PER_ITEM,
+                        ),
+                    ))
+                except Exception as exc:
+                    message = (
+                        'Не удалось подготовить structured batch prompt: '
+                        f'{str(exc)[:200]}'
+                    )
+                    return {
+                        'status': 'failed',
+                        'processed': 0,
+                        'saved': 0,
+                        'failed': total,
+                        'message': message,
+                        'errors': [{'error': message}],
+                        '_usage': _build_usage(
+                            {}, mode='structured_batch_preflight',
+                        ),
+                    }
+
+            scheduled_count = 0
+            minimum_reserved = 0
+            for estimated_input, minimum_output in zip(
+                estimated_inputs, minimum_outputs,
+            ):
+                required = estimated_input + minimum_output
+                if minimum_reserved + required > run_token_budget:
+                    break
+                minimum_reserved += required
+                scheduled_count += 1
+            chunks = chunks[:scheduled_count]
+            estimated_inputs = estimated_inputs[:scheduled_count]
+            minimum_outputs = minimum_outputs[:scheduled_count]
+
+            if chunks:
+                remaining_output_budget = max(
+                    0, run_token_budget - minimum_reserved,
+                )
+                base_extra, extra_remainder = divmod(
+                    remaining_output_budget, len(chunks),
+                )
+                chunk_token_budgets = [
+                    min(
+                        configured_output_cap,
+                        minimum_outputs[index]
+                        + base_extra
+                        + (1 if index < extra_remainder else 0),
+                    )
+                    for index in range(len(chunks))
+                ]
+            else:
+                chunk_token_budgets = []
+        scheduled_total = sum(len(chunk) for chunk in chunks)
+        deferred_count = max(0, total - scheduled_total)
+        chunk_api_attempt_budgets = [None] * len(chunks)
+        if api_budget and chunks:
+            base_attempts, extra_attempts = divmod(api_budget, len(chunks))
+            chunk_api_attempt_budgets = [
+                max(1, base_attempts + (1 if index < extra_attempts else 0))
+                for index in range(len(chunks))
+            ]
 
         # 3. Обработка чанков (параллельно или последовательно)
         progress_lock = threading.Lock()
         processed_count = 0
         saved_count = 0
-        failed_count = 0
+        failed_count = deferred_count
         all_results = []
-        all_errors = []
+        all_errors = ([{
+            'error': 'Часть товаров не запущена из-за лимита LLM API/токенов',
+            'deferred': deferred_count,
+        }] if deferred_count else [])
         completed_chunks = set()
+        token_budget_exhausted = threading.Event()
         base_checkpoint = task.get('checkpoint')
         if not isinstance(base_checkpoint, dict):
             base_checkpoint = {}
+
+        def _mark_token_budget_locked() -> None:
+            if not run_token_budget:
+                return
+            used = (
+                int(usage_totals.get('input_tokens') or 0)
+                + int(usage_totals.get('output_tokens') or 0)
+            )
+            if used >= run_token_budget:
+                token_budget_exhausted.set()
 
         def _checkpoint_locked() -> None:
             checkpoint = dict(base_checkpoint)
@@ -758,23 +966,42 @@ class BaseAgent(ABC):
                 structured_call = getattr(
                     self.llm, 'structured_output_with_usage', None,
                 )
-                if callable(structured_call):
-                    structured = structured_call(
-                        system=self.system_prompt,
-                        prompt=prompt,
-                        schema=schema,
-                    )
-                else:
-                    structured = {
-                        'data': self.llm.structured_output(
+                attempt_budget = chunk_api_attempt_budgets[chunk_idx]
+                attempt_context = (
+                    llm_retry_attempt_limit(attempt_budget)
+                    if attempt_budget is not None else nullcontext()
+                )
+                with attempt_context:
+                    if callable(structured_call):
+                        structured_kwargs = dict(
                             system=self.system_prompt,
                             prompt=prompt,
                             schema=schema,
-                        ),
-                        'usage': {},
-                    }
+                        )
+                        if chunk_token_budgets[chunk_idx] is not None:
+                            structured_kwargs['max_tokens'] = (
+                                chunk_token_budgets[chunk_idx]
+                            )
+                        structured = structured_call(**structured_kwargs)
+                    else:
+                        structured_kwargs = dict(
+                            system=self.system_prompt,
+                            prompt=prompt,
+                            schema=schema,
+                        )
+                        if chunk_token_budgets[chunk_idx] is not None:
+                            structured_kwargs['max_tokens'] = (
+                                chunk_token_budgets[chunk_idx]
+                            )
+                        structured = {
+                            'data': self.llm.structured_output(**structured_kwargs),
+                            'usage': {},
+                        }
+                structured_usage = dict(structured.get('usage') or {})
+                structured_usage.setdefault('api_requests', 1)
                 with progress_lock:
-                    _merge_usage(usage_totals, structured.get('usage') or {})
+                    _merge_usage(usage_totals, structured_usage)
+                    _mark_token_budget_locked()
                 llm_result = structured['data']
                 duration_ms = int((time.time() - t0) * 1000)
 
@@ -794,6 +1021,35 @@ class BaseAgent(ABC):
                         'Модель вернула невалидный structured result',
                     )
 
+                result_ids = []
+                for item in results:
+                    if not isinstance(item, dict):
+                        raise ValueError(
+                            'Structured result entries must be objects',
+                        )
+                    product_id = item.get('product_id')
+                    if (
+                        not isinstance(product_id, int)
+                        or isinstance(product_id, bool)
+                    ):
+                        raise ValueError(
+                            'Structured result product_id must be an integer',
+                        )
+                    result_ids.append(product_id)
+                result_id_set = set(result_ids)
+                expected_id_set = set(chunk_ids)
+                if (
+                    len(result_ids) != len(result_id_set)
+                    or result_id_set != expected_id_set
+                ):
+                    missing = sorted(expected_id_set - result_id_set)
+                    foreign = sorted(result_id_set - expected_id_set)
+                    raise ValueError(
+                        'Structured result IDs do not match current chunk: '
+                        f'missing={missing[:10]}, foreign={foreign[:10]}, '
+                        f'duplicates={len(result_ids) - len(result_id_set)}'
+                    )
+
                 self.platform.log_action(
                     task_id,
                     f'LLM ответ (чанк {chunk_idx + 1})',
@@ -805,6 +1061,7 @@ class BaseAgent(ABC):
                     _merge_usage(
                         usage_totals, getattr(e, 'llm_usage', None) or {},
                     )
+                    _mark_token_budget_locked()
                 err_msg = f'Чанк {chunk_idx + 1}: LLM ошибка — {str(e)[:200]}'
                 logger.warning(f"Structured batch chunk {chunk_idx} failed: {e}")
                 self.platform.log_error(task_id, f'Ошибка чанка {chunk_idx + 1}', err_msg)
@@ -834,6 +1091,34 @@ class BaseAgent(ABC):
             # Маппинг в формат batch update
             try:
                 updates = self._map_structured_result_to_updates(results)
+                if not isinstance(updates, list):
+                    raise ValueError(
+                        'Structured mapper must return a list of updates',
+                    )
+                update_ids = set()
+                expected_id_set = set(chunk_ids)
+                for update in updates:
+                    product_id = (
+                        update.get('product_id')
+                        if isinstance(update, dict) else None
+                    )
+                    if (
+                        not isinstance(product_id, int)
+                        or isinstance(product_id, bool)
+                        or product_id not in expected_id_set
+                    ):
+                        raise ValueError(
+                            'Structured mapper returned an update outside chunk',
+                        )
+                    if product_id in update_ids:
+                        raise ValueError(
+                            'Structured mapper returned duplicate product_id',
+                        )
+                    if len(update) <= 1:
+                        raise ValueError(
+                            'Structured mapper returned an empty update',
+                        )
+                    update_ids.add(product_id)
             except Exception as e:
                 logger.warning(f"Mapping error in chunk {chunk_idx}: {e}")
                 return _record_chunk_failure(chunk_idx, len(chunk_products), str(e))
@@ -848,7 +1133,10 @@ class BaseAgent(ABC):
                     return {'status': 'cancelled', 'processed': 0, 'saved': 0}
                 try:
                     save_resp = self.platform.batch_update_imported_products(updates)
-                    chunk_saved = save_resp.get('updated', 0)
+                    chunk_saved = min(
+                        len(updates),
+                        max(0, int(save_resp.get('updated') or 0)),
+                    )
                     for r in save_resp.get('results', []):
                         if r.get('status') == 'error':
                             chunk_errors.append(r)
@@ -858,9 +1146,11 @@ class BaseAgent(ABC):
 
             # Обновляем прогресс
             with progress_lock:
+                chunk_processed = len(chunk_products)
+                chunk_failed = max(0, chunk_processed - chunk_saved)
                 processed_count += len(chunk_products)
                 saved_count += chunk_saved
-                failed_count += len(chunk_errors)
+                failed_count += chunk_failed
                 all_results.extend(results)
                 all_errors.extend(chunk_errors)
                 completed_chunks.add(chunk_idx)
@@ -880,22 +1170,53 @@ class BaseAgent(ABC):
                 'errors': chunk_errors,
             }
 
+        def _stop_scheduling() -> bool:
+            return _is_cancelled() or token_budget_exhausted.is_set()
+
         self._run_cancel_aware_chunks(
-            chunks, max_workers, _process_chunk, _is_cancelled,
+            chunks, max_workers, _process_chunk, _stop_scheduling,
             'Structured batch chunk error',
         )
+
+        runtime_deferred_count = 0
+        if token_budget_exhausted.is_set() and not _is_cancelled():
+            unstarted_indices = [
+                index for index in range(len(chunks))
+                if index not in completed_chunks
+            ]
+            runtime_deferred_count = sum(
+                len(chunks[index]) for index in unstarted_indices
+            )
+            if runtime_deferred_count:
+                with progress_lock:
+                    failed_count += runtime_deferred_count
+                    all_errors.append({
+                        'error': (
+                            'Часть товаров не запущена после исчерпания '
+                            'фактического лимита токенов'
+                        ),
+                        'deferred': runtime_deferred_count,
+                    })
+                    _checkpoint_locked()
+        budget_deferred_count = deferred_count + runtime_deferred_count
 
         if _is_cancelled():
             status = 'cancelled'
             message = 'Задача отменена пользователем'
-        elif failed_count and not processed_count:
+        elif budget_deferred_count and not processed_count:
+            status = 'partial'
+            message = (
+                'Лимита LLM API недостаточно для запуска structured batch. '
+                f'Не обработано: {budget_deferred_count}.'
+            )
+        elif failed_count and not saved_count:
             status = 'failed'
-            message = 'Не удалось обработать structured batch.'
+            message = 'Не удалось сохранить результаты structured batch.'
         elif failed_count:
             status = 'partial'
             message = (
                 f'Обработано {processed_count} товаров. '
-                f'Не обработано: {failed_count}.'
+                f'Сохранено: {saved_count}, не сохранено: {failed_count}.'
             )
         else:
             status = 'completed'
@@ -922,7 +1243,8 @@ class BaseAgent(ABC):
             'message': message,
             '_usage': _build_usage(
                 usage_totals, mode='structured_batch', chunks=len(completed_chunks),
-                api_budget=api_budget,
+                api_budget=api_budget, token_budget=run_token_budget,
+                budget_exhausted=token_budget_exhausted.is_set(),
             ),
         }
 
@@ -1005,6 +1327,33 @@ class BaseAgent(ABC):
         task_type = task.get('task_type', 'batch')
         cancel_event = threading.Event()
 
+        seen_product_ids = set()
+        invalid_selection = None
+        for index, product_id in enumerate(product_ids):
+            if (
+                not isinstance(product_id, int)
+                or isinstance(product_id, bool)
+                or product_id <= 0
+            ):
+                invalid_selection = (
+                    f'product_ids[{index}] должен быть положительным integer'
+                )
+                break
+            if product_id in seen_product_ids:
+                invalid_selection = f'Повторяющийся product_id: {product_id}'
+                break
+            seen_product_ids.add(product_id)
+        if invalid_selection:
+            return {
+                'status': 'failed',
+                'processed': 0,
+                'saved': 0,
+                'failed': total,
+                'message': invalid_selection,
+                'errors': [{'error': invalid_selection}],
+                '_usage': _build_usage({}, mode='tool_batch_preflight'),
+            }
+
         def _is_cancelled() -> bool:
             if cancel_event.is_set():
                 return True
@@ -1043,6 +1392,43 @@ class BaseAgent(ABC):
                 '_usage': _build_usage({}, mode='tool_batch'),
             }
 
+        fetched_ids = []
+        invalid_prefetch = None
+        if not isinstance(all_products, list):
+            invalid_prefetch = 'Batch prefetch вернул данные неверного типа'
+        else:
+            for item in all_products:
+                product_id = item.get('id') if isinstance(item, dict) else None
+                if (
+                    not isinstance(product_id, int)
+                    or isinstance(product_id, bool)
+                    or product_id not in seen_product_ids
+                    or product_id in fetched_ids
+                ):
+                    invalid_prefetch = (
+                        'Batch prefetch вернул посторонний или повторяющийся product_id'
+                    )
+                    break
+                fetched_ids.append(product_id)
+        missing_ids = sorted(seen_product_ids - set(fetched_ids))
+        if invalid_prefetch or missing_ids:
+            message = invalid_prefetch or (
+                'Не удалось загрузить выбранные товары: '
+                + ', '.join(str(product_id) for product_id in missing_ids[:20])
+            )
+            return {
+                'status': 'failed',
+                'processed': 0,
+                'saved': 0,
+                'failed': total,
+                'message': message,
+                'errors': [{
+                    'error': message,
+                    **({'missing_product_ids': missing_ids} if missing_ids else {}),
+                }],
+                '_usage': _build_usage({}, mode='tool_batch_preflight'),
+            }
+
         # 2. Кэширование справочных данных
         if _is_cancelled():
             return {
@@ -1066,15 +1452,10 @@ class BaseAgent(ABC):
         api_budget = max(0, int(getattr(
             self, '_run_api_budget_override', getattr(self.config, 'RUN_API_BUDGET', 24),
         )))
-        if api_budget:
-            # A tool-calling chunk normally needs one action response and one
-            # final response. Do not start work that cannot fit the run budget.
-            chunks = chunks[:max(1, api_budget // 2)]
-        per_chunk_api_budget = (
-            max(2, api_budget // max(len(chunks), 1)) if api_budget else 0
-        )
 
-        # 4. Создаём урезанный toolset (без get_product/get_imported_product)
+        # 4. Создаём урезанный toolset (без fetch/write tools). The model may
+        # query missing reference data, but Python owns the single batch write
+        # after validating the final JSON result.
         batch_tools = ToolRegistry()
         batch_tools.merge(self._tools)
         # Убираем fetch-инструменты — данные уже в промпте
@@ -1082,16 +1463,60 @@ class BaseAgent(ABC):
                           'get_product', 'get_products',
                           'get_imported_products_brief'):
             batch_tools.remove(tool_name)
-        # Убираем single update — будем сохранять пакетно
-        batch_tools.remove('update_imported_product')
+        for tool_name in (
+            'update_product', 'batch_update_products',
+            'update_imported_product', 'batch_update_imported_products',
+        ):
+            batch_tools.remove(tool_name)
+        for tool_name in getattr(self, 'tool_batch_excluded_tools', ()):
+            batch_tools.remove(tool_name)
+
+        # A chunk without tools needs one final model response. A chunk with
+        # reference tools reserves one action response plus the final response.
+        requests_per_chunk = 2 if batch_tools.get_tool_schemas() else 1
+        if api_budget:
+            max_chunks = api_budget // requests_per_chunk
+            chunks = chunks[:max_chunks]
+        run_token_budget = max(0, int(getattr(
+            self, '_run_token_budget_override',
+            getattr(self.config, 'RUN_TOKEN_BUDGET', 0),
+        )))
+        if run_token_budget:
+            max_token_chunks = (
+                run_token_budget // TOOL_BATCH_MIN_CHUNK_TOKEN_BUDGET
+            )
+            chunks = chunks[:max_token_chunks]
+        scheduled_total = sum(len(chunk) for chunk in chunks)
+        deferred_count = max(0, total - scheduled_total)
+        chunk_token_budgets = [None] * len(chunks)
+        if run_token_budget and chunks:
+            base_tokens, extra_tokens = divmod(run_token_budget, len(chunks))
+            chunk_token_budgets = [
+                base_tokens + (1 if index < extra_tokens else 0)
+                for index in range(len(chunks))
+            ]
+        per_chunk_hard_cap = 4 if batch_tools.get_tool_schemas() else 1
+        if api_budget:
+            per_chunk_api_budget = min(
+                per_chunk_hard_cap,
+                max(
+                    requests_per_chunk,
+                    api_budget // max(len(chunks), 1),
+                ),
+            )
+        else:
+            per_chunk_api_budget = per_chunk_hard_cap
 
         # 5. Обработка чанков
         progress_lock = threading.Lock()
         processed_count = 0
         saved_count = 0
-        failed_count = 0
+        failed_count = deferred_count
         all_results = []
-        all_errors = []
+        all_errors = ([{
+            'error': 'Часть товаров не запущена из-за лимита LLM API',
+            'deferred': deferred_count,
+        }] if deferred_count else [])
         usage_totals = {}
         completed_chunks = set()
         base_checkpoint = task.get('checkpoint')
@@ -1161,27 +1586,82 @@ class BaseAgent(ABC):
                 tools_override=batch_tools,
                 max_iterations_override=dynamic_max_iter,
                 api_budget_override=per_chunk_api_budget,
+                token_budget_override=chunk_token_budgets[chunk_idx],
             )
 
             usage = chunk_result.pop('_usage', {})
 
-            with progress_lock:
-                _merge_usage(usage_totals, usage)
-                if chunk_result.get('status') == 'cancelled':
+            if chunk_result.get('status') == 'cancelled' or _is_cancelled():
+                with progress_lock:
+                    _merge_usage(usage_totals, usage)
                     cancel_event.set()
                     _checkpoint_locked()
-                    return chunk_result
-                chunk_processed = chunk_result.get('processed',
-                                                   chunk_result.get('saved', len(chunk_products)))
-                chunk_saved = chunk_result.get('saved', chunk_result.get('processed', 0))
+                return chunk_result
+
+            chunk_errors = []
+            chunk_saved = 0
+            try:
+                updates = self._map_tool_batch_result_to_updates(
+                    chunk_result, chunk_products,
+                )
+                updates = self._validate_tool_batch_updates(
+                    updates, chunk_products,
+                )
+            except Exception as exc:
+                logger.warning(
+                    'Tool batch mapping failed for chunk %s: %s',
+                    chunk_idx, exc,
+                )
+                updates = []
+                chunk_errors.append({
+                    'chunk': chunk_idx,
+                    'error': str(exc)[:200],
+                })
+
+            if updates and not _is_cancelled():
+                try:
+                    # One deterministic platform call per chunk. The model
+                    # never receives a write tool in tool-assisted batch mode.
+                    save_resp = self.platform.batch_update_imported_products(
+                        updates,
+                    )
+                    chunk_saved = min(
+                        len(chunk_products),
+                        max(0, int(save_resp.get('updated') or 0)),
+                    )
+                    chunk_errors.extend(
+                        item for item in save_resp.get('results', [])
+                        if isinstance(item, dict)
+                        and item.get('status') == 'error'
+                    )
+                except Exception as exc:
+                    logger.error(
+                        'Tool batch save failed for chunk %s: %s',
+                        chunk_idx, exc,
+                    )
+                    chunk_errors.append({
+                        'chunk': chunk_idx,
+                        'error': str(exc)[:200],
+                    })
+
+            with progress_lock:
+                _merge_usage(usage_totals, usage)
+                # Never trust model-reported processed/saved counters. Only
+                # loaded products and the typed batch API define accounting.
+                chunk_processed = len(chunk_products)
+                chunk_failed = max(0, chunk_processed - chunk_saved)
                 processed_count += chunk_processed
                 saved_count += chunk_saved
+                failed_count += chunk_failed
+                all_errors.extend(chunk_errors)
 
                 chunk_results = chunk_result.get('results', [])
                 if isinstance(chunk_results, list):
                     all_results.extend(chunk_results)
 
                 completed_chunks.add(chunk_idx)
+                if _is_cancelled():
+                    cancel_event.set()
                 self.platform.update_progress(
                     task_id,
                     completed_steps=processed_count,
@@ -1192,7 +1672,12 @@ class BaseAgent(ABC):
                 )
                 _checkpoint_locked()
 
-            return chunk_result
+            if cancel_event.is_set():
+                return {
+                    'status': 'cancelled',
+                    'processed': chunk_processed,
+                    'saved': chunk_saved,
+                }
 
         self._run_cancel_aware_chunks(
             chunks, max_workers, _process_tool_chunk, _is_cancelled,
@@ -1200,19 +1685,40 @@ class BaseAgent(ABC):
         )
 
         cancelled = _is_cancelled()
+        if cancelled:
+            status = 'cancelled'
+            message = 'Задача отменена пользователем'
+        elif deferred_count and not processed_count:
+            status = 'partial'
+            message = (
+                'Лимита LLM API недостаточно для запуска безопасного чанка. '
+                f'Не обработано: {deferred_count}.'
+            )
+        elif failed_count and not saved_count:
+            status = 'failed'
+            message = 'Не удалось сохранить результаты пакетной обработки.'
+        elif failed_count:
+            status = 'partial'
+            message = (
+                f'Обработано {processed_count} товаров. '
+                f'Сохранено: {saved_count}, не сохранено: {failed_count}.'
+            )
+        else:
+            status = 'completed'
+            message = (
+                f'Обработано {processed_count} товаров ({len(chunks)} чанков). '
+                f'Сохранено: {saved_count}.'
+            )
 
         return {
-            'status': 'cancelled' if cancelled else 'completed',
+            'status': status,
             'processed': processed_count,
             'saved': saved_count,
             'failed': failed_count,
             'results': all_results,
             'errors': all_errors if all_errors else None,
             'chunks': len(chunks),
-            'message': 'Задача отменена пользователем' if cancelled else (
-                f'Обработано {processed_count} товаров ({len(chunks)} чанков). '
-                f'Сохранено: {saved_count}.'
-            ),
+            'message': message,
             '_usage': _build_usage(
                 usage_totals, mode='tool_batch', chunks=len(completed_chunks),
                 api_budget=api_budget,
@@ -1243,6 +1749,49 @@ class BaseAgent(ABC):
         # Fallback: используем стандартный build_task_prompt
         # (будет вызван из _execute_react через build_task_prompt)
         return ''
+
+    def _map_tool_batch_result_to_updates(
+        self, chunk_result: dict, products_data: list[dict],
+    ) -> list[dict]:
+        """Map the model's final JSON into deterministic imported-card writes."""
+        raise NotImplementedError(
+            f'{self.__class__.__name__} must implement '
+            '_map_tool_batch_result_to_updates() to use _execute_tool_batch()'
+        )
+
+    @staticmethod
+    def _validate_tool_batch_updates(
+        updates: list[dict], products_data: list[dict],
+    ) -> list[dict]:
+        """Fail closed on cross-chunk, duplicate or empty model updates."""
+        if not isinstance(updates, list):
+            raise ValueError('Batch mapper must return a list of updates')
+
+        allowed_ids = {
+            item.get('id') for item in products_data
+            if isinstance(item, dict)
+            and isinstance(item.get('id'), int)
+            and not isinstance(item.get('id'), bool)
+        }
+        seen = set()
+        validated = []
+        for update in updates:
+            if not isinstance(update, dict):
+                raise ValueError('Each batch update must be an object')
+            product_id = update.get('product_id')
+            if (
+                not isinstance(product_id, int)
+                or isinstance(product_id, bool)
+                or product_id not in allowed_ids
+            ):
+                raise ValueError('Batch result contains a product outside its chunk')
+            if product_id in seen:
+                raise ValueError('Batch result contains duplicate product_id')
+            if len(update) < 2:
+                raise ValueError('Batch update has no writable fields')
+            seen.add(product_id)
+            validated.append(update)
+        return validated
 
     # ── Креативные названия шагов ──────────────────────────────────
 
@@ -1504,7 +2053,8 @@ class BaseAgent(ABC):
     def _execute_react(self, task: dict,
                        tools_override: ToolRegistry = None,
                        max_iterations_override: int = None,
-                       api_budget_override: int = None) -> dict:
+                       api_budget_override: int = None,
+                       token_budget_override: int = None) -> dict:
         """
         ReAct (Reason-Act) цикл:
         1. LLM получает задачу + инструменты
@@ -1514,6 +2064,7 @@ class BaseAgent(ABC):
 
         tools_override: заменяет self._tools (для batch mode с урезанным toolset)
         max_iterations_override: заменяет self.max_iterations (для dynamic batch sizing)
+        token_budget_override: ограничивает этот ReAct без изменения single-run default
         """
         task_id = task['id']
 
@@ -1529,7 +2080,15 @@ class BaseAgent(ABC):
         total_input_tokens = 0
         total_output_tokens = 0
         usage_totals = {}
-        token_budget = max(0, int(getattr(self.config, 'RUN_TOKEN_BUDGET', 0)))
+        configured_token_budget = getattr(
+            self, '_run_token_budget_override',
+            getattr(self.config, 'RUN_TOKEN_BUDGET', 0),
+        )
+        token_budget = max(0, int(
+            token_budget_override
+            if token_budget_override is not None
+            else configured_token_budget
+        ))
         configured_api_budget = getattr(
             self, '_run_api_budget_override', getattr(self.config, 'RUN_API_BUDGET', 24),
         )
@@ -1542,7 +2101,7 @@ class BaseAgent(ABC):
             if token_budget and tokens_used >= token_budget:
                 return self._token_budget_partial(
                     total_input_tokens, total_output_tokens, iteration,
-                    usage=usage_totals,
+                    usage=usage_totals, token_budget=token_budget,
                 )
             if api_budget and int(usage_totals.get('api_requests') or 0) >= api_budget:
                 return {
@@ -1578,46 +2137,71 @@ class BaseAgent(ABC):
             remaining_tokens = token_budget - tokens_used if token_budget else None
             max_tokens = None
             if remaining_tokens is not None:
-                configured_max = int(getattr(self.config, 'MAX_TOKENS', remaining_tokens))
-                max_tokens = max(1, min(configured_max, remaining_tokens))
-            if tool_schemas:
-                llm_kwargs = dict(
-                    system=self.system_prompt,
-                    messages=messages,
-                    tools=tool_schemas,
+                estimated_next_input = _estimate_chat_input_tokens(
+                    self.system_prompt, messages, tool_schemas,
                 )
-                if max_tokens is not None:
-                    llm_kwargs['max_tokens'] = max_tokens
-                response = self.llm.chat_with_tools(**llm_kwargs)
-            else:
-                chat_with_usage = getattr(self.llm, 'chat_with_usage', None)
-                if callable(chat_with_usage):
-                    chat_kwargs = {
-                        'system': self.system_prompt,
-                        'messages': messages,
-                    }
-                    if max_tokens is not None:
-                        chat_kwargs['max_tokens'] = max_tokens
-                    chat_response = chat_with_usage(**chat_kwargs)
-                    response = {
-                        'text': chat_response.get('text', ''),
-                        'tool_calls': [],
-                        'stop_reason': 'end_turn',
-                        'usage': chat_response.get('usage') or {},
-                    }
-                elif max_tokens is None:
-                    text = self.llm.chat(self.system_prompt, messages)
-                    response = {'text': text, 'tool_calls': [], 'stop_reason': 'end_turn'}
-                else:
-                    text = self.llm.chat(
-                        self.system_prompt, messages, max_tokens=max_tokens,
+                available_output = remaining_tokens - estimated_next_input
+                if available_output <= 0:
+                    return self._token_budget_partial(
+                        total_input_tokens, total_output_tokens, iteration,
+                        usage=usage_totals, token_budget=token_budget,
                     )
-                    response = {'text': text, 'tool_calls': [], 'stop_reason': 'end_turn'}
+                configured_max = int(getattr(self.config, 'MAX_TOKENS', remaining_tokens))
+                max_tokens = max(1, min(configured_max, available_output))
+            used_api_requests = int(usage_totals.get('api_requests') or 0)
+            remaining_api_requests = (
+                max(api_budget - used_api_requests, 0) if api_budget else None
+            )
+            attempt_context = (
+                llm_retry_attempt_limit(remaining_api_requests)
+                if remaining_api_requests is not None else nullcontext()
+            )
+            with attempt_context:
+                if tool_schemas:
+                    llm_kwargs = dict(
+                        system=self.system_prompt,
+                        messages=messages,
+                        tools=tool_schemas,
+                    )
+                    if max_tokens is not None:
+                        llm_kwargs['max_tokens'] = max_tokens
+                    response = self.llm.chat_with_tools(**llm_kwargs)
+                else:
+                    chat_with_usage = getattr(self.llm, 'chat_with_usage', None)
+                    if callable(chat_with_usage):
+                        chat_kwargs = {
+                            'system': self.system_prompt,
+                            'messages': messages,
+                        }
+                        if max_tokens is not None:
+                            chat_kwargs['max_tokens'] = max_tokens
+                        chat_response = chat_with_usage(**chat_kwargs)
+                        response = {
+                            'text': chat_response.get('text', ''),
+                            'tool_calls': [],
+                            'stop_reason': 'end_turn',
+                            'usage': chat_response.get('usage') or {},
+                        }
+                    elif max_tokens is None:
+                        text = self.llm.chat(self.system_prompt, messages)
+                        response = {
+                            'text': text, 'tool_calls': [],
+                            'stop_reason': 'end_turn',
+                        }
+                    else:
+                        text = self.llm.chat(
+                            self.system_prompt, messages, max_tokens=max_tokens,
+                        )
+                        response = {
+                            'text': text, 'tool_calls': [],
+                            'stop_reason': 'end_turn',
+                        }
 
             duration_ms = int((time.time() - t0) * 1000)
 
             # Трекинг токенов
-            usage = response.get('usage', {})
+            usage = dict(response.get('usage') or {})
+            usage.setdefault('api_requests', 1)
             total_input_tokens += usage.get('input_tokens', 0)
             total_output_tokens += usage.get('output_tokens', 0)
             _merge_usage(usage_totals, usage)
@@ -1716,6 +2300,7 @@ class BaseAgent(ABC):
                     iteration + 1,
                     response.get('text'),
                     usage=usage_totals,
+                    token_budget=token_budget,
                 )
 
         # Достигнут лимит итераций — пробуем извлечь частичный результат
@@ -1762,9 +2347,14 @@ class BaseAgent(ABC):
         react_iterations: int,
         partial_text: str = None,
         usage: dict = None,
+        token_budget: int = None,
     ) -> dict:
         """Возвращает накопленный результат без ещё одного LLM-вызова."""
-        budget = max(0, int(getattr(self.config, 'RUN_TOKEN_BUDGET', 0)))
+        budget = max(0, int(
+            token_budget
+            if token_budget is not None
+            else getattr(self.config, 'RUN_TOKEN_BUDGET', 0)
+        ))
         if partial_text:
             result = _extract_json(partial_text)
         else:

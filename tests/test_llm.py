@@ -9,7 +9,8 @@ import pytest
 
 import agents.llm as llm_module
 from agents.llm import (
-    llm_retry, _extract_json_from_text, create_llm_from_profile,
+    BaseLLM, llm_retry, llm_retry_attempt_limit,
+    _extract_json_from_text, create_llm_from_profile,
     _extract_openai_usage, _safe_base_url_for_log, DeepSeekLLM, OpenAICompatLLM,
 )
 
@@ -77,6 +78,27 @@ class TestLLMRetry:
         assert flaky() == 'ok'
         assert call_count == 3
 
+    def test_success_usage_counts_every_physical_attempt(self):
+        call_count = 0
+
+        @llm_retry(max_retries=2, base_delay=0)
+        def flaky():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError('network error')
+            return {
+                'text': 'ok',
+                'usage': {'input_tokens': 11, 'api_requests': 1},
+            }
+
+        result = flaky()
+
+        assert result['usage'] == {
+            'input_tokens': 11,
+            'api_requests': 3,
+        }
+
     def test_no_retry_on_non_retryable(self):
         @llm_retry(max_retries=3, base_delay=0.01)
         def bad():
@@ -85,13 +107,98 @@ class TestLLMRetry:
         with pytest.raises(ValueError):
             bad()
 
-    def test_exhausted_retries_raises(self):
-        @llm_retry(max_retries=1, base_delay=0.01)
+    def test_exhausted_retries_attaches_usage_without_final_sleep(
+            self, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(llm_module.time, 'sleep', sleeps.append)
+
+        @llm_retry(max_retries=1, base_delay=2)
         def always_fail():
             raise ConnectionError('nope')
 
-        with pytest.raises(ConnectionError):
+        with pytest.raises(ConnectionError) as exc_info:
             always_fail()
+
+        assert exc_info.value.llm_usage == {'api_requests': 2}
+        assert sleeps == [2]
+
+    def test_attempt_limit_caps_retries_and_is_request_local(self):
+        call_count = 0
+
+        @llm_retry(max_retries=3, base_delay=0)
+        def succeeds_on_third_call():
+            nonlocal call_count
+            call_count += 1
+            if call_count % 3:
+                raise TimeoutError('retry me')
+            return {'usage': {}}
+
+        with llm_retry_attempt_limit(2):
+            with pytest.raises(TimeoutError) as exc_info:
+                succeeds_on_third_call()
+
+        assert call_count == 2
+        assert exc_info.value.llm_usage == {'api_requests': 2}
+
+        # The exhausted limit must not leak into the next logical request.
+        call_count = 0
+        result = succeeds_on_third_call()
+        assert result['usage']['api_requests'] == 3
+
+    @pytest.mark.parametrize('value', [0, -1, True, 1.5])
+    def test_attempt_limit_requires_positive_integer(self, value):
+        with pytest.raises(ValueError):
+            with llm_retry_attempt_limit(value):
+                pass
+
+
+class TestCompatibilityUsage:
+    class PlainProvider(BaseLLM):
+        def __init__(self, failures=0, text='ok'):
+            self.failures = failures
+            self.text = text
+            self.calls = 0
+
+        @llm_retry(max_retries=3, base_delay=0)
+        def chat(self, system, messages, temperature=None, max_tokens=None):
+            self.calls += 1
+            if self.calls <= self.failures:
+                raise ConnectionError('temporary')
+            return self.text
+
+        def chat_with_tools(self, system, messages, tools,
+                            temperature=None, max_tokens=None):
+            raise NotImplementedError
+
+        def structured_output(self, system, prompt, schema,
+                              max_tokens=None):
+            text = self.chat(
+                system,
+                [{'role': 'user', 'content': prompt}],
+                max_tokens=max_tokens,
+            )
+            return _extract_json_from_text(text)
+
+    def test_plain_chat_wrapper_captures_retry_attempts(self):
+        provider = self.PlainProvider(failures=2)
+
+        result = provider.chat_with_usage('system', [])
+
+        assert result == {
+            'text': 'ok',
+            'usage': {'api_requests': 3},
+        }
+
+    def test_structured_parse_error_keeps_nested_chat_attempts(self):
+        provider = self.PlainProvider(failures=1, text='not json')
+
+        with pytest.raises(ValueError) as exc_info:
+            provider.structured_output_with_usage(
+                'system', 'prompt', {'type': 'object'},
+            )
+
+        assert provider.calls == 2
+        assert exc_info.value.llm_usage == {'api_requests': 2}
 
 
 class TestTaskLLMProfile:
@@ -217,7 +324,7 @@ class TestPromptCacheUsage:
         }
 
         first = provider.structured_output_with_usage(
-            'stable system', 'dynamic request one', schema,
+            'stable system', 'dynamic request one', schema, max_tokens=17,
         )
         provider.structured_output_with_usage(
             'stable system', 'dynamic request two', schema,
@@ -225,6 +332,7 @@ class TestPromptCacheUsage:
 
         assert first['data'] == {'result': 'ok'}
         assert first['usage']['cache_hit_tokens'] == 64
+        assert calls[0]['max_tokens'] == 17
         assert calls[0]['messages'][0] == calls[1]['messages'][0]
         assert calls[0]['messages'][1]['content'] == 'dynamic request one'
         assert calls[1]['messages'][1]['content'] == 'dynamic request two'

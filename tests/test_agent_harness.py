@@ -3,6 +3,7 @@
 import json
 import unittest
 
+from agents.llm import llm_retry
 from agents.unified import BatchAuditSkill, CatalogQuerySkill, DescriptionWriterSkill
 from services.agent_harness import (
     _normalize_product_ids,
@@ -594,6 +595,57 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
         self.assertEqual(result['status'], 'needs_clarification')
         self.assertEqual(platform.brief_calls, 0)
 
+    def test_content_writer_rejects_non_integer_scope_ids(self):
+        platform = _GeneratedBatchPlatform()
+        skill = object.__new__(DescriptionWriterSkill)
+        skill.llm = _GeneratedBatchLLM()
+        skill.platform = platform
+
+        result = skill.execute_task({
+            'seller_id': 7,
+            'task_type': 'rewrite_content',
+            'input_data': json.dumps({
+                'product_ids': [1.0],
+                'entity_scope': {'kind': 'product', 'ids': [1.0]},
+                'params': {'entity_kind': 'product', 'fields': ['description']},
+            }),
+        })
+
+        self.assertEqual(result['status'], 'needs_clarification')
+        self.assertEqual(platform.brief_calls, 0)
+
+    def test_content_writer_retry_respects_physical_api_budget(self):
+        platform = _GeneratedBatchPlatform()
+        skill = object.__new__(DescriptionWriterSkill)
+        skill.platform = platform
+        skill._run_api_budget_override = 2
+
+        class FailingLLM:
+            def __init__(self):
+                self.calls = 0
+
+            @llm_retry(max_retries=3, base_delay=0)
+            def structured_output_with_usage(self, **kwargs):
+                self.calls += 1
+                raise ConnectionError('temporary provider failure')
+
+        skill.llm = FailingLLM()
+        result = skill.execute_task({
+            'id': 'content-retry-budget',
+            'seller_id': 7,
+            'task_type': 'rewrite_content',
+            'input_data': json.dumps({
+                'product_ids': [1],
+                'entity_scope': {'kind': 'product', 'ids': [1]},
+                'params': {'entity_kind': 'product', 'fields': ['description']},
+            }),
+        })
+
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(skill.llm.calls, 2)
+        self.assertEqual(result['_usage']['api_requests'], 2)
+        self.assertEqual(platform.batch_calls, [])
+
     def test_content_writer_generates_and_saves_title_and_description_in_one_call(self):
         platform = _ContentPlatform()
         llm = _ContentLLM()
@@ -646,6 +698,35 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
 
         self.assertEqual(result['status'], 'partial')
         self.assertEqual(result['failed'], 1)
+        self.assertEqual(platform.saved, [])
+        self.assertEqual(platform.checked_items, [])
+
+    def test_content_writer_rejects_coerced_model_product_id(self):
+        platform = _ContentPlatform()
+        skill = object.__new__(DescriptionWriterSkill)
+        skill.platform = platform
+
+        class FloatIdLLM:
+            def structured_output_with_usage(self, **kwargs):
+                return {
+                    'data': {'results': [{
+                        'product_id': 9741.0,
+                        'description': 'Нельзя сохранять по приведённому ID',
+                    }]},
+                    'usage': {'api_requests': 1},
+                }
+
+        skill.llm = FloatIdLLM()
+        result = skill.execute_task({
+            'seller_id': 7,
+            'input_data': json.dumps({
+                'product_ids': [9741],
+                'entity_scope': {'kind': 'product', 'ids': [9741]},
+            }),
+        })
+
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['saved'], 0)
         self.assertEqual(platform.saved, [])
         self.assertEqual(platform.checked_items, [])
 

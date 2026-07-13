@@ -17,6 +17,8 @@ import logging
 import re
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -128,6 +130,91 @@ def _safe_base_url_for_log(value: str) -> str:
 
 # ── Retry-декоратор для LLM-вызовов ──────────────────────────────
 
+_llm_attempt_count: ContextVar[int | None] = ContextVar(
+    'llm_attempt_count', default=None,
+)
+_llm_attempts_remaining: ContextVar[int | None] = ContextVar(
+    'llm_attempts_remaining', default=None,
+)
+
+
+@contextmanager
+def llm_retry_attempt_limit(max_attempts: int):
+    """Caps physical retry attempts within the current request context."""
+    if (
+        isinstance(max_attempts, bool)
+        or not isinstance(max_attempts, int)
+        or max_attempts <= 0
+    ):
+        raise ValueError('max_attempts must be a positive integer')
+
+    parent_remaining = _llm_attempts_remaining.get()
+    effective_limit = (
+        max_attempts
+        if parent_remaining is None
+        else min(parent_remaining, max_attempts)
+    )
+    token = _llm_attempts_remaining.set(effective_limit)
+    try:
+        yield
+    finally:
+        remaining = _llm_attempts_remaining.get()
+        consumed = max(effective_limit - int(remaining or 0), 0)
+        _llm_attempts_remaining.reset(token)
+        if parent_remaining is not None:
+            _llm_attempts_remaining.set(max(parent_remaining - consumed, 0))
+
+
+def _start_attempt_capture():
+    """Starts or joins a request-local physical-attempt capture."""
+    current = _llm_attempt_count.get()
+    if current is None:
+        return _llm_attempt_count.set(0), 0
+    return None, current
+
+
+def _captured_attempts_since(start: int) -> int:
+    current = _llm_attempt_count.get()
+    if current is None:
+        return 0
+    return max(int(current) - int(start), 0)
+
+
+def _finish_attempt_capture(token) -> None:
+    if token is not None:
+        _llm_attempt_count.reset(token)
+
+
+def _usage_with_api_requests(usage: Any, api_requests: int) -> dict:
+    normalized = dict(usage) if isinstance(usage, dict) else {}
+    normalized['api_requests'] = max(int(api_requests), 0)
+    return normalized
+
+
+def _attach_api_request_usage(error: Exception, api_requests: int) -> None:
+    existing = getattr(error, 'llm_usage', None)
+    existing_count = 0
+    if isinstance(existing, dict):
+        try:
+            existing_count = int(existing.get('api_requests') or 0)
+        except (TypeError, ValueError):
+            existing_count = 0
+    error.llm_usage = _usage_with_api_requests(
+        existing, max(int(api_requests), existing_count, 0),
+    )
+
+
+def _result_with_api_request_usage(result: Any, api_requests: int) -> Any:
+    """Adds attempt count only to result shapes that already expose usage."""
+    if not isinstance(result, dict) or not isinstance(result.get('usage'), dict):
+        return result
+    normalized = dict(result)
+    normalized['usage'] = _usage_with_api_requests(
+        result['usage'], api_requests,
+    )
+    return normalized
+
+
 def llm_retry(max_retries: int = 3, base_delay: float = 2.0):
     """
     Retry с экспоненциальным backoff для LLM-вызовов.
@@ -137,32 +224,73 @@ def llm_retry(max_retries: int = 3, base_delay: float = 2.0):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            last_error = None
-            for attempt in range(max_retries + 1):
-                try:
-                    return func(*args, **kwargs)
-                except (ConnectionError, TimeoutError, OSError) as e:
-                    last_error = e
-                except Exception as e:
-                    err_str = str(e).lower()
-                    status = getattr(getattr(e, 'response', None), 'status_code', 0) or 0
-                    is_retryable = (
-                        status in (429, 502, 503, 529)
-                        or 'rate' in err_str
-                        or 'overloaded' in err_str
-                        or 'timeout' in err_str
+            capture_token, capture_start = _start_attempt_capture()
+            try:
+                for attempt in range(max_retries + 1):
+                    attempts_remaining = _llm_attempts_remaining.get()
+                    if attempts_remaining is not None:
+                        # A positive limit is guaranteed by the public context
+                        # manager. Reaching zero is handled after the preceding
+                        # failed attempt, before another provider call or sleep.
+                        if attempts_remaining <= 0:
+                            error = RuntimeError(
+                                'LLM retry attempt limit exhausted',
+                            )
+                            _attach_api_request_usage(
+                                error,
+                                _captured_attempts_since(capture_start),
+                            )
+                            raise error
+                        _llm_attempts_remaining.set(attempts_remaining - 1)
+                    _llm_attempt_count.set(
+                        int(_llm_attempt_count.get() or 0) + 1,
                     )
-                    if not is_retryable or attempt >= max_retries:
-                        raise
-                    last_error = e
+                    try:
+                        result = func(*args, **kwargs)
+                    except (ConnectionError, TimeoutError, OSError) as caught:
+                        last_error = caught
+                        is_retryable = True
+                    except Exception as caught:
+                        last_error = caught
+                        err_str = str(caught).lower()
+                        status = (
+                            getattr(
+                                getattr(caught, 'response', None),
+                                'status_code', 0,
+                            ) or 0
+                        )
+                        is_retryable = (
+                            status in (429, 502, 503, 529)
+                            or 'rate' in err_str
+                            or 'overloaded' in err_str
+                            or 'timeout' in err_str
+                        )
+                    else:
+                        return _result_with_api_request_usage(
+                            result,
+                            _captured_attempts_since(capture_start),
+                        )
 
-                wait = base_delay * (2 ** attempt)
-                logger.warning(
-                    f"LLM call failed (attempt {attempt+1}/{max_retries+1}), "
-                    f"retry in {wait:.0f}s: {last_error}"
-                )
-                time.sleep(wait)
-            raise last_error
+                    attempts = _captured_attempts_since(capture_start)
+                    attempt_limit_reached = (
+                        _llm_attempts_remaining.get() == 0
+                    )
+                    if (
+                        not is_retryable
+                        or attempt >= max_retries
+                        or attempt_limit_reached
+                    ):
+                        _attach_api_request_usage(last_error, attempts)
+                        raise last_error
+
+                    wait = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "LLM call failed (attempt %s/%s), retry in %.0fs: %s",
+                        attempt + 1, max_retries + 1, wait, last_error,
+                    )
+                    time.sleep(wait)
+            finally:
+                _finish_attempt_capture(capture_token)
         return wrapper
     return decorator
 
@@ -201,26 +329,49 @@ class BaseLLM(ABC):
 
     @abstractmethod
     def structured_output(self, system: str, prompt: str,
-                          schema: dict) -> dict:
+                          schema: dict, max_tokens: int = None) -> dict:
         """Возвращает JSON по заданной схеме."""
         ...
 
     def structured_output_with_usage(self, system: str, prompt: str,
-                                     schema: dict) -> dict:
+                                     schema: dict,
+                                     max_tokens: int = None) -> dict:
         """Compatibility wrapper for providers without structured usage data."""
-        return {
-            'data': self.structured_output(system, prompt, schema),
-            'usage': {'api_requests': 1},
-        }
+        capture_token, capture_start = _start_attempt_capture()
+        try:
+            data = self.structured_output(
+                system, prompt, schema, max_tokens=max_tokens,
+            )
+            attempts = _captured_attempts_since(capture_start)
+            return {
+                'data': data,
+                'usage': _usage_with_api_requests({}, attempts or 1),
+            }
+        except Exception as error:
+            attempts = _captured_attempts_since(capture_start)
+            _attach_api_request_usage(error, attempts or 1)
+            raise
+        finally:
+            _finish_attempt_capture(capture_token)
 
     def chat_with_usage(self, system: str, messages: list[dict],
                         temperature: float = None,
                         max_tokens: int = None) -> dict:
         """Compatibility wrapper for providers whose chat API returns text only."""
-        return {
-            'text': self.chat(system, messages, temperature, max_tokens),
-            'usage': {'api_requests': 1},
-        }
+        capture_token, capture_start = _start_attempt_capture()
+        try:
+            text = self.chat(system, messages, temperature, max_tokens)
+            attempts = _captured_attempts_since(capture_start)
+            return {
+                'text': text,
+                'usage': _usage_with_api_requests({}, attempts or 1),
+            }
+        except Exception as error:
+            attempts = _captured_attempts_since(capture_start)
+            _attach_api_request_usage(error, attempts or 1)
+            raise
+        finally:
+            _finish_attempt_capture(capture_token)
 
 
 def _extract_json_from_text(text: str) -> dict:
@@ -327,14 +478,17 @@ class ClaudeLLM(BaseLLM):
         }
 
     def structured_output(self, system: str, prompt: str,
-                          schema: dict) -> dict:
+                          schema: dict, max_tokens: int = None) -> dict:
         schema_str = json.dumps(schema, ensure_ascii=False, indent=2)
         full_prompt = (
             f"{prompt}\n\n"
             f"Ответь СТРОГО в JSON формате по схеме:\n```json\n{schema_str}\n```\n"
             f"Без комментариев, только валидный JSON."
         )
-        text = self.chat(system, [{'role': 'user', 'content': full_prompt}])
+        text = self.chat(
+            system, [{'role': 'user', 'content': full_prompt}],
+            max_tokens=max_tokens,
+        )
         return _extract_json_from_text(text)
 
 
@@ -446,13 +600,13 @@ class GeminiLLM(BaseLLM):
         }
 
     def structured_output(self, system: str, prompt: str,
-                          schema: dict) -> dict:
+                          schema: dict, max_tokens: int = None) -> dict:
         from google.genai import types
 
         config = types.GenerateContentConfig(
             system_instruction=system,
             temperature=self.cfg.TEMPERATURE,
-            max_output_tokens=self.cfg.MAX_TOKENS,
+            max_output_tokens=max_tokens or self.cfg.MAX_TOKENS,
             response_mime_type='application/json',
             response_schema=schema,
         )
@@ -621,12 +775,15 @@ class OpenAICompatLLM(BaseLLM):
         }
 
     def structured_output(self, system: str, prompt: str,
-                          schema: dict) -> dict:
-        return self.structured_output_with_usage(system, prompt, schema)['data']
+                          schema: dict, max_tokens: int = None) -> dict:
+        return self.structured_output_with_usage(
+            system, prompt, schema, max_tokens=max_tokens,
+        )['data']
 
     @llm_retry()
     def structured_output_with_usage(self, system: str, prompt: str,
-                                     schema: dict) -> dict:
+                                     schema: dict,
+                                     max_tokens: int = None) -> dict:
         """Structured call with a stable cacheable prefix and raw usage metrics."""
         schema_str = json.dumps(
             schema, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
@@ -646,7 +803,7 @@ class OpenAICompatLLM(BaseLLM):
                 model=self.model,
                 messages=messages,
                 temperature=self.cfg.TEMPERATURE,
-                max_tokens=self.cfg.MAX_TOKENS,
+                max_tokens=max_tokens or self.cfg.MAX_TOKENS,
                 **self._thinking_request_kwargs(),
             )
         except Exception as e:

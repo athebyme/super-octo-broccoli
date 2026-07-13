@@ -588,7 +588,8 @@ class EnrichmentService:
         seller,
         wb_client,
         bulk_edit_id: int = None,
-        is_bulk: bool = False
+        is_bulk: bool = False,
+        validation_cache: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Применяет выбранные поля из ImportedProduct к WB-карточке.
@@ -621,7 +622,9 @@ class EnrichmentService:
                 'wb_sync': False,
             }
 
-        snapshot_before = _create_product_snapshot(product)
+        snapshot_before_local = _create_product_snapshot(product)
+        snapshot_before = snapshot_before_local
+        wb_snapshot_context = {}
         wb_updates = {}
         fields_applied = []
         errors = []
@@ -657,6 +660,7 @@ class EnrichmentService:
                     imp,
                     product.subject_id,
                     source=supplier_characteristics,
+                    validation_cache=validation_cache,
                 )
             except WBCharacteristicValidationError as exc:
                 return {
@@ -682,77 +686,233 @@ class EnrichmentService:
         # --- Обновление через WB API (текстовые поля) ---
         wb_sync_success = False
         wb_error = None
+        content_history = None
+        content_history_id = None
 
         if wb_updates:
+            from services.card_snapshot import overlay_snapshot_with_wb_card
+
+            def mirror_sent_card_to_product(after_wb):
+                if 'title' in wb_updates:
+                    product.title = after_wb.get('title')
+                if 'brand' in wb_updates:
+                    product.brand = after_wb.get('brand')
+                if 'description' in wb_updates:
+                    product.description = after_wb.get('description')
+                if 'characteristics' in wb_updates:
+                    product.characteristics_json = json.dumps(
+                        after_wb.get('characteristics') or [],
+                        ensure_ascii=False,
+                    )
+                if 'dimensions' in wb_updates:
+                    product.dimensions_json = json.dumps(
+                        after_wb.get('dimensions') or {},
+                        ensure_ascii=False,
+                    )
+
+            def persist_pending_content_history(exact_snapshot):
+                """Commit rollback data before WB receives the replacement."""
+                nonlocal content_history, content_history_id, snapshot_before
+                snapshot_before = overlay_snapshot_with_wb_card(
+                    snapshot_before_local,
+                    exact_snapshot['before'],
+                )
+                snapshot_after = overlay_snapshot_with_wb_card(
+                    snapshot_before_local,
+                    exact_snapshot['after'],
+                )
+                content_history = CardEditHistory(
+                    product_id=product.id,
+                    seller_id=seller.id,
+                    bulk_edit_id=bulk_edit_id,
+                    action='update',
+                    changed_fields=list(wb_updates),
+                    snapshot_before=snapshot_before,
+                    snapshot_after=snapshot_after,
+                    wb_synced=False,
+                    wb_sync_status='pending',
+                    user_comment='Обогащение от поставщика',
+                )
+                db.session.add(content_history)
+                db.session.commit()
+                content_history_id = content_history.id
+
             try:
                 wb_client.update_card(
                     product.nm_id,
                     wb_updates,
                     merge_with_existing=True,
-                    seller_id=seller.id
+                    seller_id=seller.id,
+                    snapshot_context=wb_snapshot_context,
+                    before_send_callback=persist_pending_content_history,
                 )
-                wb_sync_success = True
-                logger.info(f"[Enrich] WB API updated nmID={product.nm_id}: {list(wb_updates.keys())}")
-
-                # Обновляем локально
-                if 'title' in wb_updates:
-                    product.title = wb_updates['title']
-                if 'brand' in wb_updates:
-                    product.brand = wb_updates['brand']
-                if 'description' in wb_updates:
-                    product.description = wb_updates['description']
-                if 'characteristics' in wb_updates:
-                    from services.marketplace_validator import merge_wb_characteristics
-                    try:
-                        current = json.loads(product.characteristics_json or '[]')
-                    except (json.JSONDecodeError, TypeError):
-                        current = []
-                    product.characteristics_json = json.dumps(
-                        merge_wb_characteristics(
-                            current,
-                            wb_updates['characteristics'],
-                            subject_id=product.subject_id,
-                        ),
-                        ensure_ascii=False,
-                    )
-                if 'dimensions' in wb_updates:
-                    product.dimensions_json = json.dumps(wb_updates['dimensions'], ensure_ascii=False)
-
             except Exception as e:
+                # A successfully committed pending row survives this rollback;
+                # a callback/DB failure happens before the HTTP request.
+                db.session.rollback()
                 wb_error = str(e)
+                if content_history_id is not None:
+                    content_history = CardEditHistory.query.filter_by(
+                        id=content_history_id,
+                        product_id=product.id,
+                        seller_id=seller.id,
+                    ).first()
+                    if content_history is not None:
+                        reconciliation = 'conflict'
+                        try:
+                            from services.card_rollback import (
+                                classify_wb_card_history_state,
+                            )
+                            live_card = wb_client.get_card_by_nm_id(
+                                product.nm_id,
+                                seller_id=seller.id,
+                            )
+                            reconciliation = classify_wb_card_history_state(
+                                live_card,
+                                content_history.snapshot_before,
+                                content_history.snapshot_after,
+                                content_history.changed_fields,
+                            )
+                        except Exception as reconcile_error:
+                            logger.warning(
+                                '[Enrich] Could not reconcile nmID=%s after '
+                                'ambiguous update: %s',
+                                product.nm_id,
+                                reconcile_error,
+                            )
+
+                        if reconciliation == 'after':
+                            # WB confirms the exact sent values despite the
+                            # transport exception: finish local state normally.
+                            wb_sync_success = True
+                            content_history.wb_synced = True
+                            content_history.wb_sync_status = 'success'
+                            content_history.wb_error_message = None
+                            mirror_sent_card_to_product(
+                                wb_snapshot_context['after'])
+                        else:
+                            # before/conflict may be eventual consistency. Keep
+                            # an explicit uncertain row; conflict-aware rollback
+                            # remains available after the short in-flight window.
+                            content_history.wb_synced = False
+                            content_history.wb_sync_status = 'uncertain'
+                            content_history.wb_error_message = wb_error
+                        db.session.commit()
                 logger.error(f"[Enrich] WB API error for nmID={product.nm_id}: {e}")
-                errors.append(f"WB API: {e}")
+                if not wb_sync_success:
+                    errors.append(f"WB API: {e}")
+                    fields_applied = [
+                        field for field in fields_applied
+                        if field not in {
+                            'title', 'brand', 'description',
+                            'characteristics', 'dimensions',
+                        }
+                    ]
+            else:
+                wb_sync_success = True
+                logger.info(
+                    f"[Enrich] WB API updated nmID={product.nm_id}: "
+                    f"{list(wb_updates.keys())}"
+                )
+
+                # Real client invokes the callback before HTTP. Keep a guarded
+                # fallback for compatible test/custom clients, while preserving
+                # exact snapshots supplied through snapshot_context.
+                if content_history is None:
+                    persist_pending_content_history(wb_snapshot_context)
+
+                mirror_sent_card_to_product(wb_snapshot_context['after'])
+
+                content_history.wb_synced = True
+                content_history.wb_sync_status = 'success'
+                content_history.wb_error_message = None
+                # If this local commit fails, the already committed pending row
+                # remains a durable recovery marker with exact before/after.
+                try:
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+                    # WB already returned success. Retry the local finalization
+                    # over the durable pending row before surfacing an error.
+                    content_history = CardEditHistory.query.filter_by(
+                        id=content_history_id,
+                        product_id=product.id,
+                        seller_id=seller.id,
+                    ).first()
+                    if content_history is None:
+                        raise
+                    content_history.wb_synced = True
+                    content_history.wb_sync_status = 'success'
+                    content_history.wb_error_message = None
+                    mirror_sent_card_to_product(wb_snapshot_context['after'])
+                    db.session.commit()
 
         # --- Фото ---
+        # Photo changes are intentionally recorded separately: WB media has no
+        # supported rollback path and must not make content history unrevertible.
         photo_result = {'skipped': True}
-        if 'photos' in fields:
-            photo_result = self._apply_photos(product, imp, photo_strategy, seller, wb_client,
-                                                  is_bulk=is_bulk)
-            if photo_result.get('uploaded', 0) > 0:
+        if 'photos' in fields and (not wb_updates or wb_sync_success):
+            photo_snapshot_before = _create_product_snapshot(product)
+            photo_history = CardEditHistory(
+                product_id=product.id,
+                seller_id=seller.id,
+                bulk_edit_id=bulk_edit_id,
+                action='update',
+                changed_fields=['photos'],
+                snapshot_before=photo_snapshot_before,
+                snapshot_after=photo_snapshot_before,
+                wb_synced=False,
+                wb_sync_status='pending',
+                user_comment=(
+                    'Обогащение фото от поставщика '
+                    f'(стратегия: {photo_strategy})'
+                ),
+            )
+            db.session.add(photo_history)
+            db.session.commit()
+
+            photo_result = self._apply_photos(
+                product, imp, photo_strategy, seller, wb_client,
+                is_bulk=is_bulk,
+            )
+            uploaded_count = int(photo_result.get('uploaded') or 0)
+            failed_count = int(photo_result.get('failed') or 0)
+            if uploaded_count > 0:
                 fields_applied.append('photos')
+                photo_history.wb_synced = True
+                photo_history.snapshot_after = _create_product_snapshot(product)
+                if failed_count > 0:
+                    photo_history.wb_sync_status = 'partial'
+                    photo_error = (
+                        f'загружено {uploaded_count}, '
+                        f'не загружено {failed_count}'
+                    )
+                    photo_history.wb_error_message = photo_error
+                    errors.append(f'Фото WB: {photo_error}')
+                else:
+                    photo_history.wb_sync_status = 'success'
+            elif photo_result.get('skipped'):
+                # No WB side effect occurred, so a history row is unnecessary.
+                db.session.delete(photo_history)
+            else:
+                photo_error = (
+                    photo_result.get('error')
+                    or f'не загружено, ошибок: {photo_result.get("failed", 0)}'
+                )
+                photo_history.wb_sync_status = 'failed'
+                photo_history.wb_error_message = str(photo_error)
+                errors.append(f'Фото WB: {photo_error}')
+        elif 'photos' in fields:
+            photo_result = {
+                'skipped': True,
+                'reason': 'content_update_failed',
+            }
 
         # --- Связываем ImportedProduct с Product (если ещё не) ---
         if imp.product_id is None:
             imp.product_id = product.id
 
         product.updated_at = datetime.utcnow()
-
-        # --- История изменений ---
-        snapshot_after = _create_product_snapshot(product)
-        history = CardEditHistory(
-            product_id=product.id,
-            seller_id=seller.id,
-            bulk_edit_id=bulk_edit_id,
-            action='update',
-            changed_fields=fields_applied,
-            snapshot_before=snapshot_before,
-            snapshot_after=snapshot_after,
-            wb_synced=wb_sync_success,
-            wb_sync_status='success' if wb_sync_success else ('failed' if wb_error else 'pending'),
-            wb_error_message=wb_error,
-            user_comment='Обогащение от поставщика'
-        )
-        db.session.add(history)
         db.session.commit()
 
         return {
@@ -768,6 +928,7 @@ class EnrichmentService:
         imp,
         subject_id: int,
         source: Optional[Dict[str, Any]] = None,
+        validation_cache: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
         """
         Преобразует characteristics из ImportedProduct в формат WB API.
@@ -788,6 +949,7 @@ class EnrichmentService:
             source['values'],
             materials=source['materials'],
             gender=source['gender'],
+            validation_cache=validation_cache,
         )
 
     def apply_selective_photos(
@@ -882,8 +1044,25 @@ class EnrichmentService:
         if not cached_paths:
             return {'success': False, 'error': 'Не удалось загрузить фото поставщика'}
 
-        # Снапшот для истории
+        # Снапшот и durable pending-история до внешнего side effect.
         snapshot_before = _create_product_snapshot(product)
+        history = CardEditHistory(
+            product_id=product.id,
+            seller_id=seller.id,
+            action='update',
+            changed_fields=['photos'],
+            snapshot_before=snapshot_before,
+            snapshot_after=snapshot_before,
+            wb_synced=False,
+            wb_sync_status='pending',
+            user_comment=(
+                f'Выборочное обогащение фото ({len(photo_indices)} шт, '
+                f'стратегия: {strategy})'
+            ),
+        )
+        db.session.add(history)
+        db.session.commit()
+        history_id = history.id
 
         # Загружаем в WB
         try:
@@ -897,30 +1076,43 @@ class EnrichmentService:
 
             product.updated_at = datetime.utcnow()
 
-            # История
             snapshot_after = _create_product_snapshot(product)
-            history = CardEditHistory(
-                product_id=product.id,
-                seller_id=seller.id,
-                action='update',
-                changed_fields=['photos'],
-                snapshot_before=snapshot_before,
-                snapshot_after=snapshot_after,
-                wb_synced=uploaded_count > 0,
-                wb_sync_status='success' if uploaded_count > 0 else 'failed',
-                user_comment=f'Выборочное обогащение фото ({len(photo_indices)} шт, стратегия: {strategy})'
-            )
-            db.session.add(history)
+            history.snapshot_after = snapshot_after
+            history.wb_synced = uploaded_count > 0
+            if uploaded_count > 0 and failed_count == 0:
+                history.wb_sync_status = 'success'
+            elif uploaded_count > 0:
+                history.wb_sync_status = 'partial'
+                history.wb_error_message = (
+                    f'загружено {uploaded_count}, '
+                    f'не загружено {failed_count}'
+                )
+            else:
+                history.wb_sync_status = 'failed'
+                history.wb_error_message = 'Ни одно фото не загружено'
             db.session.commit()
 
             return {
-                'success': uploaded_count > 0,
+                'success': uploaded_count > 0 and failed_count == 0,
                 'uploaded': uploaded_count,
                 'failed': failed_count,
                 'total': len(cached_paths),
                 'strategy': strategy,
+                'error': history.wb_error_message,
             }
         except Exception as e:
+            db.session.rollback()
+            persisted_history = CardEditHistory.query.filter_by(
+                id=history_id,
+                product_id=product.id,
+                seller_id=seller.id,
+            ).first()
+            if persisted_history is not None:
+                # A timeout/commit error after upload is ambiguous; retain the
+                # pending marker instead of claiming WB definitely rejected it.
+                persisted_history.wb_sync_status = 'pending'
+                persisted_history.wb_error_message = str(e)
+                db.session.commit()
             logger.error(f"[Enrich] Selective photo upload error for nmID={product.nm_id}: {e}")
             return {'success': False, 'uploaded': 0, 'error': str(e)}
 
@@ -1277,21 +1469,28 @@ class EnrichmentService:
             from models import BulkEditHistory
             bulk_history = BulkEditHistory(
                 seller_id=seller_id,
-                action='supplier_enrichment',
-                status='running',
+                operation_type='supplier_enrichment',
+                operation_params={
+                    'fields': fields,
+                    'photo_strategy': photo_strategy,
+                },
+                description='Обновление карточек данными поставщика',
+                status='in_progress',
                 total_products=len(product_ids),
-                updated_products=0,
-                failed_products=0,
-                params=json.dumps({'fields': fields, 'photo_strategy': photo_strategy})
+                success_count=0,
+                error_count=0,
+                errors_details=[],
             )
             db.session.add(bulk_history)
             db.session.flush()
             bulk_edit_id = bulk_history.id
+            db.session.commit()
 
             results = []
             succeeded = 0
             failed = 0
             skipped = 0
+            validation_cache = {}
 
             for i, product_id in enumerate(product_ids):
                 product = Product.query.filter_by(
@@ -1323,7 +1522,8 @@ class EnrichmentService:
                     result = self.apply_enrichment(
                         product, imp, fields, photo_strategy,
                         seller, wb_client, bulk_edit_id=bulk_edit_id,
-                        is_bulk=True
+                        is_bulk=True,
+                        validation_cache=validation_cache,
                     )
 
                     if result['success']:
@@ -1346,6 +1546,7 @@ class EnrichmentService:
                         })
 
                 except Exception as e:
+                    db.session.rollback()
                     failed += 1
                     logger.error(f"[Enrich] Error enriching product {product_id}: {e}")
                     results.append({
@@ -1379,8 +1580,14 @@ class EnrichmentService:
             job.updated_at = datetime.utcnow()
 
             bulk_history.status = 'completed'
-            bulk_history.updated_products = succeeded
-            bulk_history.failed_products = failed
+            bulk_history.success_count = succeeded
+            bulk_history.error_count = failed + skipped
+            bulk_history.errors_details = [
+                item for item in results
+                if item.get('status') != 'success'
+            ]
+            bulk_history.wb_synced = succeeded > 0
+            bulk_history.completed_at = datetime.utcnow()
 
             db.session.commit()
 

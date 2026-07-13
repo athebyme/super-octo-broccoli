@@ -2,6 +2,8 @@
 """Deterministic marketplace reference synchronization tests (no WB calls)."""
 
 import json
+import fcntl
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -15,12 +17,14 @@ from sqlalchemy import event
 from migrations.migrate_add_marketplace_reference_freshness import apply_migration
 from models import (
     Brand,
+    BrandAlias,
     db,
     Marketplace,
     MarketplaceCategory,
     MarketplaceCategoryCharacteristic,
     MarketplaceDirectory,
     MarketplaceBrand,
+    BrandCategoryLink,
 )
 from services.brand_engine import BrandEngine
 from services.marketplace_service import MarketplaceService
@@ -33,35 +37,55 @@ class FakeWBClient:
         self.characteristics = {}
         self.characteristic_calls = []
         self.directory_payloads = {
-            'colors': [{'name': 'red'}],
-            'countries': [{'name': 'RU'}],
-            'kinds': [{'name': 'female'}],
-            'seasons': [{'name': 'all'}],
-            'vat': [{'value': 20}],
+            'colors': [{'name': 'красный', 'parentName': 'красный'}],
+            'countries': [{
+                'id': 643,
+                'name': 'Россия',
+                'fullName': 'Российская Федерация',
+            }],
+            'kinds': ['Женский'],
+            'seasons': ['круглогодичный'],
+            'vat': ['20'],
         }
         self.directory_failures = set()
         self.directory_calls = []
         self.brand_result = {'data': [], 'complete': True, 'errors': []}
+        self.brand_subject_calls = []
 
     def get_subjects_list(self, limit, offset):
         self.category_calls.append((limit, offset))
         value = self.category_pages.get(offset, [])
         if isinstance(value, Exception):
             raise value
-        return {'data': value}
+        return {
+            'data': value,
+            'error': False,
+            'errorText': '',
+            'additionalErrors': None,
+        }
 
     def get_card_characteristics_config(self, subject_id):
         self.characteristic_calls.append(subject_id)
         value = self.characteristics.get(subject_id, [])
         if isinstance(value, Exception):
             raise value
-        return {'data': value}
+        return {
+            'data': value,
+            'error': False,
+            'errorText': '',
+            'additionalErrors': None,
+        }
 
     def _directory(self, name):
         self.directory_calls.append(name)
         if name in self.directory_failures:
             raise RuntimeError(f'{name} unavailable')
-        return {'data': self.directory_payloads[name]}
+        return {
+            'data': self.directory_payloads[name],
+            'error': False,
+            'errorText': '',
+            'additionalErrors': None,
+        }
 
     def get_directory_colors(self):
         return self._directory('colors')
@@ -79,15 +103,37 @@ class FakeWBClient:
         return self._directory('vat')
 
     def fetch_all_brands(self, subject_ids, top=5000, progress_callback=None):
+        self.brand_subject_calls.append(list(subject_ids))
+        result = dict(self.brand_result)
+        if 'subject_brands' not in result and result.get('complete') is True:
+            if len(subject_ids) == 1:
+                subject_id = int(subject_ids[0])
+                result['subject_brands'] = {
+                    subject_id: list(result.get('data') or []),
+                }
+                result['completed_subject_ids'] = [subject_id]
+            else:
+                result['complete'] = False
+                result['subject_brands'] = {}
+                result['completed_subject_ids'] = []
+                result['errors'] = [{
+                    'code': 'fake_requires_typed_subject_snapshots',
+                }]
         if progress_callback:
-            progress_callback(len(subject_ids), len(subject_ids), len(self.brand_result['data']))
-        return self.brand_result
+            progress_callback(
+                len(result.get('completed_subject_ids') or []),
+                len(subject_ids),
+                len(result.get('data') or []),
+            )
+        return result
 
 
 def charc(
     charc_id,
     name,
     *,
+    subject_id,
+    subject_name='Category',
     charc_type=1,
     required=False,
     dictionary=None,
@@ -95,6 +141,8 @@ def charc(
 ):
     return {
         'charcID': charc_id,
+        'subjectID': subject_id,
+        'subjectName': subject_name,
         'name': name,
         'charcType': charc_type,
         'required': required,
@@ -109,6 +157,13 @@ def charc(
 
 class MarketplaceReferenceSyncTestCase(unittest.TestCase):
     def setUp(self):
+        self.brand_lock_dir = tempfile.TemporaryDirectory()
+        self.brand_lock_env = patch.dict(os.environ, {
+            'BRAND_SYNC_LOCK_FILE': str(
+                Path(self.brand_lock_dir.name) / 'brand-sync.lock'
+            ),
+        })
+        self.brand_lock_env.start()
         self.app = Flask(__name__)
         self.app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
         self.app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -133,6 +188,8 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         db.session.remove()
         db.drop_all()
         self.context.pop()
+        self.brand_lock_env.stop()
+        self.brand_lock_dir.cleanup()
 
     def add_category(self, subject_id, name, **kwargs):
         category = MarketplaceCategory(
@@ -257,6 +314,55 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         self.assertEqual(self.client.category_calls, [(2, 0), (2, 2)])
         self.assertEqual(result['total'], 3)
 
+    def test_category_sync_rejects_coerced_ids_and_untyped_flags(self):
+        existing = self.add_category(
+            41, 'Last good', is_enabled=True, is_available=True,
+        )
+        invalid_items = [
+            {'subjectID': True, 'subjectName': 'Bool ID'},
+            {'subjectID': 41.0, 'subjectName': 'Float ID'},
+            {'subjectID': '41', 'subjectName': 'String ID'},
+            {'subjectID': 41, 'subjectName': 'Bad parent', 'parentID': 1.0},
+            {'subjectID': 41, 'subjectName': 'Bad flag', 'isVisible': 'false'},
+            {'subjectID': 41, 'subjectName': 'Bad flag', 'isEnabled': 1},
+            {'subjectID': 41, 'subjectName': 'Bad flag', 'disabled': 0},
+        ]
+
+        for item in invalid_items:
+            with self.subTest(item=item):
+                self.client.category_pages[0] = [item]
+                result = MarketplaceService.sync_categories(
+                    self.marketplace.id, client=self.client,
+                )
+                db.session.refresh(existing)
+
+                self.assertFalse(result['success'])
+                self.assertEqual(existing.subject_name, 'Last good')
+                self.assertTrue(existing.is_available)
+
+    def test_category_sync_rejects_top_level_wb_error_without_mutating_cache(self):
+        existing = self.add_category(
+            41, 'Last good', is_enabled=True, is_available=True,
+        )
+        response = {
+            'data': [{'subjectID': 41, 'subjectName': 'Corrupted rename'}],
+            'error': True,
+            'errorText': 'upstream failure',
+        }
+
+        with patch.object(
+            self.client, 'get_subjects_list', return_value=response,
+        ):
+            result = MarketplaceService.sync_categories(
+                self.marketplace.id, client=self.client,
+            )
+        db.session.refresh(existing)
+
+        self.assertFalse(result['success'])
+        self.assertIn('reports an error', result['error'])
+        self.assertEqual(existing.subject_name, 'Last good')
+        self.assertTrue(existing.is_available)
+
     def test_characteristics_sync_tracks_schema_and_preserves_custom_instruction(self):
         now = datetime(2026, 7, 13, 9, 0, 0)
         category = self.add_category(
@@ -302,10 +408,17 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         self.client.characteristics[100] = [
             charc(
                 1, 'Colour', required=True,
+                subject_id=category.subject_id,
                 dictionary=[{'value': 'Black'}, {'value': 'White'}],
             ),
-            charc(3, 'Weight', charc_type=4, required=True, dictionary=None),
-            charc(4, 'Material', dictionary=[{'value': 'Cotton'}]),
+            charc(
+                3, 'Weight', subject_id=category.subject_id,
+                charc_type=4, required=True, dictionary=None,
+            ),
+            charc(
+                4, 'Material', subject_id=category.subject_id,
+                dictionary=[{'value': 'Cotton'}],
+            ),
         ]
 
         first = MarketplaceService.sync_category_characteristics(
@@ -358,7 +471,9 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         db.session.add(characteristic)
         db.session.commit()
         self.client.characteristics[category.subject_id] = [
-            charc(7, 'Required now', required=True),
+            charc(
+                7, 'Required now', subject_id=category.subject_id, required=True,
+            ),
         ]
 
         result = MarketplaceService.sync_category_characteristics(
@@ -369,6 +484,178 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         self.assertTrue(result['success'])
         self.assertTrue(characteristic.required)
         self.assertTrue(characteristic.is_enabled)
+
+    def test_characteristics_reject_wrong_subject_and_untyped_fields(self):
+        category = self.add_category(
+            106, 'Typed category', is_enabled=True, is_available=True,
+        )
+        existing = MarketplaceCategoryCharacteristic(
+            category_id=category.id,
+            marketplace_id=self.marketplace.id,
+            charc_id=1,
+            name='Last good',
+            charc_type=1,
+            is_available=True,
+        )
+        db.session.add(existing)
+        db.session.commit()
+
+        wrong_subject = charc(2, 'Wrong scope', subject_id=999)
+        self.client.characteristics[category.subject_id] = [wrong_subject]
+        mismatch = MarketplaceService.sync_category_characteristics(
+            category.id, client=self.client,
+        )
+        db.session.refresh(existing)
+
+        self.assertFalse(mismatch['success'])
+        self.assertIn('does not match', mismatch['error'])
+        self.assertTrue(existing.is_available)
+        self.assertIsNone(
+            MarketplaceCategoryCharacteristic.query.filter_by(charc_id=2).first()
+        )
+
+        untyped = charc(2, 'Untyped', subject_id=category.subject_id)
+        untyped['required'] = 'false'
+        self.client.characteristics[category.subject_id] = [untyped]
+        typed = MarketplaceService.sync_category_characteristics(
+            category.id, client=self.client,
+        )
+
+        self.assertFalse(typed['success'])
+        self.assertIn('required is not a boolean', typed['error'])
+        self.assertTrue(existing.is_available)
+
+    def test_characteristics_reject_coerced_integer_and_boolean_fields(self):
+        category = self.add_category(
+            108, 'Strict schema', is_enabled=True, is_available=True,
+        )
+        existing = MarketplaceCategoryCharacteristic(
+            category_id=category.id,
+            marketplace_id=self.marketplace.id,
+            charc_id=1,
+            name='Last good',
+            charc_type=1,
+            is_available=True,
+        )
+        db.session.add(existing)
+        db.session.commit()
+
+        mutations = [
+            ('charcID', True),
+            ('charcID', 2.0),
+            ('charcID', '2'),
+            ('subjectID', 108.0),
+            ('subjectID', '108'),
+            ('charcType', True),
+            ('charcType', 1.0),
+            ('charcType', '1'),
+            ('maxCount', False),
+            ('maxCount', 1.0),
+            ('maxCount', '1'),
+            ('required', 1),
+            ('popular', 'false'),
+            ('hasFilter', 0),
+            ('isVariable', None),
+            ('existNamedField', 'true'),
+        ]
+
+        for field_name, value in mutations:
+            with self.subTest(field=field_name, value=value):
+                payload = charc(
+                    2, 'Rejected', subject_id=category.subject_id,
+                )
+                payload[field_name] = value
+                self.client.characteristics[category.subject_id] = [payload]
+                result = MarketplaceService.sync_category_characteristics(
+                    category.id, client=self.client,
+                )
+                db.session.refresh(existing)
+
+                self.assertFalse(result['success'])
+                self.assertTrue(existing.is_available)
+                self.assertIsNone(
+                    MarketplaceCategoryCharacteristic.query.filter_by(
+                        category_id=category.id, charc_id=2,
+                    ).first()
+                )
+
+    def test_characteristics_accept_missing_optional_boolean_fields(self):
+        category = self.add_category(
+            109, 'Official minimal schema', is_enabled=True, is_available=True,
+        )
+        payload = charc(
+            2, 'Размер', subject_id=category.subject_id,
+        )
+        payload.pop('hasFilter')
+        payload.pop('isVariable')
+        self.client.characteristics[category.subject_id] = [payload]
+
+        result = MarketplaceService.sync_category_characteristics(
+            category.id, client=self.client,
+        )
+
+        self.assertTrue(result['success'])
+        characteristic = MarketplaceCategoryCharacteristic.query.filter_by(
+            category_id=category.id, charc_id=2,
+        ).one()
+        self.assertFalse(characteristic.has_filter)
+        self.assertFalse(characteristic.is_variable)
+
+    def test_characteristics_reject_top_level_error_and_anomalous_shrink(self):
+        old_sync = datetime(2026, 7, 10, 8, 0, 0)
+        category = self.add_category(
+            107,
+            'Stable schema',
+            is_enabled=True,
+            is_available=True,
+            characteristics_synced_at=old_sync,
+            characteristics_sync_status='success',
+            characteristics_count=8,
+            characteristics_version=3,
+        )
+        existing = []
+        for charc_id in range(1, 9):
+            characteristic = MarketplaceCategoryCharacteristic(
+                category_id=category.id,
+                marketplace_id=self.marketplace.id,
+                charc_id=charc_id,
+                name=f'Field {charc_id}',
+                charc_type=1,
+                is_available=True,
+            )
+            existing.append(characteristic)
+        db.session.add_all(existing)
+        db.session.commit()
+
+        with patch.object(
+            self.client,
+            'get_card_characteristics_config',
+            return_value={
+                'data': [charc(1, 'Field 1', subject_id=category.subject_id)],
+                'error': True,
+            },
+        ):
+            upstream_error = MarketplaceService.sync_category_characteristics(
+                category.id, client=self.client,
+            )
+        self.assertFalse(upstream_error['success'])
+        self.assertTrue(all(item.is_available for item in existing))
+
+        self.client.characteristics[category.subject_id] = [
+            charc(1, 'Field 1', subject_id=category.subject_id),
+        ]
+        shrink = MarketplaceService.sync_category_characteristics(
+            category.id, client=self.client,
+        )
+        db.session.refresh(category)
+        for item in existing:
+            db.session.refresh(item)
+
+        self.assertFalse(shrink['success'])
+        self.assertIn('shrank anomalously', shrink['error'])
+        self.assertEqual(category.characteristics_synced_at, old_sync)
+        self.assertEqual(category.characteristics_version, 3)
+        self.assertTrue(all(item.is_available for item in existing))
 
     def test_admin_cannot_disable_required_characteristic(self):
         category = self.add_category(
@@ -433,7 +720,9 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         category.characteristics_schema_hash = initial_hash
         initial_version = category.characteristics_version
         db.session.commit()
-        upstream = charc(10, 'Материал изделия')
+        upstream = charc(
+            10, 'Материал изделия', subject_id=category.subject_id,
+        )
         upstream.pop('dictionary')
         self.client.characteristics[category.subject_id] = [upstream]
 
@@ -451,6 +740,19 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         self.assertEqual(result['schema_hash'], initial_hash)
         self.assertEqual(category.characteristics_schema_hash, initial_hash)
         self.assertEqual(category.characteristics_version, initial_version)
+
+        upstream['dictionary'] = []
+        self.client.characteristics[category.subject_id] = [upstream]
+        explicit_empty = MarketplaceService.sync_category_characteristics(
+            category.id,
+            client=self.client,
+        )
+        db.session.refresh(material)
+
+        self.assertTrue(explicit_empty['success'])
+        self.assertEqual(explicit_empty['updated'], 0)
+        self.assertEqual(material.dictionary_json, dictionary_json)
+        self.assertEqual(explicit_empty['schema_hash'], initial_hash)
 
     def test_save_characteristic_allowlist_normalizes_and_preserves_custom_instruction(self):
         category = self.add_category(
@@ -723,7 +1025,9 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
             characteristics_sync_status='success',
         )
         for subject_id in (201, 202, 203):
-            self.client.characteristics[subject_id] = [charc(1, 'Color')]
+            self.client.characteristics[subject_id] = [
+                charc(1, 'Color', subject_id=subject_id),
+            ]
 
         first = MarketplaceService.sync_stale_characteristics(
             self.marketplace.id,
@@ -757,7 +1061,9 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
                 characteristics_synced_at=now - timedelta(hours=31),
                 characteristics_sync_status='success',
             )
-            self.client.characteristics[subject_id] = [charc(1, 'Color')]
+            self.client.characteristics[subject_id] = [
+                charc(1, 'Color', subject_id=subject_id),
+            ]
         sleeps = []
 
         result = MarketplaceService.sync_stale_characteristics(
@@ -777,6 +1083,91 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
                 MarketplaceService.CHARACTERISTIC_REQUEST_INTERVAL_SECONDS,
             ],
         )
+
+    def test_stale_schema_batch_does_not_retry_failed_null_before_other_work(self):
+        now = datetime(2026, 7, 13, 12, 0, 0)
+        failed = self.add_category(
+            311,
+            'Failed before',
+            is_enabled=True,
+            is_available=True,
+            characteristics_sync_status='failed',
+        )
+        untouched = self.add_category(
+            312,
+            'Untouched',
+            is_enabled=True,
+            is_available=True,
+        )
+        stale_success = self.add_category(
+            313,
+            'Stale success',
+            is_enabled=True,
+            is_available=True,
+            characteristics_synced_at=now - timedelta(hours=31),
+            characteristics_sync_status='success',
+        )
+        self.client.characteristics[untouched.subject_id] = [
+            charc(1, 'Color', subject_id=untouched.subject_id),
+        ]
+        self.client.characteristics[stale_success.subject_id] = [
+            charc(1, 'Color', subject_id=stale_success.subject_id),
+        ]
+
+        result = MarketplaceService.sync_stale_characteristics(
+            self.marketplace.id,
+            limit=2,
+            client=self.client,
+            now=now,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['synced'], 2)
+        self.assertEqual(
+            self.client.characteristic_calls,
+            [stale_success.subject_id, untouched.subject_id],
+        )
+        self.assertNotIn(failed.subject_id, self.client.characteristic_calls)
+
+    def test_reference_sync_claim_skips_overlapping_refresh_without_api_calls(self):
+        category = self.add_category(
+            314, 'Claimed', is_enabled=True, is_available=True,
+        )
+        operations = {
+            'categories': lambda: MarketplaceService.sync_categories(
+                self.marketplace.id, client=self.client,
+            ),
+            'directory': lambda: MarketplaceService.sync_directories(
+                self.marketplace.id, client=self.client,
+                sleep_fn=lambda _seconds: None,
+            ),
+            'category schema': lambda: MarketplaceService.sync_category_characteristics(
+                category.id, client=self.client,
+            ),
+            'stale sweep': lambda: MarketplaceService.sync_stale_characteristics(
+                self.marketplace.id,
+                client=self.client,
+                sleep_fn=lambda _seconds: None,
+            ),
+        }
+
+        with patch(
+            'services.marketplace_service._try_reference_sync_claim',
+            return_value=None,
+        ):
+            for name, operation in operations.items():
+                with self.subTest(name=name):
+                    result = operation()
+                    self.assertFalse(result['success'])
+                    self.assertTrue(result['skipped'])
+
+        self.assertEqual(self.client.category_calls, [])
+        self.assertEqual(self.client.directory_calls, [])
+        self.assertEqual(self.client.characteristic_calls, [])
+        self.assertIsNone(self.marketplace.categories_sync_status)
+        self.assertIsNone(self.marketplace.directories_sync_status)
+        self.assertIsNone(category.characteristics_sync_status)
 
     def test_directory_sync_preserves_failed_cache_and_is_idempotent(self):
         old_sync = datetime(2026, 7, 10, 8, 0, 0)
@@ -830,6 +1221,121 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         self.assertEqual(self.marketplace.directories_version, stable_version)
         self.assertGreater(stable_version, first_version)
 
+    def test_directory_payloads_require_official_shapes_and_unique_items(self):
+        invalid_payloads = {
+            'colors': [{'name': 'красный', 'parentName': 7}],
+            'countries': [{
+                'id': '643',
+                'name': 'Россия',
+                'fullName': 'Российская Федерация',
+            }],
+            'kinds': [{'name': 'Женский'}],
+            'seasons': [1],
+            'vat': [20],
+        }
+        for directory_type, payload in invalid_payloads.items():
+            with self.subTest(directory_type=directory_type):
+                with self.assertRaises(ValueError):
+                    MarketplaceService._normalize_directory_snapshot(
+                        directory_type, payload,
+                    )
+
+        normalized_colors = MarketplaceService._normalize_directory_snapshot(
+            'colors',
+            [
+                {'name': 'Белый', 'parentName': None},
+                {'name': 'Черный'},
+            ],
+        )
+        self.assertEqual(
+            [item['parentName'] for item in normalized_colors],
+            ['', ''],
+        )
+
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            MarketplaceService._normalize_directory_snapshot(
+                'colors',
+                [
+                    {'name': 'Красный', 'parentName': 'Красный'},
+                    {'name': 'красный', 'parentName': 'Другой'},
+                ],
+            )
+        with self.assertRaisesRegex(ValueError, 'duplicated name'):
+            MarketplaceService._normalize_directory_snapshot(
+                'countries',
+                [
+                    {'id': 1, 'name': 'Россия', 'fullName': 'Россия'},
+                    {'id': 2, 'name': 'россия', 'fullName': 'РФ'},
+                ],
+            )
+
+    def test_directory_error_and_anomalous_shrink_preserve_last_good(self):
+        old_sync = datetime(2026, 7, 10, 8, 0, 0)
+        old_items = [
+            {
+                'id': item_id,
+                'name': f'Country {item_id}',
+                'fullName': f'Country {item_id} full',
+            }
+            for item_id in range(1, 9)
+        ]
+        countries = MarketplaceDirectory(
+            marketplace_id=self.marketplace.id,
+            directory_type='countries',
+            data_json=json.dumps(old_items, ensure_ascii=False),
+            data_hash='last-good-hash',
+            version=4,
+            synced_at=old_sync,
+            sync_status='success',
+            items_count=len(old_items),
+        )
+        db.session.add(countries)
+        db.session.commit()
+        original_json = countries.data_json
+
+        original_fetcher = self.client.get_directory_countries
+        self.client.get_directory_countries = lambda: {
+            'data': [{
+                'id': 1,
+                'name': 'Corrupted',
+                'fullName': 'Corrupted',
+            }],
+            'error': True,
+        }
+        upstream_error = MarketplaceService.sync_directories(
+            self.marketplace.id,
+            client=self.client,
+            sleep_fn=lambda _seconds: None,
+        )
+        db.session.refresh(countries)
+
+        self.assertTrue(upstream_error['success'])
+        self.assertEqual(countries.data_json, original_json)
+        self.assertEqual(countries.data_hash, 'last-good-hash')
+        self.assertEqual(countries.synced_at, old_sync)
+        self.assertEqual(countries.version, 4)
+
+        self.client.get_directory_countries = original_fetcher
+        self.client.directory_payloads['countries'] = [{
+            'id': 1,
+            'name': 'Only one',
+            'fullName': 'Only one country',
+        }]
+        shrink = MarketplaceService.sync_directories(
+            self.marketplace.id,
+            client=self.client,
+            sleep_fn=lambda _seconds: None,
+        )
+        db.session.refresh(countries)
+
+        self.assertTrue(shrink['success'])
+        self.assertIn('warning', shrink)
+        self.assertIn('shrank anomalously', countries.sync_error)
+        self.assertEqual(countries.data_json, original_json)
+        self.assertEqual(countries.data_hash, 'last-good-hash')
+        self.assertEqual(countries.synced_at, old_sync)
+        self.assertEqual(countries.version, 4)
+
     def test_brand_sync_updates_rename_by_stable_external_id(self):
         self.add_category(
             401, 'Brand category', is_enabled=True, is_available=True,
@@ -863,6 +1369,71 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         self.assertEqual(Brand.query.count(), 1)
         self.assertEqual(binding.marketplace_brand_name, 'Renamed Brand')
         self.assertEqual(self.marketplace.brands_version, 2)
+        renamed_alias = BrandAlias.query.filter_by(
+            alias_normalized='renamed brand',
+        ).one()
+        self.assertEqual(renamed_alias.brand_id, binding.brand_id)
+        self.assertEqual(renamed_alias.source, 'marketplace_sync')
+        self.assertTrue(renamed_alias.is_active)
+
+        engine.invalidate_cache()
+        resolution = engine.resolve(
+            'Renamed Brand',
+            marketplace_id=self.marketplace.id,
+            category_id=401,
+        )
+        self.assertEqual(resolution.status, 'exact')
+        self.assertEqual(resolution.brand_id, binding.brand_id)
+        self.assertEqual(
+            resolution.marketplace_brand_name, 'Renamed Brand',
+        )
+
+    def test_brand_sync_rename_does_not_take_over_manual_alias(self):
+        self.add_category(
+            402, 'Brand category', is_enabled=True, is_available=True,
+        )
+        engine = BrandEngine(self.app)
+        self.client.brand_result = {
+            'data': [{'id': 9002, 'name': 'Original Brand'}],
+            'complete': True,
+            'errors': [],
+        }
+        engine.sync_marketplace_brands(self.marketplace.id, self.client)
+        binding = MarketplaceBrand.query.one()
+
+        manual_brand = Brand(
+            name='Manual Brand',
+            name_normalized='manual brand',
+            status='verified',
+        )
+        db.session.add(manual_brand)
+        db.session.flush()
+        manual_alias = BrandAlias(
+            brand_id=manual_brand.id,
+            alias='Renamed Brand',
+            alias_normalized='renamed brand',
+            source='manual',
+            confidence=1.0,
+        )
+        db.session.add(manual_alias)
+        db.session.commit()
+
+        self.client.brand_result = {
+            'data': [{'id': 9002, 'name': 'Renamed Brand'}],
+            'complete': True,
+            'errors': [],
+        }
+        result = engine.sync_marketplace_brands(
+            self.marketplace.id, self.client,
+        )
+        db.session.refresh(binding)
+        db.session.refresh(manual_alias)
+
+        self.assertGreater(result['errors'], 0)
+        self.assertEqual(binding.marketplace_brand_name, 'Original Brand')
+        self.assertEqual(manual_alias.brand_id, manual_brand.id)
+        self.assertEqual(manual_alias.source, 'manual')
+        self.assertTrue(manual_alias.is_active)
 
         binding.is_available = False
         db.session.commit()
@@ -870,6 +1441,200 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         self.assertIsNone(
             engine.get_marketplace_brand(binding.brand_id, self.marketplace.id)
         )
+
+    def test_brand_sync_persists_and_invalidates_category_membership(self):
+        self.add_category(
+            405, 'Scoped brands', is_enabled=True, is_available=True,
+        )
+        engine = BrandEngine(self.app)
+        self.client.brand_result = {
+            'data': [
+                {'id': 9401, 'name': 'Present Brand'},
+                {'id': 9402, 'name': 'Removed Brand'},
+            ],
+            'complete': True,
+            'errors': [],
+        }
+        engine.sync_marketplace_brands(self.marketplace.id, self.client)
+
+        bindings = {
+            item.marketplace_brand_id: item
+            for item in MarketplaceBrand.query.all()
+        }
+        self.assertTrue(BrandCategoryLink.query.filter_by(
+            marketplace_brand_id=bindings[9401].id,
+            category_id=405,
+        ).one().is_available)
+        self.assertEqual(BrandCategoryLink.query.filter_by(
+            marketplace_brand_id=bindings[9401].id,
+            category_id=405,
+        ).one().category_name, 'Scoped brands')
+        removed_link = BrandCategoryLink.query.filter_by(
+            marketplace_brand_id=bindings[9402].id,
+            category_id=405,
+        ).one()
+        self.assertTrue(removed_link.is_available)
+
+        other_marketplace = Marketplace(name='Ozon', code='ozon')
+        other_brand = Brand(
+            name='Other Marketplace Brand',
+            name_normalized='other marketplace brand',
+            status='verified',
+        )
+        db.session.add_all([other_marketplace, other_brand])
+        db.session.flush()
+        other_binding = MarketplaceBrand(
+            brand_id=other_brand.id,
+            marketplace_id=other_marketplace.id,
+            marketplace_brand_name=other_brand.name,
+            marketplace_brand_id=9402,
+            status='verified',
+            is_available=True,
+        )
+        db.session.add(other_binding)
+        db.session.flush()
+        other_link = BrandCategoryLink(
+            marketplace_brand_id=other_binding.id,
+            category_id=405,
+            is_available=True,
+        )
+        db.session.add(other_link)
+        db.session.commit()
+
+        self.client.brand_result = {
+            'data': [{'id': 9401, 'name': 'Present Brand'}],
+            'complete': True,
+            'errors': [],
+        }
+        stats = engine.sync_marketplace_brands(self.marketplace.id, self.client)
+        db.session.refresh(removed_link)
+        db.session.refresh(bindings[9402])
+        db.session.refresh(other_link)
+
+        self.assertEqual(stats['category_links_removed'], 1)
+        self.assertFalse(removed_link.is_available)
+        self.assertFalse(bindings[9402].is_available)
+        self.assertTrue(other_link.is_available)
+
+    def test_brand_sync_resumes_from_durable_category_checkpoint(self):
+        self.add_category(501, 'First scope', is_enabled=True, is_available=True)
+        self.add_category(502, 'Second scope', is_enabled=True, is_available=True)
+        engine = BrandEngine(self.app)
+        self.client.brand_result = {
+            'data': [{'id': 9501, 'name': 'First Brand'}],
+            'subject_brands': {
+                501: [{'id': 9501, 'name': 'First Brand'}],
+            },
+            'completed_subject_ids': [501],
+            'complete': False,
+            'errors': [{'code': 'request_budget_exhausted'}],
+        }
+        first = engine.sync_marketplace_brands(self.marketplace.id, self.client)
+        db.session.refresh(self.marketplace)
+
+        self.assertEqual(first['categories_completed_this_run'], 1)
+        self.assertEqual(self.marketplace.brands_sync_status, 'partial')
+        self.assertIsNone(self.marketplace.brands_synced_at)
+        checkpoint = json.loads(self.marketplace.brands_sync_checkpoint)
+        self.assertEqual(checkpoint['next_index'], 1)
+        self.assertEqual(self.client.brand_subject_calls[-1], [501, 502])
+
+        self.client.brand_result = {
+            'data': [{'id': 9502, 'name': 'Second Brand'}],
+            'subject_brands': {
+                502: [{'id': 9502, 'name': 'Second Brand'}],
+            },
+            'completed_subject_ids': [502],
+            'complete': True,
+            'errors': [],
+        }
+        second = engine.sync_marketplace_brands(self.marketplace.id, self.client)
+        db.session.refresh(self.marketplace)
+
+        self.assertEqual(second['categories_completed_this_run'], 1)
+        self.assertEqual(self.client.brand_subject_calls[-1], [502])
+        self.assertEqual(self.marketplace.brands_sync_status, 'success')
+        self.assertIsNotNone(self.marketplace.brands_synced_at)
+        self.assertIsNone(self.marketplace.brands_sync_checkpoint)
+        self.assertEqual(BrandCategoryLink.query.filter_by(
+            is_available=True,
+        ).count(), 2)
+
+    def test_category_validation_is_fail_closed_without_live_evidence(self):
+        brand = Brand(
+            name='Manual Review Brand',
+            name_normalized='manual review brand',
+            status='verified',
+        )
+        db.session.add(brand)
+        db.session.flush()
+        binding = MarketplaceBrand(
+            brand_id=brand.id,
+            marketplace_id=self.marketplace.id,
+            marketplace_brand_name=brand.name,
+            marketplace_brand_id=9601,
+            status='verified',
+            is_available=True,
+        )
+        db.session.add(binding)
+        db.session.commit()
+        engine = BrandEngine(self.app)
+
+        self.assertIsNone(engine.validate_brand_for_category(
+            binding.id, 601, marketplace_client=None,
+        ))
+        failing_client = MagicMock()
+        failing_client.search_brands.side_effect = RuntimeError('WB unavailable')
+        self.assertIsNone(engine.validate_brand_for_category(
+            binding.id, 601, marketplace_client=failing_client,
+        ))
+        self.assertIsNone(BrandCategoryLink.query.filter_by(
+            marketplace_brand_id=binding.id,
+            category_id=601,
+        ).first())
+
+    def test_unexpected_brand_sync_error_never_leaves_running_status(self):
+        self.add_category(701, 'Failure scope', is_enabled=True, is_available=True)
+        self.client.brand_result = {
+            'data': [{'id': 9701, 'name': 'Failure Brand'}],
+            'complete': True,
+            'errors': [],
+        }
+        engine = BrandEngine(self.app)
+        with patch(
+            'services.brand_engine.normalize_for_comparison',
+            side_effect=RuntimeError('sensitive upstream detail'),
+        ):
+            result = engine.sync_marketplace_brands(
+                self.marketplace.id, self.client,
+            )
+        db.session.refresh(self.marketplace)
+
+        self.assertEqual(result['errors'], 1)
+        self.assertEqual(self.marketplace.brands_sync_status, 'failed')
+        self.assertNotEqual(self.marketplace.brands_sync_status, 'running')
+        self.assertNotIn('sensitive upstream detail', self.marketplace.brands_sync_error)
+        self.assertEqual(engine.get_sync_progress(self.marketplace.id)['status'], 'error')
+
+    def test_brand_sync_honors_cross_process_advisory_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = str(Path(directory) / 'brand-sync.lock')
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                with patch.dict(os.environ, {
+                    'BRAND_SYNC_LOCK_FILE': lock_path,
+                }):
+                    result = BrandEngine(self.app).sync_marketplace_brands(
+                        self.marketplace.id, self.client,
+                    )
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+
+            self.assertTrue(result['skipped'])
+            self.assertEqual(result['reason'], 'brand_sync_already_running')
+            self.assertEqual(self.client.brand_subject_calls, [])
 
     def test_empty_complete_brand_sweep_preserves_last_good_cache_and_freshness(self):
         self.add_category(
@@ -953,7 +1718,7 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         db.session.refresh(self.marketplace)
         db.session.refresh(binding)
 
-        self.assertEqual(stats['total_fetched'], 1)
+        self.assertEqual(stats['total_fetched'], 0)
         self.assertEqual(self.marketplace.brands_sync_status, 'partial')
         self.assertEqual(self.marketplace.brands_synced_at, old_sync)
         self.assertEqual(self.marketplace.brands_version, 4)

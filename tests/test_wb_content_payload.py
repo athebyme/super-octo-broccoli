@@ -156,6 +156,8 @@ class TestWBContentPayload(unittest.TestCase):
             "updatedAt": "2026-01-01T00:00:00Z",
         }
 
+        from services.wb_validators import _mark_wb_card_as_fetched
+        _mark_wb_card_as_fetched(full_card)
         prepared = prepare_card_for_update(full_card, {"dimensions": {"width": 9}})
 
         self.assertEqual(prepared["dimensions"], {
@@ -176,6 +178,26 @@ class TestWBContentPayload(unittest.TestCase):
         self.assertNotIn("createdAt", prepared)
         self.assertNotIn("updatedAt", prepared)
         self.assertNotIn("isValid", prepared["dimensions"])
+
+    def test_prepare_update_rejects_implicit_loss_of_untouched_characteristic(self):
+        from services.wb_validators import _mark_wb_card_as_fetched
+
+        full_card = {
+            "nmID": 100,
+            "subjectID": 300,
+            "vendorCode": "SKU-1",
+            "sizes": [{"chrtID": 10, "skus": ["2000000000011"]}],
+            "characteristics": [
+                {"id": 55, "value": ""},
+                {"id": 56, "value": ["Сохранить"]},
+            ],
+        }
+        _mark_wb_card_as_fetched(full_card)
+
+        with self.assertRaises(WBValidationError) as raised:
+            prepare_card_for_update(full_card, {"title": "Новое название"})
+
+        self.assertIn("55", str(raised.exception))
 
     def test_build_dimensions_converts_mm_and_grams_from_legacy_sources(self):
         dimensions = build_dimensions(

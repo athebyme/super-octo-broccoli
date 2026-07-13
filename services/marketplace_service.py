@@ -6,12 +6,16 @@ Marketplace Service
 
 import logging
 from datetime import datetime, timedelta
+from functools import wraps
 from typing import Dict, List, Any, Optional
+import fcntl
 import hashlib
 import json
+import os
+import tempfile
 import time
 
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 
 from models import (
     db, Marketplace, MarketplaceCategory, MarketplaceCategoryCharacteristic,
@@ -22,12 +26,74 @@ from services.wb_api_client import WildberriesAPIClient
 logger = logging.getLogger('marketplace_service')
 
 
+def _try_reference_sync_claim(scope: str, identifier: Any):
+    lock_dir = os.path.join(tempfile.gettempdir(), 'seller-hub-reference-locks')
+    os.makedirs(lock_dir, mode=0o700, exist_ok=True)
+    lock_path = os.path.join(lock_dir, f'{scope}-{int(identifier)}.lock')
+    lock_file = open(lock_path, 'a+', encoding='ascii')
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        return None
+    return lock_file
+
+
+def _release_reference_sync_claim(lock_file) -> None:
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock_file.close()
+
+
+def _reference_sync_guard(scope: str, identifier_name: str):
+    """Serialize one reference refresh scope across local worker processes."""
+    def decorator(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            identifier = kwargs.get(identifier_name)
+            if identifier is None and len(args) > 1:
+                identifier = args[1]
+            try:
+                lock_file = _try_reference_sync_claim(scope, identifier)
+            except (OSError, TypeError, ValueError):
+                logger.exception('Could not acquire %s reference sync claim', scope)
+                return {
+                    'success': False,
+                    'error': 'Reference sync claim is unavailable',
+                }
+            if lock_file is None:
+                return {
+                    'success': False,
+                    'skipped': True,
+                    'error': 'Reference sync is already running',
+                    'reason': 'Reference sync is already running',
+                    'added': 0,
+                    'updated': 0,
+                    'selected': 0,
+                    'synced': 0,
+                    'failed': 0,
+                    'errors': [],
+                    'results': {},
+                }
+            try:
+                return func(*args, **kwargs)
+            finally:
+                _release_reference_sync_claim(lock_file)
+        return wrapped
+    return decorator
+
+
 class MarketplaceService:
 
     CATEGORY_PAGE_SIZE = 1000
     MAX_CATEGORY_PAGES = 100
     CATEGORY_SHRINK_GUARD_MIN = 100
     CATEGORY_SHRINK_GUARD_RATIO = 0.75
+    CHARACTERISTIC_SHRINK_GUARD_MIN = 8
+    CHARACTERISTIC_SHRINK_GUARD_RATIO = 0.5
+    DIRECTORY_SHRINK_GUARD_MIN = 4
+    DIRECTORY_SHRINK_GUARD_RATIO = 0.5
     REFERENCE_STALE_HOURS = 48
     SCHEMA_REFRESH_AFTER_HOURS = 30
     DEFAULT_STALE_SCHEMA_BATCH = 50
@@ -49,6 +115,127 @@ class MarketplaceService:
     @staticmethod
     def _error_text(exc: Exception) -> str:
         return str(exc)[:2000]
+
+    @classmethod
+    def _wb_data_list(cls, response: Any, reference_name: str) -> List[Any]:
+        """Validate the common WB Content API response envelope."""
+        if not isinstance(response, dict):
+            raise ValueError(f'WB {reference_name} response is not an object')
+
+        error_flag = response.get('error')
+        error_text = response.get('errorText')
+        additional_errors = response.get('additionalErrors')
+        if (
+            error_flag is not False
+            or error_text not in (None, '')
+            or additional_errors not in (None, '', [], {})
+        ):
+            raise ValueError(f'WB {reference_name} response reports an error')
+
+        items = response.get('data')
+        if not isinstance(items, list):
+            raise ValueError(f'WB {reference_name} response has no typed data list')
+        return items
+
+    @staticmethod
+    def _is_typed_integer(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    @classmethod
+    def _require_integer(
+        cls,
+        value: Any,
+        field_name: str,
+        *,
+        minimum: int,
+    ) -> int:
+        """Accept only JSON integers; never truncate bool, float or strings."""
+        if not cls._is_typed_integer(value) or value < minimum:
+            qualifier = 'positive ' if minimum == 1 else 'non-negative '
+            raise ValueError(
+                f'WB {field_name} is not a {qualifier}integer'
+            )
+        return value
+
+    @staticmethod
+    def _require_boolean(value: Any, field_name: str) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError(f'WB {field_name} is not a boolean')
+        return value
+
+    @classmethod
+    def _normalize_directory_snapshot(
+        cls,
+        directory_type: str,
+        items: List[Any],
+    ) -> List[Any]:
+        """Validate and normalize the documented shape of a WB directory."""
+        normalized: List[Any] = []
+        seen = set()
+        seen_names = set()
+
+        for index, item in enumerate(items):
+            if directory_type == 'colors':
+                if not isinstance(item, dict):
+                    raise ValueError(f'colors[{index}] must be an object')
+                name = item.get('name')
+                parent_name = item.get('parentName')
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError(f'colors[{index}].name must be a non-empty string')
+                if parent_name is not None and not isinstance(parent_name, str):
+                    raise ValueError(
+                        f'colors[{index}].parentName must be a string or null'
+                    )
+                key = name.strip().casefold()
+                normalized_item = dict(item)
+                normalized_item['name'] = name.strip()
+                normalized_item['parentName'] = (
+                    parent_name.strip() if isinstance(parent_name, str) else ''
+                )
+            elif directory_type == 'countries':
+                if not isinstance(item, dict):
+                    raise ValueError(f'countries[{index}] must be an object')
+                external_id = item.get('id')
+                name = item.get('name')
+                full_name = item.get('fullName')
+                if not cls._is_typed_integer(external_id) or external_id <= 0:
+                    raise ValueError(f'countries[{index}].id must be a positive integer')
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError(
+                        f'countries[{index}].name must be a non-empty string'
+                    )
+                if not isinstance(full_name, str) or not full_name.strip():
+                    raise ValueError(
+                        f'countries[{index}].fullName must be a non-empty string'
+                    )
+                key = external_id
+                name_key = name.strip().casefold()
+                if name_key in seen_names:
+                    raise ValueError(
+                        f'countries snapshot duplicated name {name.strip()!r}'
+                    )
+                seen_names.add(name_key)
+                normalized_item = dict(item)
+                normalized_item['name'] = name.strip()
+                normalized_item['fullName'] = full_name.strip()
+            elif directory_type in {'kinds', 'seasons', 'vat'}:
+                if not isinstance(item, str) or not item.strip():
+                    raise ValueError(
+                        f'{directory_type}[{index}] must be a non-empty string'
+                    )
+                normalized_item = item.strip()
+                key = normalized_item.casefold()
+            else:
+                raise ValueError(f'Unsupported directory type: {directory_type}')
+
+            if key in seen:
+                raise ValueError(
+                    f'{directory_type} snapshot contains a duplicate item'
+                )
+            seen.add(key)
+            normalized.append(normalized_item)
+
+        return normalized
 
     @classmethod
     def characteristic_allowlist_values(
@@ -157,6 +344,7 @@ class MarketplaceService:
     # =========================================================================
 
     @classmethod
+    @_reference_sync_guard('categories', 'marketplace_id')
     def sync_categories(
         cls,
         marketplace_id: int,
@@ -191,10 +379,7 @@ class MarketplaceService:
                 if page_number:
                     sleep_fn(cls.CHARACTERISTIC_REQUEST_INTERVAL_SECONDS)
                 response = client.get_subjects_list(limit=limit, offset=offset)
-                if not isinstance(response, dict) or not isinstance(response.get('data'), list):
-                    raise ValueError('WB categories response has no typed data list')
-
-                items = response['data']
+                items = cls._wb_data_list(response, 'categories')
                 if not items:
                     if not snapshot:
                         raise ValueError('WB returned an empty category snapshot')
@@ -204,24 +389,29 @@ class MarketplaceService:
                 for item in items:
                     if not isinstance(item, dict) or item.get('subjectID') is None:
                         raise ValueError('WB category snapshot contains an invalid item')
-                    try:
-                        subject_id = int(item['subjectID'])
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError('WB category subjectID is not an integer') from exc
+                    subject_id = cls._require_integer(
+                        item['subjectID'], 'category subjectID', minimum=1,
+                    )
                     subject_name = item.get('subjectName')
                     if not isinstance(subject_name, str) or not subject_name.strip():
                         raise ValueError('WB category snapshot contains an empty subjectName')
                     parent_id = item.get('parentID')
                     if parent_id is not None:
-                        try:
-                            parent_id = int(parent_id)
-                        except (TypeError, ValueError) as exc:
-                            raise ValueError('WB category parentID is not an integer') from exc
+                        parent_id = cls._require_integer(
+                            parent_id, 'category parentID', minimum=1,
+                        )
+
+                    availability_flags = {}
+                    for flag_name in ('isEnabled', 'isVisible', 'disabled'):
+                        if flag_name in item:
+                            availability_flags[flag_name] = cls._require_boolean(
+                                item[flag_name], f'category {flag_name}',
+                            )
 
                     is_available = not (
-                        item.get('isEnabled') is False
-                        or item.get('isVisible') is False
-                        or item.get('disabled') is True
+                        availability_flags.get('isEnabled') is False
+                        or availability_flags.get('isVisible') is False
+                        or availability_flags.get('disabled') is True
                     )
                     normalized = {
                         'subject_id': subject_id,
@@ -349,6 +539,7 @@ class MarketplaceService:
     # =========================================================================
 
     @classmethod
+    @_reference_sync_guard('characteristics-category', 'category_id')
     def sync_category_characteristics(
         cls,
         category_id: int,
@@ -375,9 +566,7 @@ class MarketplaceService:
         try:
             synced_at = now or datetime.utcnow()
             response = client.get_card_characteristics_config(category.subject_id)
-            if not isinstance(response, dict) or not isinstance(response.get('data'), list):
-                raise ValueError('WB characteristics response has no typed data list')
-            items = response['data']
+            items = cls._wb_data_list(response, 'characteristics')
             if not items:
                 raise ValueError('WB returned an empty characteristics snapshot')
 
@@ -385,17 +574,55 @@ class MarketplaceService:
             for item in items:
                 if not isinstance(item, dict) or item.get('charcID') is None:
                     raise ValueError('WB characteristics snapshot contains an invalid item')
-                try:
-                    charc_id = int(item['charcID'])
-                except (TypeError, ValueError) as exc:
-                    raise ValueError('WB characteristic charcID is not an integer') from exc
+                charc_id = cls._require_integer(
+                    item['charcID'], 'characteristic charcID', minimum=1,
+                )
                 if charc_id in normalized_items:
                     raise ValueError(
                         f'WB characteristics snapshot duplicated charcID {charc_id}'
                     )
+                subject_id = cls._require_integer(
+                    item.get('subjectID'),
+                    'characteristic subjectID',
+                    minimum=1,
+                )
+                if subject_id != category.subject_id:
+                    raise ValueError(
+                        'WB characteristic subjectID does not match the requested category'
+                    )
+                subject_name = item.get('subjectName')
+                if not isinstance(subject_name, str) or not subject_name.strip():
+                    raise ValueError('WB characteristic has no typed subjectName')
                 name = item.get('name')
                 if not isinstance(name, str) or not name.strip():
                     raise ValueError('WB characteristic has no name')
+                charc_type = cls._require_integer(
+                    item.get('charcType'),
+                    'characteristic charcType',
+                    minimum=0,
+                )
+                max_count = cls._require_integer(
+                    item.get('maxCount'),
+                    'characteristic maxCount',
+                    minimum=0,
+                )
+                for boolean_field in ('required', 'popular'):
+                    cls._require_boolean(
+                        item.get(boolean_field),
+                        f'characteristic {boolean_field}',
+                    )
+                for boolean_field in (
+                    'hasFilter', 'isVariable', 'existNamedField',
+                ):
+                    if boolean_field not in item:
+                        continue
+                    cls._require_boolean(
+                        item[boolean_field],
+                        f'characteristic {boolean_field}',
+                    )
+                unit_name = item.get('unitName')
+                if unit_name is not None and not isinstance(unit_name, str):
+                    raise ValueError('WB characteristic unitName has an invalid type')
                 dictionary = item.get('dictionary')
                 if dictionary is not None and not isinstance(dictionary, (list, dict)):
                     raise ValueError('WB characteristic dictionary has an invalid type')
@@ -403,14 +630,14 @@ class MarketplaceService:
                     dictionary = sorted(dictionary, key=cls._stable_json)
                 normalized_items[charc_id] = {
                     'charc_id': charc_id,
-                    'name': name,
-                    'charc_type': int(item.get('charcType') or 0),
-                    'required': bool(item.get('required', False)),
-                    'unit_name': item.get('unitName'),
-                    'max_count': int(item.get('maxCount') or 0),
-                    'popular': bool(item.get('popular', False)),
-                    'has_filter': bool(item.get('hasFilter', False)),
-                    'is_variable': bool(item.get('isVariable', False)),
+                    'name': name.strip(),
+                    'charc_type': charc_type,
+                    'required': item['required'],
+                    'unit_name': unit_name.strip() if unit_name else None,
+                    'max_count': max_count,
+                    'popular': item['popular'],
+                    'has_filter': item.get('hasFilter', False),
+                    'is_variable': item.get('isVariable', False),
                     'dictionary_json': (
                         cls._stable_json(dictionary) if dictionary is not None else None
                     ),
@@ -422,6 +649,20 @@ class MarketplaceService:
                     category_id=category.id,
                 ).all()
             }
+            previous_available = sum(
+                1 for characteristic in existing.values()
+                if characteristic.is_available
+            )
+            if (
+                previous_available >= cls.CHARACTERISTIC_SHRINK_GUARD_MIN
+                and len(normalized_items)
+                < previous_available * cls.CHARACTERISTIC_SHRINK_GUARD_RATIO
+            ):
+                raise ValueError(
+                    'WB characteristics snapshot shrank anomalously '
+                    f'({previous_available} -> {len(normalized_items)}); '
+                    'cache preserved'
+                )
 
             total_added = 0
             total_updated = 0
@@ -434,11 +675,12 @@ class MarketplaceService:
             for charc_id, item in normalized_items.items():
                 charc = existing.get(charc_id)
                 if charc:
-                    # WB's characteristic schema commonly omits dictionary values.
-                    # Keep an admin-maintained category allowlist unless upstream
-                    # explicitly sends a dictionary (including an empty list).
+                    # WB's characteristic schema commonly omits dictionary values
+                    # or sends an explicit empty array. Preserve a non-empty
+                    # admin allowlist until WB supplies a non-empty replacement.
                     if (
-                        item['dictionary_json'] is None
+                        not cls.characteristic_allowlist_values(
+                            item['dictionary_json'])
                         and cls.characteristic_allowlist_values(charc.dictionary_json)
                     ):
                         item = dict(item)
@@ -688,6 +930,7 @@ class MarketplaceService:
         return charc.ai_instruction in (generated, legacy_generated)
 
     @classmethod
+    @_reference_sync_guard('characteristics-sweep', 'marketplace_id')
     def sync_stale_characteristics(
         cls,
         marketplace_id: int,
@@ -706,6 +949,11 @@ class MarketplaceService:
         if not client:
             return {"success": False, "error": "API key not configured", "synced": 0}
 
+        refresh_priority = case(
+            (MarketplaceCategory.characteristics_sync_status == 'success', 0),
+            (MarketplaceCategory.characteristics_sync_status.is_(None), 1),
+            else_=2,
+        )
         categories = MarketplaceCategory.query.filter(
             MarketplaceCategory.marketplace_id == marketplace_id,
             MarketplaceCategory.is_enabled.is_(True),
@@ -717,11 +965,14 @@ class MarketplaceService:
                 MarketplaceCategory.characteristics_sync_status != 'success',
             ),
         ).order_by(
+            refresh_priority.asc(),
             MarketplaceCategory.characteristics_synced_at.asc(),
+            MarketplaceCategory.updated_at.asc(),
             MarketplaceCategory.id.asc(),
         ).limit(limit).all()
 
         synced = 0
+        skipped_categories = 0
         errors = []
         for index, category in enumerate(categories):
             if index:
@@ -729,7 +980,9 @@ class MarketplaceService:
             result = cls.sync_category_characteristics(
                 category.id, client=client, now=current_time,
             )
-            if result.get('success'):
+            if result.get('skipped'):
+                skipped_categories += 1
+            elif result.get('success'):
                 synced += 1
             else:
                 errors.append({
@@ -742,6 +995,7 @@ class MarketplaceService:
             'success': not errors,
             'selected': len(categories),
             'synced': synced,
+            'skipped_categories': skipped_categories,
             'failed': len(errors),
             'errors': errors[:10],
             'limit': limit,
@@ -856,6 +1110,7 @@ class MarketplaceService:
     # =========================================================================
 
     @classmethod
+    @_reference_sync_guard('directories', 'marketplace_id')
     def sync_directories(
         cls,
         marketplace_id: int,
@@ -902,13 +1157,23 @@ class MarketplaceService:
             ).first()
             try:
                 res = fetcher()
-                if not isinstance(res, dict) or not isinstance(res.get('data'), list):
-                    raise ValueError('response has no typed data list')
-                items = res['data']
+                items = cls._wb_data_list(res, f'{d_type} directory')
                 if not items:
                     raise ValueError('empty upstream directory snapshot')
-                data_json = cls._stable_json(items)
-                canonical_items = sorted(items, key=cls._stable_json)
+                normalized_items = cls._normalize_directory_snapshot(d_type, items)
+                previous_count = int(directory.items_count or 0) if directory else 0
+                if (
+                    previous_count >= cls.DIRECTORY_SHRINK_GUARD_MIN
+                    and len(normalized_items)
+                    < previous_count * cls.DIRECTORY_SHRINK_GUARD_RATIO
+                ):
+                    raise ValueError(
+                        f'{d_type} directory snapshot shrank anomalously '
+                        f'({previous_count} -> {len(normalized_items)}); '
+                        'cache preserved'
+                    )
+                data_json = cls._stable_json(normalized_items)
+                canonical_items = sorted(normalized_items, key=cls._stable_json)
                 data_hash = cls._payload_hash(canonical_items)
 
                 if directory:
@@ -918,7 +1183,7 @@ class MarketplaceService:
                     directory.data_json = data_json
                     directory.data_hash = data_hash
                     directory.synced_at = synced_at
-                    directory.items_count = len(items)
+                    directory.items_count = len(normalized_items)
                     directory.sync_status = 'success'
                     directory.sync_error = None
                 else:
@@ -929,13 +1194,13 @@ class MarketplaceService:
                         data_hash=data_hash,
                         version=1,
                         synced_at=synced_at,
-                        items_count=len(items),
+                        items_count=len(normalized_items),
                         sync_status='success',
                     )
                     db.session.add(directory)
                     changed += 1
 
-                results[d_type] = len(items)
+                results[d_type] = len(normalized_items)
                 succeeded += 1
             except Exception as e:
                 logger.error(f"Failed to fetch directory '{d_type}': {e}")

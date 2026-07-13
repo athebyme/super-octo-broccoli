@@ -405,6 +405,59 @@ class PlatformClient:
         return self._request('GET', '/categories/search',
                              params={'q': query, 'limit': limit})
 
+    def search_categories_batch(
+        self, queries: list[str], limit: int = 20,
+    ) -> dict:
+        """Search typed category scopes in one request and verify exact order."""
+        if not isinstance(queries, list) or not 1 <= len(queries) <= 200:
+            raise ValueError('queries must contain 1..200 entries')
+        prepared = []
+        seen = set()
+        for index, raw_query in enumerate(queries):
+            if not isinstance(raw_query, str):
+                raise ValueError(f'queries[{index}] must be a string')
+            query = raw_query.strip()
+            if not 2 <= len(query) <= 300:
+                raise ValueError(f'queries[{index}] must contain 2..300 chars')
+            normalized = query.casefold()
+            if normalized in seen:
+                raise ValueError(f'Duplicate query: {query}')
+            seen.add(normalized)
+            prepared.append(query)
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 50
+        ):
+            raise ValueError('limit must be an integer from 1 to 50')
+
+        payload = self._request(
+            'POST', '/categories/search-batch',
+            json={'queries': prepared, 'limit': limit},
+        )
+        results = payload.get('results') if isinstance(payload, dict) else None
+        if (
+            not isinstance(results, list)
+            or len(results) != len(prepared)
+            or payload.get('count') != len(results)
+            or not isinstance(payload.get('reference_status'), dict)
+        ):
+            raise ValueError('Invalid category search batch response')
+        for expected_query, result in zip(prepared, results):
+            if (
+                not isinstance(result, dict)
+                or result.get('query') != expected_query
+                or not isinstance(result.get('categories'), list)
+                or result.get('count') != len(result['categories'])
+                or not isinstance(result.get('reference_status'), dict)
+            ):
+                raise ValueError(
+                    'Category search batch response does not match request order',
+                )
+        if {item['query'] for item in results} != set(prepared):
+            raise ValueError('Category search batch query set does not match request')
+        return payload
+
     # ── Характеристики категории ─────────────────────────────────
 
     def get_category_characteristics(self, subject_id: int,
@@ -414,6 +467,61 @@ class PlatformClient:
         return self._request(
             'GET', f'/categories/{subject_id}/characteristics{params}'
         )
+
+    def get_category_characteristics_batch(
+        self, subject_ids: list[int], required_only: bool = False,
+    ) -> dict:
+        """Load category schemas in one request and verify exact IDs/order."""
+        if not isinstance(subject_ids, list) or not 1 <= len(subject_ids) <= 200:
+            raise ValueError('subject_ids must contain 1..200 entries')
+        prepared = []
+        seen = set()
+        for index, subject_id in enumerate(subject_ids):
+            if (
+                not isinstance(subject_id, int)
+                or isinstance(subject_id, bool)
+                or subject_id <= 0
+            ):
+                raise ValueError(
+                    f'subject_ids[{index}] must be a positive integer',
+                )
+            if subject_id in seen:
+                raise ValueError(f'Duplicate subject_id: {subject_id}')
+            seen.add(subject_id)
+            prepared.append(subject_id)
+        if not isinstance(required_only, bool):
+            raise ValueError('required_only must be a boolean')
+
+        payload = self._request(
+            'POST', '/categories/characteristics-batch',
+            json={
+                'subject_ids': prepared,
+                'required_only': required_only,
+            },
+        )
+        results = payload.get('results') if isinstance(payload, dict) else None
+        if (
+            not isinstance(results, list)
+            or len(results) != len(prepared)
+            or payload.get('count') != len(results)
+        ):
+            raise ValueError('Invalid characteristic schema batch response')
+        for expected_id, result in zip(prepared, results):
+            if (
+                not isinstance(result, dict)
+                or result.get('subject_id') != expected_id
+                or not isinstance(result.get('characteristics'), list)
+                or result.get('count') != len(result['characteristics'])
+                or not isinstance(result.get('reference_status'), dict)
+            ):
+                raise ValueError(
+                    'Characteristic schema batch response does not match request order',
+                )
+        if {item['subject_id'] for item in results} != set(prepared):
+            raise ValueError(
+                'Characteristic schema batch subject set does not match request',
+            )
+        return payload
 
     # ── Справочники ────────────────────────────────────────────────
 
@@ -466,6 +574,25 @@ class PlatformClient:
 
     # ── Бренды ─────────────────────────────────────────────────────
 
+    def preflight_brand_categories(self, category_ids: list[int]) -> dict:
+        """Check brand-reference freshness for typed WB category scopes."""
+        if not isinstance(category_ids, list) or not 1 <= len(category_ids) <= 100:
+            raise ValueError('category_ids must contain 1..100 entries')
+        payload = self._request(
+            'POST', '/brands/preflight', json={'category_ids': category_ids},
+        )
+        results = payload.get('results') if isinstance(payload, dict) else None
+        if not isinstance(results, list) or len(results) != len(set(category_ids)):
+            raise ValueError('Invalid brand preflight response')
+        expected = {int(category_id) for category_id in category_ids}
+        actual = {
+            int(item.get('category_id'))
+            for item in results if isinstance(item, dict)
+        }
+        if actual != expected:
+            raise ValueError('Brand preflight category IDs do not match request')
+        return payload
+
     def validate_brand(self, brand_name: str,
                        category_id: int = None) -> dict:
         """Проверяет бренд и возвращает плоский typed result без HTTP envelope."""
@@ -480,6 +607,25 @@ class PlatformClient:
         result = dict(result)
         result['reference_status'] = payload['reference_status']
         return result
+
+    def validate_brands(self, items: list[dict]) -> list[dict]:
+        """Validate a typed brand batch in one internal API request."""
+        if not isinstance(items, list) or not items or len(items) > 100:
+            raise ValueError('items must contain 1..100 entries')
+        payload = self._request(
+            'POST', '/brands/validate-batch', json={'items': items},
+        )
+        results = payload.get('results') if isinstance(payload, dict) else None
+        if not isinstance(results, list) or len(results) != len(items):
+            raise ValueError('Invalid batch brand validation response')
+        expected_ids = {int(item['product_id']) for item in items}
+        result_ids = {
+            int(item.get('product_id'))
+            for item in results if isinstance(item, dict)
+        }
+        if result_ids != expected_ids:
+            raise ValueError('Batch brand validation IDs do not match request')
+        return results
 
     # ── Настройки ценообразования ──────────────────────────────────
 

@@ -1,7 +1,10 @@
 """
 Валидация данных для WB API согласно swagger документации
 """
+import hashlib
+import json
 import logging
+import copy
 from typing import Dict, List, Any, Optional, Tuple
 
 logger = logging.getLogger('wb_validators')
@@ -16,6 +19,170 @@ class WBValidationError(Exception):
 # перед HTTP и никогда не являются частью WB wire-contract.
 WB_SUBJECT_CONTEXT_KEY = '_wb_subjectID'
 WB_CHARACTERISTICS_CHANGED_KEY = '_wb_characteristics_changed'
+WB_PREPARED_CONTEXT_KEY = '_wb_prepared_context'
+WB_SOURCE_CONTEXT_KEY = '_wb_fetched_source_context'
+
+
+class _WBFetchedSourceContext:
+    """Opaque proof that the API client fetched this base card from WB."""
+
+    __slots__ = ('nm_id', 'subject_id', 'characteristics_hash', '_token')
+
+    def __init__(self, nm_id, subject_id, characteristics_hash, token):
+        self.nm_id = nm_id
+        self.subject_id = subject_id
+        self.characteristics_hash = characteristics_hash
+        self._token = token
+
+
+class _WBPreparedContext:
+    """Opaque in-process context; JSON callers cannot forge this marker."""
+
+    __slots__ = (
+        'nm_id', 'subject_id', 'changed_ids', 'removed_ids',
+        'characteristics_hash', '_token',
+    )
+
+    def __init__(
+        self,
+        nm_id,
+        subject_id,
+        changed_ids,
+        removed_ids,
+        characteristics_hash,
+        token,
+    ):
+        self.nm_id = nm_id
+        self.subject_id = subject_id
+        self.changed_ids = tuple(changed_ids)
+        self.removed_ids = tuple(removed_ids)
+        self.characteristics_hash = characteristics_hash
+        self._token = token
+
+
+_WB_PREPARED_CONTEXT_TOKEN = object()
+_WB_FETCHED_SOURCE_CONTEXT_TOKEN = object()
+
+
+def _characteristics_fingerprint(characteristics):
+    encoded = json.dumps(
+        characteristics,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _strict_characteristic_ids(characteristics, source_label):
+    """Return IDs without allowing normalization to hide malformed entries."""
+    if not isinstance(characteristics, list):
+        raise WBValidationError(
+            f'{source_label}: characteristics должен быть массивом'
+        )
+    result = set()
+    for index, item in enumerate(characteristics):
+        if not isinstance(item, dict):
+            raise WBValidationError(
+                f'{source_label}: характеристика #{index + 1} должна быть объектом'
+            )
+        try:
+            if isinstance(item.get('id'), bool):
+                raise ValueError
+            charc_id = int(item.get('id'))
+        except (TypeError, ValueError):
+            raise WBValidationError(
+                f'{source_label}: характеристика #{index + 1} не содержит '
+                'числовой id'
+            )
+        if charc_id in result:
+            raise WBValidationError(
+                f'{source_label}: характеристика id={charc_id} продублирована'
+            )
+        if 'value' not in item:
+            raise WBValidationError(
+                f'{source_label}: характеристика id={charc_id} не содержит value'
+            )
+        result.add(charc_id)
+    return result
+
+
+def _make_wb_prepared_context(
+    nm_id,
+    subject_id,
+    changed_ids,
+    characteristics,
+    removed_ids=(),
+):
+    return _WBPreparedContext(
+        nm_id,
+        subject_id,
+        changed_ids,
+        removed_ids,
+        _characteristics_fingerprint(characteristics),
+        _WB_PREPARED_CONTEXT_TOKEN,
+    )
+
+
+def _mark_wb_card_as_fetched(card):
+    """Attach an in-process source receipt to a card returned by WB client."""
+    if not isinstance(card, dict):
+        raise WBValidationError('Свежая WB-карточка должна быть объектом')
+    if not isinstance(card.get('characteristics'), list):
+        raise WBValidationError(
+            'Свежая WB-карточка не содержит массив characteristics'
+        )
+    card[WB_SOURCE_CONTEXT_KEY] = _WBFetchedSourceContext(
+        card.get('nmID'),
+        card.get('subjectID'),
+        _characteristics_fingerprint(card.get('characteristics')),
+        _WB_FETCHED_SOURCE_CONTEXT_TOKEN,
+    )
+    return card
+
+
+def _read_wb_fetched_source_context(value, card):
+    if (
+        not isinstance(value, _WBFetchedSourceContext)
+        or value._token is not _WB_FETCHED_SOURCE_CONTEXT_TOKEN
+    ):
+        raise WBValidationError('Недостоверный источник WB-карточки')
+    if str(value.nm_id) != str(card.get('nmID')):
+        raise WBValidationError('Источник относится к другой WB-карточке')
+    if str(value.subject_id) != str(card.get('subjectID')):
+        raise WBValidationError('subjectID изменён после получения WB-карточки')
+    if value.characteristics_hash != _characteristics_fingerprint(
+        card.get('characteristics')
+    ):
+        raise WBValidationError(
+            'Характеристики изменены до безопасной подготовки WB-карточки'
+        )
+    if value.subject_id is None:
+        raise WBValidationError(
+            'Свежая WB-карточка не содержит typed subjectID'
+        )
+    return value.subject_id
+
+
+def _read_wb_prepared_context(value, characteristics, nm_id):
+    if (
+        not isinstance(value, _WBPreparedContext)
+        or value._token is not _WB_PREPARED_CONTEXT_TOKEN
+    ):
+        raise WBValidationError('Недостоверный внутренний контекст WB-карточки')
+    if str(value.nm_id) != str(nm_id):
+        raise WBValidationError(
+            'Внутренний контекст относится к другой WB-карточке'
+        )
+    if value.characteristics_hash != _characteristics_fingerprint(characteristics):
+        raise WBValidationError(
+            'Характеристики изменены после безопасной подготовки карточки'
+        )
+    return (
+        value.subject_id,
+        list(value.changed_ids),
+        list(value.removed_ids),
+    )
 
 
 def validate_card_update(card_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
@@ -303,18 +470,64 @@ def prepare_card_for_update(
     if not isinstance(full_card, dict) or not isinstance(updates, dict):
         raise WBValidationError('full_card и updates должны быть объектами')
 
-    subject_context = (
-        full_card.get('subjectID')
-        or full_card.get(WB_SUBJECT_CONTEXT_KEY)
+    immutable_update_keys = {
+        'nmID', 'subjectID',
+        WB_SOURCE_CONTEXT_KEY, WB_PREPARED_CONTEXT_KEY,
+        WB_SUBJECT_CONTEXT_KEY, WB_CHARACTERISTICS_CHANGED_KEY,
+    }
+    forbidden_updates = immutable_update_keys.intersection(updates)
+    if forbidden_updates:
+        raise WBValidationError(
+            'Нельзя изменять identity/context поля WB-карточки: '
+            + ', '.join(sorted(forbidden_updates))
+        )
+
+    legacy_context_keys = (
+        WB_SUBJECT_CONTEXT_KEY,
+        WB_CHARACTERISTICS_CHANGED_KEY,
     )
-    previous_changed_ids = full_card.get(WB_CHARACTERISTICS_CHANGED_KEY)
-    characteristics_changed_ids = (
-        list(previous_changed_ids)
-        if isinstance(previous_changed_ids, list) else []
+    if any(key in full_card for key in legacy_context_keys):
+        raise WBValidationError(
+            'Legacy WB context markers are reserved and cannot be supplied'
+        )
+
+    opaque_context = full_card.get(WB_PREPARED_CONTEXT_KEY)
+    if opaque_context is not None:
+        prepared_subject, characteristics_changed_ids, characteristics_removed_ids = (
+            _read_wb_prepared_context(
+                opaque_context,
+                full_card.get('characteristics'),
+                full_card.get('nmID'),
+            )
+        )
+    else:
+        source_context = full_card.get(WB_SOURCE_CONTEXT_KEY)
+        if source_context is None:
+            raise WBValidationError(
+                'Для batch/full update требуется карточка, свежая из WB API'
+            )
+        prepared_subject = _read_wb_fetched_source_context(
+            source_context, full_card)
+        characteristics_changed_ids = []
+        characteristics_removed_ids = []
+    subject_context = full_card.get('subjectID') or prepared_subject
+    if (
+        full_card.get('subjectID') is not None
+        and prepared_subject is not None
+        and str(full_card.get('subjectID')) != str(prepared_subject)
+    ):
+        raise WBValidationError(
+            'WB subjectID не совпадает с безопасно подготовленным контекстом'
+        )
+    source_characteristic_ids = _strict_characteristic_ids(
+        full_card.get('characteristics'),
+        'Свежая WB-карточка',
     )
 
     # Копируем полную карточку
     prepared = full_card.copy()
+    prepared.pop(WB_PREPARED_CONTEXT_KEY, None)
+    prepared.pop(WB_SOURCE_CONTEXT_KEY, None)
 
     # Legacy Product мог хранить {name: value}. Нельзя позволять wire-
     # normalizer молча превратить такой объект в [], поэтому сначала точно
@@ -359,14 +572,17 @@ def prepare_card_for_update(
             from services.marketplace_validator import merge_wb_characteristics
             prepared[key] = merge_wb_characteristics(
                 prepared.get('characteristics'), value)
-            characteristics_changed_ids = []
+            new_changed_ids = []
             for item in value:
                 if not isinstance(item, dict):
                     continue
                 try:
-                    characteristics_changed_ids.append(int(item.get('id')))
+                    new_changed_ids.append(int(item.get('id')))
                 except (TypeError, ValueError):
                     continue
+            characteristics_changed_ids = list(dict.fromkeys(
+                characteristics_changed_ids + new_changed_ids
+            ))
         else:
             prepared[key] = value
 
@@ -395,13 +611,6 @@ def prepare_card_for_update(
     from services.wb_content_payload import normalize_update_card_payload
 
     prepared = normalize_update_card_payload(prepared)
-
-    # Переносим subject context до batch boundary, где будет
-    # выполнена обязательная admin-dictionary validation. Клиент
-    # удаляет оба marker-поля до сети.
-    if subject_context is not None:
-        prepared[WB_SUBJECT_CONTEXT_KEY] = subject_context
-    prepared[WB_CHARACTERISTICS_CHANGED_KEY] = characteristics_changed_ids
 
     # Проверяем обязательные поля
     required_fields = ['nmID', 'vendorCode', 'sizes']
@@ -452,6 +661,109 @@ def prepare_card_for_update(
         logger.info(f"🧹 Cleaning {len(prepared['characteristics'])} characteristics before API call")
         prepared['characteristics'] = clean_characteristics_for_update(prepared['characteristics'])
 
+    final_characteristic_ids = _strict_characteristic_ids(
+        prepared.get('characteristics'),
+        'Подготовленная WB-карточка',
+    )
+    expected_characteristic_ids = (
+        source_characteristic_ids | set(characteristics_changed_ids)
+    ) - set(characteristics_removed_ids)
+    lost_characteristic_ids = (
+        expected_characteristic_ids - final_characteristic_ids
+    )
+    if lost_characteristic_ids:
+        # WB moved this legacy field to dimensions.weightBrutto. Its removal is
+        # an explicit, signed migration rather than an invisible side effect.
+        from services.wb_content_payload import PACKED_WEIGHT_CHARC_IDS
+        deprecated_removed_ids = (
+            lost_characteristic_ids & PACKED_WEIGHT_CHARC_IDS
+        )
+        unsafe_removed_ids = lost_characteristic_ids - deprecated_removed_ids
+        if unsafe_removed_ids:
+            raise WBValidationError(
+                'Нормализация молча удалила характеристики WB: '
+                + ', '.join(str(value) for value in sorted(unsafe_removed_ids))
+            )
+        characteristics_removed_ids = list(dict.fromkeys(
+            characteristics_removed_ids + sorted(deprecated_removed_ids)
+        ))
+        characteristics_changed_ids = list(dict.fromkeys(
+            characteristics_changed_ids + sorted(deprecated_removed_ids)
+        ))
+
+    # Контекст подписывает уже финальный wire-shape: cleanup выше может удалить
+    # технические значения или превратить scalar в list.
+    if subject_context is not None:
+        prepared[WB_PREPARED_CONTEXT_KEY] = _make_wb_prepared_context(
+            prepared.get('nmID'),
+            subject_context,
+            characteristics_changed_ids,
+            prepared.get('characteristics'),
+            characteristics_removed_ids,
+        )
+
+    return prepared
+
+
+def prepare_card_for_characteristic_rollback(
+    full_card: Dict[str, Any],
+    restored_characteristics: List[Dict[str, Any]],
+    removed_characteristic_ids: List[int],
+) -> Dict[str, Any]:
+    """Prepare a fresh WB card while explicitly restoring/removing charc IDs."""
+    prepared = prepare_card_for_update(
+        full_card,
+        {'characteristics': restored_characteristics},
+    )
+    context = prepared.pop(WB_PREPARED_CONTEXT_KEY, None)
+    if context is None:
+        raise WBValidationError(
+            'subjectID обязателен для безопасного отката характеристик'
+        )
+    subject_id, changed_ids, previous_removed_ids = _read_wb_prepared_context(
+        context,
+        prepared.get('characteristics'),
+        prepared.get('nmID'),
+    )
+
+    try:
+        removed_ids = {
+            int(value)
+            for value in list(previous_removed_ids) + list(removed_characteristic_ids)
+        }
+    except (TypeError, ValueError) as exc:
+        raise WBValidationError(
+            'Некорректный ID удаляемой характеристики'
+        ) from exc
+
+    restored_ids = {
+        int(item.get('id'))
+        for item in restored_characteristics
+        if isinstance(item, dict) and item.get('id') is not None
+    }
+    removed_ids.difference_update(restored_ids)
+
+    characteristics = prepared.get('characteristics')
+    if not isinstance(characteristics, list):
+        raise WBValidationError('Характеристики WB должны быть массивом')
+    prepared['characteristics'] = [
+        item for item in characteristics
+        if not (
+            isinstance(item, dict)
+            and str(item.get('id', '')).isdigit()
+            and int(item['id']) in removed_ids
+        )
+    ]
+    all_changed_ids = list(dict.fromkeys(
+        list(changed_ids) + sorted(removed_ids)
+    ))
+    prepared[WB_PREPARED_CONTEXT_KEY] = _make_wb_prepared_context(
+        prepared.get('nmID'),
+        subject_id,
+        all_changed_ids,
+        prepared.get('characteristics'),
+        sorted(removed_ids),
+    )
     return prepared
 
 
@@ -579,13 +891,14 @@ def prepare_batch_cards_safe(
     updates_fn,
     client,
     seller_id: int = None,
-    log_to_db: bool = True
+    log_to_db: bool = True,
+    fresh_cards_out: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> tuple:
     """
     Безопасная подготовка карточек для batch-обновления.
 
-    Для каждого продукта получает СВЕЖИЕ sizes из WB API (с chrtID),
-    чтобы избежать ошибки "Неуникальный баркод" при обновлении.
+    Для каждого продукта получает целиком СВЕЖУЮ карточку WB. Это сохраняет
+    актуальные характеристики и sizes с chrtID при full-replacement update.
 
     Карточки с nm_id=0 или без nm_id пропускаются.
 
@@ -623,9 +936,10 @@ def prepare_batch_cards_safe(
     if not valid_products:
         return cards_to_update, product_map, skipped_errors
 
-    # Получаем свежие sizes из WB API для всех карточек
+    # Получаем целиком свежие карточки WB. Локальная копия может отставать и
+    # не должна повторно отправляться как full replacement при batch update.
     nm_ids = [p.nm_id for p in valid_products]
-    fresh_sizes_map = client.get_fresh_sizes_map(
+    fresh_cards_map = client.fetch_cards_by_nm_ids(
         nm_ids,
         log_to_db=log_to_db,
         seller_id=seller_id
@@ -633,21 +947,20 @@ def prepare_batch_cards_safe(
 
     for product in valid_products:
         try:
-            full_card = product.to_wb_card_format()
+            full_card = fresh_cards_map.get(product.nm_id)
             if not full_card:
-                skipped_errors.append(f"Товар {product.vendor_code}: нет данных в БД")
-                continue
-
-            # Подменяем sizes на свежие из WB API (с chrtID)
-            fresh_sizes = fresh_sizes_map.get(product.nm_id)
-            if fresh_sizes:
-                full_card['sizes'] = fresh_sizes
-            elif not full_card.get('sizes'):
                 skipped_errors.append(
-                    f"Товар {product.vendor_code}: нет sizes ни в БД, "
-                    f"ни в WB API (требуется синхронизация)"
+                    f"Товар {product.vendor_code}: свежая карточка не найдена в WB"
                 )
                 continue
+            if not full_card.get('sizes'):
+                skipped_errors.append(
+                    f"Товар {product.vendor_code}: в свежей карточке WB нет sizes"
+                )
+                continue
+
+            if fresh_cards_out is not None:
+                fresh_cards_out[product.nm_id] = copy.deepcopy(full_card)
 
             # Применяем обновления через пользовательскую функцию
             updates = updates_fn(product, full_card)

@@ -17,6 +17,7 @@ from models import (
 logger = logging.getLogger('marketplace_validator')
 
 REFERENCE_MAX_AGE_HOURS = 48
+EFFECTIVE_CONSTRAINT_VALUES_LIMIT = 40
 
 
 class WBCharacteristicValidationError(ValueError):
@@ -42,6 +43,19 @@ _DIRECTORY_BY_CHARACTERISTIC = {
     'ставка ндс': 'vat',
 }
 
+_MATERIAL_CHARACTERISTIC_ALIASES = {
+    'состав',
+    'состав изделия',
+    'состав материала',
+}
+
+
+def _strict_positive_integer(value: Any) -> int:
+    """Return a positive JSON integer without bool/float/string coercion."""
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError('value must be a positive integer')
+    return value
+
 
 def _normalized_label(value: Any) -> str:
     text = str(value or '').strip().casefold().replace('ё', 'е')
@@ -57,6 +71,14 @@ def _normalized_dictionary_value(value: Any) -> str:
 def _directory_type_for_characteristic(name: str) -> Optional[str]:
     normalized = _normalized_label(name)
     return _DIRECTORY_BY_CHARACTERISTIC.get(normalized)
+
+
+def _is_material_characteristic(name: Any) -> bool:
+    normalized = _normalized_label(name)
+    return bool(
+        'материал' in normalized
+        or normalized in _MATERIAL_CHARACTERISTIC_ALIASES
+    )
 
 
 def _is_fresh(synced_at: Optional[datetime]) -> bool:
@@ -144,8 +166,8 @@ def _resolve_wb_schema(
     validation_cache: Optional[Dict[str, Any]] = None,
 ):
     try:
-        subject_id = int(subject_id)
-    except (TypeError, ValueError):
+        subject_id = _strict_positive_integer(subject_id)
+    except ValueError:
         return None, None, None
 
     cache_key = (marketplace_code, subject_id)
@@ -171,12 +193,18 @@ def _resolve_wb_schema(
         if schema_cache is not None:
             schema_cache[cache_key] = resolved
         return resolved
-    characteristics = MarketplaceCategoryCharacteristic.query.filter_by(
+    available_characteristics = MarketplaceCategoryCharacteristic.query.filter_by(
         marketplace_id=marketplace.id,
         category_id=category.id,
-        is_enabled=True,
         is_available=True,
     ).all()
+    # Required characteristics cannot be disabled through current admin UI,
+    # but old databases may still contain required=True/is_enabled=False.
+    # Such a row must never disappear from create/removal validation.
+    characteristics = [
+        charc for charc in available_characteristics
+        if charc.is_enabled or charc.required
+    ]
     resolved = (marketplace, category, characteristics)
     if schema_cache is not None:
         schema_cache[cache_key] = resolved
@@ -203,23 +231,31 @@ def _allowed_values_for_characteristic(
             allowed_cache[cache_key] = result
         return result
 
-    if characteristic.dictionary_json:
+    normalized_name = _normalized_label(characteristic.name)
+    directory_type = _directory_type_for_characteristic(characteristic.name)
+
+    uses_global_directory = bool(
+        directory_type and normalized_name not in ('пол', 'пол товара')
+    )
+    if characteristic.dictionary_json and not uses_global_directory:
         try:
             raw = json.loads(characteristic.dictionary_json)
         except (json.JSONDecodeError, TypeError):
             raw = None
         values = _dictionary_values(raw)
-        if not values:
+        if values:
+            return resolved(values, 'category')
+        if not isinstance(raw, list):
             return resolved(issue=_issue(
                 'dictionary_not_synced',
-                f'«{characteristic.name}»: словарь категории повреждён или пуст; '
+                f'«{characteristic.name}»: словарь категории повреждён; '
                 'синхронизируйте характеристики WB в админке',
                 charc_id=characteristic.charc_id,
                 name=characteristic.name,
             ))
-        return resolved(values, 'category')
-
-    normalized_name = _normalized_label(characteristic.name)
+        # Официальная схема часто отдаёт explicit []. Для общих справочников
+        # это означает fallback к синхронизированному MarketplaceDirectory.
+        # Category-scoped Пол/Материал/ТНВЭД обрабатываются ниже fail-closed.
 
     # Общий WB-справочник kinds описывает все варианты пола во всём каталоге
     # и потому не доказывает допустимость значения для конкретного предмета.
@@ -234,7 +270,6 @@ def _allowed_values_for_characteristic(
             name=characteristic.name,
         ))
 
-    directory_type = _directory_type_for_characteristic(characteristic.name)
     if normalized_name in ('тнвэд', 'тнвэд код', 'тн вэд', 'тн вэд код'):
         return resolved(issue=_issue(
             'category_scoped_directory_not_synced',
@@ -244,10 +279,22 @@ def _allowed_values_for_characteristic(
             name=characteristic.name,
         ))
     if directory_type:
-        directory = MarketplaceDirectory.query.filter_by(
-            marketplace_id=marketplace.id,
-            directory_type=directory_type,
-        ).first()
+        directory_cache = (
+            validation_cache.setdefault('directories', {})
+            if validation_cache is not None else None
+        )
+        directory_key = (marketplace.id, directory_type)
+        if directory_cache is not None and directory_key in directory_cache:
+            directory = directory_cache[directory_key]
+        else:
+            directory = MarketplaceDirectory.query.filter_by(
+                marketplace_id=marketplace.id,
+                directory_type=directory_type,
+            ).first()
+            if directory_cache is not None:
+                # Cache misses as well: an absent reference must not cause one
+                # SELECT per characteristic in a request-sized batch.
+                directory_cache[directory_key] = directory
         if (
             not directory
             or directory.sync_status != 'success'
@@ -277,7 +324,7 @@ def _allowed_values_for_characteristic(
 
     # Для материала в supplier workflow запрещён непроверяемый свободный текст:
     # именно такой путь превращал фразу «в наилучшем виде» в материал изделия.
-    if 'материал' in _normalized_label(characteristic.name):
+    if _is_material_characteristic(characteristic.name):
         return resolved(issue=_issue(
             'dictionary_not_synced',
             f'«{characteristic.name}»: нет словаря допустимых материалов в админке',
@@ -286,6 +333,93 @@ def _allowed_values_for_characteristic(
         ))
 
     return resolved()
+
+
+def prime_wb_characteristic_directory_cache(
+    marketplace: Marketplace,
+    characteristics: List[MarketplaceCategoryCharacteristic],
+    validation_cache: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Load every global directory needed by a characteristic batch once."""
+    if validation_cache is None or not marketplace or not characteristics:
+        return
+
+    directory_types = {
+        directory_type
+        for characteristic in characteristics
+        for directory_type in [
+            _directory_type_for_characteristic(characteristic.name),
+        ]
+        if directory_type
+        and _normalized_label(characteristic.name) not in ('пол', 'пол товара')
+    }
+    cache = validation_cache.setdefault('directories', {})
+    missing_types = sorted(
+        directory_type for directory_type in directory_types
+        if (marketplace.id, directory_type) not in cache
+    )
+    if not missing_types:
+        return
+
+    rows = MarketplaceDirectory.query.filter(
+        MarketplaceDirectory.marketplace_id == marketplace.id,
+        MarketplaceDirectory.directory_type.in_(missing_types),
+    ).all()
+    by_type = {row.directory_type: row for row in rows}
+    for directory_type in missing_types:
+        # Missing rows are authoritative for this request and are cached as
+        # None so validation remains fail-closed without another DB lookup.
+        cache[(marketplace.id, directory_type)] = by_type.get(directory_type)
+
+
+def get_wb_characteristic_constraint(
+    marketplace: Marketplace,
+    characteristic: MarketplaceCategoryCharacteristic,
+    validation_cache: Optional[Dict[str, Any]] = None,
+    values_limit: int = EFFECTIVE_CONSTRAINT_VALUES_LIMIT,
+) -> Dict[str, Any]:
+    """Return the compact effective constraint used by the write validator."""
+    values_limit = max(1, min(int(values_limit), 100))
+    allowed, source, issue = _allowed_values_for_characteristic(
+        marketplace,
+        characteristic,
+        validation_cache,
+    )
+
+    normalized_name = _normalized_label(characteristic.name)
+    if source is None:
+        directory_type = _directory_type_for_characteristic(characteristic.name)
+        if normalized_name in ('пол', 'пол товара'):
+            source = 'category'
+        elif normalized_name in (
+            'тнвэд', 'тнвэд код', 'тн вэд', 'тн вэд код',
+        ):
+            source = 'tnved'
+        elif _is_material_characteristic(characteristic.name):
+            source = 'category'
+        elif directory_type:
+            source = directory_type
+        elif characteristic.dictionary_json:
+            source = 'category'
+        else:
+            source = 'free_text'
+
+    canonical_values = list(allowed or [])
+    result = {
+        'source': source,
+        'constrained': source != 'free_text',
+        'usable': issue is None,
+        'count': len(canonical_values),
+        'values': canonical_values[:values_limit],
+        'truncated': len(canonical_values) > values_limit,
+    }
+    if issue:
+        result['issue'] = {
+            key: issue[key]
+            for key in ('code', 'message', 'charc_id', 'name')
+            if issue.get(key) is not None
+        }
+    return result
 
 
 def _coerce_number(value: Any, unit_name: Optional[str]) -> Optional[Any]:
@@ -377,8 +511,8 @@ def validate_wb_characteristics(
             ))
             continue
         try:
-            charc_id = int(item.get('id'))
-        except (TypeError, ValueError):
+            charc_id = _strict_positive_integer(item.get('id'))
+        except ValueError:
             result['issues'].append(_issue(
                 'invalid_payload',
                 f'Характеристика #{index + 1}: отсутствует числовой id',
@@ -573,11 +707,205 @@ def build_wb_characteristic_patch(
     return result['normalized']
 
 
+def validate_wb_full_card_dictionary_values(
+    subject_id: Any,
+    characteristics: Any,
+    marketplace_code: str = 'wb',
+    validation_cache: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Validate dictionary-bound values already present in a fresh full card.
+
+    WB may contain old/legacy characteristics that are no longer in the active
+    admin schema. Those untouched unknown IDs remain authoritative. Every known
+    characteristic backed by a category/global dictionary (especially material
+    and gender) must still pass the current admin reference before any full-card
+    replacement is sent.
+    """
+    validation_cache = validation_cache if validation_cache is not None else {}
+    marketplace, category, schema = _resolve_wb_schema(
+        subject_id, marketplace_code, validation_cache)
+    base = validate_wb_characteristics(
+        subject_id, [], marketplace_code, validation_cache)
+    if not base['valid']:
+        return base
+    if not isinstance(characteristics, list):
+        return {
+            **base,
+            'valid': False,
+            'issues': [_issue(
+                'invalid_payload',
+                'Полная WB-карточка должна содержать массив characteristics',
+            )],
+        }
+
+    schema_by_id = {int(charc.charc_id): charc for charc in schema or []}
+    constrained = []
+    for item in characteristics:
+        if not isinstance(item, dict):
+            continue
+        try:
+            charc = schema_by_id.get(int(item.get('id')))
+        except (TypeError, ValueError):
+            charc = None
+        if not charc:
+            continue
+        normalized_name = _normalized_label(charc.name)
+        is_constrained = bool(
+            charc.dictionary_json
+            or _directory_type_for_characteristic(charc.name)
+            or _is_material_characteristic(charc.name)
+            or normalized_name in (
+                'тнвэд', 'тнвэд код', 'тн вэд', 'тн вэд код',
+            )
+        )
+        if is_constrained:
+            constrained.append(item)
+
+    if not constrained:
+        return base
+    return validate_wb_characteristics(
+        subject_id,
+        constrained,
+        marketplace_code,
+        validation_cache,
+    )
+
+
+def require_wb_characteristic_ids(
+    subject_id: Any,
+    characteristic_ids: Any,
+    marketplace_code: str = 'wb',
+    validation_cache: Optional[Dict[str, Any]] = None,
+) -> List[int]:
+    """Validate reference freshness and existence for value-less removals."""
+    validation_cache = validation_cache if validation_cache is not None else {}
+    base_result = validate_wb_characteristics(
+        subject_id,
+        [],
+        marketplace_code,
+        validation_cache,
+    )
+    if not base_result['valid']:
+        raise WBCharacteristicValidationError(base_result)
+
+    try:
+        normalized_ids = sorted({
+            _strict_positive_integer(value) for value in characteristic_ids
+        })
+    except (TypeError, ValueError) as exc:
+        raise WBCharacteristicValidationError({
+            'valid': False,
+            'subject_id': subject_id,
+            'normalized': [],
+            'issues': [_issue(
+                'invalid_payload',
+                'ID удаляемых характеристик должны быть числовыми',
+            )],
+        }) from exc
+
+    _marketplace, _category, schema = _resolve_wb_schema(
+        subject_id,
+        marketplace_code,
+        validation_cache,
+    )
+    schema_by_id = {int(charc.charc_id): charc for charc in schema or []}
+    available_ids = set(schema_by_id)
+    from services.wb_content_payload import PACKED_WEIGHT_CHARC_IDS
+    unknown_ids = [
+        value for value in normalized_ids
+        if value not in available_ids and value not in PACKED_WEIGHT_CHARC_IDS
+    ]
+    if unknown_ids:
+        raise WBCharacteristicValidationError({
+            'valid': False,
+            'subject_id': subject_id,
+            'normalized': [],
+            'issues': [
+                _issue(
+                    'unknown_characteristic',
+                    f'Характеристика id={value} отсутствует в WB-схеме категории',
+                    charc_id=value,
+                )
+                for value in unknown_ids
+            ],
+        })
+    required_ids = [
+        value for value in normalized_ids
+        if value in schema_by_id and schema_by_id[value].required
+    ]
+    if required_ids:
+        raise WBCharacteristicValidationError({
+            'valid': False,
+            'subject_id': subject_id,
+            'normalized': [],
+            'issues': [
+                _issue(
+                    'required_characteristic_removal',
+                    f'«{schema_by_id[value].name}»: обязательную характеристику '
+                    'нельзя удалить при откате',
+                    charc_id=value,
+                    name=schema_by_id[value].name,
+                )
+                for value in required_ids
+            ],
+        })
+    return normalized_ids
+
+
+def build_wb_create_characteristics(
+    subject_id: Any,
+    values: Any,
+    marketplace_code: str = 'wb',
+    validation_cache: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Strict create validation, including admin-required characteristics."""
+    validation_cache = validation_cache if validation_cache is not None else {}
+    normalized = build_wb_characteristic_patch(
+        subject_id,
+        values,
+        marketplace_code,
+        validation_cache,
+    )
+    _marketplace, category, schema = _resolve_wb_schema(
+        subject_id,
+        marketplace_code,
+        validation_cache,
+    )
+    provided_ids = {int(item['id']) for item in normalized}
+    missing = [
+        charc for charc in schema or []
+        if charc.required and int(charc.charc_id) not in provided_ids
+    ]
+    if missing:
+        raise WBCharacteristicValidationError({
+            'valid': False,
+            'subject_id': subject_id,
+            'normalized': normalized,
+            'issues': [
+                _issue(
+                    'required_characteristic_missing',
+                    f'«{charc.name}»: обязательная характеристика не заполнена',
+                    charc_id=charc.charc_id,
+                    name=charc.name,
+                )
+                for charc in missing
+            ],
+            'schema_synced_at': (
+                category.characteristics_synced_at.isoformat()
+                if category and category.characteristics_synced_at else None
+            ),
+        })
+    return normalized
+
+
 _SUPPLIER_MATERIAL_CHARACTERISTIC_NAMES = (
     'материал изделия',
     'материал товара',
     'основной материал',
     'материал',
+    'состав',
+    'состав изделия',
+    'состав материала',
 )
 _SUPPLIER_GENDER_CHARACTERISTIC_NAMES = ('пол', 'пол товара')
 
@@ -665,6 +993,7 @@ def merge_wb_characteristics(
     patch: Any,
     subject_id: Any = None,
     marketplace_code: str = 'wb',
+    validation_cache: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Заменить значения по charc_id, не стирая остальные характеристики."""
     if isinstance(existing, Mapping):
@@ -673,7 +1002,11 @@ def merge_wb_characteristics(
         # связываем имена с charc_id, чтобы patch обновил поле без дубля.
         schema_by_name = {}
         if subject_id is not None:
-            _, _, schema = _resolve_wb_schema(subject_id, marketplace_code)
+            _, _, schema = _resolve_wb_schema(
+                subject_id,
+                marketplace_code,
+                validation_cache,
+            )
             schema_by_name = {
                 _normalized_label(charc.name): charc for charc in (schema or [])
             }

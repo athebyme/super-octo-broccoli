@@ -22,6 +22,7 @@ from agents.base_agent import (
     BaseAgent,
     select_task_llm_profile,
 )
+from agents.llm import llm_retry
 from agents.tools import ToolRegistry
 
 
@@ -349,6 +350,25 @@ class TestTokenBudget:
 
         assert 'max_tokens' not in agent.llm.calls[0]
 
+    def test_task_scoped_override_limits_single_react(self):
+        response = {
+            'text': '{"completed": true}',
+            'tool_calls': [],
+            'stop_reason': 'end_turn',
+            'usage': {'input_tokens': 4, 'output_tokens': 2},
+        }
+        agent = _make_bare_agent(response, token_budget=2000)
+        agent._run_token_budget_override = 1000
+        agent._tools.register(
+            'unused', 'Keeps tool calling enabled',
+            {'properties': {}, 'required': []},
+            handler=lambda: {'ok': True},
+        )
+
+        agent._execute_react({'id': 'task-scoped-budget'})
+
+        assert 0 < agent.llm.calls[0]['max_tokens'] < 1000
+
     def test_exhausted_budget_returns_partial_without_second_llm_call(self):
         tool_runs = []
         response = {
@@ -357,9 +377,9 @@ class TestTokenBudget:
                 {'name': 'record', 'arguments': {'value': 1}, 'id': 'call-1'},
             ],
             'stop_reason': 'tool_use',
-            'usage': {'input_tokens': 6, 'output_tokens': 4},
+            'usage': {'input_tokens': 900, 'output_tokens': 100},
         }
-        agent = _make_bare_agent(response, token_budget=10)
+        agent = _make_bare_agent(response, token_budget=1000)
         agent._tools.register(
             'record', 'Record a value',
             {
@@ -373,15 +393,16 @@ class TestTokenBudget:
 
         assert tool_runs == [1]
         assert len(agent.llm.calls) == 1
-        assert agent.llm.calls[0]['max_tokens'] == 10
+        assert 0 < agent.llm.calls[0]['max_tokens'] < 1000
         assert result['processed'] == 1
         assert result['status'] == 'partial'
         assert result['_usage'] == {
-            'input_tokens': 6,
-            'output_tokens': 4,
-            'total_tokens': 10,
+            'input_tokens': 900,
+            'output_tokens': 100,
+            'total_tokens': 1000,
+            'api_requests': 1,
             'react_iterations': 1,
-            'token_budget': 10,
+            'token_budget': 1000,
             'budget_exhausted': True,
         }
 
@@ -390,9 +411,9 @@ class TestTokenBudget:
             'text': '{"completed": true}',
             'tool_calls': [],
             'stop_reason': 'end_turn',
-            'usage': {'input_tokens': 7, 'output_tokens': 3},
+            'usage': {'input_tokens': 900, 'output_tokens': 100},
         }
-        agent = _make_bare_agent(response, token_budget=10)
+        agent = _make_bare_agent(response, token_budget=1000)
         agent._tools.register(
             'unused', 'Keeps tool calling enabled',
             {'properties': {}, 'required': []},
@@ -403,7 +424,27 @@ class TestTokenBudget:
 
         assert result['completed'] is True
         assert result.get('status') != 'partial'
-        assert result['_usage']['total_tokens'] == 10
+        assert result['_usage']['total_tokens'] == 1000
+
+    def test_next_input_estimate_can_block_call_without_spending_tokens(self):
+        response = {
+            'text': '{"completed": true}',
+            'tool_calls': [],
+            'stop_reason': 'end_turn',
+            'usage': {'input_tokens': 1, 'output_tokens': 1},
+        }
+        agent = _make_bare_agent(response, token_budget=100)
+        agent._tools.register(
+            'unused', 'Keeps tool calling enabled',
+            {'properties': {}, 'required': []},
+            handler=lambda: {'ok': True},
+        )
+
+        result = agent._execute_react({'id': 'task-input-reserve'})
+
+        assert result['status'] == 'partial'
+        assert result['_usage']['budget_exhausted'] is True
+        assert agent.llm.calls == []
 
     def test_react_propagates_cache_and_cost_usage(self):
         response = {
@@ -431,6 +472,32 @@ class TestTokenBudget:
         assert result['_usage']['cache_miss_tokens'] == 36
         assert result['_usage']['cache_hit_rate'] == 0.64
         assert result['_usage']['estimated_cost_usd'] == 0.0001
+
+    def test_react_retry_cannot_exceed_remaining_api_budget(self):
+        class AlwaysFailingLLM:
+            def __init__(self):
+                self.calls = 0
+
+            @llm_retry(max_retries=3, base_delay=0)
+            def chat_with_tools(self, **kwargs):
+                self.calls += 1
+                raise ConnectionError('temporary provider failure')
+
+        agent = _make_bare_agent({}, token_budget=0)
+        agent.llm = AlwaysFailingLLM()
+        agent._tools.register(
+            'unused', 'Keeps tool calling enabled',
+            {'properties': {}, 'required': []},
+            handler=lambda: {'ok': True},
+        )
+
+        with pytest.raises(ConnectionError) as exc_info:
+            agent._execute_react(
+                {'id': 'task-api-retry-budget'}, api_budget_override=2,
+            )
+
+        assert agent.llm.calls == 2
+        assert exc_info.value.llm_usage['api_requests'] == 2
 
 
 class TestTokenOptimizations:
@@ -650,15 +717,18 @@ class _StructuredResponseLLM:
         self.error = error
         self.cancel_after = cancel_after
         self.calls = 0
+        self.call_kwargs = []
 
     def structured_output_with_usage(self, **kwargs):
         self.calls += 1
+        self.call_kwargs.append(kwargs)
         if self.cancel_after:
             self.agent.cancelled = True
         if self.error:
             raise self.error
+        data = self.data(kwargs) if callable(self.data) else self.data
         return {
-            'data': self.data,
+            'data': data,
             'usage': {
                 'model': 'deepseek-v4-flash',
                 'input_tokens': 10, 'output_tokens': 2, 'api_requests': 1,
@@ -758,6 +828,239 @@ class TestStructuredBatchCancellation:
         assert result['_usage']['api_requests'] == 1
         assert react_calls == []
         assert agent.platform.saves == []
+
+    def test_duplicate_selection_stops_before_prefetch_and_llm(self):
+        agent = _make_batch_agent()
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-duplicate-selection'}, [1, 1],
+            chunk_size=2, max_workers=1,
+        )
+
+        assert result['status'] == 'failed'
+        assert result['failed'] == 2
+        assert agent.prefetch_calls == 0
+        assert agent.llm.calls == 0
+        assert agent.platform.saves == []
+
+    def test_incomplete_prefetch_stops_before_llm(self):
+        agent = _make_batch_agent()
+        agent._prefetch_for_structured_batch = lambda product_ids: [
+            {'id': product_ids[0], 'title': 'Only one'},
+        ]
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-incomplete-prefetch'}, [1, 2],
+            chunk_size=2, max_workers=1,
+        )
+
+        assert result['status'] == 'failed'
+        assert result['failed'] == 2
+        assert agent.llm.calls == 0
+        assert agent.platform.saves == []
+
+    @pytest.mark.parametrize('results', [
+        [{'product_id': 1, 'title': 'Updated'}],
+        [
+            {'product_id': 1, 'title': 'Updated'},
+            {'product_id': 1, 'title': 'Duplicate'},
+        ],
+        [
+            {'product_id': 1, 'title': 'Updated'},
+            {'product_id': 999, 'title': 'Foreign'},
+        ],
+    ])
+    def test_result_id_mismatch_blocks_chunk_before_postprocess(self, results):
+        agent = _make_batch_agent(data={'results': results})
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-result-scope'}, [1, 2],
+            chunk_size=2, max_workers=1,
+        )
+
+        assert result['status'] == 'failed'
+        assert result['failed'] == 2
+        assert agent.postprocess_calls == 0
+        assert agent.platform.saves == []
+
+    def test_mapper_updates_must_be_unique_subset_of_chunk(self):
+        agent = _make_batch_agent(data={'results': [
+            {'product_id': 1, 'title': 'Updated'},
+            {'product_id': 2, 'title': 'Updated'},
+        ]})
+        agent._map_structured_result_to_updates = lambda results: [
+            {'product_id': 1, 'title': 'First'},
+            {'product_id': 1, 'title': 'Duplicate'},
+        ]
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-mapper-scope'}, [1, 2],
+            chunk_size=2, max_workers=1,
+        )
+
+        assert result['status'] == 'failed'
+        assert result['failed'] == 2
+        assert agent.platform.saves == []
+
+    def test_unsaved_products_count_as_failed_without_api_error_rows(self):
+        agent = _make_batch_agent(data={'results': [
+            {'product_id': 1, 'title': 'Updated'},
+            {'product_id': 2, 'title': 'Updated'},
+        ]})
+        agent.platform.batch_update_imported_products = lambda updates: {
+            'updated': 0,
+            'failed': 0,
+            'results': [],
+        }
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-zero-confirmed'}, [1, 2],
+            chunk_size=2, max_workers=1,
+        )
+
+        assert result['status'] == 'failed'
+        assert result['processed'] == 2
+        assert result['saved'] == 0
+        assert result['failed'] == 2
+
+    def test_mapper_subset_marks_omitted_product_failed(self):
+        agent = _make_batch_agent(data={'results': [
+            {'product_id': 1, 'title': 'Updated'},
+            {'product_id': 2, 'title': 'No update'},
+        ]})
+        agent._map_structured_result_to_updates = lambda results: [{
+            'product_id': 1,
+            'title': 'Updated',
+        }]
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-mapper-subset'}, [1, 2],
+            chunk_size=2, max_workers=1,
+        )
+
+        assert result['status'] == 'partial'
+        assert result['saved'] == 1
+        assert result['failed'] == 1
+
+    def test_api_budget_accounts_for_deferred_products(self):
+        def response_for_chunk(kwargs):
+            products = json.loads(kwargs['prompt'])
+            return {'results': [{
+                'product_id': product['id'],
+                'title': 'Updated',
+            } for product in products]}
+
+        agent = _make_batch_agent(data=response_for_chunk)
+        agent._run_api_budget_override = 1
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-api-budget'}, [1, 2],
+            chunk_size=1, max_workers=1,
+        )
+
+        assert result['status'] == 'partial'
+        assert result['processed'] == 1
+        assert result['saved'] == 1
+        assert result['failed'] == 1
+        assert agent.llm.calls == 1
+
+    def test_structured_retry_uses_only_chunk_api_allocation(self):
+        agent = _make_batch_agent()
+        agent._run_api_budget_override = 2
+
+        class AlwaysFailingStructuredLLM:
+            def __init__(self):
+                self.calls = 0
+
+            @llm_retry(max_retries=3, base_delay=0)
+            def structured_output_with_usage(self, **kwargs):
+                self.calls += 1
+                raise TimeoutError('temporary provider failure')
+
+        agent.llm = AlwaysFailingStructuredLLM()
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-api-retry-budget'}, [1],
+            chunk_size=1, max_workers=1,
+        )
+
+        assert result['status'] == 'failed'
+        assert agent.llm.calls == 2
+        assert result['_usage']['api_requests'] == 2
+
+    def test_normal_run_token_budget_keeps_two_structured_chunks(self):
+        def response_for_chunk(kwargs):
+            products = json.loads(kwargs['prompt'])
+            return {'results': [{
+                'product_id': product['id'],
+                'title': 'Updated',
+            } for product in products]}
+
+        agent = _make_batch_agent(data=response_for_chunk)
+        agent._run_token_budget_override = 30_000
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-token-budget'}, [1, 2],
+            chunk_size=1, max_workers=1,
+        )
+
+        assert result['status'] == 'completed'
+        max_tokens = [call['max_tokens'] for call in agent.llm.call_kwargs]
+        assert len(max_tokens) == 2
+        assert all(0 < value <= agent.config.MAX_TOKENS for value in max_tokens)
+
+    def test_small_run_token_budget_defers_without_llm_call(self):
+        agent = _make_batch_agent(data={'results': []})
+        agent._run_token_budget_override = 100
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-small-token-budget'}, [1, 2],
+            chunk_size=1, max_workers=1,
+        )
+
+        assert result['status'] == 'partial'
+        assert result['processed'] == 0
+        assert result['saved'] == 0
+        assert result['failed'] == 2
+        assert agent.llm.calls == 0
+        assert agent.platform.saves == []
+
+    def test_actual_usage_exhaustion_stops_later_structured_chunks(self):
+        agent = _make_batch_agent()
+        agent._run_token_budget_override = 3000
+
+        class ExhaustingStructuredLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def structured_output_with_usage(self, **kwargs):
+                self.calls += 1
+                products = json.loads(kwargs['prompt'])
+                return {
+                    'data': {'results': [{
+                        'product_id': product['id'],
+                        'title': 'Updated',
+                    } for product in products]},
+                    'usage': {
+                        'input_tokens': 2800,
+                        'output_tokens': 200,
+                        'api_requests': 1,
+                    },
+                }
+
+        agent.llm = ExhaustingStructuredLLM()
+
+        result = agent._execute_structured_batch(
+            {'id': 'batch-actual-token-usage'}, [1, 2, 3],
+            chunk_size=1, max_workers=1,
+        )
+
+        assert result['status'] == 'partial'
+        assert result['processed'] == 1
+        assert result['saved'] == 1
+        assert result['failed'] == 2
+        assert result['_usage']['budget_exhausted'] is True
+        assert agent.llm.calls == 1
 
     def test_tool_batch_does_not_start_another_react_chunk_after_cancel(self):
         agent = _make_batch_agent()

@@ -367,15 +367,18 @@ def api_verify(brand_id):
     if not marketplace_id:
         return jsonify({'success': False, 'error': 'Маркетплейс не найден'}), 400
 
-    # Находим продавца с WB API ключом
-    from models import Seller
-    seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
-    if not seller or not seller.wb_api_key:
-        return jsonify({'success': False, 'error': 'Нет доступных WB API ключей'}), 400
+    marketplace = Marketplace.query.filter_by(
+        id=marketplace_id, code='wb', is_active=True,
+    ).first()
+    if not marketplace:
+        return jsonify({'success': False, 'error': 'Активный WB маркетплейс не найден'}), 400
+    from services.marketplace_service import MarketplaceService
+    wb_client = MarketplaceService.get_wb_client(marketplace.id)
+    if not wb_client:
+        return jsonify({'success': False, 'error': 'API ключ WB не настроен в маркетплейсе'}), 400
 
     try:
-        from services.wb_api_client import WildberriesAPIClient
-        with WildberriesAPIClient(seller.wb_api_key) as wb_client:
+        with wb_client:
             result = wb_client.validate_brand(
                 brand.name,
                 subject_id=subject_id,
@@ -590,7 +593,6 @@ def api_stats():
 @admin_required
 def api_sync():
     """Запуск синхронизации брендов в фоновом потоке."""
-    from models import Seller
     from services.brand_engine import get_brand_engine
 
     data = request.get_json() or {}
@@ -605,6 +607,15 @@ def api_sync():
     if not marketplace_id:
         return jsonify({'success': False, 'error': 'Маркетплейс не найден'}), 400
 
+    marketplace = Marketplace.query.filter_by(
+        id=marketplace_id, code='wb', is_active=True,
+    ).first()
+    if not marketplace or not marketplace.api_key:
+        return jsonify({
+            'success': False,
+            'error': 'API ключ WB не настроен в активном маркетплейсе',
+        }), 400
+
     engine = get_brand_engine()
 
     # Проверяем, не запущена ли уже синхронизация
@@ -612,13 +623,9 @@ def api_sync():
     if progress and progress.get('status') == 'running':
         return jsonify({'success': False, 'error': 'Синхронизация уже запущена'}), 400
 
-    seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
-    if not seller or not seller.wb_api_key:
-        return jsonify({'success': False, 'error': 'Нет доступных WB API ключей'}), 400
-
     from flask import current_app
     started = engine.sync_marketplace_brands_async(
-        marketplace_id, seller.wb_api_key,
+        marketplace_id,
         app=current_app._get_current_object(),
     )
     if not started:
@@ -670,8 +677,8 @@ def api_test_wb_brands():
       /admin/brands/api/test-wb-brands?subject_id=105
     """
     import traceback
-    from models import Seller, MarketplaceCategory
-    from services.wb_api_client import WildberriesAPIClient
+    from models import MarketplaceCategory
+    from services.marketplace_service import MarketplaceService
 
     next_cursor = request.args.get('next', type=int)
     endpoint = request.args.get('endpoint', '/api/content/v1/brands')
@@ -687,11 +694,10 @@ def api_test_wb_brands():
             if cat:
                 subject_id = cat.subject_id
 
-    seller = Seller.query.filter(Seller._wb_api_key_encrypted.isnot(None)).first()
-    if not seller or not seller.wb_api_key:
-        return jsonify({'success': False, 'error': 'Нет WB API ключей'}), 400
-
-    api_key = seller.wb_api_key
+    wb = Marketplace.query.filter_by(code='wb', is_active=True).first()
+    client = MarketplaceService.get_wb_client(wb.id) if wb else None
+    if not client:
+        return jsonify({'success': False, 'error': 'API ключ WB не настроен в маркетплейсе'}), 400
     params = {}
     if subject_id:
         params['subjectId'] = subject_id
@@ -699,14 +705,12 @@ def api_test_wb_brands():
         params['next'] = next_cursor
 
     result = {
-        'api_key_prefix': api_key[:15] + '...' if len(api_key) > 15 else '(empty)',
-        'api_key_length': len(api_key),
         'endpoint': endpoint,
         'params': params,
     }
 
     try:
-        with WildberriesAPIClient(api_key) as client:
+        with client:
             base_url = client._get_base_url('content')
             from urllib.parse import urljoin
             full_url = urljoin(base_url, endpoint)

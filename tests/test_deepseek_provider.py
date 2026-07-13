@@ -151,6 +151,15 @@ class TestForSellerDeepSeek(DeepSeekDBTestCase):
         self.assertEqual(config.api_key, 'per-seller-key')
         self.assertEqual(config.api_base_url, DEEPSEEK_BASE)
 
+    def test_new_settings_default_to_deepseek_v4_pro(self):
+        settings = AutoImportSettings(seller_id=99)
+        db.session.add(settings)
+        db.session.flush()
+
+        self.assertEqual(settings.ai_provider, 'deepseek')
+        self.assertEqual(settings.ai_model, 'deepseek-v4-pro')
+        self.assertFalse(settings.agent_single_model)
+
 
 class TestModelCatalog(unittest.TestCase):
     def test_get_available_models_deepseek(self):

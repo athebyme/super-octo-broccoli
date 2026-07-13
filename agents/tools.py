@@ -192,6 +192,14 @@ def create_platform_tools(platform_client) -> ToolRegistry:
                 'brand': {'type': 'string', 'description': 'Новый бренд'},
                 'wb_category_id': {'type': 'integer', 'description': 'ID категории WB (subjectID)'},
                 'wb_category_name': {'type': 'string', 'description': 'Название категории WB'},
+                'characteristics': {
+                    'type': 'object',
+                    'description': (
+                        'Patch характеристик: точное имя из актуальной схемы WB '
+                        '→ проверяемое значение. Сервер канонизирует и мержит patch.'
+                    ),
+                    'additionalProperties': True,
+                },
                 'ai_seo_title': {'type': 'string', 'description': 'SEO-оптимизированный заголовок'},
                 'tags': {'type': 'string', 'description': 'Теги через запятую'},
             },

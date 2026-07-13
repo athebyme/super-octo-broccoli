@@ -1,7 +1,7 @@
 """
 Модели базы данных для платформы продавцов WB
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -442,11 +442,16 @@ class BulkEditHistory(db.Model):
 
     def can_revert(self) -> bool:
         """Можно ли откатить эту операцию"""
-        return (
-            not self.reverted and
-            self.status == 'completed' and
-            self.success_count > 0 and
-            self.wb_synced
+        if self.reverted or self.status != 'completed':
+            return False
+        # Media-only rows are intentionally irreversible. A mixed supplier
+        # operation remains revertible when at least one tenant-owned content
+        # history has a safe rollback contract, even if photos partially failed.
+        return any(
+            change.supports_safe_revert()
+            for change in self.product_changes.filter_by(
+                seller_id=self.seller_id,
+            ).all()
         )
 
     def get_progress_percent(self) -> float:
@@ -497,7 +502,7 @@ class CardEditHistory(db.Model):
 
     # Результат синхронизации с WB
     wb_synced = db.Column(db.Boolean, default=False)  # Синхронизировано ли с WB
-    wb_sync_status = db.Column(db.String(50))  # 'success', 'failed', 'pending'
+    wb_sync_status = db.Column(db.String(50))  # success|failed|pending|uncertain|partial
     wb_error_message = db.Column(db.Text)  # Сообщение об ошибке от WB
 
     # Откат
@@ -515,9 +520,38 @@ class CardEditHistory(db.Model):
     def __repr__(self) -> str:
         return f'<CardEditHistory {self.action} product_id={self.product_id}>'
 
+    def supports_safe_revert(self) -> bool:
+        """Whether snapshots/status provide a conflict-aware WB rollback."""
+        supported_fields = {
+            'vendor_code', 'title', 'description', 'brand',
+            'characteristics', 'dimensions',
+        }
+        fields = set(self.changed_fields or [])
+        confirmed = bool(
+            self.wb_synced and self.wb_sync_status == 'success'
+        )
+        # A durable pre-send row can survive a timeout or process crash. Once
+        # the short request window has passed, rollback is safe: the helper
+        # fetches live WB and accepts only exact before/after states.
+        uncertain_cutoff = datetime.utcnow() - timedelta(minutes=5)
+        uncertain = bool(
+            self.wb_sync_status in {'pending', 'uncertain'}
+            and self.created_at is not None
+            and self.created_at <= uncertain_cutoff
+        )
+        return bool(
+            (confirmed or uncertain)
+            and self.snapshot_before is not None
+            and self.snapshot_after is not None
+            and fields
+            and fields.issubset(supported_fields)
+            and all(field in self.snapshot_before for field in fields)
+            and all(field in self.snapshot_after for field in fields)
+        )
+
     def can_revert(self) -> bool:
         """Можно ли откатить это изменение"""
-        return not self.reverted and self.snapshot_before is not None
+        return bool(not self.reverted and self.supports_safe_revert())
 
     def get_changes_summary(self) -> dict:
         """Получить краткую сводку изменений"""
@@ -776,13 +810,13 @@ class AutoImportSettings(db.Model):
 
     # AI настройки
     ai_enabled = db.Column(db.Boolean, default=False, nullable=False)  # Использовать AI для определения категорий/размеров
-    ai_provider = db.Column(db.String(50), default='openai')  # Провайдер AI (openai, cloudru, custom)
+    ai_provider = db.Column(db.String(50), default='deepseek')  # Провайдер AI (deepseek, openai, cloudru, custom)
     ai_api_key = db.Column(db.String(500))  # API ключ для AI
     ai_api_base_url = db.Column(db.String(500))  # Базовый URL API (для custom провайдеров)
-    ai_model = db.Column(db.String(100), default='gpt-4o-mini')  # Модель AI
+    ai_model = db.Column(db.String(100), default='deepseek-v4-pro')  # Primary model
     # Agent harness policy. True keeps every model call on the seller-selected
-    # primary model. False allows a cheaper fast model for explicitly safe,
-    # read-only work while all writes and verification stay on the primary.
+    # primary model. False keeps Pro for orchestration and uses DeepSeek Flash
+    # for bounded execution skills; server-side validators remain the safety boundary.
     agent_single_model = db.Column(db.Boolean, default=False, nullable=False)
     ai_temperature = db.Column(db.Float, default=0.3)  # Температура для AI
     ai_max_tokens = db.Column(db.Integer, default=2000)  # Максимум токенов
@@ -2945,6 +2979,9 @@ class Marketplace(db.Model):
     brands_sync_status = db.Column(db.String(50))
     brands_sync_error = db.Column(db.Text)
     brands_version = db.Column(db.Integer, default=0, nullable=False)
+    # Durable progress for a bounded, category-scoped WB brand sweep. The JSON
+    # payload contains the ordered subject snapshot and the next subject index.
+    brands_sync_checkpoint = db.Column(db.Text)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

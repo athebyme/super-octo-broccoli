@@ -175,6 +175,15 @@ class TestBrandCursorPagination(unittest.TestCase):
         self.assertTrue(result['complete'])
         self.assertEqual(result['requests'], 3)
         self.assertEqual(result['categories_completed'], 2)
+        self.assertEqual(result['completed_subject_ids'], [101, 202])
+        self.assertEqual(
+            {item['id'] for item in result['subject_brands'][101]},
+            {1, 2},
+        )
+        self.assertEqual(
+            {item['id'] for item in result['subject_brands'][202]},
+            {3},
+        )
         self.assertEqual({item['id'] for item in result['data']}, {1, 2, 3})
         calls = client._make_request.call_args_list
         self.assertEqual(calls[0].kwargs['params'], {'subjectId': 101})
@@ -199,8 +208,114 @@ class TestBrandCursorPagination(unittest.TestCase):
         self.assertFalse(result['complete'])
         self.assertEqual(result['requests'], 1)
         self.assertEqual(result['categories_completed'], 0)
+        self.assertEqual(result['completed_subject_ids'], [])
+        self.assertEqual(result['subject_brands'], {})
         self.assertEqual(result['errors'][0]['code'], 'request_budget_exhausted')
         self.assertEqual(client._make_request.call_count, 1)
+
+    def test_single_subject_can_use_more_than_legacy_25_page_cap(self):
+        client = WildberriesAPIClient('brand-many-pages-token')
+        pages = []
+        for index in range(26):
+            pages.append(self._response({
+                'brands': [{'id': index + 1, 'name': f'Brand {index + 1}'}],
+                'next': index + 1 if index < 25 else 0,
+                'total': 26,
+            }))
+        client._make_request = MagicMock(side_effect=pages)
+
+        result = client.fetch_all_brands([303])
+
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['requests'], 26)
+        self.assertEqual(result['completed_subject_ids'], [303])
+        self.assertEqual(len(result['subject_brands'][303]), 26)
+
+    def test_complete_brand_snapshot_skips_entry_with_empty_name(self):
+        client = WildberriesAPIClient('brand-empty-name-token')
+        client._make_request = MagicMock(return_value=self._response({
+            'brands': [
+                {'id': 1, 'name': 'One'},
+                {'id': 2, 'name': ''},
+            ],
+            'next': None,
+            'total': 2,
+        }))
+
+        result = client.fetch_all_brands([404])
+
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['completed_subject_ids'], [404])
+        self.assertEqual(result['subject_brands'][404], [
+            {'id': 1, 'name': 'One'},
+        ])
+        self.assertEqual(result['warnings'], [{
+            'subject_id': 404,
+            'code': 'brands_excluded_invalid_name',
+            'count': 1,
+        }])
+
+    def test_brand_snapshot_rejects_duplicate_or_invalid_ids(self):
+        payloads = (
+            {
+                'brands': [
+                    {'id': 1, 'name': 'One'},
+                    {'id': 1, 'name': 'Duplicate'},
+                ],
+                'next': None,
+                'total': 2,
+            },
+            {
+                'brands': [{'id': None, 'name': 'Invalid'}],
+                'next': None,
+                'total': 1,
+            },
+            {
+                'brands': [{'id': '3', 'name': 'String ID'}],
+                'next': None,
+                'total': 1,
+            },
+            {
+                'brands': [{'id': True, 'name': 'Boolean ID'}],
+                'next': None,
+                'total': 1,
+            },
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                client = WildberriesAPIClient('brand-invalid-id-token')
+                client._make_request = MagicMock(
+                    return_value=self._response(payload),
+                )
+
+                result = client.fetch_all_brands([505])
+
+                self.assertFalse(result['complete'])
+                self.assertEqual(result['completed_subject_ids'], [])
+                self.assertEqual(result['subject_brands'], {})
+                self.assertEqual(result['errors'][0]['code'], 'page_error')
+
+    def test_brand_snapshot_rejects_duplicate_id_between_cursor_pages(self):
+        client = WildberriesAPIClient('brand-cross-page-duplicate-token')
+        client._make_request = MagicMock(side_effect=[
+            self._response({
+                'brands': [{'id': 1, 'name': 'One'}],
+                'next': 11,
+                'total': 2,
+            }),
+            self._response({
+                'brands': [{'id': 1, 'name': 'Duplicate'}],
+                'next': None,
+                'total': 2,
+            }),
+        ])
+
+        result = client.fetch_all_brands([606])
+
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['completed_subject_ids'], [])
+        self.assertEqual(result['subject_brands'], {})
+        self.assertEqual(result['errors'][0]['code'], 'page_error')
 
     def test_brand_validation_requires_typed_category_without_api_call(self):
         client = WildberriesAPIClient('brand-validation-token')

@@ -12,6 +12,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
 
+BRAND_SYNC_RESUME_MINUTES = 10
+
 # Глобальный планировщик
 scheduler = None
 _scheduler_lock_handle = None
@@ -266,7 +268,35 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         trigger=IntervalTrigger(hours=6),
         id='brand_wb_sync',
         name='Sync brands from WB API',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Categories are refreshed at +90s and stale schemas at +180s. Start the
+    # category-scoped brand cycle afterwards so a deploy does not leave agent
+    # validation blocked until the first six-hour interval tick.
+    scheduler.add_job(
+        func=lambda: sync_brands_background(flask_app),
+        trigger='date',
+        run_date=datetime.utcnow() + timedelta(seconds=360),
+        id='brand_wb_sync_initial',
+        name='Initial WB brand reference refresh',
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Continue a bounded multi-run sweep promptly, but only while a durable
+    # checkpoint exists. The brand engine advisory lock handles overlap with
+    # manual/regular runs.
+    scheduler.add_job(
+        func=lambda: resume_brand_sync_if_needed(flask_app),
+        trigger=IntervalTrigger(minutes=BRAND_SYNC_RESUME_MINUTES),
+        id='brand_wb_sync_resume',
+        name='Resume partial WB brand reference sweep',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
 
     # Авто-резолв pending брендов (каждый час)
@@ -990,7 +1020,7 @@ def sync_brands_background(flask_app):
             from services.marketplace_service import MarketplaceService
 
             # Находим WB маркетплейс
-            wb = Marketplace.query.filter_by(code='wb').first()
+            wb = Marketplace.query.filter_by(code='wb', is_active=True).first()
             if not wb:
                 logger.info("Brand sync skipped: WB marketplace not found")
                 return
@@ -1009,6 +1039,26 @@ def sync_brands_background(flask_app):
             logger.error(f"Brand sync background task failed: {e}")
 
 
+def _brand_sync_needs_resume(marketplace) -> bool:
+    """Return true only for a durable, incomplete category sweep."""
+    return bool(
+        marketplace
+        and marketplace.is_active
+        and marketplace.brands_sync_status == 'partial'
+        and marketplace.brands_sync_checkpoint
+    )
+
+
+def resume_brand_sync_if_needed(flask_app):
+    """Resume a partial brand sweep without polling WB when none is pending."""
+    with flask_app.app_context():
+        from models import Marketplace
+        wb = Marketplace.query.filter_by(code='wb', is_active=True).first()
+        should_resume = _brand_sync_needs_resume(wb)
+    if should_resume:
+        sync_brands_background(flask_app)
+
+
 def auto_resolve_pending_brands(flask_app):
     """Фоновый авто-резолв pending брендов."""
     with flask_app.app_context():
@@ -1018,7 +1068,7 @@ def auto_resolve_pending_brands(flask_app):
             from services.marketplace_service import MarketplaceService
 
             # Находим WB маркетплейс
-            wb = Marketplace.query.filter_by(code='wb').first()
+            wb = Marketplace.query.filter_by(code='wb', is_active=True).first()
             if not wb:
                 logger.info("Brand auto-resolve skipped: WB marketplace not found")
                 return

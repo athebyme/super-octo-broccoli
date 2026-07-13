@@ -30,6 +30,11 @@ from models import (
     Supplier, SellerSupplier,
 )
 from services import agent_service
+from services.brand_reference_service import (
+    parse_positive_integer,
+    preflight_brand_categories,
+    resolve_exact_brand_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -476,13 +481,75 @@ _PRODUCT_FIELD_MAP = {
 
 
 def _parse_subject_id(raw_value):
-    if isinstance(raw_value, bool):
-        return None
     try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
+        return parse_positive_integer(raw_value, 'subject_id')
+    except ValueError:
         return None
-    return value if value > 0 else None
+
+
+def _brand_reference_cache_key(brand_name, subject_id):
+    from services.brand_engine import normalize_for_comparison
+
+    return normalize_for_comparison(brand_name), _parse_subject_id(subject_id)
+
+
+def _prime_agent_brand_write_cache(pairs, validation_cache):
+    """Resolve all explicit brand writes once for a request-sized batch."""
+    cache = validation_cache.setdefault('agent_write_brands', {})
+    pending = []
+    for brand_name, subject_id in pairs:
+        key = _brand_reference_cache_key(brand_name, subject_id)
+        if key in cache or len(str(brand_name or '').strip()) < 2 or not key[1]:
+            continue
+        pending.append({
+            'request_id': key,
+            'brand': str(brand_name).strip(),
+            'category_id': key[1],
+        })
+    # De-duplicate exact normalized pairs while preserving bounded input.
+    unique = {item['request_id']: item for item in pending}
+    if not unique:
+        return
+    for result in resolve_exact_brand_categories(list(unique.values())):
+        cache[result['request_id']] = result
+
+
+def _validate_agent_brand_write(
+    brand_name, subject_id, validation_cache=None,
+):
+    """Fail closed and return only the canonical WB marketplace spelling."""
+    brand_name = str(brand_name or '').strip()
+    if len(brand_name) < 2 or len(brand_name) > 200:
+        return None, 'Бренд должен содержать от 2 до 200 символов'
+    subject_id = _parse_subject_id(subject_id)
+    if not subject_id:
+        return None, 'Нельзя записать бренд без категории WB'
+
+    validation_cache = validation_cache if validation_cache is not None else {}
+    key = _brand_reference_cache_key(brand_name, subject_id)
+    cache = validation_cache.setdefault('agent_write_brands', {})
+    if key not in cache:
+        _prime_agent_brand_write_cache(
+            [(brand_name, subject_id)], validation_cache,
+        )
+    result = cache.get(key) or {}
+    reference_status = result.get('reference_status') or {}
+    if not reference_status.get('usable'):
+        return None, (
+            'Справочник брендов WB для этой категории недоступен или '
+            'устарел; запись остановлена'
+        )
+    canonical = str(result.get('marketplace_brand_name') or '').strip()
+    if (
+        result.get('status') != 'found'
+        or result.get('category_available') is not True
+        or not canonical
+    ):
+        return None, (
+            f'Бренд "{brand_name}" не подтверждён в категории WB '
+            f'{subject_id}; запись остановлена'
+        )
+    return canonical, None
 
 
 def _wb_category_for_agent_write(subject_id, validation_cache=None):
@@ -601,7 +668,7 @@ def _validate_agent_characteristics_write(
         subject_id, validation_cache,
     )
     if error:
-        return error
+        return None, error
 
     status = _wb_reference_status(
         f'wb_category_characteristics:{subject_id}',
@@ -612,11 +679,14 @@ def _validate_agent_characteristics_write(
         has_data=bool(category.characteristics_count),
     )
     if not status['usable']:
-        return f'Схема характеристик категории {subject_id} недоступна или устарела; запись остановлена'
+        return None, (
+            f'Схема характеристик категории {subject_id} '
+            'недоступна или устарела; запись остановлена'
+        )
 
-    names, charc_ids, error = _decode_agent_characteristics(raw_value)
+    _, _, error = _decode_agent_characteristics(raw_value)
     if error:
-        return error
+        return None, error
 
     schema_key = ('wb', int(subject_id))
     schema_cache = validation_cache.setdefault('schemas', {})
@@ -636,7 +706,10 @@ def _validate_agent_characteristics_write(
     else:
         allowed = resolved_schema[2]
     if not allowed:
-        return f'Для категории {subject_id} нет доступных включённых характеристик'
+        return None, (
+            f'Для категории {subject_id} нет доступных '
+            'включённых характеристик'
+        )
 
     validation_value = raw_value
     if isinstance(validation_value, str):
@@ -666,18 +739,67 @@ def _validate_agent_characteristics_write(
         details = '; '.join(
             str(issue.get('message') or '') for issue in issues[:5]
         )
-        return f'Значения характеристик не прошли проверку WB: {details[:500]}'
+        return None, (
+            'Значения характеристик не прошли проверку WB: '
+            f'{details[:500]}'
+        )
     allowed_ids = {item.charc_id for item in allowed}
     unavailable_ids = sorted(
         int(item['id']) for item in normalized_patch
         if int(item['id']) not in allowed_ids
     )
     if unavailable_ids:
-        return (
+        return None, (
             'Характеристики отсутствуют в текущей схеме WB '
             f'(ID: {", ".join(map(str, unavailable_ids[:10]))})'
         )
-    return None
+    return normalized_patch, None
+
+
+def _decode_stored_agent_characteristics(raw_value):
+    """Decode the current card state without silently dropping corrupt rows."""
+    if raw_value in (None, ''):
+        return [], None
+    value = raw_value
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None, (
+                'Текущие характеристики карточки повреждены; '
+                'обновление остановлено'
+            )
+    if isinstance(value, dict):
+        return value, None
+    if not isinstance(value, list) or any(
+        not isinstance(item, dict) for item in value
+    ):
+        return None, (
+            'Текущие характеристики карточки имеют недопустимый '
+            'формат; обновление остановлено'
+        )
+    return value, None
+
+
+def _merge_agent_characteristics(
+    subject_id, stored_value, normalized_patch, validation_cache=None,
+):
+    existing, error = _decode_stored_agent_characteristics(stored_value)
+    if error:
+        return None, error
+    from services.marketplace_validator import merge_wb_characteristics
+
+    merged = merge_wb_characteristics(
+        existing,
+        normalized_patch,
+        subject_id=subject_id,
+        validation_cache=validation_cache,
+    )
+    return json.dumps(
+        merged,
+        ensure_ascii=False,
+        separators=(',', ':'),
+    ), None
 
 
 def _validate_product_reference_update(product, data, validation_cache=None):
@@ -702,12 +824,33 @@ def _validate_product_reference_update(product, data, validation_cache=None):
             data['wb_category_id'] = subject_id
         data['wb_category_name'] = category.subject_name
 
+    # Validate only an explicit brand patch. A category-only step must not be
+    # blocked by the old raw brand before the following brand-normalization step.
+    if 'brand' in data:
+        canonical_brand, error = _validate_agent_brand_write(
+            data['brand'], subject_id, validation_cache,
+        )
+        if error:
+            return error
+        data['brand'] = canonical_brand
+
     if 'characteristics' in data:
         if not subject_id:
             return 'Нельзя записать характеристики без категории WB'
-        return _validate_agent_characteristics_write(
+        normalized_patch, error = _validate_agent_characteristics_write(
             subject_id, data['characteristics'], validation_cache,
         )
+        if error:
+            return error
+        merged, error = _merge_agent_characteristics(
+            subject_id,
+            product.characteristics_json,
+            normalized_patch,
+            validation_cache,
+        )
+        if error:
+            return error
+        data['characteristics'] = merged
     return None
 
 
@@ -795,6 +938,15 @@ def internal_batch_update_products(seller_id):
     unchanged_count = 0
     failed_count = 0
     reference_validation_cache = {}
+    _prime_agent_brand_write_cache([
+        (
+            item.get('brand'),
+            item.get('wb_category_id', product.subject_id),
+        )
+        for item, product_id in zip(updates, product_ids)
+        for product in [products_by_id.get(product_id)]
+        if product is not None and 'brand' in item
+    ], reference_validation_cache)
 
     for item, product_id in zip(updates, product_ids):
         product = products_by_id.get(product_id)
@@ -1199,17 +1351,41 @@ def _validate_and_apply_imported_product_update(
 
         data['mapped_wb_category'] = cat.subject_name
 
+    if 'brand' in data:
+        target_subject_id = _parse_subject_id(
+            data.get('wb_subject_id', product.wb_subject_id),
+        )
+        canonical_brand, reference_error = _validate_agent_brand_write(
+            data['brand'], target_subject_id, validation_cache,
+        )
+        if reference_error:
+            return False, reference_error
+        data['brand'] = canonical_brand
+
     if 'characteristics' in data:
         target_subject_id = _parse_subject_id(
             data.get('wb_subject_id', product.wb_subject_id),
         )
         if not target_subject_id:
             return False, 'Нельзя записать характеристики без категории WB'
-        reference_error = _validate_agent_characteristics_write(
-            target_subject_id, data['characteristics'], validation_cache,
+        normalized_patch, reference_error = (
+            _validate_agent_characteristics_write(
+                target_subject_id,
+                data['characteristics'],
+                validation_cache,
+            )
         )
         if reference_error:
             return False, reference_error
+        merged, reference_error = _merge_agent_characteristics(
+            target_subject_id,
+            product.characteristics,
+            normalized_patch,
+            validation_cache,
+        )
+        if reference_error:
+            return False, reference_error
+        data['characteristics'] = merged
 
     # ── Снимок предыдущих значений для отката ──
     previous_values = {}
@@ -1255,8 +1431,12 @@ def _is_reference_data_write_error(error):
         'значения характеристик',
         'доступных включённых характеристик',
         'пустой patch характеристик',
+        'текущие характеристики карточки',
         'характеристики без категории wb',
         'название категории без',
+        'справочник брендов wb',
+        'бренд без категории wb',
+        'не подтверждён в категории wb',
     ))
 
 
@@ -1307,18 +1487,40 @@ def internal_batch_update_imported_products():
     if error:
         return error
     data = request.get_json(silent=True) or {}
-    updates = data.get('updates', [])
+    raw_updates = data.get('updates')
 
-    if not updates:
+    if not isinstance(raw_updates, list) or not raw_updates:
         return jsonify({'error': 'updates array is required'}), 400
-    if len(updates) > 50:
+    if len(raw_updates) > 50:
         return jsonify({'error': 'Maximum 50 updates per request'}), 400
+
+    updates = []
+    product_ids = []
+    seen_product_ids = set()
+    for index, item in enumerate(raw_updates):
+        if not isinstance(item, dict):
+            return jsonify({
+                'error': f'updates[{index}] must be an object',
+            }), 400
+        try:
+            product_id = parse_positive_integer(
+                item.get('product_id'),
+                f'updates[{index}].product_id',
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        if product_id in seen_product_ids:
+            return jsonify({
+                'error': f'Duplicate product_id: {product_id}',
+            }), 400
+        seen_product_ids.add(product_id)
+        product_ids.append(product_id)
+        updates.append({**item, 'product_id': product_id})
 
     task_id = request.headers.get('X-Task-Id')
     agent_id = request._agent.id if hasattr(request, '_agent') else None
 
     # Предзагрузка всех товаров одним запросом
-    product_ids = [u.get('product_id') for u in updates if u.get('product_id')]
     products_map = {
         p.id: p
         for p in ImportedProduct.query.filter(
@@ -1331,6 +1533,20 @@ def internal_batch_update_imported_products():
     updated_count = 0
     failed_count = 0
     reference_validation_cache = {}
+    _prime_agent_brand_write_cache([
+        (
+            item.get('brand'),
+            (
+                item.get('wb_category_id')
+                if 'wb_category_id' in item
+                else item.get('wb_subject_id', product.wb_subject_id)
+            ),
+        )
+        for item in updates
+        if isinstance(item, dict)
+        for product in [products_map.get(item.get('product_id'))]
+        if product is not None and 'brand' in item
+    ], reference_validation_cache)
 
     for item in updates:
         pid = item.get('product_id')
@@ -2100,6 +2316,213 @@ def _wb_reference_warning(status, label):
     return f'{label} не готов к использованию. Дождитесь успешной синхронизации с WB.'
 
 
+_WB_REFERENCE_BATCH_LIMIT = 200
+_WB_CATEGORY_QUERY_MAX_CHARS = 300
+_WB_CATEGORY_RESULT_LIMIT = 50
+_WB_RU_SEARCH_ENDINGS = (
+    'ами', 'ями', 'ого', 'его', 'ому', 'ему', 'ной', 'ный', 'ная', 'ное',
+    'ые', 'ие', 'ой', 'ей', 'ом', 'ем', 'ов', 'ев', 'ам', 'ям',
+    'ах', 'ях', 'ую', 'юю', 'ий', 'ый',
+    'а', 'я', 'о', 'е', 'и', 'ы', 'у', 'ю', 'ь', 'й',
+)
+
+
+def _validated_reference_queries(data):
+    if not isinstance(data, dict):
+        raise ValueError('JSON body must be an object')
+    queries = data.get('queries')
+    if (
+        not isinstance(queries, list)
+        or not queries
+        or len(queries) > _WB_REFERENCE_BATCH_LIMIT
+    ):
+        raise ValueError('queries must contain 1..200 entries')
+
+    prepared = []
+    seen = set()
+    for index, raw in enumerate(queries):
+        if not isinstance(raw, str):
+            raise ValueError(f'queries[{index}] must be a string')
+        query = raw.strip()
+        if len(query) < 2 or len(query) > _WB_CATEGORY_QUERY_MAX_CHARS:
+            raise ValueError(
+                f'queries[{index}] must contain 2..{_WB_CATEGORY_QUERY_MAX_CHARS} chars'
+            )
+        normalized = query.casefold()
+        if normalized in seen:
+            raise ValueError(f'Duplicate query: {query}')
+        seen.add(normalized)
+        prepared.append(query)
+    return prepared
+
+
+def _validated_reference_subject_ids(data):
+    if not isinstance(data, dict):
+        raise ValueError('JSON body must be an object')
+    subject_ids = data.get('subject_ids')
+    if (
+        not isinstance(subject_ids, list)
+        or not subject_ids
+        or len(subject_ids) > _WB_REFERENCE_BATCH_LIMIT
+    ):
+        raise ValueError('subject_ids must contain 1..200 entries')
+
+    prepared = []
+    seen = set()
+    for index, raw in enumerate(subject_ids):
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            raise ValueError(
+                f'subject_ids[{index}] must be a positive integer'
+            )
+        if raw in seen:
+            raise ValueError(f'Duplicate subject_id: {raw}')
+        seen.add(raw)
+        prepared.append(raw)
+    return prepared
+
+
+def _wb_categories_reference_status(marketplace):
+    return _wb_reference_status(
+        'wb_categories',
+        marketplace.categories_synced_at if marketplace else None,
+        marketplace.categories_sync_status if marketplace else None,
+        getattr(marketplace, 'categories_sync_error', None)
+        if marketplace else None,
+        available=bool(marketplace and marketplace.is_active),
+        has_data=bool(marketplace and marketplace.total_categories),
+    )
+
+
+def _load_wb_leaf_categories(marketplace):
+    if not marketplace:
+        return []
+    return (
+        MarketplaceCategory.query
+        .options(load_only(
+            MarketplaceCategory.subject_id,
+            MarketplaceCategory.subject_name,
+            MarketplaceCategory.parent_name,
+            MarketplaceCategory.is_leaf,
+            MarketplaceCategory.is_enabled,
+            MarketplaceCategory.is_available,
+            MarketplaceCategory.last_seen_at,
+        ))
+        .filter(
+            MarketplaceCategory.marketplace_id == marketplace.id,
+            MarketplaceCategory.is_leaf.is_(True),
+            MarketplaceCategory.is_available.is_(True),
+        )
+        .all()
+    )
+
+
+def _stem_wb_category_word(word):
+    if len(word) <= 3:
+        return word
+    for ending in _WB_RU_SEARCH_ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 3:
+            return word[:-len(ending)]
+    return word
+
+
+def _wb_category_search_spec(query):
+    normalized = query.casefold()
+    stems = tuple(
+        _stem_wb_category_word(word)
+        for word in normalized.split()
+        if len(word) >= 2
+    )
+    return normalized, stems
+
+
+def _wb_category_matches(category, normalized, stems):
+    subject_name = str(category.subject_name or '').casefold()
+    parent_name = str(category.parent_name or '').casefold()
+    terms = stems or (normalized,)
+    return all(
+        term in subject_name or term in parent_name
+        for term in terms
+    )
+
+
+def _wb_category_sort_key(category, normalized, stems):
+    subject_name = str(category.subject_name or '')
+    folded = subject_name.casefold()
+    if normalized in folded:
+        priority = 0
+    elif stems and stems[0] in folded:
+        priority = 1
+    else:
+        priority = 2
+    return priority, subject_name
+
+
+def _serialize_wb_category(category, include_disabled=False):
+    return {
+        'subject_id': category.subject_id,
+        'subject_name': category.subject_name,
+        'parent_name': category.parent_name,
+        'is_leaf': category.is_leaf,
+        'is_available': getattr(category, 'is_available', True),
+        'last_seen_at': (
+            category.last_seen_at.isoformat()
+            if getattr(category, 'last_seen_at', None) else None
+        ),
+        **(
+            {'is_enabled': category.is_enabled}
+            if include_disabled else {}
+        ),
+    }
+
+
+def _serialize_wb_category_search(
+    query, categories, reference_status, limit,
+):
+    if not reference_status['usable']:
+        return {
+            'categories': [],
+            'count': 0,
+            'reference_status': dict(reference_status),
+            'warning': _wb_reference_warning(
+                reference_status, 'Справочник категорий WB',
+            ),
+        }
+
+    normalized, stems = _wb_category_search_spec(query)
+    matches = [
+        category for category in categories
+        if _wb_category_matches(category, normalized, stems)
+    ]
+    enabled = [category for category in matches if category.is_enabled]
+    include_disabled = not enabled and bool(matches)
+    selected = enabled if enabled else matches
+    selected.sort(
+        key=lambda category: _wb_category_sort_key(
+            category, normalized, stems,
+        )
+    )
+    selected = selected[:limit]
+    return {
+        'categories': [
+            _serialize_wb_category(category, include_disabled)
+            for category in selected
+        ],
+        'count': len(selected),
+        'reference_status': dict(reference_status),
+        **(
+            {
+                'warning': (
+                    'Нет включённых категорий по запросу. '
+                    'Показаны все доступные (включая отключённые). '
+                    'Для использования категории её нужно включить в разделе '
+                    'Маркетплейсы → Категории.'
+                ),
+            }
+            if include_disabled else {}
+        ),
+    }
+
+
 @internal_api_bp.route('/categories/search', methods=['GET'])
 @_authenticate_agent
 def internal_search_categories():
@@ -2115,162 +2538,314 @@ def internal_search_categories():
         limit: макс. количество результатов (по умолчанию 20)
     """
     q = request.args.get('q', '').strip()
-    limit = min(request.args.get('limit', 20, type=int), 50)
-
-    if not q or len(q) < 2:
-        return jsonify({'error': 'Parameter q is required (min 2 chars)'}), 400
+    limit = min(max(request.args.get('limit', 20, type=int), 1), 50)
+    if not q or len(q) < 2 or len(q) > _WB_CATEGORY_QUERY_MAX_CHARS:
+        return jsonify({
+            'error': (
+                'Parameter q is required '
+                f'(2..{_WB_CATEGORY_QUERY_MAX_CHARS} chars)'
+            ),
+        }), 400
 
     marketplace = Marketplace.query.filter_by(code='wb').first()
-    reference_status = _wb_reference_status(
-        'wb_categories',
-        marketplace.categories_synced_at if marketplace else None,
-        marketplace.categories_sync_status if marketplace else None,
-        getattr(marketplace, 'categories_sync_error', None) if marketplace else None,
-        available=bool(marketplace and marketplace.is_active),
-        has_data=bool(marketplace and marketplace.total_categories),
+    reference_status = _wb_categories_reference_status(marketplace)
+    categories = (
+        _load_wb_leaf_categories(marketplace)
+        if reference_status['usable'] else []
     )
-    if not reference_status['usable']:
-        return jsonify({
-            'categories': [],
-            'count': 0,
-            'reference_status': reference_status,
-            'warning': _wb_reference_warning(
-                reference_status, 'Справочник категорий WB',
-            ),
-        })
+    return jsonify(_serialize_wb_category_search(
+        q, categories, reference_status, limit,
+    ))
 
-    # Ищем ТОЛЬКО включённые LEAF-категории (конечные предметы).
-    # Родительские категории (is_leaf=False) WB API не принимает.
-    # Ищем и по subject_name, и по parent_name — чтобы поиск
-    # "Товары для взрослых" вернул все leaf-категории этого раздела.
-    #
-    # SQLite NOCASE/lower() не делают case-fold кириллицы, поэтому
-    # ниже запрос строится по детерминированным вариантам регистра.
-    #
-    # Русская морфология: "пробка" не совпадёт с "Пробки" через substring.
-    # Используем стемминг — обрезаем окончания у слов > 3 символов,
-    # чтобы "пробка" → "пробк" совпало с "Пробки".
-    q_lower = q.lower()
 
-    # Простой стемминг: обрезаем типичные русские окончания
-    _RU_ENDINGS = (
-        'ами', 'ями', 'ого', 'его', 'ому', 'ему', 'ной', 'ный', 'ная', 'ное',
-        'ые', 'ие', 'ой', 'ей', 'ом', 'ем', 'ов', 'ев', 'ам', 'ям',
-        'ах', 'ях', 'ую', 'юю', 'ий', 'ый',
-        'а', 'я', 'о', 'е', 'и', 'ы', 'у', 'ю', 'ь', 'й',
+@internal_api_bp.route('/categories/search-batch', methods=['POST'])
+@_authenticate_agent
+def internal_search_categories_batch():
+    """Search up to 200 category queries from one local WB snapshot."""
+    try:
+        data = request.get_json(silent=True)
+        queries = _validated_reference_queries(data)
+        limit = data.get('limit', 20)
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= _WB_CATEGORY_RESULT_LIMIT
+        ):
+            raise ValueError('limit must be an integer from 1 to 50')
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    marketplace = Marketplace.query.filter_by(code='wb').first()
+    reference_status = _wb_categories_reference_status(marketplace)
+    categories = (
+        _load_wb_leaf_categories(marketplace)
+        if reference_status['usable'] else []
     )
-
-    def _stem_word(word):
-        """Простой русский стемминг — обрезаем окончание, минимум 3 символа в основе."""
-        if len(word) <= 3:
-            return word
-        for ending in _RU_ENDINGS:
-            if word.endswith(ending) and len(word) - len(ending) >= 3:
-                return word[:-len(ending)]
-        return word
-
-    # Строим поисковые термы: стемы отдельных слов
-    words = q_lower.split()
-    stems = [_stem_word(w) for w in words if len(w) >= 2]
-
-    def _contains_variants(column, term):
-        # SQLite lower()/NOCASE do not case-fold Cyrillic. WB names are usually
-        # sentence case, but include lower/upper variants for deterministic SQL.
-        variants = tuple(dict.fromkeys((
-            term,
-            term.lower(),
-            term.capitalize(),
-            term.upper(),
-        )))
-        return db.or_(*(column.contains(value) for value in variants))
-
-    def _build_search_condition():
-        """Строит условие поиска: каждый стем должен быть в subject_name ИЛИ parent_name."""
-        if not stems:
-            return db.or_(
-                _contains_variants(MarketplaceCategory.subject_name, q_lower),
-                _contains_variants(MarketplaceCategory.parent_name, q_lower),
-            )
-
-        # Для одного слова — ищем стем в subject_name или parent_name
-        if len(stems) == 1:
-            stem = stems[0]
-            return db.or_(
-                _contains_variants(MarketplaceCategory.subject_name, stem),
-                _contains_variants(MarketplaceCategory.parent_name, stem),
-            )
-
-        # Для нескольких слов — каждый стем в name или parent
-        # (AND между стемами: все слова должны присутствовать)
-        conditions = []
-        for stem in stems:
-            conditions.append(db.or_(
-                _contains_variants(MarketplaceCategory.subject_name, stem),
-                _contains_variants(MarketplaceCategory.parent_name, stem),
-            ))
-        return db.and_(*conditions)
-
-    search_condition = _build_search_condition()
-
-    def _search_categories(enabled_only: bool):
-        query = MarketplaceCategory.query.filter(
-            MarketplaceCategory.marketplace_id == marketplace.id,
-            MarketplaceCategory.is_leaf == True,
-            search_condition,
-        )
-        available_column = getattr(MarketplaceCategory, 'is_available', None)
-        if available_column is not None:
-            query = query.filter(available_column == True)
-        if enabled_only:
-            query = query.filter(MarketplaceCategory.is_enabled == True)
-        # Приоритет: точное вхождение оригинального запроса в subject_name — выше
-        return query.order_by(
-            db.case(
-                (_contains_variants(MarketplaceCategory.subject_name, q_lower), 0),
-                (_contains_variants(MarketplaceCategory.subject_name, stems[0]) if stems else db.literal(False), 1),
-                else_=2
+    results = [
+        {
+            'query': query,
+            **_serialize_wb_category_search(
+                query, categories, reference_status, limit,
             ),
-            MarketplaceCategory.subject_name
-        ).limit(limit).all()
-
-    categories = _search_categories(enabled_only=True)
-
-    # Fallback: если среди включённых ничего не нашлось — ищем среди всех
-    # (включая disabled) и помечаем, чтобы агент видел существующие категории
-    include_disabled = not categories
-    if include_disabled:
-        categories = _search_categories(enabled_only=False)
-
+        }
+        for query in queries
+    ]
     return jsonify({
-        'categories': [
-            {
-                'subject_id': c.subject_id,
-                'subject_name': c.subject_name,
-                'parent_name': c.parent_name,
-                'is_leaf': c.is_leaf,
-                'is_available': getattr(c, 'is_available', True),
-                'last_seen_at': (
-                    c.last_seen_at.isoformat()
-                    if getattr(c, 'last_seen_at', None) else None
-                ),
-                **(
-                    {'is_enabled': c.is_enabled}
-                    if include_disabled else {}
-                ),
-            }
-            for c in categories
-        ],
-        'count': len(categories),
+        'results': results,
+        'count': len(results),
         'reference_status': reference_status,
-        **(
-            {'warning': 'Нет включённых категорий по запросу. Показаны все доступные (включая отключённые). '
-                        'Для использования категории её нужно включить в разделе Маркетплейсы → Категории.'}
-            if include_disabled and categories else {}
-        ),
     })
 
 
 # ── Характеристики категории ──────────────────────────────────
+
+def _wb_category_characteristics_status(category, marketplace=None):
+    marketplace = marketplace or getattr(category, 'marketplace', None)
+    category_status = _wb_categories_reference_status(marketplace)
+    if not category_status['usable']:
+        status = dict(category_status)
+        status.update({
+            'source': (
+                f'wb_category_characteristics:{category.subject_id}'
+            ),
+            'category_reference_status': category_status,
+        })
+        return status
+
+    status = _wb_reference_status(
+        f'wb_category_characteristics:{category.subject_id}',
+        category.characteristics_synced_at,
+        getattr(category, 'characteristics_sync_status', None),
+        getattr(category, 'characteristics_sync_error', None),
+        available=getattr(category, 'is_available', True),
+        has_data=bool(category.characteristics_count),
+    )
+    if status['usable'] and not category.is_leaf:
+        status.update({
+            'usable': False,
+            'reason': 'non_leaf_category',
+            'error': 'WB category is not a leaf subject',
+        })
+    elif status['usable'] and not category.is_enabled:
+        status.update({
+            'usable': False,
+            'reason': 'category_disabled',
+            'error': 'WB category is disabled in the admin reference',
+        })
+    return status
+
+
+def _missing_wb_category_characteristics(subject_id):
+    status = _wb_reference_status(
+        f'wb_category_characteristics:{subject_id}',
+        None,
+        'not_found',
+        f'WB category {subject_id} was not found in the local reference cache',
+        available=False,
+        has_data=False,
+    )
+    status.update({
+        'sync_status': 'not_found',
+        'stale': False,
+        'reason': 'not_found',
+    })
+    return {
+        'subject_id': subject_id,
+        'subject_name': None,
+        'characteristics': [],
+        'count': 0,
+        'reference_status': status,
+        'warning': (
+            f'Категория WB {subject_id} не найдена в локальном '
+            'справочнике; нужна синхронизация с WB.'
+        ),
+    }
+
+
+def _serialize_wb_category_characteristics(
+    marketplace, category, charcs, constraint_cache,
+):
+    subject_id = category.subject_id
+    reference_status = _wb_category_characteristics_status(
+        category, marketplace,
+    )
+    if not reference_status['usable']:
+        return {
+            'subject_id': subject_id,
+            'subject_name': category.subject_name,
+            'characteristics': [],
+            'count': 0,
+            'reference_status': reference_status,
+            'warning': _wb_reference_warning(
+                reference_status,
+                f'Схема характеристик категории {subject_id}',
+            ),
+        }
+
+    characteristics = []
+    required_constraint_issues = []
+    try:
+        from services.marketplace_validator import (
+            get_wb_characteristic_constraint,
+        )
+
+        for characteristic in charcs:
+            constraint = get_wb_characteristic_constraint(
+                marketplace,
+                characteristic,
+                constraint_cache,
+            )
+            if characteristic.required and not constraint['usable']:
+                required_constraint_issues.append({
+                    'charc_id': characteristic.charc_id,
+                    'name': characteristic.name,
+                    **(constraint.get('issue') or {}),
+                })
+            characteristics.append({
+                'charc_id': characteristic.charc_id,
+                'name': characteristic.name,
+                'type': characteristic.type_label,
+                'required': characteristic.required,
+                'unit_name': characteristic.unit_name or '',
+                'max_count': characteristic.max_count,
+                'popular': characteristic.popular,
+                'has_filter': getattr(characteristic, 'has_filter', False),
+                'is_variable': getattr(characteristic, 'is_variable', False),
+                'constraint': constraint,
+                'ai_instruction': characteristic.ai_instruction or '',
+                'ai_example_value': characteristic.ai_example_value or '',
+            })
+    except Exception:
+        logger.exception(
+            'Failed to resolve WB characteristic constraints for subject_id=%s',
+            subject_id,
+        )
+        reference_status.update({
+            'usable': False,
+            'reason': 'invalid_cache',
+            'error': 'Characteristic dictionary cache is invalid',
+        })
+        return {
+            'subject_id': subject_id,
+            'subject_name': category.subject_name,
+            'characteristics': [],
+            'count': 0,
+            'reference_status': reference_status,
+            'warning': (
+                'Локальная схема характеристик повреждена; '
+                'нужна повторная синхронизация.'
+            ),
+        }
+
+    if required_constraint_issues:
+        reference_status.update({
+            'usable': False,
+            'reason': 'required_constraint_unusable',
+            'error': '; '.join(
+                str(issue.get('message') or issue.get('name') or '')
+                for issue in required_constraint_issues[:5]
+            )[:1000],
+        })
+    elif not characteristics:
+        reference_status.update({
+            'usable': False,
+            'reason': 'empty_enabled_schema',
+            'error': None,
+        })
+
+    return {
+        'subject_id': subject_id,
+        'subject_name': category.subject_name,
+        'characteristics': (
+            characteristics if reference_status['usable'] else []
+        ),
+        'count': len(characteristics) if reference_status['usable'] else 0,
+        'reference_status': reference_status,
+        **(
+            {'constraint_issues': required_constraint_issues[:10]}
+            if required_constraint_issues else {}
+        ),
+        **(
+            {
+                'warning': (
+                    'Обязательное поле WB нельзя проверить '
+                    'по актуальным справочникам; заполнение остановлено.'
+                    if required_constraint_issues else
+                    'В схеме нет включённых доступных характеристик; '
+                    'заполнение остановлено.'
+                ),
+            }
+            if not reference_status['usable'] else {}
+        ),
+    }
+
+
+def _load_wb_category_characteristics_payloads(
+    marketplace, categories, subject_ids, required_only=False,
+):
+    categories_by_subject = {
+        category.subject_id: category for category in categories
+    }
+    usable_categories = [
+        category for category in categories
+        if _wb_category_characteristics_status(
+            category, marketplace,
+        )['usable']
+    ]
+    charcs = []
+    if usable_categories:
+        usable_category_ids = [category.id for category in usable_categories]
+        query = MarketplaceCategoryCharacteristic.query.filter(
+            MarketplaceCategoryCharacteristic.marketplace_id == marketplace.id,
+            MarketplaceCategoryCharacteristic.category_id.in_(
+                usable_category_ids,
+            ),
+            MarketplaceCategoryCharacteristic.is_available.is_(True),
+            db.or_(
+                MarketplaceCategoryCharacteristic.is_enabled.is_(True),
+                MarketplaceCategoryCharacteristic.required.is_(True),
+            ),
+        )
+        if required_only:
+            query = query.filter(
+                MarketplaceCategoryCharacteristic.required.is_(True),
+            )
+        charcs = query.order_by(
+            MarketplaceCategoryCharacteristic.category_id,
+            MarketplaceCategoryCharacteristic.required.desc(),
+            MarketplaceCategoryCharacteristic.display_order,
+            MarketplaceCategoryCharacteristic.charc_id,
+        ).all()
+
+    constraint_cache = {}
+    if charcs:
+        from services.marketplace_validator import (
+            prime_wb_characteristic_directory_cache,
+        )
+        prime_wb_characteristic_directory_cache(
+            marketplace, charcs, constraint_cache,
+        )
+
+    charcs_by_category = {}
+    for characteristic in charcs:
+        charcs_by_category.setdefault(characteristic.category_id, []).append(
+            characteristic,
+        )
+
+    results = []
+    for subject_id in subject_ids:
+        category = categories_by_subject.get(subject_id)
+        if not category:
+            results.append(_missing_wb_category_characteristics(subject_id))
+            continue
+        results.append(_serialize_wb_category_characteristics(
+            marketplace,
+            category,
+            charcs_by_category.get(category.id, []),
+            constraint_cache,
+        ))
+    return results
+
 
 @internal_api_bp.route('/categories/<int:subject_id>/characteristics', methods=['GET'])
 @_authenticate_agent
@@ -2283,106 +2858,53 @@ def internal_get_category_characteristics(subject_id):
     Параметры:
         required_only: если true — вернуть только обязательные (default: false)
     """
-    category = (
-        MarketplaceCategory.query
-        .join(Marketplace, Marketplace.id == MarketplaceCategory.marketplace_id)
-        .filter(Marketplace.code == 'wb', MarketplaceCategory.subject_id == subject_id)
-        .first()
-    )
+    marketplace = Marketplace.query.filter_by(code='wb').first()
+    category = None
+    if marketplace:
+        category = MarketplaceCategory.query.filter_by(
+            marketplace_id=marketplace.id,
+            subject_id=subject_id,
+        ).first()
     if not category:
-        return jsonify({'error': f'Category {subject_id} not found'}), 404
+        payload = _missing_wb_category_characteristics(subject_id)
+        return jsonify(payload), 404
 
-    reference_status = _wb_reference_status(
-        f'wb_category_characteristics:{subject_id}',
-        category.characteristics_synced_at,
-        getattr(category, 'characteristics_sync_status', None),
-        getattr(category, 'characteristics_sync_error', None),
-        available=getattr(category, 'is_available', True),
-        has_data=bool(category.characteristics_count),
+    required_only = (
+        request.args.get('required_only', 'false').lower() == 'true'
     )
-    if not reference_status['usable']:
-        return jsonify({
-            'subject_id': subject_id,
-            'subject_name': category.subject_name,
-            'characteristics': [],
-            'count': 0,
-            'reference_status': reference_status,
-            'warning': _wb_reference_warning(
-                reference_status,
-                f'Схема характеристик категории {subject_id}',
-            ),
-        })
+    payload = _load_wb_category_characteristics_payloads(
+        marketplace, [category], [subject_id], required_only,
+    )[0]
+    return jsonify(payload)
 
-    required_only = request.args.get('required_only', 'false').lower() == 'true'
 
-    q = MarketplaceCategoryCharacteristic.query.filter(
-        MarketplaceCategoryCharacteristic.category_id == category.id,
-        db.or_(
-            MarketplaceCategoryCharacteristic.is_enabled.is_(True),
-            MarketplaceCategoryCharacteristic.required.is_(True),
-        ),
-    )
-    available_column = getattr(MarketplaceCategoryCharacteristic, 'is_available', None)
-    if available_column is not None:
-        q = q.filter(available_column == True)
-    if required_only:
-        q = q.filter_by(required=True)
-
-    charcs = q.order_by(
-        MarketplaceCategoryCharacteristic.required.desc(),
-        MarketplaceCategoryCharacteristic.display_order,
-    ).all()
-
-    characteristics = []
+@internal_api_bp.route('/categories/characteristics-batch', methods=['POST'])
+@_authenticate_agent
+def internal_get_category_characteristics_batch():
+    """Load up to 200 typed category schemas with constant query count."""
     try:
-        for c in charcs:
-            characteristics.append({
-                'charc_id': c.charc_id,
-                'name': c.name,
-                'type': c.type_label,
-                'required': c.required,
-                'unit_name': c.unit_name or '',
-                'max_count': c.max_count,
-                'popular': c.popular,
-                'has_filter': getattr(c, 'has_filter', False),
-                'is_variable': getattr(c, 'is_variable', False),
-                'dictionary': json.loads(c.dictionary_json) if c.dictionary_json else None,
-                'ai_instruction': c.ai_instruction or '',
-                'ai_example_value': c.ai_example_value or '',
-            })
-    except (TypeError, ValueError, json.JSONDecodeError):
-        reference_status.update({
-            'usable': False,
-            'reason': 'invalid_cache',
-            'error': 'Characteristic dictionary cache is invalid',
-        })
-        return jsonify({
-            'subject_id': subject_id,
-            'subject_name': category.subject_name,
-            'characteristics': [],
-            'count': 0,
-            'reference_status': reference_status,
-            'warning': 'Локальная схема характеристик повреждена; нужна повторная синхронизация.',
-        })
+        data = request.get_json(silent=True)
+        subject_ids = _validated_reference_subject_ids(data)
+        required_only = data.get('required_only', False)
+        if not isinstance(required_only, bool):
+            raise ValueError('required_only must be a boolean')
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
-    if not characteristics:
-        reference_status.update({
-            'usable': False,
-            'reason': 'empty_enabled_schema',
-            'error': None,
-        })
-
-    return jsonify({
-        'subject_id': subject_id,
-        'subject_name': category.subject_name,
-        'characteristics': characteristics if reference_status['usable'] else [],
-        'count': len(characteristics) if reference_status['usable'] else 0,
-        'reference_status': reference_status,
-        **(
-            {'warning': 'В схеме нет включённых доступных характеристик; заполнение остановлено.'}
-            if not reference_status['usable'] else {}
-        ),
-    })
+    marketplace = Marketplace.query.filter_by(code='wb').first()
+    categories = []
+    if marketplace:
+        categories = MarketplaceCategory.query.filter(
+            MarketplaceCategory.marketplace_id == marketplace.id,
+            MarketplaceCategory.subject_id.in_(subject_ids),
+        ).all()
+    results = _load_wb_category_characteristics_payloads(
+        marketplace, categories, subject_ids, required_only,
+    ) if marketplace else [
+        _missing_wb_category_characteristics(subject_id)
+        for subject_id in subject_ids
+    ]
+    return jsonify({'results': results, 'count': len(results)})
 
 
 # ── Справочники (цвета, страны, сезоны) ─────────────────────
@@ -2649,9 +3171,49 @@ def internal_validate_brand():
     if not brand_name or len(brand_name) < 2:
         return jsonify({'error': 'brand parameter required (min 2 chars)'}), 400
 
-    category_id = request.args.get('category_id', type=int)
+    raw_category_id = request.args.get('category_id')
+    if raw_category_id in (None, ''):
+        category_id = None
+    else:
+        try:
+            category_id = parse_positive_integer(
+                raw_category_id, 'category_id',
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
     wb_marketplace = Marketplace.query.filter_by(code='wb').first()
+    from services.brand_engine import normalize_for_comparison
+    normalized = normalize_for_comparison(brand_name)
+    alias = BrandAlias.query.join(Brand).filter(
+        BrandAlias.alias_normalized == normalized,
+        BrandAlias.is_active.is_(True),
+        Brand.status == 'verified',
+    ).first()
+    brand = alias.brand if alias and alias.brand else None
+    mp_brand = None
+    category_link = None
+    category_scope_available = category_id is None
+    if wb_marketplace and category_id:
+        category_scope_available = MarketplaceCategory.query.filter_by(
+            marketplace_id=wb_marketplace.id,
+            subject_id=category_id,
+            is_enabled=True,
+            is_available=True,
+        ).first() is not None
+    if wb_marketplace and brand:
+        mp_brand = MarketplaceBrand.query.filter_by(
+            brand_id=brand.id,
+            marketplace_id=wb_marketplace.id,
+            is_available=True,
+            status='verified',
+        ).first()
+        if mp_brand and category_id and category_scope_available:
+            category_link = BrandCategoryLink.query.filter_by(
+                marketplace_brand_id=mp_brand.id,
+                category_id=category_id,
+            ).first()
+
     verified_binding_exists = False
     if wb_marketplace:
         verified_binding_exists = MarketplaceBrand.query.filter_by(
@@ -2674,6 +3236,36 @@ def internal_validate_brand():
     reference_status['version'] = int(
         wb_marketplace.brands_version or 0
     ) if wb_marketplace else 0
+
+    # A recent manual/live verification is authoritative for this exact
+    # brand/category pair even while a bounded global sweep is still partial.
+    if category_id and not category_scope_available:
+        reference_status = _wb_reference_status(
+            'wb_brands', None, None,
+            f'WB category {category_id} is unavailable',
+            available=False,
+            has_data=False,
+        )
+        reference_status.update({
+            'version': int(wb_marketplace.brands_version or 0)
+            if wb_marketplace else 0,
+            'scope': 'category',
+            'category_id': category_id,
+        })
+    elif category_id and mp_brand and category_link:
+        reference_status = _wb_reference_status(
+            'wb_brands',
+            category_link.verified_at,
+            'success',
+            None,
+            available=bool(wb_marketplace and wb_marketplace.is_active),
+            has_data=True,
+        )
+        reference_status.update({
+            'version': int(wb_marketplace.brands_version or 0),
+            'scope': 'category',
+            'category_id': category_id,
+        })
     if not reference_status['usable']:
         return jsonify({
             'result': {
@@ -2688,14 +3280,8 @@ def internal_validate_brand():
             ),
         })
 
-    # Точный поиск по алиасам
-    normalized = brand_name.strip().lower()
-    alias = BrandAlias.query.filter(
-        db.func.lower(BrandAlias.alias_normalized) == normalized
-    ).first()
-
-    if alias and alias.brand:
-        brand = alias.brand
+    # Точный ответ допустим только для verified+available WB binding.
+    if brand and mp_brand:
         result = {
             'status': 'found',
             'brand_name': brand.name,
@@ -2703,41 +3289,24 @@ def internal_validate_brand():
             'source': 'exact_match',
         }
 
-        # Проверяем привязку к маркетплейсу
-        mp_brand = MarketplaceBrand.query.filter_by(
-            brand_id=brand.id,
-            marketplace_id=wb_marketplace.id,
-            is_available=True,
-            status='verified',
-        ).first()
-        if mp_brand:
-            result['marketplace_brand_name'] = mp_brand.marketplace_brand_name
-            result['marketplace_brand_id'] = mp_brand.marketplace_brand_id
+        result['marketplace_brand_name'] = mp_brand.marketplace_brand_name
+        result['marketplace_brand_id'] = mp_brand.marketplace_brand_id
 
-            # Проверяем доступность бренда в указанной категории (только если category_id передан)
-            if category_id:
-                try:
-                    link = BrandCategoryLink.query.filter_by(
-                        marketplace_brand_id=mp_brand.id,
-                        category_id=category_id,
-                    ).first()
-                    if link:
-                        result['category_available'] = link.is_available
-                    else:
-                        result['category_available'] = None
-                        result['category_warning'] = (
-                            f'Нет данных о доступности бренда в категории {category_id}. '
-                            f'Бренд НЕ подтверждён в этой категории — wb_registered=false.'
-                        )
-                except Exception:
-                    result['category_available'] = None
-                    result['category_warning'] = 'Невозможно проверить доступность бренда в категории.'
+        if category_id:
+            if category_link:
+                result['category_available'] = category_link.is_available
             else:
                 result['category_available'] = None
                 result['category_warning'] = (
-                    'category_id не передан — проверка доступности в категории не выполнена. '
-                    'Бренд найден в реестре, но category_available=null.'
+                    f'Нет данных о доступности бренда в категории {category_id}. '
+                    f'Бренд НЕ подтверждён в этой категории — wb_registered=false.'
                 )
+        else:
+            result['category_available'] = None
+            result['category_warning'] = (
+                'category_id не передан — проверка доступности в категории не выполнена. '
+                'Бренд найден в реестре, но category_available=null.'
+            )
 
         return jsonify({
             'result': result,
@@ -2746,8 +3315,15 @@ def internal_validate_brand():
 
     # Нечёткий поиск: ищем похожие бренды
     suggestions = []
-    all_aliases = BrandAlias.query.join(Brand).filter(
+    all_aliases = BrandAlias.query.join(Brand).join(
+        MarketplaceBrand,
+        MarketplaceBrand.brand_id == Brand.id,
+    ).filter(
+        BrandAlias.is_active.is_(True),
         Brand.status != 'rejected',
+        MarketplaceBrand.marketplace_id == wb_marketplace.id,
+        MarketplaceBrand.status == 'verified',
+        MarketplaceBrand.is_available.is_(True),
     ).limit(5000).all()
 
     from difflib import SequenceMatcher
@@ -2770,6 +3346,75 @@ def internal_validate_brand():
         },
         'reference_status': reference_status,
     })
+
+
+@internal_api_bp.route('/brands/preflight', methods=['POST'])
+@_authenticate_agent
+def internal_preflight_brand_categories():
+    """Check typed WB category scopes without looking up a candidate brand."""
+    data = request.get_json(silent=True) or {}
+    category_ids = data.get('category_ids')
+    if not isinstance(category_ids, list) or not 1 <= len(category_ids) <= 100:
+        return jsonify({'error': 'category_ids must contain 1..100 entries'}), 400
+    try:
+        return jsonify(preflight_brand_categories(category_ids))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+
+@internal_api_bp.route('/brands/validate-batch', methods=['POST'])
+@_authenticate_agent
+def internal_validate_brands_batch():
+    """Validate up to 100 typed brand/category pairs with bounded bulk SQL."""
+    data = request.get_json(silent=True) or {}
+    items = data.get('items')
+    if not isinstance(items, list) or not items or len(items) > 100:
+        return jsonify({'error': 'items must contain 1..100 entries'}), 400
+
+    prepared = []
+    seen_product_ids = set()
+    for item in items:
+        if not isinstance(item, dict):
+            return jsonify({'error': 'Each item must be an object'}), 400
+        try:
+            product_id = parse_positive_integer(
+                item.get('product_id'), 'product_id',
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        if product_id in seen_product_ids:
+            return jsonify({'error': 'product_id values must be unique'}), 400
+        seen_product_ids.add(product_id)
+        brand_name = str(item.get('brand') or '').strip()
+        if len(brand_name) < 2:
+            return jsonify({'error': 'brand must contain at least 2 chars'}), 400
+        raw_category_id = item.get('category_id')
+        if raw_category_id in (None, ''):
+            category_id = None
+        else:
+            try:
+                category_id = parse_positive_integer(
+                    raw_category_id, 'category_id',
+                )
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+        prepared.append({
+            'request_id': product_id,
+            'brand': brand_name,
+            'category_id': category_id,
+        })
+    try:
+        resolved = resolve_exact_brand_categories(prepared)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    results = [
+        {
+            **{key: value for key, value in result.items() if key != 'request_id'},
+            'product_id': result['request_id'],
+        }
+        for result in resolved
+    ]
+    return jsonify({'results': results, 'count': len(results)})
 
 
 # ── Настройки ценообразования ────────────────────────────────

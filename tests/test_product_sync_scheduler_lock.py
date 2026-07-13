@@ -2,6 +2,7 @@ import fcntl
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from services import product_sync_scheduler
@@ -59,6 +60,30 @@ class ProductSyncSchedulerLockTest(unittest.TestCase):
         init_scheduler.assert_called_once_with(
             flask_app, retry_if_locked=False,
         )
+
+    def test_partial_brand_checkpoint_gets_bounded_resume_without_hot_loop(self):
+        pending = SimpleNamespace(
+            is_active=True,
+            brands_sync_status='partial',
+            brands_sync_checkpoint='{"next_index":10}',
+        )
+        complete = SimpleNamespace(
+            is_active=True,
+            brands_sync_status='success',
+            brands_sync_checkpoint=None,
+        )
+        failed_without_checkpoint = SimpleNamespace(
+            is_active=True,
+            brands_sync_status='failed',
+            brands_sync_checkpoint=None,
+        )
+
+        self.assertEqual(product_sync_scheduler.BRAND_SYNC_RESUME_MINUTES, 10)
+        self.assertTrue(product_sync_scheduler._brand_sync_needs_resume(pending))
+        self.assertFalse(product_sync_scheduler._brand_sync_needs_resume(complete))
+        self.assertFalse(product_sync_scheduler._brand_sync_needs_resume(
+            failed_without_checkpoint,
+        ))
 
 
 if __name__ == '__main__':

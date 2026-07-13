@@ -42,7 +42,9 @@ class CategoryMapperAgent(BaseAgent):
 ПРАВИЛА:
 - subject_name = конечная категория для карточки. parent_name = раздел (НЕ записывай в карточку)
 - mapped_wb_category = subject_name, wb_subject_id = subject_id
-- ОБЯЗАТЕЛЬНО вызови update_imported_product для сохранения
+- Для одиночной ImportedProduct-карточки сохрани через update_imported_product.
+  В tool-assisted batch не вызывай update tools: верни typed results, их одним
+  batch-запросом проверит и сохранит Python harness
 - ЗАПРЕЩЕНО выдумывать категории — ТОЛЬКО из результатов search_wb_categories
 - ЗАПРЕЩЕНО ставить явно неподходящую категорию! "Насадки для вибраторов" НЕ подходит для анальной пробки/втулки.
   Если найдена только неподходящая категория — НЕ используй её. Лучше вернуть ошибку, чем записать неверную.
@@ -98,35 +100,70 @@ class CategoryMapperAgent(BaseAgent):
         response = self.platform.search_categories(query, limit=limit)
         return require_usable_reference(response, 'wb_categories')
 
+    @staticmethod
+    def _product_category_query(product: dict) -> str | None:
+        supplier_category = str(product.get('category') or '')
+        query = supplier_category.split('>')[0].strip()
+        if len(query) >= 2:
+            return query
+        query = ' '.join(str(product.get('title') or '').split()[:2]).strip()
+        return query if len(query) >= 2 else None
+
     def _prefetch_reference_data(self, products_data: list[dict]) -> dict:
-        """Предзагрузка: поиск категорий для уникальных category поставщика."""
-        # Группируем по supplier category
-        unique_categories = set()
-        for p in products_data:
-            cat = p.get('category', '')
-            if cat:
-                # Берём основную категорию до '>'
-                main_cat = cat.split('>')[0].strip()
-                if main_cat and len(main_cat) >= 2:
-                    unique_categories.add(main_cat)
+        """Load every unique supplier scope with one typed internal request."""
+        queries = []
+        seen_queries = set()
+        for product in products_data:
+            query = self._product_category_query(product)
+            if not query:
+                continue
+            normalized = query.casefold()
+            if normalized in seen_queries:
+                continue
+            seen_queries.add(normalized)
+            queries.append(query)
+        if not queries:
+            queries = ['товары']
 
-        # Предзагружаем результаты поиска
+        try:
+            payload = self.platform.search_categories_batch(queries, limit=10)
+        except ReferenceDataUnavailableError:
+            raise
+        except Exception as exc:
+            logger.warning('Failed to prefetch category batch: %s', exc)
+            raise ReferenceDataUnavailableError(
+                'wb_categories',
+                {
+                    'warning': 'Не удалось загрузить актуальные категории WB.',
+                    'reference_status': {
+                        'source': 'wb_categories',
+                        'usable': False,
+                        'available': False,
+                        'stale': False,
+                        'reason': 'request_failed',
+                    },
+                },
+            ) from exc
+
+        results = payload.get('results') if isinstance(payload, dict) else None
+        if not isinstance(results, list) or len(results) != len(queries):
+            raise ReferenceDataUnavailableError('wb_categories', payload)
+
         cached_searches = {}
-        for cat_query in unique_categories:
-            try:
-                results = self._search_categories_fresh(cat_query, limit=10)
-                cached_searches[cat_query] = results
-            except ReferenceDataUnavailableError:
-                raise
-            except Exception as e:
-                logger.warning(f"Failed to prefetch category search '{cat_query}': {e}")
-
-        if not unique_categories:
-            probe = next((
-                ' '.join(str(p.get('title') or '').split()[:2])
-                for p in products_data if len(str(p.get('title') or '').strip()) >= 2
-            ), 'товары')
-            cached_searches[probe] = self._search_categories_fresh(probe, limit=10)
+        for expected_query, result in zip(queries, results):
+            if (
+                not isinstance(result, dict)
+                or result.get('query') != expected_query
+            ):
+                raise ReferenceDataUnavailableError('wb_categories', payload)
+            require_usable_reference(result, 'wb_categories')
+            cached_searches[expected_query] = {
+                'categories': result.get('categories', []),
+                **(
+                    {'warning': result['warning']}
+                    if result.get('warning') else {}
+                ),
+            }
 
         return {'cached_category_searches': cached_searches}
 
@@ -134,14 +171,36 @@ class CategoryMapperAgent(BaseAgent):
         self, products_data: list[dict], reference_data: dict,
     ) -> str:
         """Промпт с данными товаров и кэшированными результатами поиска категорий."""
-        products_json = json.dumps(products_data, ensure_ascii=False, indent=2)
+        products_json = json.dumps(
+            products_data, ensure_ascii=False, separators=(',', ':'),
+        )
 
-        # Кэшированные результаты поиска
+        # Кэшированные результаты только для supplier scopes текущего чанка.
+        # Не переносим все task-level searches в каждый prompt.
         cached = reference_data.get('cached_category_searches', {})
+        cached_by_normalized = {
+            query.casefold(): (query, results)
+            for query, results in cached.items()
+        }
+        relevant_queries = []
+        seen_queries = set()
+        for product in products_data:
+            query = self._product_category_query(product)
+            normalized = query.casefold() if query else ''
+            if not normalized or normalized in seen_queries:
+                continue
+            seen_queries.add(normalized)
+            relevant_queries.append(query)
         cache_parts = []
-        for query, results in cached.items():
-            results_json = json.dumps(results, ensure_ascii=False, indent=2)
-            cache_parts.append(f'Запрос "{query}":\n{results_json}')
+        for query in relevant_queries:
+            cached_item = cached_by_normalized.get(query.casefold())
+            if not cached_item:
+                continue
+            cached_query, results = cached_item
+            results_json = json.dumps(
+                results, ensure_ascii=False, separators=(',', ':'),
+            )
+            cache_parts.append(f'Запрос "{cached_query}":\n{results_json}')
 
         cache_text = '\n\n'.join(cache_parts) if cache_parts else 'Нет предзагруженных результатов.'
 
@@ -154,14 +213,71 @@ class CategoryMapperAgent(BaseAgent):
             f"1. Для каждого товара посмотри предзагруженные результаты поиска выше\n"
             f"2. Если подходящая категория найдена — используй её\n"
             f"3. Если НЕ найдена — вызови search_wb_categories с уточнённым запросом\n"
-            f"4. Для каждого товара вызови update_imported_product(\n"
-            f"   product_id=ID, wb_subject_id=<subject_id>,\n"
-            f"   mapped_wb_category=<subject_name>,\n"
-            f"   category_confidence=<0.0-1.0>)\n\n"
+            f"4. Для каждого товара подготовь typed result: product_id, subject_id, "
+            f"subject_name, confidence и reasoning\n\n"
             f"mapped_wb_category = subject_name (конечная), НЕ parent_name (раздел).\n"
-            f"ОБЯЗАТЕЛЬНО вызови update_imported_product для КАЖДОГО товара.\n\n"
-            f"Верни JSON: {{processed: число, saved: число, results: [...]}}"
+            f"НЕ вызывай update_imported_product или batch_update_imported_products. "
+            f"Сохранение выполнит Python harness ровно одним batch-вызовом после "
+            f"проверки результата.\n\n"
+            f"Верни ОДИН финальный JSON без markdown: "
+            f"{{\"results\":[{{\"product_id\":ID,\"subject_id\":123,"
+            f"\"subject_name\":\"Категория\",\"confidence\":0.9,"
+            f"\"reasoning\":\"кратко\"}}]}}. "
+            f"Если категория не найдена, верни для товара product_id и error."
         )
+
+    def _map_tool_batch_result_to_updates(
+        self, chunk_result: dict, products_data: list[dict],
+    ) -> list[dict]:
+        """Convert only typed, confident category results into batch updates."""
+        results = chunk_result.get('results')
+        if not isinstance(results, list):
+            raise ValueError('Category batch result must contain results array')
+
+        allowed_ids = {item.get('id') for item in products_data}
+        seen = set()
+        updates = []
+        for item in results:
+            if not isinstance(item, dict):
+                raise ValueError('Category batch result item must be an object')
+            product_id = item.get('product_id')
+            if (
+                not isinstance(product_id, int)
+                or isinstance(product_id, bool)
+                or product_id not in allowed_ids
+            ):
+                raise ValueError('Category result references product outside chunk')
+            if product_id in seen:
+                raise ValueError('Category result contains duplicate product_id')
+            seen.add(product_id)
+            if item.get('error'):
+                continue
+
+            subject_id = item.get('subject_id')
+            subject_name = item.get('subject_name')
+            confidence = item.get('confidence')
+            if (
+                not isinstance(subject_id, int)
+                or isinstance(subject_id, bool)
+                or subject_id <= 0
+                or not isinstance(subject_name, str)
+                or not subject_name.strip()
+                or isinstance(confidence, bool)
+            ):
+                continue
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError):
+                continue
+            if not 0.5 <= confidence <= 1.0:
+                continue
+            updates.append({
+                'product_id': product_id,
+                'wb_subject_id': subject_id,
+                'mapped_wb_category': subject_name.strip(),
+                'category_confidence': confidence,
+            })
+        return updates
 
     def build_task_prompt(self, task: dict) -> str:
         input_data = self.parse_input_data(task)

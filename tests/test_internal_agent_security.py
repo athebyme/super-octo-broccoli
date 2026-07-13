@@ -606,6 +606,40 @@ class InternalAgentSecurityTestCase(unittest.TestCase):
         ).one()
         self.assertNotIn('expected_updated_at', snapshot.new_values)
 
+    def test_imported_batch_rejects_invalid_or_duplicate_ids_before_write(self):
+        product = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        original_title = product.title
+        snapshot_count = AgentChangeSnapshot.query.filter_by(
+            imported_product_id=product.id,
+        ).count()
+
+        invalid_updates = (
+            {'updates': {'product_id': product.id, 'title': 'Нельзя'}},
+            {'updates': [None]},
+            {'updates': [{'product_id': True, 'title': 'Нельзя'}]},
+            {'updates': [{'product_id': 1.5, 'title': 'Нельзя'}]},
+            {'updates': [
+                {'product_id': product.id, 'title': 'Первое'},
+                {'product_id': product.id, 'title': 'Второе'},
+            ]},
+        )
+        for body in invalid_updates:
+            with self.subTest(body=body):
+                response = self.client.patch(
+                    '/internal/v1/imported-products/batch',
+                    headers=self.task_headers(),
+                    json=body,
+                )
+                self.assertEqual(response.status_code, 400)
+
+        db.session.refresh(product)
+        self.assertEqual(product.title, original_title)
+        self.assertEqual(AgentChangeSnapshot.query.filter_by(
+            imported_product_id=product.id,
+        ).count(), snapshot_count)
+
     def test_platform_client_batch_helpers_never_clip_items(self):
         client = object.__new__(PlatformClient)
         calls = []

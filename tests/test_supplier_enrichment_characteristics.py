@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 from flask import Flask
 
 from models import (
+    CardEditHistory,
     Marketplace,
     MarketplaceCategory,
     MarketplaceCategoryCharacteristic,
@@ -96,6 +97,7 @@ class SupplierEnrichmentCharacteristicsTestCase(unittest.TestCase):
     def _product():
         return SimpleNamespace(
             id=501,
+            seller_id=1,
             nm_id=1000501,
             vendor_code='ANDREY-501',
             title='Карточка Андрея',
@@ -116,6 +118,7 @@ class SupplierEnrichmentCharacteristicsTestCase(unittest.TestCase):
     def _andrey_import(**overrides):
         values = {
             'id': 601,
+            'seller_id': 1,
             'external_id': 'ANDREY-501',
             'source_type': 'andrey',
             'title': 'Карточка Андрея',
@@ -209,6 +212,134 @@ class SupplierEnrichmentCharacteristicsTestCase(unittest.TestCase):
             {'id': self.GENDER_ID, 'value': ['Женский']},
         ])
 
+    def test_success_history_and_local_state_use_exact_fresh_wb_card(self):
+        product = self._product()
+        product.characteristics_json = json.dumps([{
+            'id': 777,
+            'value': ['Устаревшее локальное значение'],
+        }], ensure_ascii=False)
+        before = {
+            'nmID': product.nm_id,
+            'subjectID': self.SUBJECT_ID,
+            'vendorCode': product.vendor_code,
+            'title': product.title,
+            'brand': product.brand,
+            'description': product.description,
+            'sizes': [{'chrtID': 1, 'skus': ['1234567890123']}],
+            'characteristics': [
+                {'id': self.MATERIAL_ID, 'value': ['Пластик']},
+                {'id': 999, 'value': ['Только в свежей WB-карточке']},
+            ],
+        }
+        after = dict(before)
+        after['characteristics'] = [
+            {'id': self.MATERIAL_ID, 'value': ['Силикон']},
+            {'id': 999, 'value': ['Только в свежей WB-карточке']},
+            {'id': self.GENDER_ID, 'value': ['Женский']},
+        ]
+        wb_client = MagicMock()
+
+        def update_card(_nm_id, _updates, **kwargs):
+            context = kwargs['snapshot_context']
+            context.update({'before': before, 'after': after})
+            kwargs['before_send_callback']({
+                'before': before,
+                'after': after,
+            })
+            pending = CardEditHistory.query.one()
+            self.assertEqual(pending.wb_sync_status, 'pending')
+            return {'error': False}
+
+        wb_client.update_card.side_effect = update_card
+
+        result = self.service.apply_enrichment(
+            product,
+            self._andrey_import(
+                materials=json.dumps(['силикон'], ensure_ascii=False),
+                gender='женский',
+            ),
+            ['characteristics'],
+            'replace',
+            SimpleNamespace(id=1),
+            wb_client,
+        )
+
+        self.assertTrue(result['success'], result['error'])
+        self.assertEqual(
+            json.loads(product.characteristics_json),
+            after['characteristics'],
+        )
+        history = CardEditHistory.query.one()
+        self.assertEqual(
+            history.snapshot_before['characteristics'],
+            before['characteristics'],
+        )
+        self.assertEqual(
+            history.snapshot_after['characteristics'],
+            after['characteristics'],
+        )
+
+    def test_transport_error_reconciles_when_live_wb_has_exact_sent_state(self):
+        product = self._product()
+        before = {
+            'nmID': product.nm_id,
+            'subjectID': self.SUBJECT_ID,
+            'vendorCode': product.vendor_code,
+            'title': product.title,
+            'brand': product.brand,
+            'description': product.description,
+            'sizes': [{'chrtID': 1, 'skus': ['1234567890123']}],
+            'characteristics': [{
+                'id': self.MATERIAL_ID,
+                'value': ['Пластик'],
+            }],
+        }
+        after = dict(before)
+        after['characteristics'] = [{
+            'id': self.MATERIAL_ID,
+            'value': ['Силикон'],
+        }, {
+            'id': self.GENDER_ID,
+            'value': ['Женский'],
+        }]
+        wb_client = MagicMock()
+
+        def timed_out_update(_nm_id, _updates, **kwargs):
+            kwargs['snapshot_context'].update({
+                'before': before,
+                'after': after,
+            })
+            kwargs['before_send_callback']({
+                'before': before,
+                'after': after,
+            })
+            raise TimeoutError('ответ WB потерян')
+
+        wb_client.update_card.side_effect = timed_out_update
+        wb_client.get_card_by_nm_id.return_value = after
+
+        result = self.service.apply_enrichment(
+            product,
+            self._andrey_import(
+                materials=json.dumps(['силикон'], ensure_ascii=False),
+                gender='женский',
+            ),
+            ['characteristics'],
+            'replace',
+            SimpleNamespace(id=1),
+            wb_client,
+        )
+
+        self.assertTrue(result['success'], result['error'])
+        self.assertTrue(result['wb_sync'])
+        history = CardEditHistory.query.one()
+        self.assertTrue(history.wb_synced)
+        self.assertEqual(history.wb_sync_status, 'success')
+        self.assertEqual(
+            json.loads(product.characteristics_json),
+            after['characteristics'],
+        )
+
     def test_malformed_characteristics_fail_closed(self):
         wb_client = MagicMock()
 
@@ -228,6 +359,44 @@ class SupplierEnrichmentCharacteristicsTestCase(unittest.TestCase):
         self.assertFalse(result['success'])
         self.assertIn('Неподдерживаемый формат', result['error'])
         wb_client.update_card.assert_not_called()
+
+    def test_cross_tenant_import_is_rejected_before_side_effect(self):
+        wb_client = MagicMock()
+
+        result = self.service.apply_enrichment(
+            self._product(),
+            self._andrey_import(
+                seller_id=2,
+                materials=json.dumps(['Силикон'], ensure_ascii=False),
+                gender='Женский',
+            ),
+            ['characteristics'],
+            'replace',
+            SimpleNamespace(id=1),
+            wb_client,
+        )
+
+        self.assertFalse(result['success'])
+        self.assertIn('seller scope mismatch', result['error'])
+        wb_client.update_card.assert_not_called()
+
+    def test_malformed_local_product_json_does_not_break_preview(self):
+        product = self._product()
+        product.characteristics_json = '{broken'
+        product.dimensions_json = '[]'
+        product.photos_json = '{broken'
+
+        preview = self.service.build_preview(
+            product,
+            self._andrey_import(
+                materials=json.dumps(['Силикон'], ensure_ascii=False),
+                gender='Женский',
+            ),
+        )
+
+        self.assertEqual(preview['characteristics']['current'], [])
+        self.assertEqual(preview['dimensions']['current'], {})
+        self.assertEqual(preview['photos']['current_count'], 0)
 
 
 if __name__ == '__main__':

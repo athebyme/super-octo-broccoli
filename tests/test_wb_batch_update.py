@@ -14,9 +14,11 @@ from services.wb_api_client import WildberriesAPIClient, WBAPIException
 def _card(nm_id, vendor_code=None, **extra):
     card = {'nmID': nm_id, 'vendorCode': vendor_code or f'VC-{nm_id}',
             'title': f'Товар {nm_id}', 'brand': 'Old',
+            'subjectID': 777, 'characteristics': [],
             'sizes': [{'skus': ['123']}]}
     card.update(extra)
-    return card
+    from services.wb_validators import _mark_wb_card_as_fetched
+    return _mark_wb_card_as_fetched(card)
 
 
 class TestFetchCardsByNmIds(unittest.TestCase):
@@ -163,11 +165,23 @@ class TestUpdateCardsMerged(unittest.TestCase):
         cards_map = {i: _card(i, bigfield=big_text) for i in range(1, 11)}
         nm_updates = {i: {'brand': 'New'} for i in range(1, 11)}
         sizes = []
+        from services.wb_validators import WB_PREPARED_CONTEXT_KEY
+
+        def record_wire_size(cards, **_kwargs):
+            wire_cards = [
+                {
+                    key: value for key, value in card.items()
+                    if key != WB_PREPARED_CONTEXT_KEY
+                }
+                for card in cards
+            ]
+            sizes.append(len(__import__('json').dumps(wire_cards)))
+            return {'error': False}
+
         with patch.object(self.client, 'fetch_cards_by_nm_ids',
                           return_value=cards_map), \
              patch.object(self.client, 'update_cards_batch',
-                          side_effect=lambda cards, **kw: sizes.append(
-                              len(__import__('json').dumps(cards))) or {'error': False}):
+                          side_effect=record_wire_size):
             self.client.update_cards_merged(nm_updates, chunk_size=1000)
         # Ни один отправленный чанк не должен превышать 8 МБ в wire-формате
         self.assertTrue(all(s <= 8 * 1024 * 1024 for s in sizes), sizes)

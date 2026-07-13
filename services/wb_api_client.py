@@ -2,11 +2,12 @@
 Wildberries API Client с оптимизацией и кэшированием
 """
 import logging
+import copy
 import threading as _threading
 import time
 from datetime import datetime, timedelta
 from functools import lru_cache, wraps
-from typing import Dict, List, Optional, Any
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -901,7 +902,11 @@ class WildberriesAPIClient:
         merge_with_existing: bool = True,
         log_to_db: bool = False,
         seller_id: int = None,
-        validate: bool = True
+        validate: bool = True,
+        snapshot_context: Optional[Dict[str, Any]] = None,
+        before_send_callback: Optional[
+            Callable[[Dict[str, Dict[str, Any]]], None]
+        ] = None,
     ) -> Dict[str, Any]:
         """
         Обновить карточку товара (Content API v2)
@@ -931,6 +936,7 @@ class WildberriesAPIClient:
             Метод автоматически получает текущую карточку и объединяет с изменениями.
         """
         from services.wb_validators import prepare_card_for_update, validate_and_log_errors, clean_characteristics_for_update
+        from services.wb_validators import _mark_wb_card_as_fetched
 
         updates = dict(updates or {})
         logger.info(f"🔧 Updating card nmID={nm_id} with updates: {list(updates.keys())}")
@@ -947,15 +953,13 @@ class WildberriesAPIClient:
                 )
                 if not full_card:
                     raise WBAPIException(f"Card nmID={nm_id} not found in WB API")
+                _mark_wb_card_as_fetched(full_card)
             except Exception as e:
                 logger.error(f"❌ Failed to fetch full card for merging: {str(e)}")
-                if 'characteristics' in updates:
-                    raise WBAPIException(
-                        f"Нельзя проверить характеристики nmID={nm_id}: "
-                        "не удалось получить категорию карточки WB"
-                    ) from e
-                logger.warning("⚠️ Trying to update with partial data (may fail)")
-                card_to_send = {"nmID": nm_id, **updates}
+                raise WBAPIException(
+                    f"Нельзя безопасно обновить nmID={nm_id}: "
+                    "не удалось получить полную текущую карточку WB"
+                ) from e
             else:
                 # Supplier/AI characteristics обязаны пройти строгую проверку
                 # по category schema + dictionaries, синхронизированным в админке.
@@ -971,12 +975,10 @@ class WildberriesAPIClient:
                 # Подготавливаем полную карточку; characteristic patch мержится по id.
                 card_to_send = prepare_card_for_update(full_card, updates)
         else:
-            if 'characteristics' in updates:
-                raise WBAPIException(
-                    'Обновление характеристик без merge_with_existing запрещено: '
-                    'невозможно подтвердить WB-категорию и сохранить остальные значения'
-                )
-            card_to_send = {"nmID": nm_id, **updates}
+            raise WBAPIException(
+                'Обновление карточки без merge_with_existing запрещено: '
+                'Content API принимает full replacement и может стереть поля'
+            )
 
         # prepare_card_for_update переносит внутренний category/patch context
         # до batch-boundary. Одиночный update уже прошёл проверку выше, поэтому
@@ -984,9 +986,25 @@ class WildberriesAPIClient:
         from services.wb_validators import (
             WB_SUBJECT_CONTEXT_KEY,
             WB_CHARACTERISTICS_CHANGED_KEY,
+            WB_PREPARED_CONTEXT_KEY,
         )
         card_to_send.pop(WB_SUBJECT_CONTEXT_KEY, None)
         card_to_send.pop(WB_CHARACTERISTICS_CHANGED_KEY, None)
+        card_to_send.pop(WB_PREPARED_CONTEXT_KEY, None)
+
+        # Content API performs a full replacement. Even when only title or
+        # description changes, an invalid dictionary-bound value already
+        # present in the fresh card would otherwise be sent back to WB.
+        from services.marketplace_validator import (
+            WBCharacteristicValidationError,
+            validate_wb_full_card_dictionary_values,
+        )
+        full_validation = validate_wb_full_card_dictionary_values(
+            full_card.get('subjectID'),
+            card_to_send.get('characteristics'),
+        )
+        if not full_validation['valid']:
+            raise WBCharacteristicValidationError(full_validation)
 
         # Валидация данных перед отправкой
         if validate:
@@ -995,6 +1013,22 @@ class WildberriesAPIClient:
 
         # WB Content API v2 эндпоинт для обновления
         endpoint = "/content/v2/cards/update"
+
+        # A caller that needs rollback guarantees may durably persist this
+        # exact fresh-before/sent-after pair before the external side effect.
+        # The callback receives its own deep copy and cannot mutate wire data.
+        before_snapshot = copy.deepcopy(full_card)
+        from services.wb_validators import WB_SOURCE_CONTEXT_KEY
+        before_snapshot.pop(WB_SOURCE_CONTEXT_KEY, None)
+        exact_snapshot = {
+            'before': before_snapshot,
+            'after': copy.deepcopy(card_to_send),
+        }
+        if snapshot_context is not None:
+            snapshot_context.clear()
+            snapshot_context.update(copy.deepcopy(exact_snapshot))
+        if before_send_callback is not None:
+            before_send_callback(copy.deepcopy(exact_snapshot))
 
         logger.info(f"📤 Sending update request for nmID={nm_id}")
         logger.debug(f"Card to send keys: {list(card_to_send.keys())}")
@@ -1015,6 +1049,10 @@ class WildberriesAPIClient:
                 json=[card_to_send]
             )
             result = response.json()
+            if isinstance(result, dict) and result.get('error'):
+                details = result.get('errorText') or result.get(
+                    'additionalErrors') or 'WB отклонил обновление карточки'
+                raise WBAPIException(str(details))
             logger.info(f"✅ Card nmID={nm_id} update response: {result}")
             return result
         except WBAPIException as e:
@@ -1049,7 +1087,11 @@ class WildberriesAPIClient:
                 card = self.get_card_by_nm_id(nm, log_to_db=log_to_db, seller_id=seller_id)
                 if card:
                     found[nm] = card
-            return found
+            from services.wb_validators import _mark_wb_card_as_fetched
+            return {
+                nm: _mark_wb_card_as_fetched(card)
+                for nm, card in found.items()
+            }
 
         cursor_updated_at = None
         cursor_nm_id = None
@@ -1079,7 +1121,11 @@ class WildberriesAPIClient:
                 logger.warning("fetch_cards_by_nm_ids: cursor stalled, aborting sweep")
                 break
             prev_cursor = (cursor_updated_at, cursor_nm_id)
-        return found
+        from services.wb_validators import _mark_wb_card_as_fetched
+        return {
+            nm: _mark_wb_card_as_fetched(card)
+            for nm, card in found.items()
+        }
 
     def update_cards_merged(
         self,
@@ -1110,13 +1156,18 @@ class WildberriesAPIClient:
         from services.wb_validators import (
             prepare_card_for_update, validate_card_update,
             clean_characteristics_for_update, WBValidationError,
+            WB_PREPARED_CONTEXT_KEY, WB_SOURCE_CONTEXT_KEY,
         )
         from services.marketplace_validator import (
             WBCharacteristicValidationError,
             build_wb_characteristic_patch,
+            validate_wb_full_card_dictionary_values,
         )
 
-        result = {'sent': [], 'missing': [], 'invalid': {}, 'failed': {}, 'requests': 0}
+        result = {
+            'sent': [], 'missing': [], 'invalid': {}, 'failed': {},
+            'requests': 0, 'snapshots': {},
+        }
         nm_updates = {int(k): v for k, v in (nm_updates or {}).items() if v}
         if not nm_updates:
             return result
@@ -1166,7 +1217,17 @@ class WildberriesAPIClient:
                     raise WBAPIException(
                         str(resp.get('errorText') or 'WB вернул ошибку в теле ответа'))
                 result['requests'] += 1
-                result['sent'].extend(c['nmID'] for c in chunk)
+                for card in chunk:
+                    nm_id = card['nmID']
+                    result['sent'].append(nm_id)
+                    after = copy.deepcopy(card)
+                    after.pop(WB_PREPARED_CONTEXT_KEY, None)
+                    before = copy.deepcopy(cards_map[nm_id])
+                    before.pop(WB_SOURCE_CONTEXT_KEY, None)
+                    result['snapshots'][nm_id] = {
+                        'before': before,
+                        'after': after,
+                    }
             except Exception as e:
                 result['requests'] += 1
                 if len(chunk) == 1:
@@ -1186,7 +1247,11 @@ class WildberriesAPIClient:
         batch: List[Dict[str, Any]] = []
         batch_bytes = 0
         for card in prepared:
-            size = len(_json.dumps(card))
+            size_card = {
+                key: value for key, value in card.items()
+                if key != WB_PREPARED_CONTEXT_KEY
+            }
+            size = len(_json.dumps(size_card))
             if batch and (len(batch) >= chunk_size or batch_bytes + size > max_bytes):
                 _send_chunk(batch)
                 batch, batch_bytes = [], 0
@@ -1264,51 +1329,112 @@ class WildberriesAPIClient:
             return {'success': True, 'updated': 0}
 
         # Dictionary validation выполняется всегда, независимо от флага
-        # validate (он управляет только общей shape-валидацией). Подготовленные
-        # карточки несут internal subject/patch context; прямой caller обязан
-        # передать subjectID, иначе characteristics считаются непроверяемыми.
+        # validate (он управляет только общей shape-валидацией). Batch endpoint
+        # принимает только карточки с opaque context из prepare_card_for_update:
+        # subjectID из произвольного payload нельзя считать доказательством
+        # фактической категории nmID.
         from services.marketplace_validator import (
+            WBCharacteristicValidationError,
             build_wb_characteristic_patch,
             merge_wb_characteristics,
+            validate_wb_full_card_dictionary_values,
         )
         from services.wb_validators import (
             WB_SUBJECT_CONTEXT_KEY,
             WB_CHARACTERISTICS_CHANGED_KEY,
+            WB_PREPARED_CONTEXT_KEY,
+            WBValidationError,
+            _read_wb_prepared_context,
             clean_characteristics_for_update,
         )
         characteristic_validation_cache = {}
         guarded_cards = []
+        no_characteristic_patch = object()
         for index, raw_card in enumerate(cards):
             if not isinstance(raw_card, dict):
                 raise WBAPIException(f'Card #{index + 1} must be an object')
             card = dict(raw_card)
-            internal_subject_id = card.pop(WB_SUBJECT_CONTEXT_KEY, None)
-            wire_subject_id = card.pop('subjectID', None)
-            subject_id = internal_subject_id or wire_subject_id
-            has_internal_patch_context = WB_CHARACTERISTICS_CHANGED_KEY in card
-            changed_ids = card.pop(WB_CHARACTERISTICS_CHANGED_KEY, None)
+            if (
+                WB_SUBJECT_CONTEXT_KEY in card
+                or WB_CHARACTERISTICS_CHANGED_KEY in card
+            ):
+                raise WBAPIException(
+                    f'Card #{index + 1}: legacy internal context marker is forbidden')
 
-            proposed_patch = None
-            requires_characteristic_validation = False
-            if has_internal_patch_context:
-                if not isinstance(changed_ids, list):
-                    raise WBAPIException(
-                        f'Card #{index + 1}: invalid characteristic patch context')
-                if changed_ids:
-                    requires_characteristic_validation = True
-                    chars = card.get('characteristics')
-                    if not isinstance(chars, list):
+            opaque_context_present = WB_PREPARED_CONTEXT_KEY in card
+            opaque_context = card.pop(WB_PREPARED_CONTEXT_KEY, None)
+            if not opaque_context_present:
+                raise WBAPIException(
+                    f'Card #{index + 1}: raw batch payload is forbidden; '
+                    'use safe full-card preparation')
+            try:
+                (
+                    internal_subject_id,
+                    changed_ids,
+                    removed_ids,
+                ) = _read_wb_prepared_context(
+                    opaque_context,
+                    card.get('characteristics'),
+                    card.get('nmID'),
+                )
+            except WBValidationError as exc:
+                raise WBAPIException(
+                    f'Card #{index + 1}: invalid internal context') from exc
+            wire_subject_id = card.pop('subjectID', None)
+            if (
+                wire_subject_id is not None
+                and str(wire_subject_id) != str(internal_subject_id)
+            ):
+                raise WBAPIException(
+                    f'Card #{index + 1}: subjectID conflicts with safe context')
+            subject_id = internal_subject_id
+
+            full_validation = validate_wb_full_card_dictionary_values(
+                subject_id,
+                card.get('characteristics'),
+                validation_cache=characteristic_validation_cache,
+            )
+            if not full_validation['valid']:
+                raise WBCharacteristicValidationError(full_validation)
+
+            if 'characteristics' not in card:
+                raise WBAPIException(
+                    f'Card #{index + 1}: full update payload must contain '
+                    'characteristics to prevent accidental erase')
+
+            if 'characteristics' in card:
+                chars = card.get('characteristics')
+                if chars is None:
+                    proposed_patch = chars
+                elif chars in ([], {}):
+                    changed_set = set(changed_ids)
+                    removed_set = set(removed_ids)
+                    if (
+                        not opaque_context_present
+                        or changed_set != removed_set
+                    ):
                         raise WBAPIException(
-                            f'Card #{index + 1}: characteristics must be an array')
-                    changed_set = set()
-                    try:
-                        changed_set = {int(value) for value in changed_ids}
-                    except (TypeError, ValueError) as exc:
+                            f'Card #{index + 1}: empty characteristics are allowed '
+                            'only for a safely prepared unchanged/removal card')
+                    if removed_set:
+                        from services.marketplace_validator import (
+                            require_wb_characteristic_ids,
+                        )
+                        require_wb_characteristic_ids(
+                            subject_id,
+                            removed_set,
+                            validation_cache=characteristic_validation_cache,
+                        )
+                    proposed_patch = no_characteristic_patch
+                elif opaque_context_present:
+                    changed_set = set(changed_ids)
+                    removed_set = set(removed_ids)
+                    if not removed_set.issubset(changed_set):
                         raise WBAPIException(
-                            f'Card #{index + 1}: invalid characteristic id context') from exc
+                            f'Card #{index + 1}: invalid removed characteristic context')
                     proposed_patch = []
                     found_ids = set()
-                    for item in chars:
+                    for item in chars if isinstance(chars, list) else []:
                         if not isinstance(item, dict):
                             continue
                         try:
@@ -1318,31 +1444,36 @@ class WildberriesAPIClient:
                         if charc_id in changed_set:
                             proposed_patch.append(item)
                             found_ids.add(charc_id)
-                    if found_ids != changed_set:
+                    if found_ids != changed_set - removed_set:
                         raise WBAPIException(
                             f'Card #{index + 1}: characteristic patch was lost during merge')
-            elif 'characteristics' in card:
-                # Не подготовленный центральным builder payload: проверяем весь
-                # массив и не разрешаем обход через прямой public batch method.
-                if card.get('characteristics') in ([], {}):
-                    raise WBAPIException(
-                        f'Card #{index + 1}: empty characteristics are allowed '
-                        'only as a patch merged with the current WB card')
-                requires_characteristic_validation = True
-                proposed_patch = card.get('characteristics')
+                    if removed_set:
+                        from services.marketplace_validator import (
+                            require_wb_characteristic_ids,
+                        )
+                        require_wb_characteristic_ids(
+                            subject_id,
+                            removed_set,
+                            validation_cache=characteristic_validation_cache,
+                        )
+                    if not changed_set:
+                        proposed_patch = no_characteristic_patch
+                else:
+                    # Raw public payload has no trustworthy changed-ID context.
+                    proposed_patch = chars
 
-            if requires_characteristic_validation:
-                if subject_id is None:
+                if proposed_patch is not no_characteristic_patch and subject_id is None:
                     raise WBAPIException(
                         f'Card #{index + 1}: subjectID is required for mandatory '
                         'WB admin-dictionary validation')
-                normalized_patch = build_wb_characteristic_patch(
-                    subject_id,
-                    proposed_patch,
-                    validation_cache=characteristic_validation_cache,
-                )
-                card['characteristics'] = merge_wb_characteristics(
-                    card.get('characteristics'), normalized_patch)
+                if proposed_patch is not no_characteristic_patch:
+                    normalized_patch = build_wb_characteristic_patch(
+                        subject_id,
+                        proposed_patch,
+                        validation_cache=characteristic_validation_cache,
+                    )
+                    card['characteristics'] = merge_wb_characteristics(
+                        card.get('characteristics'), normalized_patch)
             guarded_cards.append(card)
 
         from services.wb_content_payload import normalize_update_card_payload
@@ -1392,6 +1523,10 @@ class WildberriesAPIClient:
                 json=cards  # Отправляем массив карточек
             )
             result = response.json()
+            if isinstance(result, dict) and result.get('error'):
+                details = result.get('errorText') or result.get(
+                    'additionalErrors') or 'WB отклонил batch-обновление карточек'
+                raise WBAPIException(str(details))
             logger.info(f"✅ Batch update result: {result}")
             return result
         except WBAPIException as e:
@@ -2554,7 +2689,7 @@ class WildberriesAPIClient:
 
     def fetch_all_brands(self, subject_ids: list, top: int = 5000,
                          progress_callback=None, max_requests: int = 200,
-                         max_pages_per_subject: int = 25) -> Dict[str, Any]:
+                         max_pages_per_subject: int = 200) -> Dict[str, Any]:
         """
         Получить бренды из WB по списку категорий через cursor pagination.
 
@@ -2566,9 +2701,11 @@ class WildberriesAPIClient:
             max_pages_per_subject: защита от бесконечной пагинации
         """
         endpoint = "/api/content/v1/brands"
-        all_brands = {}  # id -> brand_data
+        all_brands = {}  # id -> brand_data from complete subject snapshots
+        subject_brands = {}  # subject_id -> complete list[brand_data]
         self._fetch_debug = None
         fetch_errors = []
+        fetch_warnings = []
         request_count = 0
         completed_subjects = 0
         normalized_subject_ids = []
@@ -2584,11 +2721,14 @@ class WildberriesAPIClient:
             seen_subject_ids.add(subject_id)
         total = len(normalized_subject_ids)
 
-        budget_exhausted = False
+        stop_sweep = False
         for subject_id in normalized_subject_ids:
             cursor = None
             seen_cursors = set()
-            subject_brand_ids = set()
+            subject_brand_map = {}
+            subject_seen_brand_ids = set()
+            subject_items_seen = 0
+            excluded_empty_names = 0
             expected_total = None
             subject_complete = False
 
@@ -2599,7 +2739,7 @@ class WildberriesAPIClient:
                         'code': 'request_budget_exhausted',
                         'error': f'Brand sweep exceeded {max_requests} requests',
                     })
-                    budget_exhausted = True
+                    stop_sweep = True
                     break
 
                 params = {'subjectId': subject_id}
@@ -2634,22 +2774,44 @@ class WildberriesAPIClient:
                         raise ValueError('WB brand total changed during pagination')
                     for brand in brands:
                         if not isinstance(brand, dict):
+                            raise ValueError('WB brand page contains a non-object item')
+                        brand_id = brand.get('id')
+                        if (
+                            not isinstance(brand_id, int)
+                            or isinstance(brand_id, bool)
+                            or brand_id <= 0
+                        ):
+                            raise ValueError('WB brand page contains an invalid brand id')
+                        if brand_id in subject_seen_brand_ids:
+                            raise ValueError('WB brand page contains a duplicate brand id')
+                        subject_seen_brand_ids.add(brand_id)
+                        subject_items_seen += 1
+                        raw_name = brand.get('name')
+                        name = raw_name.strip() if isinstance(raw_name, str) else ''
+                        if not name:
+                            excluded_empty_names += 1
                             continue
-                        try:
-                            brand_id = int(brand.get('id'))
-                        except (TypeError, ValueError):
-                            continue
-                        name = str(brand.get('name') or '').strip()
-                        if brand_id > 0 and name:
-                            brand['id'] = brand_id
-                            all_brands[brand_id] = brand
-                            subject_brand_ids.add(brand_id)
+                        normalized_brand = dict(brand)
+                        normalized_brand['id'] = brand_id
+                        normalized_brand['name'] = name
+                        subject_brand_map[brand_id] = normalized_brand
 
                     next_cursor = result.get('next')
                     if next_cursor in (None, 0, '0', ''):
-                        if len(subject_brand_ids) != expected_total:
+                        if subject_items_seen != expected_total:
                             raise ValueError(
                                 'WB brand pagination ended before declared total'
+                            )
+                        if excluded_empty_names:
+                            fetch_warnings.append({
+                                'subject_id': subject_id,
+                                'code': 'brands_excluded_invalid_name',
+                                'count': excluded_empty_names,
+                            })
+                            logger.warning(
+                                'Excluded %s WB brands without a usable name '
+                                'for subjectId=%s',
+                                excluded_empty_names, subject_id,
                             )
                         subject_complete = True
                         break
@@ -2680,6 +2842,7 @@ class WildberriesAPIClient:
                         'code': 'page_error',
                         'error': str(error)[:300],
                     })
+                    stop_sweep = True
                     break
             else:
                 fetch_errors.append({
@@ -2689,14 +2852,19 @@ class WildberriesAPIClient:
                         f'Brand pagination exceeded {max_pages_per_subject} pages'
                     ),
                 })
+                stop_sweep = True
 
             if subject_complete:
                 completed_subjects += 1
+                subject_snapshot = list(subject_brand_map.values())
+                subject_brands[subject_id] = subject_snapshot
+                for brand in subject_snapshot:
+                    all_brands[brand['id']] = brand
             if progress_callback:
                 progress_callback(
                     completed_subjects, total, len(all_brands),
                 )
-            if budget_exhausted:
+            if stop_sweep or not subject_complete:
                 break
 
         brands_list = list(all_brands.values())
@@ -2706,12 +2874,19 @@ class WildberriesAPIClient:
         )
         return {
             'data': brands_list,
+            'subject_brands': subject_brands,
+            'completed_subject_ids': list(subject_brands),
+            'next_subject_id': (
+                normalized_subject_ids[completed_subjects]
+                if completed_subjects < total else None
+            ),
             'complete': (
                 total > 0
                 and completed_subjects == total
                 and not fetch_errors
             ),
             'errors': fetch_errors[:100],
+            'warnings': fetch_warnings[:100],
             'requests': request_count,
             'categories_completed': completed_subjects,
             'categories_total': total,
@@ -2889,19 +3064,18 @@ class WildberriesAPIClient:
         endpoint = "/content/v2/cards/upload"
 
         # Формируем тело запроса согласно спецификации WB API
-        from services.marketplace_validator import build_wb_characteristic_patch
+        from services.marketplace_validator import build_wb_create_characteristics
         characteristic_validation_cache = {}
         validated_variants = []
         for variant in variants:
             validated_variant = dict(variant)
-            if 'characteristics' in validated_variant:
-                validated_variant['characteristics'] = (
-                    build_wb_characteristic_patch(
-                        subject_id,
-                        validated_variant['characteristics'],
-                        validation_cache=characteristic_validation_cache,
-                    )
+            validated_variant['characteristics'] = (
+                build_wb_create_characteristics(
+                    subject_id,
+                    validated_variant.get('characteristics', []),
+                    validation_cache=characteristic_validation_cache,
                 )
+            )
             validated_variants.append(validated_variant)
         request_body = [{
             'subjectID': subject_id,
@@ -2981,7 +3155,7 @@ class WildberriesAPIClient:
 
         # Центральный safety boundary для всех create-paths, включая ручной
         # UI и supplier batch: характеристики проверяются до HTTP-вызова.
-        from services.marketplace_validator import build_wb_characteristic_patch
+        from services.marketplace_validator import build_wb_create_characteristics
         characteristic_validation_cache = {}
         validated_cards = []
         for card in cards:
@@ -2990,14 +3164,13 @@ class WildberriesAPIClient:
             validated_variants = []
             for variant in validated_card.get('variants') or []:
                 validated_variant = dict(variant)
-                if 'characteristics' in validated_variant:
-                    validated_variant['characteristics'] = (
-                        build_wb_characteristic_patch(
-                            subject_id,
-                            validated_variant['characteristics'],
-                            validation_cache=characteristic_validation_cache,
-                        )
+                validated_variant['characteristics'] = (
+                    build_wb_create_characteristics(
+                        subject_id,
+                        validated_variant.get('characteristics', []),
+                        validation_cache=characteristic_validation_cache,
                     )
+                )
                 validated_variants.append(validated_variant)
             validated_card['variants'] = validated_variants
             validated_cards.append(validated_card)
