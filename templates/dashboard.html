@@ -112,11 +112,6 @@
         margin-bottom: 40px;
     }
     @media (max-width: 640px) { .dash-quality { flex-direction: column; align-items: flex-start; gap: 20px; } }
-    .dash-quality-gauge { display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0; }
-    .dash-quality-gauge-label {
-        font-size: 11px; font-weight: 600; text-transform: uppercase;
-        letter-spacing: 0.08em; color: var(--text-muted); text-align: center; max-width: 110px;
-    }
     .dash-quality-body { flex: 1; min-width: 0; }
     .dash-quality-headline { display: flex; align-items: baseline; gap: 8px; margin-bottom: 14px; }
     .dash-quality-count {
@@ -124,9 +119,16 @@
         color: var(--accent); line-height: 1;
     }
     .dash-quality-headline-text { font-size: 14px; color: var(--text-secondary); }
+    .dash-quality-chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+    .dash-quality-chip {
+        font-size: 12px; font-weight: 600; color: var(--text-secondary);
+        border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px;
+        text-decoration: none; transition: border-color 0.15s, color 0.15s;
+    }
+    .dash-quality-chip:hover { color: var(--accent); border-color: var(--accent); }
     .dash-quality-bar {
         display: flex; height: 10px; border-radius: 5px; overflow: hidden;
-        background: #ece9e4; margin-bottom: 10px;
+        background: var(--border); margin-bottom: 10px;
     }
     .dash-quality-bar-seg { min-width: 0; }
     .dash-quality-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
@@ -339,27 +341,37 @@
     </div>
 
     <div class="dash-quality" x-data="cardQualityWidget()" x-init="load()">
-        <div class="dash-quality-gauge">
-            <template x-if="!loading && data && data.avg_quality !== null">
-                <div :style="'width:96px;height:96px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:conic-gradient(' + gaugeColor() + ' ' + Math.round(data.avg_quality) + '%, #ece9e4 0)'">
-                    <div style="width:80px;height:80px;border-radius:50%;background:var(--bg-card);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-style:italic;font-size:28px"
-                         :style="'color:' + gaugeColor()" x-text="Math.round(data.avg_quality)"></div>
-                </div>
-            </template>
-            <template x-if="loading || !data || data.avg_quality === null">
-                <div style="width:96px;height:96px;border-radius:50%;background:#ece9e4;display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-style:italic;font-size:28px;color:var(--text-muted)">—</div>
-            </template>
-            <div class="dash-quality-gauge-label">средний Quality Score</div>
-        </div>
-
         <div class="dash-quality-body">
-            <div class="dash-quality-headline">
-                <span class="dash-quality-count" x-text="loading ? '…' : (data ? data.need_attention : 0)"></span>
-                <span class="dash-quality-headline-text">карточек тянут рейтинг вниз</span>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+                <div class="dash-quality-headline">
+                    <span class="dash-quality-count" x-text="loading ? '…' : (data ? data.need_attention : 0)"></span>
+                    <span class="dash-quality-headline-text">карточек теряют продажи</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px" x-show="!loading && data">
+                    <svg x-show="sparkPoints()" width="120" height="36" viewBox="0 0 120 36"
+                         fill="none" aria-hidden="true">
+                        <polyline :points="sparkPoints()" stroke="var(--accent)" stroke-width="2"
+                                  fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+                    </svg>
+                    <div style="text-align:center">
+                        <div style="font-family:var(--font-display);font-style:italic;font-size:28px;line-height:1"
+                             :style="'color:' + gaugeColor()"
+                             x-text="data && data.avg_quality !== null ? Math.round(data.avg_quality) : '—'"></div>
+                        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.06em">Quality Score</div>
+                    </div>
+                </div>
+            </div>
+            <div class="dash-quality-chips" x-show="!loading && topReasons().length">
+                <template x-for="rc in topReasons()" :key="rc.code">
+                    <a :href="'/card-quality?reason=' + rc.code" class="dash-quality-chip"
+                       x-text="rc.label + ' · ' + rc.count"></a>
+                </template>
             </div>
             <div class="dash-quality-bar" x-show="!loading && data && data.total">
                 <template x-for="seg in segments()" :key="seg.key">
-                    <div class="dash-quality-bar-seg" :style="'flex:' + seg.count + ';background:' + seg.color" :title="seg.label + ': ' + seg.count"></div>
+                    <a class="dash-quality-bar-seg" :href="'/card-quality?bucket=' + seg.bucket"
+                       :style="'flex:' + seg.count + ';background:' + seg.color"
+                       :title="seg.label + ': ' + seg.count"></a>
                 </template>
             </div>
             <div class="dash-quality-legend" x-show="!loading && data && data.total">
@@ -367,7 +379,7 @@
                 <span><span class="dash-dot" style="background:#d97706"></span> Средние: <span x-text="data ? data.distribution.average : 0"></span></span>
                 <span><span class="dash-dot" style="background:#16a34a"></span> Хорошие: <span x-text="data ? (data.distribution.good + data.distribution.excellent) : 0"></span></span>
             </div>
-            <a href="{{ url_for('card_quality_page') }}" class="dash-quality-cta">Разобрать &rarr;</a>
+            <a href="{{ url_for('card_quality_page') }}" class="dash-quality-cta">Исправить &rarr;</a>
         </div>
     </div>
     {% endif %}
@@ -611,15 +623,36 @@ function cardQualityWidget() {
             const v = this.data ? this.data.avg_quality : 0;
             return v >= 70 ? '#16a34a' : v >= 50 ? '#d97706' : '#dc2626';
         },
+        topReasons() {
+            if (!this.data || !this.data.reason_counts) return [];
+            const labels = this.data.reason_labels || {};
+            return Object.entries(this.data.reason_counts)
+                .filter(([, n]) => n > 0)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 4)
+                .map(([code, count]) => ({ code, count, label: labels[code] || code }));
+        },
+        sparkPoints() {
+            const t = (this.data && this.data.trend) || [];
+            if (t.length < 2) return '';
+            const vals = t.map(p => p.avg_quality);
+            const min = Math.min(...vals), max = Math.max(...vals);
+            const range = (max - min) || 1;
+            const W = 120, H = 36, PAD = 4;
+            return vals.map((v, i) =>
+                (i / (vals.length - 1) * W).toFixed(1) + ',' +
+                (H - PAD - (v - min) / range * (H - 2 * PAD)).toFixed(1)
+            ).join(' ');
+        },
         segments() {
             if (!this.data) return [];
             const d = this.data.distribution;
             return [
-                { key: 'poor', count: d.poor, color: '#dc2626', label: 'Слабые' },
-                { key: 'average', count: d.average, color: '#d97706', label: 'Средние' },
-                { key: 'good', count: d.good + d.excellent, color: '#16a34a', label: 'Хорошие' },
+                { key: 'poor', bucket: 'poor', label: 'Слабые', color: '#dc2626', count: d.poor || 0 },
+                { key: 'average', bucket: 'average', label: 'Средние', color: '#d97706', count: d.average || 0 },
+                { key: 'good', bucket: 'good', label: 'Хорошие', color: '#16a34a', count: (d.good || 0) + (d.excellent || 0) },
             ].filter(s => s.count > 0);
-        }
+        },
     };
 }
 </script>
