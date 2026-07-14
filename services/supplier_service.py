@@ -2129,7 +2129,10 @@ class SupplierService:
     @staticmethod
     def ai_generate_rich_content(product_id: int) -> dict:
         """
-        AI генерация Rich-контента (слайды инфографики) для товара.
+        Fact-safe сборка Rich-контента для товара.
+
+        Метод сохраняет legacy-имя API, но production copy не генерируется
+        моделью: на слайды попадают только дословные поля товара с provenance.
 
         Returns:
             dict: {success, data, error}
@@ -2138,197 +2141,103 @@ class SupplierService:
         if not product:
             return {'success': False, 'error': 'Товар не найден'}
 
-        supplier = Supplier.query.get(product.supplier_id)
-        if not supplier or not supplier.ai_enabled:
-            return {'success': False, 'error': 'AI не включен'}
-
-        ai_svc = SupplierService._get_ai_service(supplier)
-        if not ai_svc:
-            return {'success': False, 'error': 'Не удалось создать AI сервис'}
-
         # Получаем характеристики
         characteristics = {}
         if product.characteristics_json:
             try:
                 characteristics = json.loads(product.characteristics_json) if isinstance(product.characteristics_json, str) else product.characteristics_json
-            except Exception:
-                pass
+            except (TypeError, ValueError):
+                characteristics = {}
+        if isinstance(characteristics, list):
+            mapped = {}
+            for item in characteristics:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get('name') or item.get('title')
+                value = item.get('value')
+                if isinstance(name, str) and name.strip() and value is not None:
+                    mapped[name.strip()] = value
+            characteristics = mapped
+        elif not isinstance(characteristics, dict):
+            characteristics = {}
 
-        success, result, error = ai_svc.generate_rich_content(
-            title=product.title or '',
-            description=product.description or '',
-            category=product.wb_category_name or product.category or '',
-            brand=product.brand or '',
-            characteristics=characteristics,
-            price=float(product.supplier_price or 0)
-        )
+        try:
+            from services.infographic_content import (
+                build_fact_pack,
+                build_fact_safe_rich_content,
+            )
 
-        if success and result:
+            fact_pack = build_fact_pack(
+                title=product.title or '',
+                category=product.wb_category_name or product.category or '',
+                brand=product.brand or '',
+                characteristics=characteristics,
+            )
+            result = build_fact_safe_rich_content(fact_pack)
             product.ai_rich_content_json = json.dumps(result, ensure_ascii=False)
             product.updated_at = datetime.utcnow()
             db.session.commit()
-            return {'success': True, 'data': result}
-
-        return {'success': False, 'error': error or 'Ошибка AI'}
+            return {
+                'success': True,
+                'data': result,
+                'generator': 'fact_safe_v1',
+            }
+        except (TypeError, ValueError) as exc:
+            db.session.rollback()
+            return {'success': False, 'error': str(exc)}
 
     @staticmethod
     def ai_render_infographic(product_id: int, slide_index=None) -> dict:
-        """
-        Рендеринг инфографики из HTML-шаблонов через Playwright.
-
-        Returns:
-            dict: {success, results/image_base64, error}
-        """
-        import base64 as b64module
-        product = SupplierProduct.query.get(product_id)
-        if not product:
-            return {'success': False, 'error': 'Товар не найден'}
-
-        if not product.ai_rich_content_json:
-            return {'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}
-
-        try:
-            rich_content = json.loads(product.ai_rich_content_json)
-            slides = rich_content.get('slides', [])
-            design = rich_content.get('design_recommendations', {})
-
-            if not slides:
-                return {'success': False, 'error': 'Нет слайдов в Rich-контенте'}
-
-            # Получаем фотографии товара
-            product_photos = []
-            if product.photo_urls_json:
-                try:
-                    product_photos = json.loads(product.photo_urls_json) if isinstance(product.photo_urls_json, str) else product.photo_urls_json
-                except Exception:
-                    pass
-
-            from services.infographic_renderer import render_all_slides, render_slide_to_png, _fetch_photo_as_b64, _fetch_photo_from_cache
-
-            if slide_index is not None:
-                if slide_index >= len(slides):
-                    return {'success': False, 'error': f'Слайд {slide_index} не найден'}
-
-                slide = slides[slide_index]
-
-                # Сначала из кэша, потом по URL
-                photo_b64 = None
-                for idx in range(min(3, len(product_photos) if product_photos else 0)):
-                    photo_b64 = _fetch_photo_from_cache(product_id, idx)
-                    if photo_b64:
-                        break
-                if not photo_b64:
-                    for entry in product_photos[:3]:
-                        photo_b64 = _fetch_photo_as_b64(entry)
-                        if photo_b64:
-                            break
-
-                success, img_bytes, error = render_slide_to_png(slide, design, photo_b64, slide_index)
-                if not success:
-                    return {'success': False, 'error': error}
-
-                return {
-                    'success': True,
-                    'slide_index': slide_index,
-                    'slide_type': slide.get('type', 'unknown'),
-                    'image_base64': b64module.b64encode(img_bytes).decode('utf-8'),
-                    'image_size': len(img_bytes),
-                    'renderer': 'template'
-                }
-            else:
-                results = render_all_slides(rich_content=rich_content, product_photos=product_photos, supplier_product_id=product_id)
-                output = []
-                for r in results:
-                    item = {
-                        'slide_number': r.get('slide_number', 0),
-                        'slide_type': r.get('slide_type', 'unknown'),
-                        'success': r['success'],
-                        'error': r.get('error', '')
-                    }
-                    if r['success'] and r.get('image_bytes'):
-                        item['image_base64'] = b64module.b64encode(r['image_bytes']).decode('utf-8')
-                        item['image_size'] = r.get('image_size', len(r['image_bytes']))
-                    output.append(item)
-
-                successful = sum(1 for r in results if r['success'])
-                return {
-                    'success': True,
-                    'total_slides': len(slides),
-                    'successful': successful,
-                    'failed': len(slides) - successful,
-                    'results': output,
-                    'renderer': 'template'
-                }
-
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Infographic render error: {e}")
-            return {'success': False, 'error': str(e)}
+        """Compatibility wrapper over the production-safe hybrid renderer."""
+        result = SupplierService.ai_render_hybrid_infographic(product_id)
+        if slide_index is not None and result.get('results'):
+            selected = [
+                item for item in result['results']
+                if item.get('slide_number') == slide_index + 1
+            ]
+            result['results'] = selected
+            result['total_slides'] = len(selected)
+            result['successful'] = sum(1 for item in selected if item.get('success'))
+            result['failed'] = len(selected) - result['successful']
+        return result
 
     @staticmethod
     def ai_render_infographic_preview(product_id: int, slide_index: int = 0, preview_width: int = 720) -> dict:
-        """
-        Быстрый превью одного слайда инфографики.
+        """Return a resized preview produced by the safe hybrid path."""
+        import base64 as b64module
+        import io as io_module
 
-        Returns:
-            dict: {success, preview_base64, error}
-        """
-        product = SupplierProduct.query.get(product_id)
-        if not product:
-            return {'success': False, 'error': 'Товар не найден'}
-
-        if not product.ai_rich_content_json:
-            return {'success': False, 'error': 'Сначала сгенерируйте Rich-контент'}
-
+        result = SupplierService.ai_render_hybrid_infographic(product_id)
+        if not result.get('success'):
+            return result
+        matches = [
+            item for item in result.get('results', [])
+            if item.get('slide_number') == slide_index + 1
+        ]
+        if not matches or not matches[0].get('image_base64'):
+            error = matches[0].get('error') if matches else f'Слайд {slide_index} не найден'
+            return {'success': False, 'error': error}
         try:
-            rich_content = json.loads(product.ai_rich_content_json)
-            slides = rich_content.get('slides', [])
-            design = rich_content.get('design_recommendations', {})
+            from PIL import Image
 
-            if slide_index >= len(slides):
-                return {'success': False, 'error': f'Слайд {slide_index} не найден'}
-
-            slide = slides[slide_index]
-
-            product_photos = []
-            if product.photo_urls_json:
-                try:
-                    product_photos = json.loads(product.photo_urls_json) if isinstance(product.photo_urls_json, str) else product.photo_urls_json
-                except Exception:
-                    pass
-
-            from services.infographic_renderer import render_slide_preview_b64, _fetch_photo_as_b64, _fetch_photo_from_cache
-
-            photo_b64 = None
-            for idx in range(min(3, len(product_photos) if product_photos else 0)):
-                photo_b64 = _fetch_photo_from_cache(product_id, idx)
-                if photo_b64:
-                    break
-            if not photo_b64:
-                for entry in product_photos[:3]:
-                    photo_b64 = _fetch_photo_as_b64(entry)
-                    if photo_b64:
-                        break
-
-            success, preview_b64, error = render_slide_preview_b64(
-                slide, design, photo_b64, slide_index, preview_width=preview_width
-            )
-
-            if not success:
-                return {'success': False, 'error': error}
-
+            width = max(240, min(int(preview_width), 900))
+            image = Image.open(io_module.BytesIO(
+                b64module.b64decode(matches[0]['image_base64']))).convert('RGB')
+            height = round(image.height * width / image.width)
+            image = image.resize((width, height), Image.Resampling.LANCZOS)
+            output = io_module.BytesIO()
+            image.save(output, format='JPEG', quality=82)
             return {
                 'success': True,
                 'slide_index': slide_index,
-                'slide_type': slide.get('type', 'unknown'),
-                'preview_base64': preview_b64,
-                'renderer': 'template'
+                'slide_type': matches[0].get('slide_type', 'unknown'),
+                'preview_base64': b64module.b64encode(output.getvalue()).decode('ascii'),
+                'renderer': matches[0].get('renderer', 'hybrid'),
+                'publishable': matches[0].get('publishable', False),
+                'quality': matches[0].get('quality', {}),
             }
-
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Preview render error: {e}")
-            return {'success': False, 'error': str(e)}
+        except (TypeError, ValueError, OSError) as exc:
+            return {'success': False, 'error': str(exc)}
 
     @staticmethod
     def ai_render_hybrid_infographic(product_id: int) -> dict:
@@ -2351,11 +2260,10 @@ class SupplierService:
         if not supplier:
             return {'success': False, 'error': 'Поставщик не найден'}
 
-        # Получаем image service
+        # Получаем image service. Без ключа renderer использует безопасный
+        # детерминированный фон; foreground и текст всё равно не уходят в модель.
         from services.image_generation_service import create_image_service
         img_service = create_image_service(supplier)
-        if not img_service:
-            return {'success': False, 'error': 'Image generation не настроен (нужен API ключ в настройках поставщика)'}
 
         try:
             rich_content = json.loads(product.ai_rich_content_json)
@@ -2385,7 +2293,10 @@ class SupplierService:
                     'success': r['success'],
                     'error': r.get('error', ''),
                     'renderer': r.get('renderer', 'hybrid'),
-                    'has_ai_bg': r.get('has_ai_bg', False)
+                    'has_ai_bg': r.get('has_ai_bg', False),
+                    'publishable': r.get('publishable', False),
+                    'quality': r.get('quality', {}),
+                    'background_note': r.get('background_note', ''),
                 }
                 if r['success'] and r.get('image_bytes'):
                     item['image_base64'] = b64module.b64encode(r['image_bytes']).decode('utf-8')

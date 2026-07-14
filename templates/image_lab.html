@@ -1,0 +1,349 @@
+{% extends "base.html" %}
+{% block title %}Фотостудия · Seller Hub{% endblock %}
+{% block content %}
+<style>
+  .lab-grid { display:grid; grid-template-columns:minmax(290px,360px) minmax(0,1fr); gap:20px; align-items:start; }
+  .lab-sticky { position:sticky; top:20px; }
+  .lab-preview { aspect-ratio:3/4; border-radius:10px; overflow:hidden; background:var(--bg-hover); border:1px solid var(--border); position:relative; }
+  .lab-preview img { width:100%; height:100%; object-fit:contain; display:block; }
+  .lab-photo-strip { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+  .lab-photo-item select { width:100%; margin-top:4px; font-size:10px; border:1px solid var(--border); border-radius:6px; padding:3px; background:var(--bg-card); }
+  .lab-photo-thumb { aspect-ratio:1/1; border:2px solid var(--border); border-radius:8px; overflow:hidden; position:relative; background:var(--bg-hover); }
+  .lab-photo-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .lab-photo-thumb.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-light); }
+  .lab-photo-thumb.active::after { content:''; position:absolute; inset:3px; border:1px solid rgba(255,255,255,.9); border-radius:5px; pointer-events:none; }
+  .lab-photo-check { position:absolute; right:4px; top:4px; min-width:20px; height:20px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-size:11px; color:white; background:rgba(17,24,39,.72); }
+  .lab-mode { display:block; padding:9px; border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+  .lab-mode.active { border-color:var(--accent); background:var(--accent-light); }
+  .lab-results { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+  .lab-result { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  .lab-result-media { aspect-ratio:3/4; background:var(--bg-hover); position:relative; }
+  .lab-result-media img { width:100%; height:100%; object-fit:contain; }
+  .lab-status { position:absolute; left:8px; top:8px; z-index:2; padding:4px 9px; border-radius:999px; font-size:11px; background:rgba(10,10,10,.78); color:#fff; }
+  .lab-provider { font-size:12px; color:var(--text-secondary); }
+  .lab-target { display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+  .lab-target.disabled { opacity:.5; cursor:not-allowed; }
+  .lab-stars button { font-size:22px; line-height:1; color:var(--text-muted); }
+  .lab-stars button.active { color:var(--warn); }
+  .lab-tags { display:flex; flex-wrap:wrap; gap:6px; }
+  .lab-tag { font-size:11px; border:1px solid var(--border); border-radius:999px; padding:4px 8px; }
+  .lab-tag.active { background:var(--accent-light); border-color:var(--accent); color:var(--accent); }
+  .lab-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+  .lab-empty { min-height:260px; display:flex; align-items:center; justify-content:center; color:var(--text-muted); text-align:center; padding:30px; }
+  @media(max-width:1100px){.lab-results{grid-template-columns:repeat(2,minmax(0,1fr));}}
+  @media(max-width:800px){.lab-grid{grid-template-columns:1fr}.lab-sticky{position:static}.lab-results{grid-template-columns:1fr}.lab-kpis{grid-template-columns:repeat(2,1fr)}}
+</style>
+
+<div class="max-w-7xl mx-auto px-4 py-6" x-data="imageLab()" x-init="init()">
+  <div class="sh-page-header">
+    <div class="sh-page-header-content">
+      <div>
+        <h1 class="sh-page-title">Фотостудия</h1>
+        <p class="sh-page-subtitle">Фото-референсы, точный локальный композит, инфографика и честное сравнение движков.</p>
+      </div>
+      <div class="sh-page-actions">
+        <label class="flex items-center gap-2 text-sm text-white/80">
+          <input type="checkbox" x-model="blindMode" class="rounded">
+          Слепое сравнение
+        </label>
+        <button type="button" class="sh-btn sh-btn--secondary" @click="showAnalytics=!showAnalytics">
+          Аналитика
+        </button>
+        <a href="/image-lab/api/export.csv" class="sh-btn sh-btn--secondary">CSV</a>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="message" x-cloak class="mb-4 rounded-lg border px-4 py-3 text-sm"
+       :class="messageType==='error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'">
+    <span x-text="message"></span>
+  </div>
+
+  <section x-show="showAnalytics" x-cloak class="sh-card mb-5">
+    <div class="sh-card-header"><h2 class="sh-card-title">Сводка экспериментов</h2><span class="text-xs text-gray-500" x-text="`${analytics.total || 0} запусков`"></span></div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-sm">
+        <thead><tr class="text-left text-gray-500 border-b">
+          <th class="py-2 pr-4">Вариант</th><th class="py-2 pr-4">Запуски</th>
+          <th class="py-2 pr-4">Принято</th><th class="py-2 pr-4">Accepted yield</th><th class="py-2 pr-4">Оценка</th><th class="py-2 pr-4">Время</th><th class="py-2 pr-4">Стоимость</th><th class="py-2">₽/принято</th>
+        </tr></thead>
+        <tbody><template x-for="row in analytics.variants" :key="row.backend+row.model+row.generation_strategy"><tr class="border-b border-gray-100">
+          <td class="py-2 pr-4"><span x-text="row.backend"></span> · <span x-text="row.model"></span><span class="block text-[10px] text-gray-400" x-text="strategyLabel(row.generation_strategy)"></span></td>
+          <td class="py-2 pr-4" x-text="row.runs"></td><td class="py-2 pr-4" x-text="`${row.accepted} (${row.human_accepted} вручную)`"></td>
+          <td class="py-2 pr-4" x-text="`${row.accepted_yield_pct}%`"></td>
+          <td class="py-2 pr-4" x-text="row.avg_rating ? `${row.avg_rating} / 5 (${row.rated})` : '—'"></td>
+          <td class="py-2 pr-4" x-text="row.avg_latency_s ? `${row.avg_latency_s} с` : '—'"></td>
+          <td class="py-2 pr-4" x-text="`${row.cost_rub} ₽`"></td>
+          <td class="py-2" x-text="row.cost_per_accepted_rub ? `${row.cost_per_accepted_rub} ₽` : '—'"></td>
+        </tr></template></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="lab-grid">
+    <aside class="lab-sticky space-y-4">
+      <section class="sh-card">
+        <div class="sh-card-header"><h2 class="sh-card-title">1. Исходник</h2></div>
+        <label class="block text-xs text-gray-500 mb-1">Товар</label>
+        <select class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm" x-model.number="productId" @change="onProductChange()">
+          <option value="">Выберите товар</option>
+          <template x-for="product in products" :key="product.id">
+            <option :value="product.id" x-text="`${product.id} · ${product.title}`"></option>
+          </template>
+        </select>
+        <div class="grid grid-cols-2 gap-2 mt-3">
+          <label class="lab-mode" :class="{'active':generationMode==='single'}">
+            <input type="radio" value="single" x-model="generationMode" @change="onModeChange()" class="mr-1"> <strong class="text-xs">Одно</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">1 выбранный ракурс</span>
+          </label>
+          <label class="lab-mode" :class="{'active':generationMode==='each'}">
+            <input type="radio" value="each" x-model="generationMode" @change="onModeChange()" class="mr-1"> <strong class="text-xs">Каждое</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">Отдельный результат</span>
+          </label>
+          <label class="lab-mode" :class="{'active':generationMode==='collage'}">
+            <input type="radio" value="collage" x-model="generationMode" @change="onModeChange()" class="mr-1"> <strong class="text-xs">Вместе</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">Один общий макет</span>
+          </label>
+          <label class="lab-mode" :class="{'active':generationMode==='reference_set'}">
+            <input type="radio" value="reference_set" x-model="generationMode" @change="onModeChange()" class="mr-1"> <strong class="text-xs">Учесть все</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">1 герой + референсы</span>
+          </label>
+          <label class="lab-mode col-span-2" :class="{'active':generationMode==='angles'}">
+            <input type="radio" value="angles" x-model="generationMode" @change="onModeChange()" class="mr-1"> <strong class="text-xs">Новые ракурсы</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">1–10 фото одного SKU → отдельные виды товара</span>
+          </label>
+        </div>
+        <div x-show="generationMode==='angles'" x-cloak class="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
+          <strong class="block text-xs text-amber-900">Какие виды создать</strong>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <template x-for="view in angleViews" :key="view.id">
+              <label class="flex items-center gap-2 text-xs text-amber-950">
+                <input type="checkbox" :value="view.id" x-model="requestedViews" class="rounded">
+                <span x-text="view.label"></span>
+              </label>
+            </template>
+          </div>
+          <p class="mt-2 text-[11px] text-amber-800">Это синтез скрытой геометрии, а не сохранение исходных пикселей. Каждый результат всегда REVIEW и не допускается к автопубликации.</p>
+        </div>
+        <div class="lab-preview mt-3">
+          <template x-if="productId && currentPhotos.length">
+            <img :src="originalUrl(productId, activePhotoIndex, true)" alt="Исходное фото"
+                 @load="sourceLoadFailed=false" @error="sourceLoadFailed=true">
+          </template>
+          <div x-show="!productId" class="lab-empty">Выберите карточку с исходным фото</div>
+          <div x-show="productId && sourceLoadFailed" class="lab-empty absolute inset-0 bg-white/90">
+            <div><strong class="block text-red-700">Фото не загрузилось</strong>
+              <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm mt-2" @click="retrySource()">Повторить</button>
+            </div>
+          </div>
+        </div>
+        <div x-show="currentPhotos.length" class="mt-3">
+          <div class="flex items-center justify-between mb-2 text-xs">
+            <span><strong x-text="selectedPhotoIndices.length"></strong> из <span x-text="currentPhotos.length"></span> выбрано</span>
+            <span class="flex gap-2">
+              <button type="button" class="text-orange-600" @click="selectAllPhotos()">Все</button>
+              <button type="button" class="text-gray-500" @click="selectOnlyActive()">Только текущее</button>
+            </span>
+          </div>
+          <div class="lab-photo-strip">
+            <template x-for="photo in currentPhotos" :key="`${productId}:${photo.index}`">
+              <div class="lab-photo-item">
+                <button type="button" class="lab-photo-thumb w-full"
+                        :class="{'selected':isPhotoSelected(photo.index),'active':activePhotoIndex===photo.index}"
+                        @click="togglePhoto(photo.index)" :title="photo.label">
+                  <img :src="originalUrl(productId, photo.index, true)" :alt="photo.label" loading="lazy">
+                  <span class="lab-photo-check" x-text="activePhotoIndex===photo.index ? '★' : (isPhotoSelected(photo.index) ? '✓' : (photo.index + 1))"></span>
+                </button>
+                <select x-show="isPhotoSelected(photo.index)" x-model="photoRoles[photo.index]" :aria-label="`Роль ${photo.label}`">
+                  <option value="angle">Ракурс</option>
+                  <option value="packaging">Упаковка</option>
+                  <option value="detail">Деталь</option>
+                </select>
+              </div>
+            </template>
+          </div>
+        </div>
+        <p class="mt-2 text-xs text-gray-500">★ — главное фото. В «Учесть все» остальные ракурсы, упаковка и детали помогают модели понять товар, но не должны появляться отдельными объектами.</p>
+        <div x-show="generationMode!=='angles'" class="grid grid-cols-2 gap-2 mt-3">
+          <label class="lab-mode" :class="{'active':generationStrategy==='reference_guided'}">
+            <input type="radio" value="reference_guided" x-model="generationStrategy" @change="onStrategyChange()" class="mr-1"> <strong class="text-xs">С фото</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">Модель видит товар</span>
+          </label>
+          <label class="lab-mode" :class="{'active':generationStrategy==='background_only'}">
+            <input type="radio" value="background_only" x-model="generationStrategy" @change="onStrategyChange()" class="mr-1"> <strong class="text-xs">Только фон</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">Контрольный режим</span>
+          </label>
+        </div>
+        <div x-show="generationMode==='angles'" x-cloak class="lab-mode active mt-3">
+          <strong class="text-xs">AI-синтез ракурса · research-only</strong>
+          <span class="block text-[10px] text-gray-500 mt-1">Главное фото идёт первым, остальные — evidence с выбранными ролями</span>
+        </div>
+        <label class="flex items-start gap-2 mt-3 text-xs">
+          <input type="checkbox" x-model="includeProductContext" class="mt-0.5 rounded">
+          <span>Передать визуальные характеристики из наиболее полного источника БД</span>
+        </label>
+        <details x-show="currentProduct?.visual_context" class="mt-2 text-xs text-gray-500">
+          <summary class="cursor-pointer">Что попадёт в контекст</summary>
+          <pre class="mt-2 whitespace-pre-wrap text-[10px]" x-text="JSON.stringify(currentProduct?.visual_context || {}, null, 2)"></pre>
+        </details>
+        <p x-show="generationMode!=='angles'" class="mt-2 text-xs text-gray-500">После ответа модели исходный RGB товара повторно накладывается локально. Референсный результат всегда требует проверки на лишние объекты.</p>
+        <p x-show="generationMode==='angles'" x-cloak class="mt-2 text-xs text-amber-700">В новых ракурсах модель перерисовывает весь товар. Больше фото с ролями «Ракурс» снижает mismatch; упаковка и детали не считаются геометрией товара.</p>
+      </section>
+
+      <section class="sh-card">
+        <div class="sh-card-header"><h2 class="sh-card-title">2. Сцена</h2></div>
+        <div class="grid grid-cols-2 gap-2">
+          <template x-for="scene in capabilities.scenes" :key="scene.id">
+            <button type="button" class="rounded-lg border px-3 py-2 text-left text-sm"
+                    :class="sceneKey===scene.id ? 'border-orange-500 bg-orange-50' : 'border-gray-300'"
+                    @click="sceneKey=scene.id" x-text="scene.label"></button>
+          </template>
+        </div>
+        <label class="block text-xs text-gray-500 mt-3 mb-1">Своя режиссура фона</label>
+        <textarea x-model="customScene" maxlength="800" rows="4"
+                  class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Например: матовый светлый камень, мягкий боковой свет, тёплая тень, свободный центр"></textarea>
+        <div class="flex justify-between text-xs text-gray-400"><span>Только фон — без товара, людей и текста</span><span x-text="`${customScene.length}/800`"></span></div>
+        <label class="block text-xs text-gray-500 mt-3 mb-1">Добавочный prompt</label>
+        <textarea x-model="additionalPrompt" maxlength="600" rows="3"
+                  class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                  placeholder="Например: товар чуть ниже центра, больше воздуха сверху, мягкое отражение на поверхности"></textarea>
+        <div class="text-right text-xs text-gray-400" x-text="`${additionalPrompt.length}/600`"></div>
+      </section>
+
+      <section class="sh-card">
+        <div class="sh-card-header"><h2 class="sh-card-title">3. Текст и логотип</h2></div>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" x-model="useOverlay" class="rounded"> Точный текст поверх фото</label>
+        <div x-show="useOverlay" class="mt-3 space-y-2">
+          <input x-model="overlayTitle" maxlength="120" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="Заголовок">
+          <textarea x-model="overlaySubtitle" maxlength="240" rows="2" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="Характеристика или подзаголовок"></textarea>
+          <button type="button" class="text-xs text-orange-600" @click="fillOverlayFromProduct()">Подставить из карточки</button>
+        </div>
+        <div class="mt-4 border-t border-gray-200 pt-3">
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" x-model="useWatermark" class="rounded"> PNG-логотип на все результаты запуска</label>
+          <input type="file" accept="image/png" class="mt-2 block w-full text-xs" @change="uploadWatermark($event)">
+          <div x-show="watermark.id" class="mt-2 flex items-center gap-3">
+            <img :src="watermark.url" alt="Логотип" class="h-14 w-20 object-contain rounded border bg-gray-50">
+            <span class="text-xs text-gray-500" x-text="`${watermark.width}×${watermark.height}`"></span>
+          </div>
+          <div x-show="useWatermark" class="grid grid-cols-2 gap-2 mt-2">
+            <select x-model="watermarkPosition" class="rounded-lg border border-gray-300 px-2 py-2 text-xs">
+              <option value="top_left">Сверху слева</option><option value="top_right">Сверху справа</option>
+              <option value="bottom_left">Снизу слева</option><option value="bottom_right">Снизу справа</option><option value="center">По центру</option>
+            </select>
+            <label class="text-[10px] text-gray-500">Размер <span x-text="`${watermarkScale}%`"></span><input type="range" min="5" max="40" x-model.number="watermarkScale" class="w-full"></label>
+            <label class="text-[10px] text-gray-500 col-span-2">Непрозрачность <span x-text="`${watermarkOpacity}%`"></span><input type="range" min="20" max="100" x-model.number="watermarkOpacity" class="w-full"></label>
+          </div>
+        </div>
+      </section>
+
+      <section class="sh-card">
+        <div class="sh-card-header"><h2 class="sh-card-title">4. Движки</h2><span class="text-xs text-gray-500" x-text="`${selectedTargetKeys.length}/3`"></span></div>
+        <div class="space-y-2">
+          <template x-for="variant in variants" :key="variant.key">
+            <label class="lab-target" :class="{'disabled':!variantAvailable(variant)}">
+              <input type="checkbox" :disabled="!variantAvailable(variant)"
+                     :checked="selectedTargetKeys.includes(variant.key)"
+                     @change="toggleTarget(variant)">
+              <span class="min-w-0"><strong class="block text-sm" x-text="variant.label"></strong>
+                <span class="lab-provider" x-text="`${variant.model} · ~${variant.cost_rub} ₽`"></span>
+                <span x-show="!variant.enabled" class="block text-xs text-red-600">Не настроен</span>
+                <span x-show="variant.enabled && ['reference_guided','angle_synthesis'].includes(generationStrategy) && !variant.supports_reference" class="block text-xs text-amber-600">Не принимает фото-референсы</span>
+              </span>
+            </label>
+          </template>
+        </div>
+        <button type="button" class="sh-btn sh-btn--primary w-full mt-4 justify-center"
+                :disabled="submitting || !canGenerate" @click="generate()">
+          <span x-show="!submitting" x-text="generateButtonLabel"></span>
+          <span x-show="submitting">Ставлю задачи…</span>
+        </button>
+        <p class="text-xs text-gray-500 mt-2"><span x-text="`${plannedJobs} задач · примерно ${plannedCost.toFixed(2)} ₽`"></span>. Очередь, бюджет и параллелизм проверяет сервер.</p>
+      </section>
+    </aside>
+
+    <main>
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div><h2 class="text-xl font-semibold">Результаты</h2><p class="text-sm text-gray-500">В слепом режиме модель откроется после оценки.</p></div>
+        <div class="flex gap-2">
+          <select x-model="qualityFilter" class="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
+            <option value="all">Все quality</option><option value="auto_pass">Auto pass</option>
+            <option value="review_required">Review</option><option value="rejected">Rejected</option>
+          </select>
+          <select x-model="productFilter" class="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
+            <option value="all">Все товары</option><option value="current">Текущий товар</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="lab-results" x-show="filteredExperiments.length">
+        <template x-for="(item,index) in filteredExperiments" :key="item.id">
+          <article class="lab-result">
+            <div class="lab-result-media">
+              <span class="lab-status" x-text="statusLabel(item)"></span>
+              <template x-if="item.has_final"><img :src="artifactUrl(item.id, viewMode[item.id] || 'final')" :alt="`Результат ${item.id}`"></template>
+              <div x-show="!item.has_final" class="lab-empty">
+                <div x-show="isActive(item)">
+                  <span class="block">Генерация выполняется…</span>
+                  <button x-show="canCancel(item)" type="button" class="sh-btn sh-btn--secondary sh-btn--sm mt-3" @click="cancel(item)">Отменить</button>
+                </div>
+                <span x-show="!isActive(item)" x-text="item.error || 'Нет изображения'"></span>
+              </div>
+            </div>
+            <div class="p-3">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <strong class="block text-sm" x-text="blindName(item,index)"></strong>
+                  <span class="lab-provider" x-show="!blindMode || item.rating" x-text="`${item.backend} · ${item.model}`"></span>
+                  <span class="block text-[11px] text-gray-500" x-text="sourceLabel(item)"></span>
+                </div>
+                <span class="sh-badge sh-badge--sm" :class="qualityClass(item)" x-text="qualityLabel(item)"></span>
+              </div>
+              <div class="grid grid-cols-3 gap-2 mt-3 text-xs text-gray-500">
+                <div><span class="block">Время</span><strong class="text-gray-900" x-text="item.latency_s ? `${item.latency_s}с` : '—'"></strong></div>
+                <div><span class="block">Стоимость</span><strong class="text-gray-900" x-text="`${item.estimated_cost_rub}₽`"></strong></div>
+                <div><span class="block">ID</span><strong class="text-gray-900" x-text="item.id"></strong></div>
+              </div>
+              <div x-show="item.has_final" class="flex gap-2 mt-3">
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='final'">Финал</button>
+                <button x-show="item.has_reference" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='reference'">Вход модели</button>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='background'" x-text="item.generation_strategy==='angle_synthesis' ? 'AI-ракурс' : (item.generation_strategy==='reference_guided' ? 'AI-черновик' : 'Фон')"></button>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='source'">Оригинал</button>
+              </div>
+              <div x-show="item.status==='completed'" class="mt-4 border-t border-gray-200 pt-3">
+                <div class="lab-stars flex gap-1" aria-label="Оценка">
+                  <template x-for="star in [1,2,3,4,5]"><button type="button" :class="{'active':star <= draft(item).rating}" @click="draft(item).rating=star">★</button></template>
+                </div>
+                <div class="lab-tags mt-2">
+                  <template x-for="tag in ratingTags" :key="tag"><button type="button" class="lab-tag" :class="{'active':draft(item).tags.includes(tag)}" @click="toggleRatingTag(item,tag)" x-text="tagLabel(tag)"></button></template>
+                </div>
+                <textarea rows="2" maxlength="500" class="w-full rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs mt-2" x-model="draft(item).comment" placeholder="Что понравилось или сломалось?"></textarea>
+                <div class="flex gap-2 mt-2">
+                  <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" :disabled="!draft(item).rating" @click="saveRating(item)">Сохранить оценку</button>
+                  <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="repeat(item)">Повторить</button>
+                </div>
+              </div>
+              <details class="mt-3 text-xs"><summary class="cursor-pointer text-gray-500">Prompt и проверки</summary>
+                <p class="mt-2 break-words text-gray-600" x-text="item.prompt"></p>
+                <pre class="mt-2 whitespace-pre-wrap text-[10px] text-gray-500" x-text="JSON.stringify(item.quality || {}, null, 2)"></pre>
+              </details>
+            </div>
+          </article>
+        </template>
+      </div>
+      <div x-show="!filteredExperiments.length" class="sh-card lab-empty">Запустите первый сравнительный прогон — результаты появятся здесь автоматически.</div>
+    </main>
+  </div>
+</div>
+
+<script>
+window.IMAGE_LAB_BOOTSTRAP = {
+  products: {{ lab_products|tojson }},
+  capabilities: {{ lab_capabilities|tojson }},
+  experiments: {{ lab_experiments|tojson }},
+  analytics: {{ lab_analytics|tojson }},
+  ratingTags: {{ rating_tags|tojson }}
+};
+</script>
+<script src="{{ url_for('static', filename='image-lab.js', v='20260714-angles1') }}"></script>
+{% endblock %}

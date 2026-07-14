@@ -22,6 +22,7 @@ SYSTEM_CONTEXT_TOOL_ALLOWLIST = (
     'get_prohibited_words',
     'check_text_prohibited',
     'get_pricing_settings',
+    'search_knowledge',
 )
 
 
@@ -147,6 +148,26 @@ class ToolRegistry:
 def create_platform_tools(platform_client) -> ToolRegistry:
     """Создаёт набор инструментов для работы с платформой."""
     registry = ToolRegistry()
+
+    registry.register(
+        name='search_knowledge',
+        description=(
+            'Найти проверенные неструктурированные правила и инструкции в '
+            'курируемой базе знаний. Возвращает максимум 8 фрагментов с версиями '
+            'и обязательными citation_id/source_uri. Не использовать вместо '
+            'typed SQL для товаров, цен, остатков, категорий и live-статусов.'
+        ),
+        parameters={
+            'properties': {
+                'seller_id': {'type': 'integer', 'description': 'ID текущего продавца'},
+                'query': {'type': 'string', 'description': 'Узкий вопрос, 2..500 символов'},
+                'limit': {'type': 'integer', 'description': 'Число фрагментов, default 6, max 8'},
+            },
+            'required': ['seller_id', 'query'],
+        },
+        handler=lambda seller_id, query, limit=6:
+            platform_client.search_knowledge(int(seller_id), query, int(limit), 6000),
+    )
 
     # ── Товары ─────────────────────────────────────────────────
 

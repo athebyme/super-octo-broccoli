@@ -6241,6 +6241,10 @@ register_supplier_updates_routes(app)
 from routes.suppliers import register_supplier_routes
 register_supplier_routes(app)
 
+# ============= ЛАБОРАТОРИЯ ГЕНЕРАЦИИ ИЗОБРАЖЕНИЙ =============
+from routes.image_lab import register_image_lab_routes
+register_image_lab_routes(app)
+
 # ============= РОУТЫ ФОТОГРАФИЙ ПОСТАВЩИКОВ =============
 from routes.photos import register_photo_routes, register_content_photo_routes
 register_photo_routes(app)

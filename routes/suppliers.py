@@ -728,6 +728,9 @@ def register_supplier_routes(app):
         product_id = data.get('product_id') or request.form.get('product_id', type=int)
         if not product_id:
             return jsonify({'success': False, 'error': 'Не указан товар'}), 400
+        if not SupplierProduct.query.filter_by(
+                id=product_id, supplier_id=supplier_id).first():
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         result = SupplierService.ai_generate_rich_content(product_id)
         log_admin_action(
@@ -744,15 +747,25 @@ def register_supplier_routes(app):
     @login_required
     @admin_required
     def admin_supplier_render_infographic(supplier_id):
-        """Рендеринг инфографики из шаблонов (бесплатно, Playwright)"""
+        """Безопасный foreground-композит + детерминированная типографика."""
         data = request.get_json() or {}
         product_id = data.get('product_id')
         slide_index = data.get('slide_index')  # None = все слайды
 
         if not product_id:
             return jsonify({'success': False, 'error': 'product_id required'}), 400
+        if not SupplierProduct.query.filter_by(
+                id=product_id, supplier_id=supplier_id).first():
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
-        result = SupplierService.ai_render_infographic(product_id, slide_index=slide_index)
+        result = SupplierService.ai_render_hybrid_infographic(product_id)
+        if slide_index is not None and result.get('results'):
+            selected = [item for item in result['results']
+                        if item.get('slide_number') == slide_index + 1]
+            result['results'] = selected
+            result['total_slides'] = len(selected)
+            result['successful'] = sum(1 for item in selected if item.get('success'))
+            result['failed'] = len(selected) - result['successful']
         return jsonify(result)
 
     @app.route('/admin/suppliers/<int:supplier_id>/ai/render-infographic-preview', methods=['POST'])
@@ -766,6 +779,9 @@ def register_supplier_routes(app):
 
         if not product_id:
             return jsonify({'success': False, 'error': 'product_id required'}), 400
+        if not SupplierProduct.query.filter_by(
+                id=product_id, supplier_id=supplier_id).first():
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         result = SupplierService.ai_render_infographic_preview(
             product_id, slide_index=slide_index,
@@ -783,6 +799,9 @@ def register_supplier_routes(app):
 
         if not product_id:
             return jsonify({'success': False, 'error': 'product_id required'}), 400
+        if not SupplierProduct.query.filter_by(
+                id=product_id, supplier_id=supplier_id).first():
+            return jsonify({'success': False, 'error': 'Товар не найден'}), 404
 
         result = SupplierService.ai_render_hybrid_infographic(product_id)
         return jsonify(result)
@@ -2811,16 +2830,16 @@ def register_supplier_routes(app):
         if not sp:
             return jsonify({'success': False, 'error': 'Не найден товар поставщика'}), 400
 
-        supplier = Supplier.query.get(sp.supplier_id)
-        if not supplier or not supplier.ai_enabled:
-            return jsonify({'success': False, 'error': 'AI не включен у поставщика'}), 400
-
         # Если у SupplierProduct уже есть rich content — копируем
         if sp.ai_rich_content_json:
-            imp.ai_rich_content = sp.ai_rich_content_json
-            db.session.commit()
             import json as json_mod
-            return jsonify({'success': True, 'data': json_mod.loads(sp.ai_rich_content_json), 'source': 'supplier'})
+            from services.infographic_content import validate_fact_safe_rich_content
+            cached = json_mod.loads(sp.ai_rich_content_json)
+            valid, _errors = validate_fact_safe_rich_content(cached)
+            if valid:
+                imp.ai_rich_content = sp.ai_rich_content_json
+                db.session.commit()
+                return jsonify({'success': True, 'data': cached, 'source': 'supplier'})
 
         # Генерируем новый
         result = SupplierService.ai_generate_rich_content(sp.id)
@@ -2836,7 +2855,7 @@ def register_supplier_routes(app):
     @login_required
     @seller_required
     def seller_render_infographic(product_id):
-        """Рендеринг инфографики (бесплатно, шаблоны + Playwright)."""
+        """Production-safe render; AI background may fall back to a safe template."""
         seller = current_user.seller
         imp = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
@@ -2854,7 +2873,14 @@ def register_supplier_routes(app):
         data = request.get_json() or {}
         slide_index = data.get('slide_index')
 
-        result = SupplierService.ai_render_infographic(sp.id, slide_index=slide_index)
+        result = SupplierService.ai_render_hybrid_infographic(sp.id)
+        if slide_index is not None and result.get('results'):
+            selected = [item for item in result['results']
+                        if item.get('slide_number') == slide_index + 1]
+            result['results'] = selected
+            result['total_slides'] = len(selected)
+            result['successful'] = sum(1 for item in selected if item.get('success'))
+            result['failed'] = len(selected) - result['successful']
         return jsonify(result)
 
     @app.route('/my-products/<int:product_id>/render-hybrid', methods=['POST'])

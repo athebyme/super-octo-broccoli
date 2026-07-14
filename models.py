@@ -1216,6 +1216,65 @@ class ImportedProduct(db.Model):
         }
 
 
+class ImageGenerationExperiment(db.Model):
+    """Seller-scoped image lab run with reproducible inputs and human rating."""
+    __tablename__ = 'image_generation_experiments'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False, index=True)
+    imported_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('imported_products.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    backend = db.Column(db.String(32), nullable=False)
+    model = db.Column(db.String(120), nullable=False)
+    scene_key = db.Column(db.String(32), nullable=True)
+    generation_strategy = db.Column(
+        db.String(32), nullable=False, default='reference_guided')
+    composition_mode = db.Column(db.String(32), nullable=False, default='single')
+    source_photo_indices_json = db.Column(db.Text, nullable=False, default='[0]')
+    source_photo_roles_json = db.Column(db.Text, nullable=False, default='{}')
+    primary_photo_index = db.Column(db.Integer, nullable=True)
+    requested_view = db.Column(db.String(32), nullable=True)
+    prompt = db.Column(db.Text, nullable=False)
+    prompt_sha256 = db.Column(db.String(64), nullable=False, index=True)
+    status = db.Column(db.String(32), nullable=False, default='queued', index=True)
+    remote_job_id = db.Column(db.String(120), nullable=True, index=True)
+    error = db.Column(db.Text, nullable=True)
+    latency_s = db.Column(db.Float, nullable=True)
+    estimated_cost_rub = db.Column(db.Float, nullable=False, default=0.0)
+    source_path = db.Column(db.String(500), nullable=True)
+    reference_path = db.Column(db.String(500), nullable=True)
+    background_path = db.Column(db.String(500), nullable=True)
+    final_path = db.Column(db.String(500), nullable=True)
+    watermark_path = db.Column(db.String(500), nullable=True)
+    watermark_json = db.Column(db.Text, nullable=True)
+    overlay_json = db.Column(db.Text, nullable=True)
+    quality_json = db.Column(db.Text, nullable=True)
+    composite_metadata_json = db.Column(db.Text, nullable=True)
+    rating = db.Column(db.Integer, nullable=True)
+    rating_tags_json = db.Column(db.Text, nullable=True)
+    rating_comment = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    rated_at = db.Column(db.DateTime, nullable=True)
+
+    seller = db.relationship(
+        'Seller', backref=db.backref(
+            'image_generation_experiments', lazy='dynamic', cascade='all, delete-orphan'))
+    imported_product = db.relationship(
+        'ImportedProduct', backref=db.backref('image_generation_experiments', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_image_exp_seller_created', 'seller_id', 'created_at'),
+        db.Index('idx_image_exp_seller_status', 'seller_id', 'status'),
+    )
+
+
 class PricingSettings(db.Model):
     """Настройки формулы ценообразования для продавца"""
     __tablename__ = 'pricing_settings'
@@ -3969,6 +4028,85 @@ class ProhibitedBrand(db.Model):
 
     def __repr__(self):
         return f'<ProhibitedBrand {self.brand_name} [{self.marketplace}]>'
+
+
+# ============= КУРИРУЕМАЯ БАЗА ЗНАНИЙ АГЕНТА =============
+
+class AgentKnowledgeDocument(db.Model):
+    """Versioned, curated source document available to the unified agent."""
+    __tablename__ = 'agent_knowledge_documents'
+
+    id = db.Column(db.Integer, primary_key=True)
+    # NULL means a platform-wide document. Non-NULL documents are visible only
+    # to tasks owned by that seller.
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=True, index=True)
+    scope_key = db.Column(db.String(80), nullable=False)
+    source_key = db.Column(db.String(160), nullable=False)
+    source_type = db.Column(db.String(40), nullable=False)
+    source_uri = db.Column(db.String(1000), nullable=False)
+    title = db.Column(db.String(300), nullable=False)
+    version = db.Column(db.String(80), nullable=False)
+    checksum = db.Column(db.String(64), nullable=False)
+    language = db.Column(db.String(12), nullable=False, default='ru')
+    status = db.Column(db.String(20), nullable=False, default='active')
+    valid_until = db.Column(db.DateTime, nullable=True)
+    metadata_json = db.Column(db.Text, nullable=False, default='{}')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False,
+    )
+
+    chunks = db.relationship(
+        'AgentKnowledgeChunk', backref='document', lazy='dynamic',
+        cascade='all, delete-orphan', order_by='AgentKnowledgeChunk.ordinal',
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'scope_key', 'source_key', 'version',
+            name='uq_agent_knowledge_source_version',
+        ),
+        db.Index(
+            'idx_agent_knowledge_scope_status', 'seller_id', 'status', 'updated_at',
+        ),
+        db.Index('idx_agent_knowledge_valid_until', 'valid_until'),
+        db.Index(
+            'idx_agent_knowledge_source_active', 'scope_key', 'source_key', 'status',
+        ),
+    )
+
+    def get_metadata(self) -> dict:
+        try:
+            value = json.loads(self.metadata_json or '{}')
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
+
+
+class AgentKnowledgeChunk(db.Model):
+    """Bounded retrieval unit indexed by SQLite FTS5."""
+    __tablename__ = 'agent_knowledge_chunks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(
+        db.Integer, db.ForeignKey('agent_knowledge_documents.id'),
+        nullable=False, index=True,
+    )
+    ordinal = db.Column(db.Integer, nullable=False)
+    heading = db.Column(db.String(300))
+    content = db.Column(db.Text, nullable=False)
+    # Unicode-casefolded text supports deterministic prefix fallback and typo
+    # reranking without copying seller truth into an embedding store.
+    search_text = db.Column(db.Text, nullable=False)
+    token_estimate = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'document_id', 'ordinal', name='uq_agent_knowledge_chunk_ordinal',
+        ),
+        db.Index('idx_agent_knowledge_chunk_document', 'document_id', 'ordinal'),
+    )
 
 
 # ============= АГЕНТЫ =============

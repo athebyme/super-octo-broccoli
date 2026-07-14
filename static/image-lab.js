@@ -1,0 +1,324 @@
+/* Seller-scoped image lab UI. All HTML rendering uses Alpine text bindings. */
+function imageLab() {
+  const boot = window.IMAGE_LAB_BOOTSTRAP || {};
+  const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
+  return {
+    products: boot.products || [],
+    capabilities: boot.capabilities || {backends: [], scenes: []},
+    experiments: boot.experiments || [],
+    analytics: boot.analytics || {total: 0, variants: []},
+    ratingTags: boot.ratingTags || [],
+    variants: [], selectedTargetKeys: [], productId: '', sceneKey: 'luxury', customScene: '',
+    additionalPrompt: '', generationMode: 'single', generationStrategy: 'reference_guided',
+    angleViews: boot.capabilities?.angle_views || [],
+    requestedViews: ['front', 'back', 'three_quarter_right'],
+    selectedPhotoIndices: [], activePhotoIndex: 0, photoRoles: {},
+    includeProductContext: true, useOverlay: false, overlayTitle: '', overlaySubtitle: '',
+    useWatermark: false, watermark: {}, watermarkPosition: 'bottom_right',
+    watermarkScale: 18, watermarkOpacity: 80,
+    sourceLoadFailed: false, sourceRevision: 0,
+    blindMode: true, showAnalytics: false, qualityFilter: 'all', productFilter: 'all',
+    submitting: false, message: '', messageType: 'success', viewMode: {}, ratingDrafts: {}, timer: null,
+
+    init() {
+      this.variants = this.capabilities.backends.flatMap(backend =>
+        backend.models.map(model => ({
+          key: `${backend.id}:${model.id}`, backend: backend.id, model: model.id,
+          label: backend.label, enabled: backend.enabled, cost_rub: model.cost_rub,
+          supports_reference: Boolean(model.supports_reference)
+        }))
+      );
+      const enabled = this.variants.filter(item => this.variantAvailable(item)).slice(0, 2);
+      this.selectedTargetKeys = enabled.map(item => item.key);
+      const requestedProduct = Number(new URLSearchParams(window.location.search).get('product_id'));
+      const requestedExists = this.products.some(item => Number(item.id) === requestedProduct);
+      if (requestedExists) this.productId = requestedProduct;
+      else if (this.products.length) this.productId = this.products[0].id;
+      this.onProductChange();
+      this.experiments = this.shuffle(this.experiments);
+      this.timer = window.setInterval(() => this.pollActive(), 2200);
+    },
+    get currentProduct() {
+      return this.products.find(item => Number(item.id) === Number(this.productId)) || null;
+    },
+    get currentPhotos() { return this.currentProduct?.photos || []; },
+    get photoSelectionValid() {
+      if (this.generationMode === 'single') return this.selectedPhotoIndices.length === 1;
+      if (['collage','reference_set'].includes(this.generationMode)) return this.selectedPhotoIndices.length >= 2;
+      return this.selectedPhotoIndices.length >= 1;
+    },
+    get canGenerate() {
+      return Boolean(this.productId && this.selectedTargetKeys.length && this.photoSelectionValid &&
+        (this.generationMode !== 'angles' || this.requestedViews.length) &&
+        (!this.useWatermark || this.watermark.id) && (!this.useOverlay || this.overlayTitle.trim()));
+    },
+    get plannedJobs() {
+      const multiplier = this.generationMode === 'each'
+        ? this.selectedPhotoIndices.length
+        : (this.generationMode === 'angles' ? this.requestedViews.length : 1);
+      return this.selectedTargetKeys.length * multiplier;
+    },
+    get plannedCost() {
+      const base = this.selectedTargetKeys.reduce((sum, key) => {
+        const item = this.variants.find(value => value.key === key);
+        return sum + Number(item?.cost_rub || 0);
+      }, 0);
+      const multiplier = this.generationMode === 'each'
+        ? this.selectedPhotoIndices.length
+        : (this.generationMode === 'angles' ? this.requestedViews.length : 1);
+      return base * multiplier;
+    },
+    get generateButtonLabel() {
+      if (!this.photoSelectionValid && ['collage','reference_set'].includes(this.generationMode)) return 'Выберите минимум 2 фото';
+      if (this.useWatermark && !this.watermark.id) return 'Загрузите PNG-логотип';
+      if (this.useOverlay && !this.overlayTitle.trim()) return 'Введите заголовок';
+      if (this.generationMode === 'angles' && !this.requestedViews.length) return 'Выберите целевые ракурсы';
+      if (!this.photoSelectionValid) return 'Выберите фото';
+      return this.plannedJobs > 1 ? `Запустить ${this.plannedJobs} задач` : 'Сгенерировать';
+    },
+    get filteredExperiments() {
+      return this.experiments.filter(item => {
+        const quality = item.quality?.status || '';
+        if (this.qualityFilter !== 'all' && quality !== this.qualityFilter) return false;
+        if (this.productFilter === 'current' && Number(item.product_id) !== Number(this.productId)) return false;
+        return true;
+      });
+    },
+    shuffle(values) { return [...values].sort(() => Math.random() - 0.5); },
+    variantAvailable(variant) {
+      return Boolean(variant.enabled &&
+        (!['reference_guided','angle_synthesis'].includes(this.generationStrategy) || variant.supports_reference));
+    },
+    toggleTarget(variant) {
+      if (!this.variantAvailable(variant)) return;
+      const index = this.selectedTargetKeys.indexOf(variant.key);
+      if (index >= 0) this.selectedTargetKeys.splice(index, 1);
+      else if (this.selectedTargetKeys.length < 3) this.selectedTargetKeys.push(variant.key);
+      else this.showMessage('Можно сравнить максимум 3 варианта за раз', 'error');
+    },
+    targets() {
+      return this.selectedTargetKeys.map(key => this.variants.find(item => item.key === key))
+        .filter(Boolean).map(item => ({backend: item.backend, model: item.model}));
+    },
+    onProductChange() {
+      const first = Number(this.currentPhotos[0]?.index || 0);
+      this.activePhotoIndex = first;
+      this.photoRoles = Object.fromEntries(
+        this.currentPhotos.map(item => [Number(item.index), 'angle'])
+      );
+      this.sourceLoadFailed = false;
+      this.sourceRevision += 1;
+      if (this.generationMode === 'single') this.selectedPhotoIndices = this.currentPhotos.length ? [first] : [];
+      else this.selectedPhotoIndices = this.currentPhotos.map(item => Number(item.index));
+      this.fillOverlayFromProduct();
+    },
+    onModeChange() {
+      if (this.generationMode === 'angles') this.generationStrategy = 'angle_synthesis';
+      else if (this.generationStrategy === 'angle_synthesis') this.generationStrategy = 'reference_guided';
+      if (this.generationMode === 'reference_set') this.generationStrategy = 'reference_guided';
+      if (this.generationMode === 'single') {
+        this.selectedPhotoIndices = this.currentPhotos.length ? [this.activePhotoIndex] : [];
+      } else if (!this.selectedPhotoIndices.length ||
+                 (['collage','reference_set'].includes(this.generationMode) && this.selectedPhotoIndices.length < 2)) {
+        this.selectedPhotoIndices = this.currentPhotos.map(item => Number(item.index));
+      }
+      if (!this.selectedPhotoIndices.includes(this.activePhotoIndex) && this.selectedPhotoIndices.length) {
+        this.activePhotoIndex = this.selectedPhotoIndices[0];
+      }
+      this.onStrategyChange();
+    },
+    onStrategyChange() {
+      if (this.generationStrategy === 'background_only' && this.generationMode === 'reference_set') {
+        this.generationMode = 'single';
+        this.selectedPhotoIndices = this.currentPhotos.length ? [this.activePhotoIndex] : [];
+      }
+      this.selectedTargetKeys = this.selectedTargetKeys.filter(key => {
+        const variant = this.variants.find(item => item.key === key);
+        return variant && this.variantAvailable(variant);
+      });
+      if (!this.selectedTargetKeys.length) {
+        this.selectedTargetKeys = this.variants.filter(item => this.variantAvailable(item))
+          .slice(0, 2).map(item => item.key);
+      }
+    },
+    isPhotoSelected(index) { return this.selectedPhotoIndices.includes(Number(index)); },
+    togglePhoto(index) {
+      const value = Number(index);
+      const wasActive = this.activePhotoIndex === value;
+      if (this.generationMode !== 'single' && this.isPhotoSelected(value) && !wasActive) {
+        this.activePhotoIndex = value; this.sourceLoadFailed = false; return;
+      }
+      this.activePhotoIndex = value;
+      this.sourceLoadFailed = false;
+      if (this.generationMode === 'single') {
+        this.selectedPhotoIndices = [value];
+        return;
+      }
+      const position = this.selectedPhotoIndices.indexOf(value);
+      if (position >= 0) this.selectedPhotoIndices.splice(position, 1);
+      else this.selectedPhotoIndices.push(value);
+      if (!this.selectedPhotoIndices.length) this.selectedPhotoIndices = [value];
+      if (!this.selectedPhotoIndices.includes(this.activePhotoIndex)) {
+        this.activePhotoIndex = this.selectedPhotoIndices[0];
+      }
+      this.selectedPhotoIndices.sort((a, b) => a - b);
+    },
+    selectAllPhotos() {
+      this.selectedPhotoIndices = this.currentPhotos.map(item => Number(item.index));
+      if (this.generationMode === 'single' && this.selectedPhotoIndices.length > 1) {
+        this.generationMode = 'reference_set'; this.generationStrategy = 'reference_guided';
+      }
+    },
+    selectOnlyActive() {
+      if (this.generationMode === 'angles') {
+        this.selectedPhotoIndices = this.currentPhotos.length ? [this.activePhotoIndex] : [];
+        return;
+      }
+      this.generationMode = 'single';
+      this.generationStrategy = 'reference_guided';
+      this.selectedPhotoIndices = this.currentPhotos.length ? [this.activePhotoIndex] : [];
+    },
+    retrySource() { this.sourceLoadFailed = false; this.sourceRevision += 1; },
+    fillOverlayFromProduct() {
+      this.overlayTitle = this.currentProduct?.suggested_overlay?.title || '';
+      this.overlaySubtitle = this.currentProduct?.suggested_overlay?.subtitle || '';
+    },
+    async uploadWatermark(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const form = new FormData(); form.append('file', file);
+      try {
+        const response = await fetch('/image-lab/api/watermarks', {
+          method:'POST', headers:{'X-CSRFToken':csrf()}, body:form
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || `HTTP ${response.status}`);
+        this.watermark = data.watermark; this.useWatermark = true;
+        this.showMessage('PNG-логотип загружен', 'success');
+      } catch (error) { this.showMessage(error.message, 'error'); }
+      finally { event.target.value = ''; }
+    },
+    async api(url, options = {}) {
+      const response = await fetch(url, {
+        ...options,
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf(), ...(options.headers || {})}
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || `HTTP ${response.status}`);
+      return data;
+    },
+    async generate() {
+      if (!this.canGenerate || this.submitting) return;
+      this.submitting = true; this.message = '';
+      try {
+        const data = await this.api('/image-lab/api/experiments', {
+          method: 'POST', body: JSON.stringify({
+            product_id: Number(this.productId), scene_key: this.sceneKey,
+            custom_scene: this.customScene, targets: this.targets(),
+            additional_prompt: this.additionalPrompt,
+            photo_indices: [...this.selectedPhotoIndices], generation_mode: this.generationMode,
+            generation_strategy: this.generationStrategy,
+            requested_views: this.generationMode === 'angles' ? [...this.requestedViews] : [],
+            primary_photo_index: Number(this.activePhotoIndex),
+            photo_roles: this.selectedPhotoIndices.map(index => ({
+              index:Number(index), role:this.photoRoles[index] || 'angle'
+            })),
+            include_product_context: Boolean(this.includeProductContext),
+            overlay: this.useOverlay ? {
+              title:this.overlayTitle, subtitle:this.overlaySubtitle
+            } : null,
+            watermark: this.useWatermark ? {
+              id:this.watermark.id, position:this.watermarkPosition,
+              scale_percent:Number(this.watermarkScale),
+              opacity_percent:Number(this.watermarkOpacity)
+            } : null
+          })
+        });
+        this.experiments = this.shuffle([...data.experiments, ...this.experiments]);
+        this.showMessage(`Запущено вариантов: ${data.experiments.length}`, 'success');
+      } catch (error) { this.showMessage(error.message, 'error'); }
+      finally { this.submitting = false; }
+    },
+    async pollActive() {
+      const active = this.experiments.filter(item => this.isActive(item)).slice(0, 10);
+      await Promise.all(active.map(async item => {
+        try {
+          const data = await this.api(`/image-lab/api/experiments/${item.id}`);
+          const index = this.experiments.findIndex(value => value.id === item.id);
+          if (index >= 0) this.experiments.splice(index, 1, data.experiment);
+        } catch (_) { /* transient poll failures stay retriable */ }
+      }));
+    },
+    isActive(item) { return ['queued','running','remote_running','finalizing'].includes(item.status); },
+    canCancel(item) { return item.status === 'queued' || item.status === 'remote_running'; },
+    originalUrl(id, photoIndex = 0, preview = false) {
+      const params = new URLSearchParams({photo_index: Number(photoIndex), v: this.sourceRevision});
+      if (preview) params.set('preview', '1');
+      return `/image-lab/api/products/${Number(id)}/original?${params.toString()}`;
+    },
+    artifactUrl(id, kind) { return `/image-lab/api/experiments/${Number(id)}/image/${kind}`; },
+    statusLabel(item) {
+      if (item.status === 'finalizing' && item.generation_strategy === 'angle_synthesis') return 'Проверка';
+      return ({queued:'В очереди',running:'Генерация',remote_running:'GPU',finalizing:'Композит',completed:'Готово',failed:'Ошибка',cancelled:'Отменено'})[item.status] || item.status;
+    },
+    qualityLabel(item) { return ({auto_pass:'AUTO PASS',review_required:'REVIEW',rejected:'REJECTED'})[item.quality?.status] || '—'; },
+    qualityClass(item) {
+      return ({auto_pass:'bg-green-100 text-green-700',review_required:'bg-yellow-100 text-yellow-700',rejected:'bg-red-100 text-red-700'})[item.quality?.status] || 'bg-gray-100 text-gray-500';
+    },
+    sourceLabel(item) {
+      const values = item.photo_indices || [0];
+      if (item.composition_mode === 'angles') return `Ракурс: ${this.angleViewLabel(item.requested_view)} · ${values.length} реф.`;
+      if (item.composition_mode === 'collage') return `Общий макет · ${values.length} фото`;
+      if (item.composition_mode === 'reference_set') return `Герой: фото ${Number(item.primary_photo_index ?? values[0]) + 1} · ${values.length - 1} реф.`;
+      return `Фото ${Number(values[0] || 0) + 1}`;
+    },
+    angleViewLabel(value) {
+      return this.angleViews.find(item => item.id === value)?.label || value || '—';
+    },
+    strategyLabel(value) {
+      return ({reference_guided:'с фото-референсом',background_only:'только фон',angle_synthesis:'новый ракурс · research'})[value] || value;
+    },
+    blindName(item, index) { return this.blindMode && !item.rating ? `Вариант ${String.fromCharCode(65 + (index % 26))}` : `${item.backend} · ${item.model}`; },
+    draft(item) {
+      if (!this.ratingDrafts[item.id]) this.ratingDrafts[item.id] = {
+        rating: item.rating || 0, tags: [...(item.rating_tags || [])], comment: item.rating_comment || ''
+      };
+      return this.ratingDrafts[item.id];
+    },
+    toggleRatingTag(item, tag) {
+      const draft = this.draft(item); const index = draft.tags.indexOf(tag);
+      if (index >= 0) draft.tags.splice(index, 1); else if (draft.tags.length < 5) draft.tags.push(tag);
+    },
+    tagLabel(tag) {
+      return ({good_composition:'Композиция',product_preserved:'Товар сохранён',angle_consistent:'Ракурс совпал',geometry_hallucination:'Геометрия выдумана',bad_background:'Плохой фон',bad_cutout:'Плохая маска',text_artifact:'Лишний текст',color_shift:'Сдвиг цвета',wrong_scale:'Неверный масштаб',other:'Другое'})[tag] || tag;
+    },
+    async saveRating(item) {
+      try {
+        const draft = this.draft(item);
+        const data = await this.api(`/image-lab/api/experiments/${item.id}/rating`, {
+          method:'POST', body:JSON.stringify(draft)
+        });
+        Object.assign(item, data.experiment); await this.refreshAnalytics();
+        this.showMessage('Оценка сохранена', 'success');
+      } catch (error) { this.showMessage(error.message, 'error'); }
+    },
+    async repeat(item) {
+      try {
+        const data = await this.api(`/image-lab/api/experiments/${item.id}/repeat`, {method:'POST', body:'{}'});
+        this.experiments.unshift(data.experiment); this.showMessage('Повтор поставлен в очередь', 'success');
+      } catch (error) { this.showMessage(error.message, 'error'); }
+    },
+    async cancel(item) {
+      try {
+        const data = await this.api(`/image-lab/api/experiments/${item.id}/cancel`, {
+          method:'POST', body:'{}'
+        });
+        Object.assign(item, data.experiment); this.showMessage('Задача отменена', 'success');
+      } catch (error) { this.showMessage(error.message, 'error'); }
+    },
+    async refreshAnalytics() {
+      try { const data = await this.api('/image-lab/api/analytics'); this.analytics = data; } catch (_) {}
+    },
+    showMessage(text, type) { this.message = text; this.messageType = type; window.setTimeout(() => { if (this.message === text) this.message = ''; }, 6000); }
+  };
+}

@@ -37,12 +37,14 @@ WB Seller Platform, или Seller Hub, автоматизирует работу
 - `agents/base_agent.py`: ReAct loop, batches, cancellation, checkpoints, limits и usage aggregation.
 - `agents/llm.py`: Claude, Gemini и OpenAI-compatible providers, включая native DeepSeek profiles.
 - `agents/tools.py`: schema и registry доступных агенту tools.
+- `services/agent_knowledge.py`: curated ingestion, tenant-aware FTS5/prefix/trigram retrieval, bounded context и offline evaluation для RAG.
+- `scripts/manage_agent_knowledge.py`: административный CLI для версий документов, retrieval smoke-test и Recall@K/MRR evaluation.
 - `agents/catalog/`: внутренние domain skills и pipeline catalog. Это не отдельные seller-facing агенты.
 - `static/agent-chat.*`, `static/ai-chat-popup.*`, `templates/agents.html`: основной чат и компактный popup.
 
-Основной поток: browser chat -> `routes/agents.py` -> `agent_harness` -> `AgentTask` -> poll единого orchestrator -> `UnifiedSellerAgent` -> internal skill -> tools -> authenticated internal API -> DB -> conversation polling -> UI. Точные безопасные intents планируются deterministic-first; неоднозначные запросы получают semantic plan или clarification. Read-only план может стартовать автоматически, write-plan требует подтверждения.
+Основной поток: browser chat -> `routes/agents.py` -> `agent_harness` -> `AgentTask` -> poll единого orchestrator -> `UnifiedSellerAgent` -> internal skill -> tools -> authenticated internal API -> DB -> conversation polling -> UI. Точные безопасные intents планируются deterministic-first. Любой непустой запрос, который не разобран этим первым уровнем (включая короткую разговорную формулировку), получает один bounded structured semantic plan или конкретный clarification; длина текста больше не является условием вызова planner. Planner видит только текущий запрос, typed scope без списка ID, нормализованный page context и до 6 предыдущих языковых реплик общим объёмом до 2400 символов. Read-only semantic plan стартует автоматически, write-plan требует подтверждения. Явные вопросы к инструкциям идут в `knowledge-query`: task-scoped internal retrieval выбирает только global + документы текущего seller, после чего bounded Flash синтезирует ответ с проверенными citations; при отсутствии результата или бюджета возвращаются детерминированные cited excerpts без догадок.
 
-Частые read-intents (цены, остатки, пропуски контента, import/publication status, supplier publication counts, WB catalog counts, API health, defaults, stop-words и pricing settings) обязаны сначала проходить строгий локальный parser и typed SQL/internal endpoint. Не используйте LLM как классификатор там, где intent и параметры можно проверить regex/enum. Для catalog query допускается один короткий Flash-вызов только для формулировки ответа; в него передаются condition/count/has_results, но не карточки и не история диалога. Точные supplier counts возвращаются без polish-вызова.
+Частые read-intents (цены, остатки, пропуски контента, import/publication status, supplier publication counts, WB catalog counts, API health, defaults, stop-words и pricing settings) обязаны сначала проходить строгий локальный parser и typed SQL/internal endpoint. Не используйте LLM как классификатор там, где intent и параметры можно проверить regex/enum. Generic count/list fast-path принимает только целую фразу без неизвестных модификаторов: «покажи просевшие карточки» нельзя молча превращать в выдачу всего каталога. Для deterministic catalog query допускается один короткий Flash-вызов только для формулировки ответа; в него передаются condition/count/has_results, но не карточки и не история диалога. Точные supplier counts возвращаются без polish-вызова.
 
 Явно выбранные карточки обрабатываются typed batch-путём. `batch-audit` получает до 200 IDs одним tenant-scoped query и работает без LLM. Контентный write принимает до 100 IDs, один раз загружает compact content brief, затем использует bounded Flash chunks и пакетные writes. Любой write batch до SELECT/snapshot строго проверяет array объектов и уникальные positive integer IDs; bool, float, loose string и дубли отклоняют весь request. Не подменяйте этот путь циклом GET/PATCH или отдельным LLM-вызовом на карточку.
 
@@ -69,6 +71,115 @@ collection (`selected_product_ids` + `entity_kind='product'`), tool
 `product_ids` в quality-brief не обрезается дефолтным limit; `quality-audit`
 входит в `_CHAINING_SOURCE_SKILLS` и передаёт `selected_product_ids` следующему
 шагу плана.
+
+### Фотостудия и инфографика
+
+- `routes/image_lab.py`, `templates/image_lab.html`, `static/image-lab.js` —
+  seller-scoped лаборатория `/image-lab`: продавец видит до 10 нормализованных
+  фото карточки и выбирает режим `single` (один ракурс), `each` (отдельная job
+  на каждый выбранный ракурс), `reference_set` (одно главное фото в финале,
+  остальные — identity references с ролями `angle|packaging|detail`),
+  `collage` (локальный общий макет из 2–10 оригинальных foreground) или
+  `angles` (research-only синтез отдельных `front|back|left|right|three_quarter_*|top`
+  видов из 1–10 фото одного SKU). Один prompt запускается до трёх
+  раз через GPU/Gen-API/AITunnel, результаты сравниваются вслепую,
+  оцениваются 1–5 и тегами. `ImageGenerationExperiment` хранит воспроизводимые
+  параметры, `generation_strategy`, `composition_mode`, главное фото, точные
+  indices/roles, `requested_view`, watermark/text configs, стоимость, latency, quality JSON и
+  локальные artifacts; миграции — `migrations/migrate_add_image_generation_lab.py`
+  `migrations/migrate_add_image_lab_reference_watermark.py` и
+  `migrations/migrate_add_image_lab_angle_synthesis.py`. Endpoint preview не отдаёт
+  upstream URL в браузер: он tenant-scoped и последовательно пробует cache и
+  `sexoptovik/blur/processed/original`, потому что original CDN может быть
+  временно недоступен backend-контейнеру.
+- `services/image_lab_service.py` владеет allowlist backend/model, prompt
+  policy, SSRF-защитой загрузки исходника, seller budgets (active/24h/рубли),
+  lifecycle и аналитикой. Browser никогда не получает provider/GPU secrets.
+  API берёт seller только из `current_user.seller`; experiment/product/artifact
+  всегда выбираются составным `id + seller_id`.
+- Default `reference_guided` boundary: Gen-API/AITunnel получает локально
+  подготовленный 3:4 canvas с главным foreground; в `reference_set` остальные
+  выбранные байты идут отдельными identity references в порядке сохранённого
+  manifest. `packaging`/`detail` являются только evidence и не должны появляться
+  лишним объектом. `background_only` остаётся контрольным режимом и единственным
+  режимом GPU bridge. Bounded visual context выбирается между ImportedProduct и
+  более полным `SupplierProduct.ai_parsed_data_json`, удаляет цены/ID/instructions,
+  ограничен размером и сохраняется в prompt. Пользовательский additional prompt
+  не может отменить identity/no-duplicate/no-generated-text правила.
+- `angle_synthesis` доступен только reference-capable Gen-API/AITunnel моделям:
+  главное фото с ролью `angle` передаётся первым, остальные выбранные фото —
+  отдельными evidence references с сохранённым manifest; на каждый выбранный
+  `requested_view` создаётся самостоятельная job. Этот поток перерисовывает весь
+  товар и синтезирует скрытую геометрию, поэтому использует
+  `identity_mode=generative_edit`, всегда имеет `publishable=false` и требует
+  human identity/geometry review. Никогда не переносите в него гарантию
+  original RGB из `reference_guided` и не разрешайте auto-publish по rating.
+- Gen-API `image_urls` имеет контракт `files_array`: локальные референсы Flux 2
+  отправляются как повторяющиеся multipart-поля `image_urls[]`, не JSON data URI.
+  AITunnel `gpt-image-2` поддерживает `reference_guided` через
+  `/v1/images/edits`, `image[]`, protection mask и `input_fidelity=high`; для
+  вертикального запроса используется поддерживаемый provider size 1024×1536,
+  после чего локальный финал нормализуется до 900×1200.
+- После provider response `services/infographic_quality.py` повторно локально
+  накладывает foreground: alpha берётся из rembg, RGB — строго из декодированного
+  оригинала, разрешены только resize/translate. Reference input и финал обязаны
+  совпасть по foreground hash и placement; mismatch блокирует job. AITunnel также
+  получает protection mask, но она не заменяет локальное восстановление RGB.
+  В `collage` каждый foreground имеет отдельный source hash/alpha metadata.
+  Финал всегда 900×1200; reference-guided scene остаётся `review_required` до
+  human/CV проверки лишних объектов и никогда автоматически не публикуется.
+- Пользовательский текст передаётся модели только как layout intent для верхней
+  safe-zone; точные UTF-8 glyphs рендерятся локально deterministic overlay и
+  сохраняются в quality metadata. Seller-scoped PNG до 2 МБ нормализуется и
+  накладывается локально с проверенными position/scale/opacity на каждый финал
+  текущего запуска; логотип не отправляется модели и оригинальные фото не меняются.
+- AI-фон проходит OCR no-text gate. Отсутствующий OCR не считается успехом:
+  лаборатория возвращает `review_required`, а production renderer инфографики
+  подменяет непроверенный/текстовый AI-фон безопасным детерминированным фоном.
+  `auto_pass` требует decode, точный размер, visual signal, foreground metadata,
+  отдельно подтверждённую alpha-mask (`mask_verified=true`), no-text background,
+  отдельно подтверждённую сцену без людей/лишних предметов и с пустой зоной,
+  точный deterministic overlay и fact-safe claims. Автоматическая rembg-mask
+  имеет `automated_unreviewed` и сама по себе даёт только `review_required`:
+  сохранность RGB не доказывает, что край товара не был обрезан маской.
+  Negative prompt не считается scene verification: AI-background без отдельной
+  CV/human проверки остаётся `review_required` даже при чистом OCR.
+  Осмысленная alpha-mask, уже находящаяся в исходном PNG, считается частью
+  source-of-truth (`source_alpha`) и не прогоняется через rembg.
+- `services/infographic_content.py` строит слайды без LLM из bounded fact pack.
+  Каждый видимый title/subtitle имеет `fact_id + source` и совпадает с фактом
+  дословно; filler-слайды и неподтверждённые `ХИТ/ТОП/ЛУЧШИЙ/НОВИНКА` запрещены.
+  `SupplierService.ai_generate_rich_content` сохраняет legacy API-имя, но модель
+  больше не вызывает. Старый rich content без fact-safe contract не рендерится.
+- `services/infographic_renderer.py` генерирует background-only, композитит
+  оригинальный foreground и лишь затем кладёт HTML-текст в верхнюю safe-zone,
+  не накрывающую товар. Provider failure даёт deterministic template, а не
+  генеративную замену товара. В output возвращаются quality/publishable.
+- GPU tunnel: `scripts/gpu_pilot/http_bridge.py` (Bearer token, localhost по
+  умолчанию, HTTPS/SSH/WireGuard снаружи) пишет background-only jobs в очередь
+  `qwen_worker.py`. `edit/posters` требуют `research_only=true`.
+  `finalize_backgrounds.py` локально собирает и оценивает raw GPU backgrounds.
+- Docker image использует системный `/usr/bin/chromium` для Playwright вместо
+  загрузки browser bundle с Playwright CDN, `fonts-dejavu-core` для точного
+  кириллического overlay; rembg-модель прогревается при build.
+- Лимиты/секреты: `GEN_API_KEY`, `AITUNNEL_API_KEY`, `GPU_IMAGE_SERVER_URL`,
+  `GPU_IMAGE_SERVER_TOKEN`, `GPU_IMAGE_ALLOW_HTTP`, `GPU_IMAGE_STEPS`,
+  `GPU_IMAGE_TRUE_CFG`, `GPU_IMAGE_RUB_PER_GENERATION`,
+  `IMAGE_LAB_MAX_ACTIVE_JOBS`,
+  `IMAGE_LAB_DAILY_JOB_LIMIT`, `IMAGE_LAB_DAILY_BUDGET_RUB`,
+  `IMAGE_LAB_PROVIDER_TIMEOUT`, `IMAGE_LAB_DATA_DIR`, `IMAGE_LAB_INLINE_WORKER`,
+  `INFOGRAPHIC_REMBG_MODEL`; GPU host использует `GPU_BRIDGE_TOKEN`.
+  Полный runbook и честная интерпретация исторического пилота —
+  `docs/INFOGRAPHICS_PILOT.md`.
+
+Локально `IMAGE_LAB_INLINE_WORKER=1` выполняет jobs bounded executor'ом web
+процесса. `IMAGE_LAB_MAX_ACTIVE_JOBS` ограничивает только реально выполняемые
+`running|remote_running|finalizing`; multi-photo batch может безопасно лежать в
+`queued`, а polling повторно предлагает queued job атомарному claim. Суточные
+лимит и бюджет учитывают все созданные jobs. В production установите
+`IMAGE_LAB_INLINE_WORKER=0` для web и
+запустите `SKIP_SCHEDULER=1 python scripts/run_image_lab_worker.py`; claim
+`queued -> running` атомарный, поэтому повторный runner не дублирует запрос.
 
 ## Локальный запуск
 
@@ -145,6 +256,14 @@ docker compose logs -f agent-orchestrator
 docker compose --profile agents up -d --build
 ```
 
+Для отдельного durable worker Фотостудии установите
+`IMAGE_LAB_INLINE_WORKER=0` и запустите:
+
+```bash
+docker compose --profile image-lab up -d --build image-lab-worker
+docker compose logs -f image-lab-worker
+```
+
 Profile `legacy-agents` поднимает старые специализированные workers и не является рекомендуемым runtime. Не добавляйте туда новые seller-facing возможности без отдельного migration plan.
 
 Данные платформы находятся в named volume `seller_platform_data`; `uploads/` и `processed/` являются bind mounts. `docker compose down` сохраняет volume, а `docker compose down -v` удаляет его и считается разрушительной операцией.
@@ -197,6 +316,9 @@ Docker entrypoint является наиболее полным migration path:
 
 ```bash
 python migrations/migrate_add_agent_chat.py data/seller_platform.db
+python migrations/migrate_add_image_generation_lab.py data/seller_platform.db
+python migrations/migrate_add_image_lab_reference_watermark.py data/seller_platform.db
+python migrations/migrate_add_image_lab_angle_synthesis.py data/seller_platform.db
 python migrations/run_all_migrations.py data/seller_platform.db
 ```
 
@@ -291,7 +413,7 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - Для больших наборов используйте prefetch, bounded chunks, batch endpoints и bounded concurrency. Не создавайте N+1 DB/API/LLM calls.
 - Явно названные поля контента извлекаются детерминированно в immutable mask `title|description`: semantic planner не может расширить эту маску. `content-writer` принимает максимум 100 typed positive integer IDs без coercion из boolean/float/string, делает один content-brief query, затем Flash chunks: до 24 карточек для title-only и до 8 для description/both, дополнительно ограничивая prompt примерно 12 000 символов. Каждый чанк обязан вернуть точное множество уникальных integer IDs и все поля; stop-word response обязан полностью совпасть по `(product_id, field)`. Любой пропуск, дубль, чужой ID или неполная проверка блокирует запись чанка без LLM retry/ReAct fallback. Product/ImportedProduct сохраняются batch endpoint-ами с optimistic `expected_updated_at`, snapshots/history и честными changed/unchanged/failed counts.
 - Cancellation проверяется до prefetch, до и после каждого LLM chunk, перед postprocess/tool/write и перед commit. После отмены не планируйте новые futures и не исполняйте уже сгенерированные tool calls. Structured batch error не должен автоматически переключаться на дорогой ReAct; usage сохраняется в partial/failed result и checkpoint.
-- Не запускайте Flash-классификатор перед каждым точным запросом. Regex/enum/typed SQL остаются первым уровнем; короткий structured Flash GoalSpec допустим только как fallback для простого неоднозначного намерения, а сложный многошаговый план строит primary/Pro.
+- Не запускайте LLM-классификатор перед точным запросом. Regex/enum/typed SQL остаются первым уровнем; после deterministic miss любой непустой запрос маршрутизируется одним `plan_request` на seller primary model (обычно Pro) с компактным стабильным capability catalog и output cap 1200 токенов. Python повторно валидирует typed scope, skill allowlist, параметры и risk, игнорирует model-reported risk и не разрешает semantic plan расширить запрет на writes. Semantic write без выбранных IDs допустим только после typed supplier selection либо при явной фразе о всём каталоге; модель не может сама расширить узкий запрос до всех товаров. Для semantic `catalog-query` не выполняется отдельный Flash polish: planner + typed SQL остаются одним LLM-вызовом. Usage planner переносится в execution run и учитывается в общем API/token budget.
 - Task mutation endpoints (`start`, `progress`, `checkpoint`, `complete`, `fail`) возвращают только компактный статус. Полные `input_data`, `checkpoint` и `result` доступны лишь в poll/get flows и не должны эхом передаваться worker на каждом обновлении.
 - DeepSeek prompt cache автоматический. Стабильные system instructions, JSON schema и tool definitions должны идти до динамического user/task content. Не добавляйте timestamps, IDs или перестановку schema/tools в стабильный prefix.
 - Сохраняйте usage: input/output, API requests, cache hit/miss tokens, reasoning tokens, requested model breakdown и cost where available. Cached tokens входят в input и не должны второй раз добавляться в total. UI должен отличать `Без LLM`, Flash execution и Pro orchestration по фактическим запросам, а не по загруженному primary profile.
@@ -300,8 +422,10 @@ python migrations/run_all_migrations.py data/seller_platform.db
 ### Retrieval policy
 
 - Structured seller truth (`Product`, `ImportedProduct`, defaults, categories/characteristics, pricing, stock, stop-words, API logs and live statuses) читается только typed SQL/tools и не индексируется как RAG corpus.
-- Для неструктурированных правил WB и проверенных инструкций используйте selective hybrid retrieval: curated source allowlist, document version/checksum, global или tenant scope, FTS exact/trigram rank fusion и обязательные citations. Не индексируйте весь `docs/`, код, `AGENTS.md`, логи, секреты и устаревшие guides автоматически.
-- Retrieval должен возвращать не более 5–8 фрагментов и примерно 6 000 символов. Точный knowledge query работает без LLM; Flash без thinking допустим только для неоднозначного query rewrite. Pro не используется для retrieval routing.
+- Неструктурированные правила WB и проверенные инструкции загружаются только явно через `scripts/manage_agent_knowledge.py`. Разрешены source types `wb_official|seller_policy|platform_guide|official_reference`; документ неизменяем в пределах `scope_key + source_key + version`, хранит SHA-256 checksum, а новая версия атомарно архивирует предыдущую. Для `wb_official|official_reference` обязателен будущий `valid_until`; просроченный документ fail-closed исключается из выдачи. Не индексируйте весь `docs/`, код, `AGENTS.md`, логи, секреты и устаревшие guides автоматически.
+- Retrieval находится в `services/agent_knowledge.py`: SQLite FTS5 prefix retrieval объединяется с Unicode casefold prefix fallback и trigram rerank; видимость всегда `seller_id IS NULL OR seller_id = task.seller_id`. Internal endpoint `/internal/v1/sellers/<seller_id>/knowledge/search` требует agent auth, активный assigned task и совпадение seller scope.
+- Retrieval возвращает не более 8 фрагментов и 6 000 символов вместе с `citation_id`, title, version, source URI и heading. Явная фраза «по базе знаний/правилам WB» маршрутизируется deterministic-first без LLM-классификатора; semantic miss может выбрать тот же read-only skill. Синтез ответа делает один Flash-вызов без thinking с cap 700 output tokens; Python отклоняет неизвестные citation IDs. При empty retrieval, ошибке synthesis или нехватке token budget возвращается bounded deterministic result без дополнительного LLM call. Pro не используется для retrieval или synthesis.
+- Качество проверяется JSON-наборами `query + expected_source_key` командой `manage_agent_knowledge.py evaluate`; она считает Recall@K и MRR. Новые corpus/ранжирующие изменения должны добавлять реальные misses в evaluation dataset и тестировать tenant isolation, version archive, strict context cap и citations.
 - Embeddings/vector DB, RAPTOR и GraphRAG добавляются только после измеренных retrieval misses или появления достаточно большого связного корпуса. Не вводите их как замену SQL или без evaluation dataset.
 
 ### Runtime caveats

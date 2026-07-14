@@ -44,6 +44,22 @@ services:
       # Формат: socks5://172.17.0.1:10808  (xray SOCKS5 на хосте)
       - AI_PROXY=${AI_PROXY:-}
       - IMAGE_GEN_PROXY=${IMAGE_GEN_PROXY:-}
+      # Фотостудия: ключи остаются только на backend
+      - GEN_API_KEY=${GEN_API_KEY:-}
+      - AITUNNEL_API_KEY=${AITUNNEL_API_KEY:-}
+      - GPU_IMAGE_SERVER_URL=${GPU_IMAGE_SERVER_URL:-}
+      - GPU_IMAGE_SERVER_TOKEN=${GPU_IMAGE_SERVER_TOKEN:-}
+      - GPU_IMAGE_ALLOW_HTTP=${GPU_IMAGE_ALLOW_HTTP:-0}
+      - GPU_IMAGE_STEPS=${GPU_IMAGE_STEPS:-4}
+      - GPU_IMAGE_TRUE_CFG=${GPU_IMAGE_TRUE_CFG:-1.0}
+      - GPU_IMAGE_RUB_PER_GENERATION=${GPU_IMAGE_RUB_PER_GENERATION:-1.0}
+      - IMAGE_LAB_MAX_ACTIVE_JOBS=${IMAGE_LAB_MAX_ACTIVE_JOBS:-3}
+      - IMAGE_LAB_DAILY_JOB_LIMIT=${IMAGE_LAB_DAILY_JOB_LIMIT:-50}
+      - IMAGE_LAB_DAILY_BUDGET_RUB=${IMAGE_LAB_DAILY_BUDGET_RUB:-500}
+      - IMAGE_LAB_PROVIDER_TIMEOUT=${IMAGE_LAB_PROVIDER_TIMEOUT:-180}
+      - IMAGE_LAB_DATA_DIR=/app/data/image_lab
+      - IMAGE_LAB_INLINE_WORKER=${IMAGE_LAB_INLINE_WORKER:-1}
+      - INFOGRAPHIC_REMBG_MODEL=${INFOGRAPHIC_REMBG_MODEL:-u2net}
     # Порты НЕ пробрасываем наружу — доступ только через Caddy
     expose:
       - "${SELLER_PORT:-5001}"
@@ -51,7 +67,40 @@ services:
       - ./uploads:/app/uploads
       - ./processed:/app/processed
       - seller_platform_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
+
+  image-lab-worker:
+    build: .
+    container_name: image-lab-worker
+    entrypoint: ["/usr/bin/gosu", "app", "python", "scripts/run_image_lab_worker.py"]
+    environment:
+      - SKIP_SCHEDULER=1
+      - DATABASE_URL=sqlite:////app/data/seller_platform.db
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env file}
+      - GEN_API_KEY=${GEN_API_KEY:-}
+      - AITUNNEL_API_KEY=${AITUNNEL_API_KEY:-}
+      - GPU_IMAGE_SERVER_URL=${GPU_IMAGE_SERVER_URL:-}
+      - GPU_IMAGE_SERVER_TOKEN=${GPU_IMAGE_SERVER_TOKEN:-}
+      - GPU_IMAGE_ALLOW_HTTP=${GPU_IMAGE_ALLOW_HTTP:-0}
+      - GPU_IMAGE_STEPS=${GPU_IMAGE_STEPS:-4}
+      - GPU_IMAGE_TRUE_CFG=${GPU_IMAGE_TRUE_CFG:-1.0}
+      - GPU_IMAGE_RUB_PER_GENERATION=${GPU_IMAGE_RUB_PER_GENERATION:-1.0}
+      - IMAGE_LAB_PROVIDER_TIMEOUT=${IMAGE_LAB_PROVIDER_TIMEOUT:-180}
+      - IMAGE_LAB_DATA_DIR=/app/data/image_lab
+      - IMAGE_LAB_INLINE_WORKER=0
+      - INFOGRAPHIC_REMBG_MODEL=${INFOGRAPHIC_REMBG_MODEL:-u2net}
+    volumes:
+      - seller_platform_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      seller-platform:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - image-lab
 
   # ══════════════════════════════════════════════════════════
   # Сервисные агенты

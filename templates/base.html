@@ -1975,7 +1975,7 @@
             </div>
 
             <!-- Товары -->
-            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history', 'card_quality_page'] %}
+            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history', 'card_quality_page', 'image_lab_page'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if products_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if products_active else 'false' }} }" :aria-expanded="open" aria-label="Товары">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -1993,6 +1993,7 @@
                     <a href="{{ url_for('products_merge') }}" class="sidebar-sublink {% if request.endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations'] %}active{% endif %}">Объединение</a>
                     <a href="{{ url_for('blocked_cards') }}" class="sidebar-sublink {% if request.endpoint in ['blocked_cards', 'blocked_cards_export'] %}active{% endif %}">Блокировки</a>
                     <a href="{{ url_for('card_quality_page') }}" class="sidebar-sublink {% if request.endpoint == 'card_quality_page' %}active{% endif %}">Качество</a>
+                    <a href="{{ url_for('image_lab_page') }}" class="sidebar-sublink {% if request.endpoint == 'image_lab_page' %}active{% endif %}">Фотостудия</a>
                 </div>
             </div>
 
@@ -2622,6 +2623,11 @@
     <a href="{{ url_for('supplier_catalog') }}" class="sh-cmdpal-item">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
         <span class="sh-cmdpal-item-label">Каталог поставщиков</span>
+    </a>
+    <a href="{{ url_for('image_lab_page') }}" class="sh-cmdpal-item">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7h3l2-2h8l2 2h3v12H3V7zm9 3a3 3 0 100 6 3 3 0 000-6z"/></svg>
+        <span class="sh-cmdpal-item-label">Фотостудия</span>
+        <span class="sh-cmdpal-item-hint">AI фото</span>
     </a>
     <a href="{{ url_for('content_factory_dashboard') }}" class="sh-cmdpal-item">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>

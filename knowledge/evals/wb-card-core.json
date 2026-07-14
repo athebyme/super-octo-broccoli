@@ -1,0 +1,18 @@
+[
+  {
+    "query": "какая максимальная длина названия карточки",
+    "expected_source_key": "wb/cards/create"
+  },
+  {
+    "query": "можно ли указывать домен и артикул в описании",
+    "expected_source_key": "wb/cards/create"
+  },
+  {
+    "query": "куда записывать материал цвет и состав товара",
+    "expected_source_key": "wb/cards/create"
+  },
+  {
+    "query": "зачем правильно указывать габариты упаковки",
+    "expected_source_key": "wb/cards/create"
+  }
+]

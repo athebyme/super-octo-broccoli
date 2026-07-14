@@ -15,22 +15,23 @@ RUN groupadd --system --gid 1000 app \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Playwright + Chromium для рендеринга инфографики
+# Системный Chromium для Playwright-рендера. Он находится через
+# services.infographic_renderer._find_chromium и не зависит от Playwright CDN.
 # gosu — для безопасного drop-privileges в entrypoint (fix-permissions pattern)
-RUN pip install 'playwright==1.52.0' \
-    && apt-get update \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       gosu \
+       gosu chromium \
        libglib2.0-0 libnss3 libnspr4 libdbus-1-3 libatk1.0-0 \
        libatk-bridge2.0-0 libcups2 libexpat1 libxcb1 libxkbcommon0 \
        libatspi2.0-0 libx11-6 libxcomposite1 libxdamage1 libxext6 \
        libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+       tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
-# Ставим chromium от имени app, чтобы кэш оказался в /home/app/.cache
-ENV PLAYWRIGHT_BROWSERS_PATH=/home/app/.cache/ms-playwright
+# Прогреваем rembg-модель от имени runtime-пользователя: первый request не
+# должен зависеть от загрузки весов из внешней сети.
 RUN mkdir -p /home/app/.cache && chown -R app:app /home/app/.cache \
-    && su app -s /bin/sh -c "python -m playwright install chromium"
+    && su app -s /bin/sh -c "python -c 'from rembg import new_session; new_session()'"
 
 COPY --chown=app:app . .
 

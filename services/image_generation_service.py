@@ -61,6 +61,8 @@ class ImageProvider(Enum):
     OPENAI_DALLE = "openai_dalle"  # DALL-E 3
     FLUX_PRO = "flux_pro"  # Flux.1 Pro через Replicate
     SDXL = "sdxl"  # Stable Diffusion XL через Replicate
+    GEN_API = "gen_api"  # Gen-API.ru — российский агрегатор, оплата в рублях
+    AITUNNEL = "aitunnel"  # AITunnel.ru — OpenAI-совместимый агрегатор, рубли
 
 
 # Конфигурация провайдеров
@@ -130,8 +132,70 @@ PROVIDER_CONFIG = {
         "max_size": "1024x1024",
         "supports_reference": True,
         "recommended": False
+    },
+    ImageProvider.GEN_API: {
+        "name": "Gen-API",
+        "description": "Российский агрегатор (FLUX.2, Kontext Pro, Seedream, Nano Banana), рубли",
+        "api_url": "https://api.gen-api.ru/api/v1",
+        "price_per_image": "3.3-10 ₽",
+        "max_size": "2048x2048",
+        "supports_reference": True,
+        "recommended": True
+    },
+    ImageProvider.AITUNNEL: {
+        "name": "AITunnel",
+        "description": "OpenAI-совместимый российский агрегатор (Seedream, GPT Image), рубли",
+        "api_url": "https://api.aitunnel.ru/v1",
+        "price_per_image": "1.5-7 ₽",
+        "max_size": "2048x2048",
+        "supports_reference": True,
+        "recommended": True
     }
 }
+
+# Маркеры цензурного отказа провайдера (а не технического сбоя).
+# Используются пилотом «Фотостудии» и fallback-цепочкой для честной метрики отказов.
+NSFW_ERROR_MARKERS = (
+    "nsfw",
+    "safety",
+    "content policy",
+    "content_policy",
+    "moderation",
+    "flagged",
+    "censor",
+    "policy violation",
+    "prohibited",
+    "blocked",
+    "sensitive",
+    "недопустимый контент",
+)
+
+
+def is_censorship_refusal(error_message):
+    """True, если ошибка похожа на отказ цензуры/модерации провайдера."""
+    msg = (error_message or "").lower()
+    return any(marker in msg for marker in NSFW_ERROR_MARKERS)
+
+
+def fit_image_to_size(image_bytes, width, height):
+    """Приводит картинку к точному размеру: scale-to-cover + центральный кроп.
+
+    Провайдеры отдают размеры по своим сеткам (кратно 16, фикс-пресеты и т.п.);
+    белый padding на тёмных сценах даёт видимую полосу, поэтому cover+crop.
+    При любой ошибке постобработки возвращает оригинал — генерацию не роняем.
+    """
+    try:
+        from PIL import ImageOps
+
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.size == (width, height):
+            return image_bytes
+        img = ImageOps.fit(img.convert("RGB"), (width, height), method=Image.LANCZOS)
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+    except Exception:
+        return image_bytes
 
 
 @dataclass
@@ -155,6 +219,14 @@ class ImageGenerationConfig:
     # TensorArt specific
     tensorart_app_id: str = ""
     tensorart_api_key: str = ""  # Private key for signing
+    # Gen-API specific (https://gen-api.ru — slugs сетей сверяются с доками)
+    gen_api_key: str = ""
+    gen_api_model: str = "flux-2"  # t2i-сеть (режим B)
+    gen_api_edit_model: str = "nano-banana"  # i2i-сеть (режим A)
+    # AITunnel specific (https://aitunnel.ru — OpenAI images API)
+    aitunnel_api_key: str = ""
+    aitunnel_model: str = "gpt-image-2"
+    aitunnel_edit_model: str = "seedream-4.5"
     # Общие
     default_width: int = 900
     default_height: int = 1200
@@ -267,6 +339,24 @@ class ImageGenerationConfig:
             default_height=getattr(settings, 'image_gen_height', 1200) or 1200
         )
 
+    @classmethod
+    def from_env(cls, provider):
+        """Конфиг из переменных окружения — для one-off скриптов (пилот).
+
+        GEN_API_KEY / AITUNNEL_API_KEY. Возвращает None, если ключа нет.
+        """
+        if provider == ImageProvider.GEN_API:
+            key = os.environ.get('GEN_API_KEY', '')
+            if not key:
+                return None
+            return cls(provider=provider, api_key=key, gen_api_key=key)
+        if provider == ImageProvider.AITUNNEL:
+            key = os.environ.get('AITUNNEL_API_KEY', '')
+            if not key:
+                return None
+            return cls(provider=provider, api_key=key, aitunnel_api_key=key)
+        return None
+
 
 class ImageGenerator(ABC):
     """Абстрактный базовый класс для генераторов изображений"""
@@ -292,6 +382,22 @@ class ImageGenerator(ABC):
             Tuple[success, image_bytes, error_message]
         """
         pass
+
+    def edit(
+        self,
+        prompt: str,
+        source_image_url: Optional[str] = None,
+        source_image_bytes: Optional[bytes] = None,
+        additional_source_images: Optional[List[bytes]] = None,
+        mask_bytes: Optional[bytes] = None,
+        input_fidelity: Optional[str] = None,
+        width: int = 900,
+        height: int = 1200,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        """Image-to-image edit. Провайдеры без i2i возвращают ошибку."""
+        return False, None, (
+            f"Провайдер {self.__class__.__name__} не поддерживает image-to-image"
+        )
 
 
 class OpenAIImageGenerator(ImageGenerator):
@@ -1153,6 +1259,381 @@ clean background, studio lighting, high quality, sharp focus,
 commercial style, minimalist design"""
 
 
+class GenApiImageGenerator(ImageGenerator):
+    """Gen-API.ru — российский агрегатор генеративных сетей (рубли).
+
+    Контракт (сверен с https://gen-api.ru/docs, июль 2026):
+    - POST {BASE_URL}/networks/<slug>  -> {"request_id": int}
+    - GET  {BASE_URL}/request/get/<request_id> ->
+      {"status": "processing|success|error", "result": [...], "cost": ...}
+    Slugs: t2i — config.gen_api_model, i2i — config.gen_api_edit_model.
+    Исходное изображение для i2i — поле image_urls (per-network параметр).
+    """
+
+    BASE_URL = "https://api.gen-api.ru/api/v1"
+
+    def __init__(self, config: ImageGenerationConfig):
+        self.config = config
+
+    def _headers(self, *, multipart: bool = False):
+        headers = {
+            "Authorization": f"Bearer {self.config.gen_api_key}",
+            "Accept": "application/json",
+        }
+        # requests сам добавляет boundary для multipart. Жёсткий application/json
+        # превращает files_array в обычные строки и Flux 2 отвечает HTTP 422.
+        if not multipart:
+            headers["Content-Type"] = "application/json"
+        return headers
+
+    def _submit_and_poll(
+        self,
+        network: str,
+        payload: dict,
+        files: Optional[List[Tuple[str, Tuple[str, bytes, str]]]] = None,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        try:
+            request_kwargs: Dict[str, Any] = {
+                "headers": self._headers(multipart=bool(files)),
+                "timeout": 30,
+            }
+            if files:
+                request_kwargs["data"] = payload
+                request_kwargs["files"] = files
+            else:
+                request_kwargs["json"] = payload
+            response = requests.post(
+                f"{self.BASE_URL}/networks/{network}",
+                **request_kwargs,
+            )
+            if response.status_code != 200:
+                return False, None, f"Gen-API {network}: HTTP {response.status_code} {response.text[:600]}"
+            request_id = (response.json() or {}).get("request_id")
+            if not request_id:
+                return False, None, f"Gen-API {network}: не получен request_id"
+
+            waited, poll_interval = 0, 3
+            while waited < self.config.timeout:
+                time.sleep(poll_interval)
+                waited += poll_interval
+                poll = requests.get(
+                    f"{self.BASE_URL}/request/get/{request_id}",
+                    headers=self._headers(),
+                    timeout=30,
+                )
+                if poll.status_code != 200:
+                    continue
+                data = poll.json() or {}
+                status = data.get("status")
+                if status == "success":
+                    urls = data.get("result") or data.get("output") or []
+                    if isinstance(urls, str):
+                        urls = [urls]
+                    if urls:
+                        img = requests.get(urls[0], timeout=60)
+                        if img.status_code == 200:
+                            return True, img.content, ""
+                    return False, None, f"Gen-API {network}: пустой результат"
+                if status in ("failed", "error"):
+                    err = data.get("error") or data.get("message")
+                    if not err:
+                        # Причина отказа часто лежит в full_response (объекты провайдера)
+                        full = data.get("full_response") or data.get("result")
+                        if full:
+                            err = json.dumps(full, ensure_ascii=False)
+                    err = str(err or "unknown")
+                    if is_censorship_refusal(err):
+                        return False, None, f"NSFW: {err[:200]}"
+                    return False, None, f"Gen-API {network}: {err[:300]}"
+            return False, None, f"Gen-API {network}: таймаут ({self.config.timeout}с)"
+        except requests.exceptions.Timeout:
+            return False, None, f"Gen-API {network}: таймаут запроса"
+        except Exception as e:
+            logger.error(f"Gen-API {network} ошибка: {e}")
+            return False, None, f"Gen-API {network}: {e}"
+
+    @staticmethod
+    def _snap16_up(value: int) -> int:
+        """Gen-API требует размеры, кратные 16 (HTTP 422 иначе).
+
+        Округляем ВВЕРХ: холст чуть больше, затем fit_image_to_size кропает
+        до точного запрошенного размера без полос и искажений.
+        """
+        v = max(256, int(value))
+        return ((v + 15) // 16) * 16
+
+    def generate(
+        self,
+        prompt: str,
+        width: int = 900,
+        height: int = 1200,
+        reference_image_url: Optional[str] = None,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        payload = {
+            "prompt": prompt,
+            "width": self._snap16_up(width),
+            "height": self._snap16_up(height),
+        }
+        files = None
+        if reference_image_url:
+            try:
+                source = requests.get(reference_image_url, timeout=60)
+                if source.status_code != 200:
+                    return False, None, f"Gen-API: исходное фото HTTP {source.status_code}"
+                files = [self._multipart_image(source.content, 0)]
+            except Exception as exc:
+                return False, None, f"Gen-API: не скачалось исходное фото: {exc}"
+        ok, data, err = self._submit_and_poll(
+            self.config.gen_api_model,
+            payload,
+            files=files,
+        )
+        if ok and data:
+            data = fit_image_to_size(data, width, height)
+        return ok, data, err
+
+    def edit(
+        self,
+        prompt: str,
+        source_image_url: Optional[str] = None,
+        source_image_bytes: Optional[bytes] = None,
+        additional_source_images: Optional[List[bytes]] = None,
+        mask_bytes: Optional[bytes] = None,
+        input_fidelity: Optional[str] = None,
+        width: int = 900,
+        height: int = 1200,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        if not source_image_url and not source_image_bytes:
+            return False, None, "Gen-API edit: не передано исходное изображение"
+        if source_image_bytes is None:
+            try:
+                source = requests.get(source_image_url, timeout=60)
+                if source.status_code != 200:
+                    return False, None, f"Gen-API edit: исходное фото HTTP {source.status_code}"
+                source_image_bytes = source.content
+            except Exception as exc:
+                return False, None, f"Gen-API edit: не скачалось исходное фото: {exc}"
+        payload = {"prompt": prompt}
+        images = [bytes(source_image_bytes)]
+        for image in additional_source_images or []:
+            if not isinstance(image, (bytes, bytearray)) or not image:
+                return False, None, "Gen-API edit: некорректный дополнительный референс"
+            images.append(bytes(image))
+        if len(images) > 10:
+            return False, None, "Gen-API edit: разрешено не более 10 референсов"
+        try:
+            files = [self._multipart_image(image, index) for index, image in enumerate(images)]
+        except ValueError as exc:
+            return False, None, f"Gen-API edit: {exc}"
+        if self.config.gen_api_edit_model == "flux-2":
+            payload["width"] = self._snap16_up(width)
+            payload["height"] = self._snap16_up(height)
+        return self._submit_and_poll(
+            self.config.gen_api_edit_model,
+            payload,
+            files=files,
+        )
+
+    @staticmethod
+    def _multipart_image(
+        image_bytes: bytes,
+        index: int,
+    ) -> Tuple[str, Tuple[str, bytes, str]]:
+        """Build the exact Gen-API files_array part: repeated image_urls[]."""
+        if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+            raise ValueError("пустой файл изображения")
+        data = bytes(image_bytes)
+        if len(data) > 25 * 1024 * 1024:
+            raise ValueError("референс больше 25 МБ")
+        extension, mime = "png", "image/png"
+        if data.startswith(b"\xff\xd8\xff"):
+            extension, mime = "jpg", "image/jpeg"
+        elif data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            extension, mime = "webp", "image/webp"
+        return "image_urls[]", (f"reference-{index}.{extension}", data, mime)
+
+
+class AITunnelImageGenerator(ImageGenerator):
+    """AITunnel — OpenAI-совместимый российский агрегатор (рубли).
+
+    Контракт (сверен с https://docs.aitunnel.ru, июль 2026):
+    - POST {BASE_URL}/images/generations — JSON (model, prompt, n, size, response_format)
+    - POST {BASE_URL}/images/edits — multipart (image, model, prompt, ...)
+    Ключ формата sk-aitunnel-..., Bearer.
+    """
+
+    BASE_URL = "https://api.aitunnel.ru/v1"
+
+    def __init__(self, config: ImageGenerationConfig):
+        self.config = config
+
+    def _auth(self):
+        return {"Authorization": f"Bearer {self.config.aitunnel_api_key}"}
+
+    # Seedream отклоняет запросы меньше ~3,69 Мп (1920x1920)
+    _SEEDREAM_MIN_PIXELS = 3686400
+
+    def _effective_size(self, width, height, model):
+        """Подгоняет размер под требования модели AITunnel.
+
+        Все image-модели требуют кратность 16; Seedream дополнительно —
+        минимум _SEEDREAM_MIN_PIXELS. Пропорции сохраняются, результат
+        не уменьшается обратно: провайдер отдаёт столько, сколько попросили.
+        """
+        import math
+
+        def snap16(v):
+            return ((max(256, int(v)) + 15) // 16) * 16
+
+        model_name = (model or "").lower()
+        if model_name.startswith("gpt-image"):
+            ratio = max(1, int(width)) / max(1, int(height))
+            if ratio < 0.9:
+                return 1024, 1536
+            if ratio > 1.1:
+                return 1536, 1024
+            return 1024, 1024
+        w, h = snap16(width), snap16(height)
+        if "seedream" in (model or "").lower() and w * h < self._SEEDREAM_MIN_PIXELS:
+            k = math.sqrt(self._SEEDREAM_MIN_PIXELS / (w * h))
+            w, h = snap16(math.ceil(w * k)), snap16(math.ceil(h * k))
+        return w, h
+
+    def _fail(self, response) -> Tuple[bool, Optional[bytes], str]:
+        err = response.text[:300]
+        if is_censorship_refusal(err):
+            return False, None, f"NSFW: {err[:200]}"
+        return False, None, f"AITunnel: HTTP {response.status_code} {err}"
+
+    def _extract_image(self, data: dict) -> Tuple[bool, Optional[bytes], str]:
+        items = data.get("data") or []
+        if not items:
+            return False, None, "AITunnel: пустой ответ"
+        first = items[0] or {}
+        if first.get("b64_json"):
+            try:
+                return True, base64.b64decode(first["b64_json"]), ""
+            except Exception:
+                return False, None, "AITunnel: битый base64 в ответе"
+        if first.get("url"):
+            img = requests.get(first["url"], timeout=60)
+            if img.status_code == 200:
+                return True, img.content, ""
+        return False, None, "AITunnel: нет изображения в ответе"
+
+    @staticmethod
+    def _multipart_image(image_bytes: bytes, name: str) -> Tuple[str, bytes, str]:
+        """Label local references by their actual byte signature."""
+        if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+            raise ValueError("пустой файл изображения")
+        data = bytes(image_bytes)
+        extension, mime = "png", "image/png"
+        if data.startswith(b"\xff\xd8\xff"):
+            extension, mime = "jpg", "image/jpeg"
+        elif data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            extension, mime = "webp", "image/webp"
+        return f"{name}.{extension}", data, mime
+
+    def generate(
+        self,
+        prompt: str,
+        width: int = 900,
+        height: int = 1200,
+        reference_image_url: Optional[str] = None,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        w, h = self._effective_size(width, height, self.config.aitunnel_model)
+        payload = {
+            "model": self.config.aitunnel_model,
+            "prompt": prompt,
+            "n": 1,
+            "size": f"{w}x{h}",
+            "response_format": "b64_json",
+        }
+        try:
+            response = requests.post(
+                f"{self.BASE_URL}/images/generations",
+                json=payload,
+                headers={**self._auth(), "Content-Type": "application/json"},
+                timeout=self.config.timeout,
+            )
+            if response.status_code != 200:
+                return self._fail(response)
+            return self._extract_image(response.json() or {})
+        except requests.exceptions.Timeout:
+            return False, None, f"AITunnel: таймаут ({self.config.timeout}с)"
+        except Exception as e:
+            logger.error(f"AITunnel ошибка: {e}")
+            return False, None, f"AITunnel: {e}"
+
+    def edit(
+        self,
+        prompt: str,
+        source_image_url: Optional[str] = None,
+        source_image_bytes: Optional[bytes] = None,
+        additional_source_images: Optional[List[bytes]] = None,
+        mask_bytes: Optional[bytes] = None,
+        input_fidelity: Optional[str] = None,
+        width: int = 900,
+        height: int = 1200,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        if source_image_bytes is None:
+            if not source_image_url:
+                return False, None, "AITunnel edit: не передано исходное изображение"
+            try:
+                src = requests.get(source_image_url, timeout=60)
+                if src.status_code != 200:
+                    return False, None, f"AITunnel edit: исходное фото HTTP {src.status_code}"
+                source_image_bytes = src.content
+            except Exception as e:
+                return False, None, f"AITunnel edit: не скачалось исходное фото: {e}"
+        try:
+            additional = list(additional_source_images or [])
+            for image in additional:
+                if not isinstance(image, (bytes, bytearray)) or not image:
+                    return False, None, "AITunnel edit: некорректный дополнительный референс"
+            if additional:
+                files = [("image[]", self._multipart_image(source_image_bytes, "source"))]
+                files.extend(
+                    (
+                        "image[]",
+                        self._multipart_image(bytes(image), f"reference-{index}"),
+                    )
+                    for index, image in enumerate(additional, start=1)
+                )
+                if mask_bytes:
+                    files.append(("mask", ("mask.png", mask_bytes, "image/png")))
+            else:
+                files = {"image": self._multipart_image(source_image_bytes, "source")}
+                if mask_bytes:
+                    files["mask"] = ("mask.png", mask_bytes, "image/png")
+            request_data = {
+                "model": self.config.aitunnel_edit_model,
+                "prompt": prompt,
+                "n": "1",
+                "size": "{}x{}".format(
+                    *self._effective_size(width, height, self.config.aitunnel_edit_model)
+                ),
+                "response_format": "b64_json",
+            }
+            if input_fidelity in ("high", "low") and self.config.aitunnel_edit_model.startswith("gpt-image"):
+                request_data["input_fidelity"] = input_fidelity
+            response = requests.post(
+                f"{self.BASE_URL}/images/edits",
+                files=files,
+                data=request_data,
+                headers=self._auth(),
+                timeout=self.config.timeout,
+            )
+            if response.status_code != 200:
+                return self._fail(response)
+            return self._extract_image(response.json() or {})
+        except requests.exceptions.Timeout:
+            return False, None, f"AITunnel: таймаут ({self.config.timeout}с)"
+        except Exception as e:
+            logger.error(f"AITunnel edit ошибка: {e}")
+            return False, None, f"AITunnel: {e}"
+
+
 class ImageGenerationService:
     """
     Главный сервис генерации изображений
@@ -1183,6 +1664,10 @@ class ImageGenerationService:
             self.generator = TogetherImageGenerator(config)
         elif config.provider == ImageProvider.OPENAI_DALLE:
             self.generator = OpenAIImageGenerator(config)
+        elif config.provider == ImageProvider.GEN_API:
+            self.generator = GenApiImageGenerator(config)
+        elif config.provider == ImageProvider.AITUNNEL:
+            self.generator = AITunnelImageGenerator(config)
         else:
             # Replicate (FLUX_PRO, SDXL)
             self.generator = ReplicateImageGenerator(config)
@@ -1211,38 +1696,72 @@ class ImageGenerationService:
 
         return self.generator.generate(prompt, w, h, reference_image_url)
 
+    def edit_image(
+        self,
+        prompt: str,
+        source_image_url: Optional[str] = None,
+        source_image_bytes: Optional[bytes] = None,
+        additional_source_images: Optional[List[bytes]] = None,
+        mask_bytes: Optional[bytes] = None,
+        input_fidelity: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        """Image-to-image: сцена вокруг товара по исходному фото (режим A)."""
+        return self.generator.edit(
+            prompt=prompt,
+            source_image_url=source_image_url,
+            source_image_bytes=source_image_bytes,
+            additional_source_images=additional_source_images,
+            mask_bytes=mask_bytes,
+            input_fidelity=input_fidelity,
+            width=width or self.config.default_width,
+            height=height or self.config.default_height,
+        )
+
     def generate_slide_image(
         self,
         slide_data: Dict,
         product_photos: Optional[List[str]] = None,
         product_title: str = ""
     ) -> Tuple[bool, Optional[bytes], str]:
+        """Generate only a text-free background for a fact-safe slide.
+
+        Product photos, product title and visible copy intentionally never enter
+        the image model.  The foreground and typography are added downstream.
         """
-        Генерирует изображение для слайда Rich-контента
+        image_concept = slide_data.get("image_concept") or {}
+        scene_key = image_concept.get("scene_key", "luxury")
+        return self.generate_background(scene_key)
 
-        Args:
-            slide_data: Данные слайда из AI (title, subtitle, image_concept, etc.)
-            product_photos: Список URL фотографий товара
-            product_title: Название товара
-
-        Returns:
-            Tuple[success, image_bytes, error]
-        """
-        # Строим промпт из данных слайда
-        prompt = self._build_slide_prompt(slide_data, product_title)
-
-        # Выбираем референс если есть
-        reference_url = None
-        if product_photos and self.config.provider != ImageProvider.OPENAI_DALLE:
-            # Для Flux/SDXL можем использовать референс
-            reference_url = product_photos[0]
-
-        return self.generate_from_prompt(
-            prompt=prompt,
-            width=self.config.default_width,
-            height=self.config.default_height,
-            reference_image_url=reference_url
+    def generate_background(
+        self,
+        scene_key: str = "luxury",
+        *,
+        width: int = 900,
+        height: int = 1200,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        """Production model boundary: approved scene key in, empty canvas out."""
+        from services.infographic_prompts import (
+            ATMOSPHERE_PRESETS,
+            build_background_prompt,
         )
+        from services.infographic_quality import ImageQualityError, canonicalize_image
+
+        if scene_key not in ATMOSPHERE_PRESETS:
+            return False, None, f"Неизвестная сцена: {scene_key}"
+        success, image_bytes, error = self.generate_from_prompt(
+            prompt=build_background_prompt(scene_key),
+            width=width,
+            height=height,
+            reference_image_url=None,
+        )
+        if not success or not image_bytes:
+            return False, None, error or "Провайдер не вернул фон"
+        try:
+            return True, canonicalize_image(image_bytes, (width, height)), ""
+        except ImageQualityError as exc:
+            return False, None, str(exc)
 
     def generate_all_slides(
         self,
@@ -1303,42 +1822,17 @@ class ImageGenerationService:
         return results
 
     def _build_slide_prompt(self, slide_data: Dict, product_title: str = "") -> str:
-        """Строит промпт для слайда из его данных"""
+        """Compatibility helper returning the same background-only prompt."""
+        from services.infographic_prompts import (
+            ATMOSPHERE_PRESETS,
+            build_background_prompt,
+        )
 
-        slide_type = slide_data.get('type', 'feature')
-        title = slide_data.get('title', '')
-        subtitle = slide_data.get('subtitle', '')
-        image_concept = slide_data.get('image_concept', {})
-
-        # Базовая информация
-        prompt_parts = [
-            f"Product infographic slide for: {product_title}" if product_title else "Product infographic slide",
-            f"Slide type: {slide_type}",
-        ]
-
-        # Добавляем концепцию изображения
-        if image_concept:
-            main_obj = image_concept.get('main_object', '')
-            background = image_concept.get('background', '')
-            composition = image_concept.get('composition', 'center')
-            mood = image_concept.get('mood', '')
-
-            if main_obj:
-                prompt_parts.append(f"Main visual: {main_obj}")
-            if background:
-                prompt_parts.append(f"Background: {background}")
-            if mood:
-                prompt_parts.append(f"Mood/style: {mood}")
-            if composition:
-                prompt_parts.append(f"Composition: product positioned {composition}")
-
-        # Контекст из заголовков
-        if title:
-            prompt_parts.append(f"Theme: {title}")
-        if subtitle:
-            prompt_parts.append(f"Context: {subtitle}")
-
-        return "\n".join(prompt_parts)
+        image_concept = slide_data.get("image_concept") or {}
+        scene_key = image_concept.get("scene_key", "luxury")
+        if scene_key not in ATMOSPHERE_PRESETS:
+            scene_key = "luxury"
+        return build_background_prompt(scene_key)
 
     def test_connection(self) -> Tuple[bool, str]:
         """Тестирует подключение к API"""

@@ -235,6 +235,24 @@ class PlatformClient:
             params={'limit': min(max(int(limit), 1), 50)},
         )
 
+    def search_knowledge(self, seller_id: int, query: str, limit: int = 6,
+                         max_chars: int = 6000) -> dict:
+        """Retrieve bounded, cited unstructured guidance for the current task."""
+        if not isinstance(query, str) or not 2 <= len(query.strip()) <= 500:
+            raise ValueError('query must contain 2..500 characters')
+        if not isinstance(limit, int) or isinstance(limit, bool):
+            raise ValueError('limit must be an integer')
+        if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+            raise ValueError('max_chars must be an integer')
+        return self._request(
+            'POST', f'/sellers/{seller_id}/knowledge/search',
+            json={
+                'query': query.strip(),
+                'limit': min(max(limit, 1), 8),
+                'max_chars': min(max(max_chars, 500), 6000),
+            },
+        )
+
     def resolve_supplier(self, seller_id: int, query: str) -> dict:
         return self._request(
             'GET', f'/sellers/{seller_id}/suppliers/resolve',

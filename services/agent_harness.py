@@ -40,6 +40,8 @@ from services import agent_service
 
 MAX_MESSAGE_LENGTH = 4000
 MAX_PRODUCT_IDS = 500
+SEMANTIC_CONTEXT_MAX_CHARS = 2400
+SEMANTIC_CONTEXT_MAX_MESSAGES = 6
 HARNESS_PLAN_VERSION = 2
 TERMINAL_TASK_STATUSES = {'completed', 'failed', 'cancelled'}
 ACTIVE_TASK_STATUSES = {'queued', 'running'}
@@ -51,7 +53,7 @@ PAGE_CONTEXT_ENTITY_KEYS = {
 
 DIRECT_HELP_PATTERNS = (
     'что ты умеешь', 'что умеешь', 'твои возможности', 'как ты работаешь',
-    'помощь', 'help',
+    'помощь', 'помоги', 'help',
 )
 
 SKILLS = {
@@ -224,12 +226,13 @@ def get_model_policy(seller_id: int) -> dict:
 
 def direct_response(text: str) -> Optional[str]:
     normalized = text.strip().lower()
-    if normalized in {'привет', 'здравствуй', 'hello', 'hi'}:
+    standalone = re.sub(r'[?!.]+$', '', normalized).strip()
+    if standalone in {'привет', 'здравствуй', 'hello', 'hi'}:
         return (
             'Здравствуйте. Опишите результат, который нужен: я соберу контекст, '
             'покажу план и попрошу подтверждение перед изменением данных.'
         )
-    if _contains_any(normalized, DIRECT_HELP_PATTERNS):
+    if standalone in DIRECT_HELP_PATTERNS:
         return (
             'Я работаю с карточками как единый помощник: готовлю товары к WB, '
             'улучшаю SEO и характеристики, проверяю категории, бренды, размеры, '
@@ -243,7 +246,7 @@ def _conversation_usage_response(conversation: AgentConversation, text: str) -> 
     normalized = text.lower()
     if not _contains_any(normalized, (
         'сколько токен', 'расход токен', 'api запрос', 'апи запрос',
-        'сколько стоил', 'стоимость запуск', 'расход последн',
+        'сколько стоил запуск', 'стоимость запуск', 'расход последн',
     )):
         return None
     run = AgentMessage.query.join(
@@ -267,16 +270,56 @@ def _conversation_usage_response(conversation: AgentConversation, text: str) -> 
 
 
 def _needs_semantic_planner(text: str) -> bool:
-    normalized = text.lower()
-    return (
-        len(text) > 140
-        or sum(1 for token in ('выбер', 'отбери', 'если', 'котор', 'из них', 'сначала', 'затем') if token in normalized) >= 2
-        or bool(_extract_named_scope(normalized))
-    )
+    """Route every unresolved user goal through the bounded semantic fallback."""
+    return bool((text or '').strip())
+
+
+def _compact_dialog_context(conversation: AgentConversation,
+                            current_message_id: str = None) -> list[dict]:
+    """Return a small language-only context; entity scope stays task-owned."""
+    query = AgentMessage.query.filter_by(conversation_id=conversation.id)
+    if current_message_id:
+        query = query.filter(AgentMessage.id != current_message_id)
+    rows = query.filter(
+        AgentMessage.role.in_({'user', 'assistant'}),
+        AgentMessage.kind.in_({'text', 'clarification', 'plan'}),
+    ).order_by(
+        AgentMessage.created_at.desc(), AgentMessage.id.desc(),
+    ).limit(SEMANTIC_CONTEXT_MAX_MESSAGES).all()
+
+    result = []
+    remaining = SEMANTIC_CONTEXT_MAX_CHARS
+    # Rows are newest-first so the bounded budget always keeps the turns that
+    # are most useful for pronouns and follow-up requests.
+    for message in rows:
+        content = re.sub(r'\s+', ' ', str(message.content or '')).strip()
+        if not content or remaining <= 0:
+            continue
+        content = content[:min(600, remaining)]
+        result.append({'role': message.role, 'content': content})
+        remaining -= len(content)
+    return list(reversed(result))
 
 
 def _is_no_write_request(text: str) -> bool:
     return _is_global_no_write_request(text)
+
+
+def _has_write_action(text: str) -> bool:
+    return _contains_any(text.lower(), (
+        'улучш', 'перепиш', 'обнов', 'сделай', 'исправ', 'оптимиз',
+        'нормализ', 'заполн', 'подготов', 'импортиру', 'опублику',
+        'установ', 'поставь', 'рассчитай', 'пересчитай', 'проверь',
+    ))
+
+
+def _allows_global_write(text: str) -> bool:
+    normalized = text.lower()
+    return _contains_any(normalized, (
+        'все карточ', 'все товар', 'всех карточ', 'всех товар',
+        'весь каталог', 'всём каталоге', 'всем карточ', 'всем товар',
+        'всю витрину', 'для всех карточ', 'для всех товар',
+    ))
 
 
 def _is_global_no_write_request(text: str) -> bool:
@@ -351,6 +394,28 @@ def _resolve_entity_kind(value, page_context: dict = None) -> str:
 
 def _parse_number(value: str) -> float:
     return float(re.sub(r'\s+', '', value).replace(',', '.'))
+
+
+def _is_plain_catalog_listing(text: str, wb_catalog: bool = False) -> bool:
+    """Accept only an unqualified count/list; modifiers belong to semantics."""
+    normalized = re.sub(r'[?!.]+$', '', re.sub(r'\s+', ' ', text.strip().lower())).strip()
+    noun = r'(?:товар\w*|карточ\w*)'
+    imported = r'(?:импортированн\w*\s+)?'
+    if wb_catalog:
+        patterns = (
+            rf'сколько(?:\s+всего)?(?:\s+у\s+меня)?\s+{noun}\s+(?:на\s+wb|wb)',
+            rf'(?:общее\s+количество|всего)\s+{noun}\s+(?:на\s+wb|wb)',
+            rf'(?:покажи|показать|выведи|дай)(?:\s+мне)?\s+(?:все\s+)?{noun}\s+(?:на\s+wb|wb)',
+            rf'список\s+{noun}\s+(?:на\s+wb|wb)',
+        )
+    else:
+        patterns = (
+            rf'сколько(?:\s+всего)?(?:\s+у\s+меня)?\s+{imported}{noun}',
+            rf'(?:общее\s+количество|всего)\s+{imported}{noun}',
+            rf'(?:покажи|показать|выведи|дай)(?:\s+мне)?\s+(?:все\s+)?{imported}{noun}',
+            rf'список\s+{imported}{noun}',
+        )
+    return any(re.fullmatch(pattern, normalized) for pattern in patterns)
 
 
 def _extract_catalog_query(text: str) -> Optional[dict]:
@@ -460,11 +525,7 @@ def _extract_catalog_query(text: str) -> Optional[dict]:
         params['vendor_code'] = vendor.group(1)
         labels.append(f'с артикулом {vendor.group(1)}')
 
-    if not labels and not _contains_any(text, (
-        'сколько всего', 'общее количество', 'всего товар', 'всего карточ',
-        'покажи товар', 'покажи карточ', 'список товар', 'список карточ',
-        'сколько импортирован', 'покажи импортирован', 'список импортирован',
-    )):
+    if not labels and not _is_plain_catalog_listing(text):
         return None
     params['condition_label'] = ', '.join(labels) if labels else 'во всём импортированном каталоге'
     return params
@@ -499,6 +560,8 @@ def _extract_wb_catalog_query(text: str) -> Optional[dict]:
     if quality:
         params['quality_max'] = min(float(quality.group(1)), 100.0)
         labels.append(f'с Quality Score ниже {quality.group(1)}')
+    if not labels and not _is_plain_catalog_listing(text, wb_catalog=True):
+        return None
     params['condition_label'] = ', '.join(labels) if labels else 'в каталоге WB'
     return params
 
@@ -521,6 +584,18 @@ def _extract_system_query(text: str) -> Optional[dict]:
     return None
 
 
+def _is_explicit_knowledge_query(text: str) -> bool:
+    """Recognize explicit document questions without spending a routing call."""
+    return bool(re.search(
+        r'(?:\bбаз(?:а|е|у|ой)\s+знаний\b|'
+        r'\b(?:правил|регламент|инструкц|документац)\w*\s+(?:wb|вб|wildberries)\b|'
+        r'\b(?:wb|вб|wildberries)\s+(?:правил|регламент|инструкц|документац)\w*\b|'
+        r'\bсогласно\s+(?:правил|регламент|инструкц|документац)\w*\b|'
+        r'\bчто\s+(?:сказано|написано)\s+в\s+(?:правил|регламент|инструкц|документац)\w*\b)',
+        text, flags=re.IGNORECASE,
+    ))
+
+
 def build_plan(text: str, product_ids=None, page_context=None,
                entity_kind=None) -> Optional[HarnessPlan]:
     """Build a conservative deterministic plan without spending LLM tokens."""
@@ -533,6 +608,22 @@ def build_plan(text: str, product_ids=None, page_context=None,
     named_scope = _extract_named_scope(normalized)
     if selected_ids and entity_kind == 'unsupported':
         return None
+    if _is_explicit_knowledge_query(normalized):
+        return HarnessPlan(
+            title='Ответ по базе знаний',
+            summary=(
+                'Найти релевантные версии проверенных инструкций, собрать bounded '
+                'контекст и ответить только по нему с обязательными источниками.'
+            ),
+            steps=[{
+                'agent': 'knowledge-query', 'task_type': 'answer_knowledge',
+                'label': 'Поиск в проверенных инструкциях',
+                'params': {'query': text[:500]},
+            }],
+            execution_type='custom', pipeline=None,
+            risk='read', confidence=0.99,
+            scope_label='Глобальные и seller-scoped документы базы знаний',
+        )
     if selected_ids and _contains_any(normalized, (
         'аудит', 'проверь выбран', 'проверить выбран', 'основные проблемы',
         'проблемы карточ', 'ошибки карточ',
@@ -718,6 +809,13 @@ def build_plan(text: str, product_ids=None, page_context=None,
             scope_label=f'Импортированные карточки поставщика «{named_scope.title()}»',
         )
 
+    named_write = named_scope and _has_write_action(normalized)
+    if named_write:
+        # The semantic planner may prepend a typed supplier resolver. A local
+        # keyword plan must never silently reinterpret a named scope as the
+        # entire imported catalog.
+        return None
+
     if _is_no_write_request(normalized):
         return None
 
@@ -754,7 +852,10 @@ def build_plan(text: str, product_ids=None, page_context=None,
             risk='write', confidence=0.91,
         )
 
-    if _contains_any(normalized, ('подготов', 'импорт', 'к публикац', 'к wb', 'на wb')):
+    if _contains_any(normalized, (
+        'подготов', 'импортиру', 'запусти импорт', 'опублику',
+        'выгрузи', 'отправь на wb', 'отправить на wb',
+    )):
         pipeline = PIPELINES['full_prepare']
         return HarnessPlan(
             title='Подготовить товары к WB',
@@ -763,7 +864,9 @@ def build_plan(text: str, product_ids=None, page_context=None,
             risk='write', confidence=0.96,
         )
 
-    if _contains_any(normalized, ('seo', 'сео', 'заголов', 'описани', 'ключев')):
+    if _has_write_action(normalized) and _contains_any(
+        normalized, ('seo', 'сео', 'заголов', 'описани', 'ключев'),
+    ):
         pipeline = PIPELINES['seo_boost']
         return HarnessPlan(
             title='Улучшить SEO карточек', summary=pipeline['description'],
@@ -779,7 +882,9 @@ def build_plan(text: str, product_ids=None, page_context=None,
             risk='read', confidence=0.92,
         )
 
-    if _contains_any(normalized, ('категори', 'subject', 'предмет wb')):
+    if _has_write_action(normalized) and _contains_any(
+        normalized, ('категори', 'subject', 'предмет wb'),
+    ):
         pipeline = PIPELINES['category_fix']
         return HarnessPlan(
             title='Исправить категории и характеристики', summary=pipeline['description'],
@@ -787,7 +892,12 @@ def build_plan(text: str, product_ids=None, page_context=None,
             risk='write', confidence=0.93,
         )
 
-    matched = [spec for spec in SKILLS.values() if _contains_any(normalized, spec['keywords'])]
+    has_write_action = _has_write_action(normalized)
+    matched = [
+        spec for spec in SKILLS.values()
+        if _contains_any(normalized, spec['keywords'])
+        and (spec['risk'] == 'read' or has_write_action)
+    ]
     if not matched:
         return None
 
@@ -892,6 +1002,7 @@ def _create_run_from_plan(conversation: AgentConversation, plan_message: AgentMe
             'kind': 'imported_product',
             'ids': metadata.get('product_ids') or [],
         },
+        'planning_usage': metadata.get('planning_usage') or {},
     }
     if metadata.get('execution_type') == 'pipeline' and metadata.get('pipeline'):
         task_type = 'pipeline'
@@ -921,7 +1032,8 @@ def _create_run_from_plan(conversation: AgentConversation, plan_message: AgentMe
 
 def _create_planning_run(conversation: AgentConversation, text: str,
                          product_ids: list[int], page_context: dict = None,
-                         entity_kind: str = None) -> AgentMessage:
+                         entity_kind: str = None,
+                         current_message_id: str = None) -> AgentMessage:
     state = runtime_state()
     if not state['online']:
         raise RuntimeError('ИИ-помощник не подключён')
@@ -937,6 +1049,12 @@ def _create_planning_run(conversation: AgentConversation, text: str,
             'product_ids': product_ids,
             'page_context': page_context or {},
             'entity_scope': entity_scope,
+            'dialog_context': _compact_dialog_context(
+                conversation, current_message_id=current_message_id,
+            ),
+            'named_scope_hint': _extract_named_scope(text),
+            'allow_writes': not _is_global_no_write_request(text),
+            'allow_global_write': _allows_global_write(text),
             'model_policy': model_policy,
             'source': 'unified_chat_planner',
         },
@@ -1019,7 +1137,7 @@ def submit_turn(conversation: AgentConversation, text: str,
     # Exact, safety-critical recipes win over the semantic planner. This keeps
     # named scopes and common audits deterministic and avoids one model call.
     plan = build_plan(text, ids, context, entity_kind)
-    if plan is None and ids and resolved_kind in {'product', 'unsupported'}:
+    if plan is None and ids and resolved_kind == 'unsupported':
         assistant = _new_message(
             conversation, 'assistant',
             'Я вижу карточку на текущей странице, но это действие пока не имеет '
@@ -1027,15 +1145,6 @@ def submit_turn(conversation: AgentConversation, text: str,
             'совпадающий ID из другого каталога. Для основной карточки сейчас доступны '
             '«что можешь сказать по этой карточке?» и «улучши её описание».',
             kind='clarification', metadata={'reason': 'unsupported_entity_action'},
-        )
-        db.session.commit()
-        return {'user_message': user_message, 'assistant_message': assistant, 'run': None}
-    if plan is None and _is_no_write_request(text):
-        assistant = _new_message(
-            conversation, 'assistant',
-            'Режим без изменений принят. Уточните область анализа: выбранные ID, '
-            'поставщика или конкретный фильтр вроде «карточки без описания».',
-            kind='clarification', metadata={'reason': 'read_scope_required'},
         )
         db.session.commit()
         return {'user_message': user_message, 'assistant_message': assistant, 'run': None}
@@ -1065,6 +1174,7 @@ def submit_turn(conversation: AgentConversation, text: str,
         try:
             planning_message = _create_planning_run(
                 conversation, text, ids, context, resolved_kind,
+                current_message_id=user_message.id,
             )
         except RuntimeError as exc:
             assistant = _new_message(
@@ -1351,6 +1461,8 @@ def sync_run_message(message: AgentMessage) -> bool:
     if metadata.get('phase') == 'planning' and task.status in TERMINAL_TASK_STATUSES:
         result = task.get_result()
         if task.status == 'completed' and result.get('steps'):
+            risk = result.get('risk') or 'write'
+            requires_approval = risk != 'read'
             message.kind = 'plan'
             message.content = result.get('summary') or 'План готов.'
             message.task_id = None
@@ -1362,10 +1474,10 @@ def sync_run_message(message: AgentMessage) -> bool:
                 'steps': result.get('steps') or [],
                 'execution_type': 'custom',
                 'pipeline': None,
-                'risk': result.get('risk') or 'write',
+                'risk': risk,
                 'confidence': result.get('confidence', 0.7),
-                'requires_approval': True,
-                'status': 'pending_approval',
+                'requires_approval': requires_approval,
+                'status': 'pending_approval' if requires_approval else 'ready',
                 'product_ids': metadata.get('product_ids') or [],
                 'scope_label': result.get('scope_label') or 'Область определена из запроса',
                 'model_policy': metadata.get('model_policy') or {},
@@ -1376,7 +1488,17 @@ def sync_run_message(message: AgentMessage) -> bool:
                     'ids': metadata.get('product_ids') or [],
                 },
                 'planning_task_id': task.id,
+                'planning_usage': result.get('_usage') or {},
+                'auto_started': not requires_approval,
             })
+            if not requires_approval:
+                try:
+                    _create_run_from_plan(message.conversation, message)
+                except RuntimeError as exc:
+                    plan_metadata = message.get_metadata()
+                    plan_metadata['status'] = 'runtime_unavailable'
+                    plan_metadata['runtime_error'] = str(exc)
+                    message.set_metadata(plan_metadata)
         else:
             message.kind = 'clarification'
             message.content = (
@@ -1412,15 +1534,23 @@ def sync_run_message(message: AgentMessage) -> bool:
 
 def conversation_payload(conversation: AgentConversation, message_limit: int = 100,
                          step_after: int = 0) -> dict:
-    run_messages = AgentMessage.query.filter_by(
-        conversation_id=conversation.id, kind='run',
-    ).order_by(AgentMessage.created_at.desc()).limit(1).all()
+    def latest_run_messages():
+        return AgentMessage.query.filter_by(
+            conversation_id=conversation.id, kind='run',
+        ).order_by(AgentMessage.created_at.desc()).limit(1).all()
+
+    run_messages = latest_run_messages()
     changed = False
     for message in run_messages:
         changed = sync_run_message(message) or changed
-    run_messages = [message for message in run_messages if message.kind == 'run']
     if changed:
         db.session.commit()
+        # A completed semantic read-plan may have auto-created its execution
+        # run while replacing the planning message. Re-query so this response
+        # keeps UI polling alive without one empty cycle.
+        run_messages = latest_run_messages()
+    else:
+        run_messages = [message for message in run_messages if message.kind == 'run']
 
     messages = list(reversed(
         AgentMessage.query.filter_by(conversation_id=conversation.id).order_by(

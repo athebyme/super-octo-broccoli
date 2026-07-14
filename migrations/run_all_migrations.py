@@ -1043,6 +1043,14 @@ def migrate(db_path):
             from migrations.migrate_add_marketplace_reference_freshness import apply_migration
         total_added += apply_migration(conn, verbose=False)
 
+        # Curated agent knowledge + FTS5. This also reconciles an existing FTS
+        # index so the comprehensive path is safe after interrupted deploys.
+        try:
+            from migrate_add_agent_knowledge import apply_migration as apply_knowledge_migration
+        except ImportError:
+            from migrations.migrate_add_agent_knowledge import apply_migration as apply_knowledge_migration
+        total_added += apply_knowledge_migration(conn, verbose=False)
+
         # ============================================================
         # Auto-publish tables
         # ============================================================
@@ -1176,6 +1184,21 @@ def main():
             sys.exit(1)
 
     success = migrate(db_path)
+    if success:
+        try:
+            from migrate_add_image_generation_lab import migrate as migrate_image_lab
+            migrate_image_lab(db_path)
+            from migrate_add_image_lab_reference_watermark import (
+                migrate as migrate_image_lab_reference_watermark,
+            )
+            migrate_image_lab_reference_watermark(db_path)
+            from migrate_add_image_lab_angle_synthesis import (
+                migrate as migrate_image_lab_angle_synthesis,
+            )
+            migrate_image_lab_angle_synthesis(db_path)
+        except Exception as exc:
+            print(f"❌ Image Lab migration failed: {exc}")
+            success = False
     sys.exit(0 if success else 1)
 
 

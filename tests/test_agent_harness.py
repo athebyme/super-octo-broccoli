@@ -2,6 +2,8 @@
 """Unit tests for conservative planning in the unified agent harness."""
 import json
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from agents.llm import llm_retry
 from agents.unified import BatchAuditSkill, CatalogQuerySkill, DescriptionWriterSkill
@@ -9,6 +11,7 @@ from services.agent_harness import (
     _normalize_product_ids,
     build_plan,
     direct_response,
+    get_model_policy,
 )
 
 
@@ -222,6 +225,28 @@ class _IncorrectCountLLM:
 
 
 class UnifiedHarnessPlanningTests(unittest.TestCase):
+    def test_default_split_policy_uses_flash_for_execution_and_writes(self):
+        settings = SimpleNamespace(
+            ai_provider='deepseek',
+            ai_model='deepseek-v4-pro',
+            agent_single_model=False,
+        )
+
+        class SettingsQuery:
+            def filter_by(self, **kwargs):
+                return self
+
+            def first(self):
+                return settings
+
+        fake_model = SimpleNamespace(query=SettingsQuery())
+        with patch('services.agent_harness.AutoImportSettings', fake_model):
+            policy = get_model_policy(7)
+
+        self.assertEqual(policy['primary_model'], 'deepseek-v4-pro')
+        self.assertEqual(policy['fast_model'], 'deepseek-v4-flash')
+        self.assertEqual(policy['write_model'], 'deepseek-v4-flash')
+
     def test_unknown_request_requires_clarification(self):
         self.assertIsNone(build_plan('сделай что-нибудь хорошее'))
 

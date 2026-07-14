@@ -35,6 +35,7 @@ from services.brand_reference_service import (
     preflight_brand_categories,
     resolve_exact_brand_categories,
 )
+from services.agent_knowledge import search_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +318,42 @@ def internal_task_ai_config(task_id):
             'single_model': bool(single_model),
         },
     })
+
+
+# ── Курируемая база знаний ──────────────────────────────────────
+
+@internal_api_bp.route('/sellers/<int:seller_id>/knowledge/search', methods=['POST'])
+@_authenticate_agent
+def internal_search_agent_knowledge(seller_id):
+    """Tenant-scoped read-only retrieval for an assigned active task."""
+    _, error = _assigned_task_for_seller(seller_id)
+    if error:
+        return error
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'JSON object is required'}), 400
+    unknown = set(payload) - {'query', 'limit', 'max_chars'}
+    if unknown:
+        return jsonify({'error': f'Unknown fields: {", ".join(sorted(unknown))}'}), 400
+    query = payload.get('query')
+    limit = payload.get('limit', 6)
+    max_chars = payload.get('max_chars', 6000)
+    if not isinstance(query, str):
+        return jsonify({'error': 'query must be a string'}), 400
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        return jsonify({'error': 'limit must be an integer'}), 400
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+        return jsonify({'error': 'max_chars must be an integer'}), 400
+    try:
+        result = search_knowledge(
+            seller_id=seller_id, query=query, limit=limit, max_chars=max_chars,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception:
+        logger.exception('Agent knowledge retrieval failed')
+        return jsonify({'error': 'Knowledge retrieval is temporarily unavailable'}), 503
+    return jsonify(result)
 
 
 # ── Данные: товары ──────────────────────────────────────────────

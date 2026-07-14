@@ -9,11 +9,13 @@ Infographic Renderer — рендеринг инфографики из HTML-ш�
 """
 
 import base64
+import html
 import io
 import json
 import logging
 import os
 import tempfile
+import re
 from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
@@ -23,6 +25,12 @@ logger = logging.getLogger(__name__)
 # Размеры для WB Rich-контента (соотношение 3:4, рекомендуемое WB)
 WB_WIDTH = 900
 WB_HEIGHT = 1200
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _safe_color(value, fallback):
+    return value if isinstance(value, str) and _HEX_COLOR_RE.fullmatch(value) else fallback
 
 # Автоматический поиск Chromium
 _CHROMIUM_PATH = None
@@ -57,9 +65,9 @@ def _find_chromium() -> Optional[str]:
 def _get_slide_bg_gradient(slide_type: str, color_palette: List[str] = None) -> str:
     """Возвращает CSS-градиент фона в зависимости от типа слайда"""
     palette = color_palette or []
-    primary = palette[0] if len(palette) > 0 else '#6366f1'
-    accent = palette[1] if len(palette) > 1 else '#8b5cf6'
-    bg_color = palette[2] if len(palette) > 2 else '#f8fafc'
+    primary = _safe_color(palette[0], '#6366f1') if len(palette) > 0 else '#6366f1'
+    accent = _safe_color(palette[1], '#8b5cf6') if len(palette) > 1 else '#8b5cf6'
+    bg_color = _safe_color(palette[2], '#f8fafc') if len(palette) > 2 else '#f8fafc'
 
     gradients = {
         'hero': f'linear-gradient(135deg, {primary} 0%, {accent} 100%)',
@@ -104,9 +112,9 @@ def _build_slide_html(
 ) -> str:
     """Строит HTML для одного слайда инфографики"""
     slide_type = slide.get('type', 'hero')
-    title = slide.get('title', '')
-    subtitle = slide.get('subtitle', '')
-    bullets = slide.get('bullets') or []
+    title = html.escape(str(slide.get('title', '')))
+    subtitle = html.escape(str(slide.get('subtitle', '')))
+    bullets = [html.escape(str(value)) for value in (slide.get('bullets') or [])]
     color_palette = design.get('color_palette', [])
     font_style = design.get('font_style', 'modern')
 
@@ -115,7 +123,7 @@ def _build_slide_html(
 
     title_color = '#ffffff' if is_dark else '#1e293b'
     subtitle_color = '#e2e8f0' if is_dark else '#64748b'
-    primary = color_palette[0] if color_palette else '#6366f1'
+    primary = _safe_color(color_palette[0], '#6366f1') if color_palette else '#6366f1'
 
     font_family = {
         'modern': "'Inter', 'Segoe UI', system-ui, sans-serif",
@@ -124,7 +132,7 @@ def _build_slide_html(
         'elegant': "'Playfair Display', 'Georgia', serif",
     }.get(font_style, "'Inter', 'Segoe UI', system-ui, sans-serif")
 
-    accent = color_palette[1] if len(color_palette) > 1 else '#8b5cf6'
+    accent = _safe_color(color_palette[1], '#8b5cf6') if len(color_palette) > 1 else '#8b5cf6'
 
     # Фото товара — верхняя половина на hero, или вставка на других слайдах
     photo_html = ''
@@ -176,7 +184,7 @@ def _build_slide_html(
         'trust': 'ГАРАНТИЯ',
         'usage': 'ПРИМЕНЕНИЕ',
     }
-    badge_text = type_labels.get(slide_type, slide_type.upper())
+    badge_text = html.escape(type_labels.get(slide_type, str(slide_type).upper()))
 
     # Контент-зона: вертикальный макет 900x1200
     # Hero с фото: текст снизу, фото сверху
@@ -555,9 +563,9 @@ def _build_overlay_html(
 ) -> str:
     """Строит HTML с AI-сгенерированным фоном и текстовым оверлеем."""
     slide_type = slide.get('type', 'hero')
-    title = slide.get('title', '')
-    subtitle = slide.get('subtitle', '')
-    bullets = slide.get('bullets') or []
+    title = html.escape(str(slide.get('title', '')))
+    subtitle = html.escape(str(slide.get('subtitle', '')))
+    bullets = [html.escape(str(value)) for value in (slide.get('bullets') or [])]
     color_palette = design.get('color_palette', [])
     font_style = design.get('font_style', 'modern')
 
@@ -568,18 +576,19 @@ def _build_overlay_html(
         'elegant': "'Playfair Display', 'Georgia', serif",
     }.get(font_style, "'Inter', 'Segoe UI', system-ui, sans-serif")
 
-    primary = color_palette[0] if color_palette else '#6366f1'
-    accent = color_palette[1] if len(color_palette) > 1 else '#8b5cf6'
+    primary = _safe_color(color_palette[0], '#6366f1') if color_palette else '#6366f1'
+    accent = _safe_color(color_palette[1], '#8b5cf6') if len(color_palette) > 1 else '#8b5cf6'
 
     # Фон: AI-картинка или градиент
     if bg_image_b64:
-        bg_style = f'background:url(data:image/jpeg;base64,{bg_image_b64}) center/cover no-repeat;'
+        bg_style = f'background:url(data:image/png;base64,{bg_image_b64}) center/cover no-repeat;'
     else:
         bg_gradient = _get_slide_bg_gradient(slide_type, color_palette)
         bg_style = f'background:{bg_gradient};'
 
-    # Затемнение поверх фона для читаемости текста
-    overlay_style = 'background:linear-gradient(180deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.65) 50%, rgba(0,0,0,0.85) 100%);'
+    # Панель существует только в зарезервированной верхней зоне. Она никогда
+    # не накрывает foreground и не меняет цвет/фактуру товара.
+    overlay_style = 'height:258px;background:linear-gradient(180deg, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.48) 78%, rgba(0,0,0,0) 100%);'
 
     # Фото товара — компактно, поверх фона
     photo_html = ''
@@ -598,7 +607,7 @@ def _build_overlay_html(
         'characteristics': 'ХАРАКТЕРИСТИКИ', 'application': 'ПРИМЕНЕНИЕ',
         'bundling': 'КОМПЛЕКТАЦИЯ', 'trust': 'ГАРАНТИЯ', 'usage': 'ПРИМЕНЕНИЕ',
     }
-    badge_text = type_labels.get(slide_type, slide_type.upper())
+    badge_text = html.escape(type_labels.get(slide_type, 'ФАКТ'))
 
     # Буллеты
     items_html = ''
@@ -615,8 +624,7 @@ def _build_overlay_html(
             {items}
         </ul>'''
 
-    # Текст всегда внизу, на затемнённом фоне — всегда хорошо читается
-    text_max_width = '560px' if product_photo_b64 and slide_type in ('hero',) else '820px'
+    title_size = max(22, 38 - max(0, len(title) - 42) // 10)
 
     return f'''<!DOCTYPE html>
 <html>
@@ -628,7 +636,7 @@ def _build_overlay_html(
             position:relative;overflow:hidden;font-family:{font_family};">
 
     <!-- Gradient overlay for readability -->
-    <div style="position:absolute;inset:0;{overlay_style}"></div>
+    <div style="position:absolute;top:0;left:0;right:0;{overlay_style}"></div>
 
     {photo_html}
 
@@ -641,10 +649,12 @@ def _build_overlay_html(
         </span>
     </div>
 
-    <!-- Content at bottom -->
-    <div style="position:absolute;left:40px;bottom:60px;max-width:{text_max_width};z-index:10;">
-        <h1 style="font-size:42px;font-weight:900;color:#ffffff;
-                   line-height:1.1;letter-spacing:-0.5px;text-transform:uppercase;
+    <!-- Content in the foreground-free top safe zone -->
+    <div id="safe-copy" style="position:absolute;left:40px;right:40px;top:78px;
+                max-height:165px;overflow:hidden;z-index:10;">
+        <h1 id="slide-title" style="font-size:{title_size}px;font-weight:900;color:#ffffff;
+                   line-height:1.08;letter-spacing:-0.3px;
+                   overflow-wrap:anywhere;
                    margin-bottom:12px;text-shadow:0 2px 8px rgba(0,0,0,0.3);">
             {title}
         </h1>
@@ -661,6 +671,69 @@ def _build_overlay_html(
 </html>'''
 
 
+def _template_background_bytes(design: Dict) -> bytes:
+    """Text-free deterministic fallback; safe even when image/OCR APIs fail."""
+    palette = design.get("color_palette") or []
+    top_hex = _safe_color(palette[0], "#232323") if palette else "#232323"
+    bottom_hex = _safe_color(palette[2], "#f4efe7") if len(palette) > 2 else "#f4efe7"
+    top = tuple(int(top_hex[index:index + 2], 16) for index in (1, 3, 5))
+    bottom = tuple(int(bottom_hex[index:index + 2], 16) for index in (1, 3, 5))
+    strip = Image.new("RGB", (1, WB_HEIGHT))
+    pixels = strip.load()
+    for y in range(WB_HEIGHT):
+        ratio = y / max(WB_HEIGHT - 1, 1)
+        color = tuple(round(a + (b - a) * ratio) for a, b in zip(top, bottom))
+        pixels[0, y] = color
+    image = strip.resize((WB_WIDTH, WB_HEIGHT), Image.Resampling.NEAREST)
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _fetch_product_photo_bytes(
+    supplier_product_id: Optional[int],
+    product_photos: Optional[List],
+) -> Optional[bytes]:
+    """Fetch original bytes without thumbnailing or JPEG recompression."""
+    entries = list(product_photos or [])
+    if supplier_product_id:
+        try:
+            from models import SupplierProduct
+            from services.photo_cache import get_photo_cache
+
+            product = SupplierProduct.query.get(supplier_product_id)
+            stored = json.loads(product.photo_urls_json or "[]") if product else []
+            if isinstance(stored, list):
+                entries = stored + entries
+            if product:
+                cache = get_photo_cache()
+                supplier_type = product.supplier.code if product.supplier else "unknown"
+                for entry in stored if isinstance(stored, list) else []:
+                    url = _resolve_photo_url(entry)
+                    if url and cache.is_cached(supplier_type, product.external_id or "", url):
+                        path = cache.get_cache_path(supplier_type, product.external_id or "", url)
+                        with open(path, "rb") as source:
+                            data = source.read()
+                        Image.open(io.BytesIO(data)).verify()
+                        return data
+        except Exception as exc:
+            logger.debug("Original cache photo unavailable: %s", exc)
+
+    try:
+        from services.image_lab_service import download_public_image
+
+        for entry in entries[:6]:
+            url = _resolve_photo_url(entry)
+            if not url:
+                continue
+            data = download_public_image(url)
+            Image.open(io.BytesIO(data)).verify()
+            return data
+    except Exception as exc:
+        logger.debug("Original photo fetch failed: %s", exc)
+    return None
+
+
 def render_hybrid_slides(
     rich_content: Dict,
     image_service,
@@ -669,68 +742,80 @@ def render_hybrid_slides(
     supplier_product_id: int = None,
     max_slides: int = 10
 ) -> List[Dict]:
-    """
-    Гибридный рендеринг: AI генерирует фон, Playwright накладывает текст + фото товара.
+    """Production render: verified copy + empty AI background + unchanged RGB."""
+    from services.infographic_content import (
+        validate_fact_safe_rich_content,
+        visible_texts,
+    )
+    from services.infographic_quality import (
+        compose_identity_preserving,
+        evaluate_background_text,
+        evaluate_final_image,
+    )
 
-    Args:
-        rich_content: JSON rich_content от AI
-        image_service: ImageGenerationService instance
-        product_photos: Фото товара (URL или dict)
-        product_title: Название товара
-        supplier_product_id: ID для загрузки фото из кэша
-        max_slides: Максимум слайдов
-
-    Returns:
-        [{slide_number, slide_type, success, image_bytes, image_size, error, renderer}]
-    """
-    slides = rich_content.get('slides', [])[:max_slides]
+    valid, validation_errors = validate_fact_safe_rich_content(rich_content)
+    if not valid:
+        return [{
+            'slide_number': 0,
+            'success': False,
+            'error': 'Fact-safe validation: ' + '; '.join(validation_errors),
+            'renderer': 'hybrid',
+            'quality': {'status': 'rejected', 'publishable': False},
+        }]
+    slides = rich_content.get('slides', [])[:max(1, min(max_slides, 10))]
     design = rich_content.get('design_recommendations', {})
+    source_bytes = _fetch_product_photo_bytes(supplier_product_id, product_photos)
+    if not source_bytes:
+        return [{
+            'slide_number': 0,
+            'success': False,
+            'error': 'Исходное фото недоступно; генеративная замена запрещена',
+            'renderer': 'hybrid',
+            'quality': {'status': 'rejected', 'publishable': False},
+        }]
 
-    if not slides:
-        return [{'slide_number': 0, 'success': False, 'error': 'Нет слайдов', 'renderer': 'hybrid'}]
-
-    # Загружаем фото товара
-    photo_b64 = None
-    if supplier_product_id:
-        for idx in range(3):
-            photo_b64 = _fetch_photo_from_cache(supplier_product_id, idx)
-            if photo_b64:
-                break
-    if not photo_b64 and product_photos:
-        for entry in product_photos[:3]:
-            photo_b64 = _fetch_photo_as_b64(entry)
-            if photo_b64:
-                break
-
-    results = []
-
-    # 1. Генерируем AI-фоны для каждого слайда
-    logger.info(f"Generating {len(slides)} AI backgrounds...")
-    bg_images = {}
+    prepared = []
     for i, slide in enumerate(slides):
         slide_num = slide.get('number', i + 1)
+        scene_key = (slide.get('image_concept') or {}).get('scene_key', 'luxury')
+        background = None
+        background_source = 'template'
+        background_note = ''
         try:
-            success, img_bytes, error = image_service.generate_slide_image(
-                slide_data=slide,
-                product_photos=[],  # не передаём фото товара как референс для фона
-                product_title=product_title
-            )
-            if success and img_bytes:
-                bg_b64 = base64.b64encode(img_bytes).decode('utf-8')
-                bg_images[i] = bg_b64
-                logger.info(f"AI background {slide_num}: OK ({len(img_bytes)} bytes)")
+            success, candidate, error = image_service.generate_background(scene_key)
+            if success and candidate:
+                candidate_check = evaluate_background_text(candidate)
+                if candidate_check.get('checked') and candidate_check.get('pass'):
+                    background = candidate
+                    background_source = 'ai_background'
+                else:
+                    background_note = (
+                        candidate_check.get('reason')
+                        or 'AI-фон не прошёл no-text gate'
+                    )
             else:
-                logger.warning(f"AI background {slide_num}: failed - {error}")
-        except Exception as e:
-            logger.error(f"AI background {slide_num}: error - {e}")
+                background_note = error or 'AI-фон недоступен'
+        except Exception as exc:
+            background_note = str(exc)
+        if background is None:
+            background = _template_background_bytes(design)
+        try:
+            composite = compose_identity_preserving(background, source_bytes)
+            prepared.append({
+                'slide': slide,
+                'slide_number': slide_num,
+                'background_source': background_source,
+                'background_note': background_note,
+                'composite': composite,
+            })
+        except Exception as exc:
+            prepared.append({
+                'slide': slide,
+                'slide_number': slide_num,
+                'error': str(exc),
+            })
 
-        # Пауза между запросами
-        if i < len(slides) - 1:
-            import time
-            time.sleep(2)
-
-    # 2. Рендерим через Playwright с AI-фонами
-    logger.info(f"Rendering {len(slides)} slides with Playwright overlay...")
+    results = []
     try:
         from playwright.sync_api import sync_playwright
 
@@ -745,55 +830,114 @@ def render_hybrid_slides(
         with sync_playwright() as p:
             browser = p.chromium.launch(**launch_opts)
 
-            for i, slide in enumerate(slides):
-                slide_num = slide.get('number', i + 1)
+            for i, item in enumerate(prepared):
+                slide = item['slide']
+                slide_num = item['slide_number']
                 slide_type = slide.get('type', 'unknown')
-
+                if item.get('error'):
+                    results.append({
+                        'slide_number': slide_num,
+                        'slide_type': slide_type,
+                        'success': False,
+                        'image_bytes': None,
+                        'error': item['error'],
+                        'renderer': 'hybrid',
+                        'quality': {'status': 'rejected', 'publishable': False},
+                    })
+                    continue
                 try:
-                    bg_b64 = bg_images.get(i)
-                    html = _build_overlay_html(slide, design, bg_b64, photo_b64, i)
+                    composite = item['composite']
+                    scene_b64 = base64.b64encode(composite.image_bytes).decode('ascii')
+                    markup = _build_overlay_html(slide, design, scene_b64, None, i)
 
                     page = browser.new_page(
                         viewport={'width': WB_WIDTH, 'height': WB_HEIGHT},
                         device_scale_factor=1
                     )
-                    page.set_content(html, wait_until='domcontentloaded')
+                    page.set_content(markup, wait_until='domcontentloaded')
                     page.wait_for_timeout(300)
+                    clipped = page.evaluate("""() => {
+                        const el = document.getElementById('safe-copy');
+                        return !el || el.scrollHeight > el.clientHeight;
+                    }""")
+                    if clipped:
+                        page.close()
+                        raise ValueError('Текст не помещается в foreground-free safe-zone')
 
                     png_bytes = page.screenshot(type='png', clip={
                         'x': 0, 'y': 0, 'width': WB_WIDTH, 'height': WB_HEIGHT
                     })
                     page.close()
 
-                    img = Image.open(io.BytesIO(png_bytes))
-                    buf = io.BytesIO()
-                    img.save(buf, format='JPEG', quality=92)
-                    jpeg_bytes = buf.getvalue()
+                    texts = visible_texts({'slides': [slide]})
+                    quality = evaluate_final_image(
+                        png_bytes,
+                        identity_mode='pixel_preserved_composite',
+                        text_mode='deterministic_overlay',
+                        expected_texts=texts,
+                        rendered_texts=texts,
+                        claims_pass=True,
+                        composite_metadata=composite.metadata,
+                        background_text_check={
+                            'checked': True,
+                            'pass': True,
+                            'reason': item['background_source'],
+                        },
+                        background_scene_check={
+                            'checked': item['background_source'] == 'template',
+                            'pass': (
+                                True if item['background_source'] == 'template'
+                                else None
+                            ),
+                            'reason': (
+                                'deterministic empty template'
+                                if item['background_source'] == 'template'
+                                else 'AI scene requires person/object/empty-zone review'
+                            ),
+                        },
+                    )
+                    accepted = quality['status'] != 'rejected'
 
                     results.append({
                         'slide_number': slide_num,
                         'slide_type': slide_type,
-                        'success': True,
-                        'image_bytes': jpeg_bytes,
-                        'image_size': len(jpeg_bytes),
-                        'error': '',
-                        'renderer': 'hybrid' if bg_b64 else 'template',
-                        'has_ai_bg': bool(bg_b64)
+                        'success': accepted,
+                        'publishable': quality['publishable'],
+                        'image_bytes': png_bytes if accepted else None,
+                        'image_size': len(png_bytes) if accepted else 0,
+                        'error': '' if accepted else 'Финальный quality gate отклонил слайд',
+                        'renderer': item['background_source'],
+                        'has_ai_bg': item['background_source'] == 'ai_background',
+                        'background_note': item['background_note'],
+                        'quality': quality,
+                        'composite_metadata': composite.metadata,
                     })
-                    logger.info(f"Hybrid slide {slide_num}: {len(jpeg_bytes)} bytes ({'AI bg' if bg_b64 else 'template bg'})")
+                    logger.info(
+                        "Hybrid slide %s: %s (%s)",
+                        slide_num,
+                        quality['status'],
+                        item['background_source'],
+                    )
 
                 except Exception as e:
                     logger.error(f"Render error slide {slide_num}: {e}")
                     results.append({
                         'slide_number': slide_num, 'slide_type': slide_type,
                         'success': False, 'image_bytes': None, 'error': str(e),
-                        'renderer': 'hybrid'
+                        'renderer': 'hybrid',
+                        'quality': {'status': 'rejected', 'publishable': False},
                     })
 
             browser.close()
 
     except Exception as e:
         logger.error(f"Playwright error: {e}")
-        return [{'slide_number': 0, 'success': False, 'error': f'Playwright error: {e}', 'renderer': 'hybrid'}]
+        return [{
+            'slide_number': 0,
+            'success': False,
+            'error': f'Playwright error: {e}',
+            'renderer': 'hybrid',
+            'quality': {'status': 'rejected', 'publishable': False},
+        }]
 
     return results

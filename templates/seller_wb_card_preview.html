@@ -131,23 +131,20 @@
                         <span x-text="loading && action === 'generate' ? 'Генерация...' : 'Сгенерировать Rich-контент'"></span>
                     </button>
 
-                    <!-- Рендер инфографики (шаблоны) -->
+                    <!-- Production-safe рендер инфографики -->
                     <button @click="renderInfographic()" :disabled="loading || !hasRichContent"
                             class="w-full px-3 py-2 bg-white border border-gray-300 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 flex items-center justify-center gap-2">
                         <template x-if="loading && action === 'render'">
                             <svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                         </template>
-                        <span x-text="loading && action === 'render' ? 'Рендеринг...' : 'Рендер инфографики (бесплатно)'"></span>
+                        <span x-text="loading && action === 'render' ? 'Рендеринг...' : 'Собрать безопасную инфографику'"></span>
                     </button>
 
-                    <!-- AI инфографика (гибрид) -->
-                    <button @click="renderHybrid()" :disabled="loading || !hasRichContent"
-                            class="w-full px-3 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-medium rounded-lg hover:from-purple-700 hover:to-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2">
-                        <template x-if="loading && action === 'hybrid'">
-                            <svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                        </template>
-                        <span x-text="loading && action === 'hybrid' ? 'AI генерация...' : 'AI инфографика (качественная)'"></span>
-                    </button>
+                    <!-- A/B-лаборатория фонов и провайдеров -->
+                    <a href="{{ url_for('image_lab_page') }}?product_id={{ product.id }}"
+                       class="w-full px-3 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-xs font-medium rounded-lg hover:from-purple-700 hover:to-indigo-700 flex items-center justify-center gap-2">
+                        Сравнить варианты в Фотостудии
+                    </a>
 
                     <!-- Просмотр слайдов -->
                     <button @click="viewSlides()" :disabled="!hasRichContent"
@@ -169,7 +166,8 @@
                                 </template>
                                 <div class="px-2 py-1 bg-gray-50 flex justify-between items-center">
                                     <span class="text-xs text-gray-500" x-text="'Слайд ' + (idx+1) + ' — ' + (slide.slide_type || '')"></span>
-                                    <span x-show="slide.success" class="text-xs text-green-600">OK</span>
+                                    <span x-show="slide.success && slide.publishable" class="text-xs text-green-600">AUTO</span>
+                                    <span x-show="slide.success && !slide.publishable" class="text-xs text-yellow-600">REVIEW</span>
                                     <span x-show="!slide.success" class="text-xs text-red-600" x-text="slide.error || 'Ошибка'"></span>
                                 </div>
                             </div>
@@ -496,7 +494,8 @@ function richContentPanel() {
             try {
                 const resp = await fetch('{{ url_for("seller_rich_content", product_id=product.id) }}', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}
+                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest',
+                              'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''}
                 });
                 const data = await resp.json();
                 if (data.success) {
@@ -519,12 +518,14 @@ function richContentPanel() {
             try {
                 const resp = await fetch('{{ url_for("seller_render_infographic", product_id=product.id) }}', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}
+                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest',
+                              'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''}
                 });
                 const data = await resp.json();
                 if (data.success) {
                     this.slides = data.results || [];
-                    this.showMessage(`Готово: ${data.successful}/${data.total_slides} слайдов`, 'success');
+                    const autoPassed = this.slides.filter(slide => slide.publishable).length;
+                    this.showMessage(`Готово: ${data.successful}/${data.total_slides}; auto-pass: ${autoPassed}`, 'success');
                 } else {
                     this.showMessage(data.error || 'Ошибка рендера', 'error');
                 }
@@ -542,7 +543,8 @@ function richContentPanel() {
             try {
                 const resp = await fetch('{{ url_for("seller_render_hybrid", product_id=product.id) }}', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}
+                    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest',
+                              'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''}
                 });
                 const data = await resp.json();
                 if (data.success) {
@@ -563,24 +565,22 @@ function richContentPanel() {
                 const resp = await fetch('{{ url_for("seller_rich_content_slides", product_id=product.id) }}');
                 const data = await resp.json();
                 if (data.success) {
-                    const slides = data.slides;
-                    let html = '<div style="max-height:70vh;overflow-y:auto;font-family:system-ui">';
-                    slides.forEach((s, i) => {
-                        html += `<div style="margin-bottom:12px;padding:8px;border:1px solid #e5e7eb;border-radius:8px">`;
-                        html += `<div style="font-weight:600;font-size:13px;margin-bottom:4px">Слайд ${i+1}: ${s.type || ''}</div>`;
-                        html += `<div style="font-size:12px;font-weight:600">${s.headline || ''}</div>`;
-                        if (s.subheadline) html += `<div style="font-size:11px;color:#6b7280">${s.subheadline}</div>`;
-                        if (s.bullets) {
-                            html += '<ul style="font-size:11px;margin:4px 0;padding-left:16px">';
-                            s.bullets.forEach(b => html += `<li>${b}</li>`);
-                            html += '</ul>';
-                        }
-                        html += '</div>';
-                    });
-                    html += '</div>';
-
                     const w = window.open('', '_blank', 'width=500,height=600');
-                    w.document.write(`<html><head><title>Rich-контент слайды</title></head><body style="margin:16px">${html}</body></html>`);
+                    w.document.title = 'Rich-контент слайды';
+                    w.document.body.style.cssText = 'margin:16px;font-family:system-ui';
+                    data.slides.forEach((slide, index) => {
+                        const card = w.document.createElement('section');
+                        card.style.cssText = 'margin-bottom:12px;padding:10px;border:1px solid #ddd;border-radius:8px';
+                        const heading = w.document.createElement('strong');
+                        heading.textContent = `Слайд ${index + 1}: ${slide.type || ''} — ${slide.title || ''}`;
+                        card.appendChild(heading);
+                        if (slide.subtitle) {
+                            const subtitle = w.document.createElement('p');
+                            subtitle.textContent = slide.subtitle;
+                            card.appendChild(subtitle);
+                        }
+                        w.document.body.appendChild(card);
+                    });
                 } else {
                     this.showMessage(data.error || 'Не удалось загрузить', 'error');
                 }

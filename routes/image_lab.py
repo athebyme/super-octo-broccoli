@@ -1,0 +1,380 @@
+# -*- coding: utf-8 -*-
+"""Seller-facing image generation lab and experiment journal."""
+
+from __future__ import annotations
+
+import csv
+import io
+import logging
+from functools import wraps
+
+from flask import (
+    current_app,
+    jsonify,
+    render_template,
+    Response,
+    request,
+    send_file,
+)
+from flask_login import current_user, login_required
+import requests
+from sqlalchemy.orm import joinedload
+
+from models import ImageGenerationExperiment, ImportedProduct, db
+from services import image_lab_service as lab
+
+logger = logging.getLogger(__name__)
+
+
+def _image_mimetype(data_or_path) -> str:
+    try:
+        from PIL import Image
+
+        image = Image.open(data_or_path)
+        return Image.MIME.get(image.format, "application/octet-stream")
+    except Exception:
+        return "application/octet-stream"
+
+
+def _seller_required(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.seller:
+            return jsonify({"success": False, "error": "Нужен профиль продавца"}), 403
+        return function(*args, **kwargs)
+    return wrapped
+
+
+def _positive_int(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _owned_experiment(experiment_id: int):
+    return ImageGenerationExperiment.query.filter_by(
+        id=experiment_id,
+        seller_id=current_user.seller.id,
+    ).first_or_404()
+
+
+def register_image_lab_routes(app):
+    @app.get('/image-lab')
+    @login_required
+    @_seller_required
+    def image_lab_page():
+        products = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == current_user.seller.id,
+            ImportedProduct.photo_urls.isnot(None),
+            ImportedProduct.photo_urls != '',
+        ).options(joinedload(ImportedProduct.supplier_product)).order_by(
+            ImportedProduct.updated_at.desc()
+        ).limit(150).all()
+        experiments = ImageGenerationExperiment.query.filter_by(
+            seller_id=current_user.seller.id,
+        ).order_by(ImageGenerationExperiment.created_at.desc()).limit(60).all()
+        lab_products = []
+        for product in products:
+            count = lab.photo_count(product.photo_urls)
+            if not count:
+                continue
+            visual_context = lab.build_product_visual_context(product)
+            lab_products.append({
+                "id": product.id,
+                "title": product.title or f"Товар {product.id}",
+                "category": product.mapped_wb_category or product.category or "",
+                "photo_count": count,
+                "photos": [
+                    {"index": index, "label": f"Фото {index + 1}"}
+                    for index in range(count)
+                ],
+                "visual_context": visual_context,
+                "suggested_overlay": {
+                    "title": (product.title or f"Товар {product.id}")[:120],
+                    "subtitle": lab.visual_context_summary(visual_context),
+                },
+            })
+        return render_template(
+            'image_lab.html',
+            lab_products=lab_products,
+            lab_capabilities=lab.capabilities(),
+            lab_experiments=[lab.experiment_dict(item) for item in experiments],
+            lab_analytics=lab.analytics(current_user.seller.id),
+            rating_tags=sorted(lab.RATING_TAGS),
+        )
+
+    @app.post('/image-lab/api/experiments')
+    @login_required
+    @_seller_required
+    def image_lab_create_experiments():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"success": False, "error": "Ожидается JSON object"}), 400
+        product_id = _positive_int(data.get("product_id"))
+        if product_id is None:
+            return jsonify({"success": False, "error": "Некорректный product_id"}), 400
+        scene_key = data.get("scene_key", "luxury")
+        custom_scene = data.get("custom_scene", "")
+        targets = data.get("targets")
+        if not isinstance(scene_key, str) or not isinstance(custom_scene, str):
+            return jsonify({"success": False, "error": "Некорректный prompt"}), 400
+        if not isinstance(targets, list):
+            return jsonify({"success": False, "error": "targets должен быть array"}), 400
+        try:
+            experiments = lab.create_experiments(
+                seller_id=current_user.seller.id,
+                product_id=product_id,
+                scene_key=scene_key,
+                custom_scene=custom_scene,
+                targets=targets,
+                photo_indices=data.get("photo_indices"),
+                generation_mode=data.get("generation_mode", "single"),
+                generation_strategy=data.get("generation_strategy", "reference_guided"),
+                primary_photo_index=data.get("primary_photo_index"),
+                photo_roles=data.get("photo_roles"),
+                include_product_context=data.get("include_product_context", True),
+                watermark=data.get("watermark"),
+                overlay=data.get("overlay"),
+                additional_prompt=data.get("additional_prompt", ""),
+                requested_views=data.get("requested_views"),
+            )
+            ids = [item.id for item in experiments]
+            lab.launch_experiments(current_app._get_current_object(), ids)
+            return jsonify({
+                "success": True,
+                "experiments": [lab.experiment_dict(item) for item in experiments],
+            }), 202
+        except lab.ImageLabError as exc:
+            db.session.rollback()
+            return jsonify({"success": False, "error": str(exc)}), 400
+
+    @app.get('/image-lab/api/experiments')
+    @login_required
+    @_seller_required
+    def image_lab_list_experiments():
+        limit_raw = request.args.get('limit', '60')
+        try:
+            limit = max(1, min(int(limit_raw), 100))
+        except ValueError:
+            limit = 60
+        query = ImageGenerationExperiment.query.filter_by(
+            seller_id=current_user.seller.id)
+        product_raw = request.args.get('product_id')
+        if product_raw:
+            try:
+                product_id = int(product_raw)
+            except ValueError:
+                return jsonify({"success": False, "error": "Некорректный product_id"}), 400
+            query = query.filter_by(imported_product_id=product_id)
+        items = query.order_by(ImageGenerationExperiment.created_at.desc()).limit(limit).all()
+        return jsonify({
+            "success": True,
+            "experiments": [lab.experiment_dict(item) for item in items],
+        })
+
+    @app.get('/image-lab/api/experiments/<int:experiment_id>')
+    @login_required
+    @_seller_required
+    def image_lab_get_experiment(experiment_id):
+        experiment = _owned_experiment(experiment_id)
+        if experiment.status == 'queued':
+            lab.launch_experiments(current_app._get_current_object(), [experiment.id])
+        if experiment.status == 'remote_running':
+            try:
+                lab.refresh_remote_experiment(experiment)
+            except requests.RequestException as exc:
+                logger.warning("GPU bridge poll failed for %s: %s", experiment.id, exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("GPU experiment finalize failed: %s", exc)
+                db.session.rollback()
+        return jsonify({"success": True, "experiment": lab.experiment_dict(experiment)})
+
+    @app.post('/image-lab/api/experiments/<int:experiment_id>/rating')
+    @login_required
+    @_seller_required
+    def image_lab_rate_experiment(experiment_id):
+        experiment = _owned_experiment(experiment_id)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"success": False, "error": "Ожидается JSON object"}), 400
+        try:
+            lab.rate_experiment(
+                experiment,
+                rating=data.get("rating"),
+                tags=data.get("tags") if isinstance(data.get("tags"), list) else [],
+                comment=data.get("comment") if isinstance(data.get("comment"), str) else "",
+            )
+            return jsonify({"success": True, "experiment": lab.experiment_dict(experiment)})
+        except lab.ImageLabError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+
+    @app.post('/image-lab/api/experiments/<int:experiment_id>/cancel')
+    @login_required
+    @_seller_required
+    def image_lab_cancel_experiment(experiment_id):
+        experiment = _owned_experiment(experiment_id)
+        try:
+            lab.cancel_experiment(experiment)
+            return jsonify({"success": True, "experiment": lab.experiment_dict(experiment)})
+        except (lab.ImageLabError, requests.RequestException) as exc:
+            db.session.rollback()
+            return jsonify({"success": False, "error": str(exc)}), 409
+
+    @app.post('/image-lab/api/experiments/<int:experiment_id>/repeat')
+    @login_required
+    @_seller_required
+    def image_lab_repeat_experiment(experiment_id):
+        source = _owned_experiment(experiment_id)
+        if source.imported_product_id is None or source.imported_product is None:
+            return jsonify({
+                "success": False,
+                "error": "Исходный товар удалён; повтор недоступен",
+            }), 400
+        data = request.get_json(silent=True) or {}
+        target = data.get("target") if isinstance(data, dict) else None
+        backend = target.get("backend") if isinstance(target, dict) else source.backend
+        model = target.get("model") if isinstance(target, dict) else source.model
+        try:
+            strategy = source.generation_strategy or 'background_only'
+            cost = lab.validate_target(backend, model, strategy)
+            lab.enforce_budget(source.seller_id, cost, 1)
+            clone = ImageGenerationExperiment(
+                seller_id=source.seller_id,
+                imported_product_id=source.imported_product_id,
+                backend=backend,
+                model=model,
+                scene_key=source.scene_key,
+                generation_strategy=strategy,
+                composition_mode=source.composition_mode or 'single',
+                source_photo_indices_json=source.source_photo_indices_json or '[0]',
+                source_photo_roles_json=source.source_photo_roles_json or '{}',
+                primary_photo_index=source.primary_photo_index,
+                requested_view=source.requested_view,
+                prompt=source.prompt,
+                prompt_sha256=source.prompt_sha256,
+                status='queued',
+                estimated_cost_rub=cost,
+                watermark_json=source.watermark_json,
+                overlay_json=source.overlay_json,
+            )
+            db.session.add(clone)
+            db.session.commit()
+            lab.launch_experiments(current_app._get_current_object(), [clone.id])
+            return jsonify({"success": True, "experiment": lab.experiment_dict(clone)}), 202
+        except lab.ImageLabError as exc:
+            db.session.rollback()
+            return jsonify({"success": False, "error": str(exc)}), 400
+
+    @app.get('/image-lab/api/experiments/<int:experiment_id>/image/<kind>')
+    @login_required
+    @_seller_required
+    def image_lab_experiment_image(experiment_id, kind):
+        if kind not in ('source', 'reference', 'background', 'final', 'watermark'):
+            return jsonify({"success": False, "error": "Неизвестный artifact"}), 404
+        experiment = _owned_experiment(experiment_id)
+        path = lab.artifact_path(experiment, kind)
+        if not path:
+            return jsonify({"success": False, "error": "Artifact не найден"}), 404
+        response = send_file(path, mimetype=_image_mimetype(path))
+        response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+        return response
+
+    @app.post('/image-lab/api/watermarks')
+    @login_required
+    @_seller_required
+    def image_lab_upload_watermark():
+        upload = request.files.get('file')
+        if upload is None:
+            return jsonify({"success": False, "error": "PNG-файл не передан"}), 400
+        try:
+            result = lab.store_watermark(
+                current_user.seller.id,
+                upload.stream.read(2 * 1024 * 1024 + 1),
+            )
+            result["url"] = f"/image-lab/api/watermarks/{result['id']}"
+            return jsonify({"success": True, "watermark": result}), 201
+        except lab.ImageLabError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+
+    @app.get('/image-lab/api/watermarks/<watermark_id>')
+    @login_required
+    @_seller_required
+    def image_lab_watermark_preview(watermark_id):
+        path = lab.watermark_preset_path(current_user.seller.id, watermark_id)
+        if path is None:
+            return jsonify({"success": False, "error": "Водяной знак не найден"}), 404
+        response = send_file(path, mimetype='image/png')
+        response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+        return response
+
+    @app.get('/image-lab/api/products/<int:product_id>/original')
+    @login_required
+    @_seller_required
+    def image_lab_product_original(product_id):
+        product = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=current_user.seller.id).first_or_404()
+        raw_index = request.args.get('photo_index', '0')
+        if not raw_index.isdigit():
+            return jsonify({"success": False, "error": "Некорректный photo_index"}), 400
+        photo_index = int(raw_index)
+        prefer_preview = request.args.get('preview') == '1'
+        try:
+            data = lab.fetch_original_product_bytes(
+                product,
+                photo_index,
+                prefer_preview=prefer_preview,
+            )
+        except lab.ImageLabError as exc:
+            return jsonify({"success": False, "error": str(exc)}), 400
+        response = send_file(io.BytesIO(data), mimetype=_image_mimetype(io.BytesIO(data)))
+        response.headers['Cache-Control'] = 'private, no-store, max-age=0'
+        return response
+
+    @app.get('/image-lab/api/analytics')
+    @login_required
+    @_seller_required
+    def image_lab_analytics():
+        return jsonify({"success": True, **lab.analytics(current_user.seller.id)})
+
+    @app.get('/image-lab/api/export.csv')
+    @login_required
+    @_seller_required
+    def image_lab_export_csv():
+        items = ImageGenerationExperiment.query.filter_by(
+            seller_id=current_user.seller.id,
+        ).order_by(ImageGenerationExperiment.created_at.asc()).all()
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            'id', 'product_id', 'backend', 'model', 'scene_key',
+            'generation_strategy', 'composition_mode', 'primary_photo_index',
+            'requested_view',
+            'photo_indices', 'photo_roles', 'watermark', 'overlay', 'prompt_sha256',
+            'status', 'quality_status', 'publishable', 'latency_s', 'cost_rub',
+            'rating', 'rating_tags', 'rating_comment', 'created_at', 'completed_at',
+        ])
+        for item in items:
+            quality = lab.json_load(item.quality_json, {})
+            writer.writerow([
+                item.id, item.imported_product_id, item.backend, item.model,
+                item.scene_key or '', item.generation_strategy or 'background_only',
+                item.composition_mode or 'single', item.primary_photo_index,
+                item.requested_view or '',
+                item.source_photo_indices_json or '[0]',
+                item.source_photo_roles_json or '{}', item.watermark_json or '',
+                item.overlay_json or '', item.prompt_sha256, item.status,
+                quality.get('status', ''), quality.get('publishable', False),
+                item.latency_s, item.estimated_cost_rub, item.rating,
+                '|'.join(lab.json_load(item.rating_tags_json, [])),
+                item.rating_comment or '',
+                item.created_at.isoformat() if item.created_at else '',
+                item.completed_at.isoformat() if item.completed_at else '',
+            ])
+        return Response(
+            '\ufeff' + output.getvalue(),
+            mimetype='text/csv; charset=utf-8',
+            headers={
+                'Content-Disposition': 'attachment; filename=image-lab-experiments.csv',
+                'Cache-Control': 'private, no-store',
+            },
+        )

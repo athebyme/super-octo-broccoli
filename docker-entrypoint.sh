@@ -139,8 +139,12 @@ python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality 
 python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
 python migrations/migrate_add_card_quality_v2.py /app/data/seller_platform.db
 python migrations/migrate_add_agent_chat.py /app/data/seller_platform.db || echo "⚠️ Unified agent chat migration skipped (already applied or error)"
+python migrations/migrate_add_agent_knowledge.py /app/data/seller_platform.db
 python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"
 python migrations/migrate_add_imported_wb_nm_id.py /app/data/seller_platform.db || echo "⚠️ Imported wb_nm_id migration skipped (already applied or error)"
+python migrations/migrate_add_image_generation_lab.py /app/data/seller_platform.db
+python migrations/migrate_add_image_lab_reference_watermark.py /app/data/seller_platform.db
+python migrations/migrate_add_image_lab_angle_synthesis.py /app/data/seller_platform.db
 python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db || echo "⚠️ Sexopt supplier migration skipped (already applied or error)"
 DATABASE_PATH=/app/data/seller_platform.db python migrations/migrate_add_competitor_monitoring.py || echo "⚠️ Competitor monitoring migration skipped (already applied or error)"
 unset SKIP_SCHEDULER
