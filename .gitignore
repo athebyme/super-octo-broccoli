@@ -50,6 +50,7 @@ uploads/*
 !uploads/.gitkeep
 processed/*
 !processed/.gitkeep
+data/global_media/
 
 # OS
 .DS_Store

@@ -1186,6 +1186,22 @@ def main():
     success = migrate(db_path)
     if success:
         try:
+            from migrate_add_marketplace_accounts import (
+                migrate as migrate_marketplace_accounts,
+            )
+            migrate_marketplace_accounts(db_path)
+            from migrate_add_ozon_references import (
+                migrate as migrate_ozon_references,
+            )
+            migrate_ozon_references(db_path)
+            from migrate_add_marketplace_listings import (
+                migrate as migrate_marketplace_listings,
+            )
+            migrate_marketplace_listings(db_path)
+            from migrate_add_marketplace_drafts import (
+                migrate as migrate_marketplace_drafts,
+            )
+            migrate_marketplace_drafts(db_path)
             from migrate_add_image_generation_lab import migrate as migrate_image_lab
             migrate_image_lab(db_path)
             from migrate_add_image_lab_reference_watermark import (
@@ -1197,7 +1213,7 @@ def main():
             )
             migrate_image_lab_angle_synthesis(db_path)
         except Exception as exc:
-            print(f"❌ Image Lab migration failed: {exc}")
+            print(f"❌ Post-schema migration failed: {exc}")
             success = False
     sys.exit(0 if success else 1)
 

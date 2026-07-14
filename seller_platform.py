@@ -88,6 +88,13 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('DISABLE_SECURE_COOKIE', '').lower() not in ('1', 'true')
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 час
 
+# Marketplace capabilities are rolled out independently. Ozon starts dark and
+# must be enabled explicitly after its migration is applied.
+app.config['MARKETPLACE_OZON_ENABLED'] = (
+    os.environ.get('MARKETPLACE_OZON_ENABLED', '').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+
 # Публичный URL сервера для внешнего доступа (WB media/save, превью)
 # Пример: http://176.123.45.230:5000  или  https://myshop.example.com
 # Если не задан — url_for(_external=True) генерит localhost, и WB не сможет забрать фото
@@ -6258,6 +6265,15 @@ register_docs_routes(app)
 from routes.marketplaces import register_marketplaces_routes
 register_marketplaces_routes(app)
 
+from routes.marketplace_accounts import register_marketplace_account_routes
+register_marketplace_account_routes(app)
+
+from routes.marketplace_listings import register_marketplace_listing_routes
+register_marketplace_listing_routes(app)
+
+from routes.marketplace_drafts import register_marketplace_draft_routes
+register_marketplace_draft_routes(app)
+
 # ============= РОУТЫ БРЕНДОВ =============
 from routes.brands import register_brand_routes
 register_brand_routes(app)
@@ -6381,6 +6397,13 @@ def _run_startup_migrations():
         ('products', 'wb_price_synced_at', 'DATETIME'),
         # Auto-publish atomic lock token
         ('auto_publish_settings', 'run_lock_token', 'VARCHAR(64)'),
+        # Marketplace-neutral adapter metadata. The standalone account
+        # migration remains fail-fast in Docker and creates account tables.
+        ('marketplaces', 'adapter_code', 'VARCHAR(50)'),
+        ('marketplaces', 'capability_versions_json', 'TEXT'),
+        ('marketplaces', 'categories_snapshot_hash', 'VARCHAR(64)'),
+        ('marketplaces', 'total_product_types', 'INTEGER DEFAULT 0'),
+        ('marketplace_attribute_definitions', 'restriction_value_ids_json', 'TEXT'),
         # Standard photos — минимальный порог фото для глобального правила продавца
         ('product_defaults', 'min_photos', 'INTEGER'),
     ]

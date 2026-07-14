@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block title %}Ошибка каталога — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 sm:px-6 py-10">
+    <div class="sh-card p-6">
+        <h1 class="text-xl font-semibold" style="color:var(--text)">Каталог недоступен</h1>
+        <p class="mt-2 text-sm" style="color:var(--text-secondary)">{{ error }}</p>
+        <a class="sh-btn sh-btn--secondary mt-5" href="{{ url_for('marketplace_listings.index') }}">Вернуться к каталогу</a>
+    </div>
+</div>
+{% endblock %}

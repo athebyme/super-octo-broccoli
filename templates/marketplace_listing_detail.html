@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}{{ listing.title or listing.offer_id }} — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+    <a href="{{ url_for('marketplace_listings.index') }}" class="text-sm" style="color:var(--accent)">← Каталог маркетплейсов</a>
+    <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2 text-xs" style="color:var(--text-muted)">
+                <span class="uppercase font-medium" style="color:var(--accent)">{{ listing.marketplace.code }}</span>
+                {% if listing.account %}<span>{{ listing.account.label }}</span>{% endif %}
+                <span>{{ listing.normalized_status }}</span>
+                {% if not listing.is_available %}<span style="color:var(--danger, #b42318)">не найден upstream</span>{% endif %}
+            </div>
+            <h1 class="mt-2 text-2xl font-semibold" style="color:var(--text)">{{ listing.title or 'Без названия' }}</h1>
+            <p class="mt-1 text-sm break-all" style="color:var(--text-secondary)">offer_id: {{ listing.offer_id }} · product_id: {{ listing.external_product_id }}{% if listing.primary_sku %} · sku: {{ listing.primary_sku }}{% endif %}</p>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Идентичность и статус</h2>
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Категория / тип</dt><dd style="color:var(--text)">{{ listing.external_category_id or '—' }} / {{ listing.external_type_id or '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Provider status</dt><dd style="color:var(--text)">{{ listing.provider_status or '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Visibility</dt><dd style="color:var(--text)">{{ listing.visibility or '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Последний полный read</dt><dd style="color:var(--text)">{{ listing.last_seen_at.strftime('%d.%m.%Y %H:%M:%S') if listing.last_seen_at else '—' }}</dd></div>
+            </dl>
+        </section>
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Цена</h2>
+            <pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.price_summary | tojson(indent=2) }}</pre>
+        </section>
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Остатки</h2>
+            <pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.stock_summary | tojson(indent=2) }}</pre>
+        </section>
+    </div>
+
+    {% if listing.description %}
+    <section class="sh-card p-4 mt-4">
+        <h2 class="font-semibold" style="color:var(--text)">Описание</h2>
+        <p class="mt-3 text-sm whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing.description }}</p>
+    </section>
+    {% endif %}
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Атрибуты ({{ listing_data.attributes | length }})</h2>
+            <pre class="mt-3 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.attributes | tojson(indent=2) }}</pre>
+        </section>
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Media / dimensions / barcodes</h2>
+            <pre class="mt-3 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ {'media': listing_data.media, 'dimensions': listing_data.dimensions, 'barcodes': listing_data.barcodes} | tojson(indent=2) }}</pre>
+        </section>
+    </div>
+
+    {% if listing_data.moderation_errors %}
+    <section class="sh-card p-4 mt-4">
+        <h2 class="font-semibold" style="color:var(--danger, #b42318)">Ошибки и модерация</h2>
+        <pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.moderation_errors | tojson(indent=2) }}</pre>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+
+{% block title %}Категории Ozon — Seller Hub{% endblock %}
+
+{% block content %}
+<style>
+    .ozon-page { max-width: 1280px; margin: 0 auto; }
+    .ozon-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; }
+    .ozon-title { margin:0; color:var(--text); font-family:var(--font-display); font-size:30px; font-weight:400; }
+    .ozon-meta { margin-top:6px; color:var(--text-secondary); font-size:12px; }
+    .ozon-path { color:var(--text); font-size:12px; line-height:1.45; }
+    .ozon-id { margin-top:4px; color:var(--text-muted); font-family:ui-monospace,monospace; font-size:11px; }
+    .ozon-toggle { width:17px; height:17px; accent-color:var(--accent); }
+    .ozon-unavailable { opacity:.52; }
+    .ozon-search { display:flex; gap:8px; margin:0 0 16px; }
+    .ozon-search input { flex:1; min-width:0; padding:9px 11px; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text); }
+    .ozon-pagination { display:flex; align-items:center; justify-content:center; gap:10px; margin-top:18px; color:var(--text-secondary); font-size:12px; }
+    @media (max-width:720px) { .ozon-head { flex-direction:column; } }
+</style>
+
+<div class="ozon-page" x-data="ozonTypesManager()">
+    <nav class="sh-breadcrumb" aria-label="Навигационная цепочка">
+        <a href="{{ url_for('marketplaces.index') }}">Маркетплейсы</a>
+        <span aria-hidden="true"> / </span>
+        <span>Ozon taxonomy</span>
+    </nav>
+
+    <div class="ozon-head">
+        <div>
+            <h1 class="ozon-title">Категории и типы Ozon</h1>
+            <p class="ozon-meta">
+                {{ total }} типов в выборке · {{ enabled_count }} включено ·
+                taxonomy v{{ marketplace.categories_version or 0 }} ·
+                {{ marketplace.categories_sync_status or 'не синхронизировано' }}
+            </p>
+        </div>
+        <form method="POST" action="{{ url_for('marketplaces.sync_ozon_tree', marketplace_id=marketplace.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md">Обновить taxonomy</button>
+        </form>
+    </div>
+
+    {% if marketplace.categories_sync_error %}
+    <div class="sh-alert sh-alert--error" role="alert">{{ marketplace.categories_sync_error }}</div>
+    {% endif %}
+
+    <form method="GET" class="ozon-search" role="search">
+        <label class="sr-only" for="ozon-category-search">Поиск по категории, типу или ID</label>
+        <input id="ozon-category-search" name="search" value="{{ search }}" maxlength="200"
+               placeholder="Категория, тип, description_category_id или type_id">
+        <button type="submit" class="sh-btn sh-btn--accent sh-btn--md">Найти</button>
+        {% if search %}<a href="{{ url_for('marketplaces.ozon_categories', marketplace_id=marketplace.id) }}" class="sh-btn sh-btn--ghost sh-btn--md">Сбросить</a>{% endif %}
+    </form>
+
+    <div class="sh-table-wrap">
+        <table class="sh-table" style="min-width:980px">
+            <thead>
+                <tr>
+                    <th style="width:58px;text-align:center">Вкл.</th>
+                    <th>Категория</th>
+                    <th style="width:27%">Тип товара</th>
+                    <th style="width:190px">Схема</th>
+                    <th style="width:120px"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in product_types %}
+                <tr :class="{'ozon-unavailable': !available[{{ item.id }}]}">
+                    <td style="text-align:center">
+                        <input class="ozon-toggle" type="checkbox"
+                               :checked="enabled[{{ item.id }}]"
+                               @change="toggle({{ item.id }}, $event.target.checked)"
+                               :disabled="busy[{{ item.id }}] || !available[{{ item.id }}]"
+                               aria-label="Включить тип {{ item.name }}">
+                    </td>
+                    <td>
+                        <div class="ozon-path">{{ item.category.full_path }}</div>
+                        <div class="ozon-id">description_category_id={{ item.category.external_category_id }}</div>
+                        {% if not item.category.is_available %}<span class="sh-badge sh-badge--sm sh-badge--gray">Категория недоступна</span>{% endif %}
+                    </td>
+                    <td>
+                        <div class="ozon-path" style="font-weight:600">{{ item.name }}</div>
+                        <div class="ozon-id">type_id={{ item.external_type_id }}</div>
+                        {% if item.is_disabled_upstream %}<span class="sh-badge sh-badge--sm sh-badge--gray">Disabled upstream</span>{% endif %}
+                    </td>
+                    <td>
+                        <div class="ozon-path">{{ item.attributes_count or 0 }} атрибутов · {{ item.required_attributes_count or 0 }} обязательных</div>
+                        <div class="ozon-id">
+                            {{ item.attributes_sync_status or 'не загружена' }}
+                            {% if item.attributes_synced_at %} · {{ item.attributes_synced_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <a href="{{ url_for('marketplaces.ozon_type_detail', product_type_id=item.id) }}" class="sh-btn sh-btn--ghost sh-btn--sm">Атрибуты →</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" style="padding:40px;text-align:center;color:var(--text-muted)">Нет типов. Синхронизируйте taxonomy или измените поиск.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% set pages = (total + per_page - 1) // per_page %}
+    {% if pages > 1 %}
+    <nav class="ozon-pagination" aria-label="Пагинация">
+        {% if page > 1 %}<a class="sh-btn sh-btn--ghost sh-btn--sm" href="{{ url_for('marketplaces.ozon_categories', marketplace_id=marketplace.id, search=search, page=page-1) }}">← Назад</a>{% endif %}
+        <span>Страница {{ page }} из {{ pages }}</span>
+        {% if page < pages %}<a class="sh-btn sh-btn--ghost sh-btn--sm" href="{{ url_for('marketplaces.ozon_categories', marketplace_id=marketplace.id, search=search, page=page+1) }}">Дальше →</a>{% endif %}
+    </nav>
+    {% endif %}
+</div>
+
+<script>
+function ozonTypesManager() {
+    return {
+        enabled: {
+            {% for item in product_types %}{{ item.id }}: {{ 'true' if item.is_enabled else 'false' }},{% endfor %}
+        },
+        available: {
+            {% for item in product_types %}{{ item.id }}: {{ 'true' if item.is_available and item.category.is_available else 'false' }},{% endfor %}
+        },
+        busy: {},
+        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content || ''; },
+        toast(type, message) { Alpine.store('toasts')[type](message); },
+        async toggle(id, state) {
+            const previous = Boolean(this.enabled[id]);
+            this.enabled[id] = state;
+            this.busy[id] = true;
+            try {
+                const response = await fetch(`/admin/marketplaces/ozon/types/${id}/toggle`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-CSRFToken': this.csrf()},
+                    body: JSON.stringify({is_enabled: state}),
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось сохранить тип Ozon');
+                this.enabled[id] = Boolean(data.is_enabled);
+                this.toast('success', data.synced ? `Тип включён, схема обновлена (${data.attributes_count})` : 'Настройка типа сохранена');
+            } catch (error) {
+                this.enabled[id] = previous;
+                this.toast('error', error.message);
+            } finally {
+                this.busy[id] = false;
+            }
+        },
+    };
+}
+</script>
+{% endblock %}

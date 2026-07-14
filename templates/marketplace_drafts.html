@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}Черновики маркетплейсов — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-semibold" style="color:var(--text)">Черновики Ozon</h1>
+            <p class="mt-1 text-sm" style="color:var(--text-secondary)">
+                Marketplace-specific проекции: точная category/type schema, provenance фактов и deterministic validation без публикации.
+            </p>
+        </div>
+        <div class="flex gap-2">
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index') }}">Каталог</a>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <div class="mb-4 rounded-md border px-4 py-3 text-sm"
+         style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>
+    {% endfor %}
+    {% endwith %}
+
+    {% if ozon_enabled %}
+    <section class="sh-card p-4 mb-5">
+        <h2 class="font-semibold" style="color:var(--text)">Создать черновик</h2>
+        <p class="mt-1 text-xs" style="color:var(--text-muted)">
+            Если category/type ещё не выбраны, черновик сохранится в статусе needs_category. Никакого запроса в Ozon не выполняется.
+        </p>
+        <form method="post" action="{{ url_for('marketplace_drafts.create') }}"
+              class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="block">
+                <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет Ozon</span>
+                <select name="account_id" required class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                        style="border-color:var(--border);color:var(--text)">
+                    <option value="">Выберите кабинет</option>
+                    {% for account in accounts %}
+                    <option value="{{ account.id }}">{{ account.label }} · {{ account.connection_status }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="block md:col-span-2">
+                <span class="block text-xs mb-1" style="color:var(--text-muted)">Импортированный товар</span>
+                <select name="imported_product_id" required class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                        style="border-color:var(--border);color:var(--text)">
+                    <option value="">Выберите товар</option>
+                    {% for source in sources %}
+                    <option value="{{ source.id }}">#{{ source.id }} · {{ source.title or source.external_id or 'Без названия' }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="block md:col-span-2">
+                <span class="block text-xs mb-1" style="color:var(--text-muted)">offer_id (необязательно)</span>
+                <input name="offer_id" maxlength="200" placeholder="По умолчанию артикул поставщика"
+                       class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                       style="border-color:var(--border);color:var(--text)">
+            </label>
+            <div class="flex items-end">
+                <button class="sh-btn sh-btn--primary w-full" type="submit" {% if not accounts or not sources %}disabled{% endif %}>Создать</button>
+            </div>
+        </form>
+    </section>
+    {% else %}
+    <div class="mb-5 rounded-md border px-4 py-3 text-sm"
+         style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
+        Ozon выключен feature flag. Существующие черновики доступны только для чтения.
+    </div>
+    {% endif %}
+
+    <form method="get" class="sh-card p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет</span>
+            <select name="account_id" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for account in accounts %}
+                <option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Статус</span>
+            <select name="status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for status in ['needs_category', 'draft', 'blocked', 'ready', 'published', 'archived'] %}
+                <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="flex items-end"><button class="sh-btn sh-btn--secondary w-full" type="submit">Применить</button></div>
+    </form>
+
+    <div class="flex items-center justify-between mb-3 text-sm" style="color:var(--text-secondary)">
+        <span>Найдено: {{ pagination.total }}</span>
+        <span>Страница {{ pagination.page }} из {{ pagination.pages or 1 }}</span>
+    </div>
+    {% if drafts %}
+    <div class="space-y-3">
+        {% for draft in drafts %}
+        <a class="sh-card block p-4" href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                        <span class="uppercase font-medium" style="color:var(--accent)">Ozon</span>
+                        <span style="color:var(--text-muted)">{{ draft.account.label }}</span>
+                        <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ draft.status }}</span>
+                        <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ draft.validation_status }}</span>
+                    </div>
+                    <h2 class="mt-2 font-semibold truncate" style="color:var(--text)">{{ draft.imported_product.title or draft.offer_id }}</h2>
+                    <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">offer: {{ draft.offer_id }} · source #{{ draft.imported_product_id }}</p>
+                    <p class="mt-1 text-xs" style="color:var(--text-muted)">{{ draft.product_type.category.full_path ~ ' / ' ~ draft.product_type.name if draft.product_type else 'Категория не выбрана' }}</p>
+                </div>
+                {% set summary = draft.to_public_dict().validation_summary %}
+                <div class="text-xs md:text-right" style="color:var(--text-muted)">
+                    <div>Ошибок: {{ summary.error_count }} · предупреждений: {{ summary.warning_count }}</div>
+                    <div class="mt-1">Версия {{ draft.version }}</div>
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="sh-card px-4 py-10 text-center text-sm" style="color:var(--text-muted)">Черновиков пока нет.</div>
+    {% endif %}
+
+    {% if pagination.pages > 1 %}
+    <nav class="mt-5 flex justify-center gap-2">
+        {% if pagination.has_prev %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index', page=pagination.prev_num, account_id=filters.account_id, status=filters.status) }}">Назад</a>{% endif %}
+        {% if pagination.has_next %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index', page=pagination.next_num, account_id=filters.account_id, status=filters.status) }}">Дальше</a>{% endif %}
+    </nav>
+    {% endif %}
+</div>
+{% endblock %}

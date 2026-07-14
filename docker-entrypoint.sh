@@ -132,7 +132,11 @@ python migrations/migrate_add_unlimited_batch.py || echo "⚠️ Unlimited batch
 python migrations/migrate_add_blocked_cards.py || echo "⚠️ Blocked cards migration skipped (already applied or error)"
 python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db || echo "⚠️ Price stock sync migration skipped (already applied or error)"
 python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace tables migration skipped (already applied or error)"
+python migrations/migrate_add_marketplace_accounts.py /app/data/seller_platform.db
+python migrations/migrate_add_ozon_references.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_reference_freshness.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_listings.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_drafts.py /app/data/seller_platform.db
 python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
 python migrations/add_ai_job_heartbeat.py || echo "⚠️ AI job heartbeat migration skipped (already applied or error)"
 python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"

@@ -1975,7 +1975,7 @@
             </div>
 
             <!-- Товары -->
-            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history', 'card_quality_page', 'image_lab_page'] %}
+            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history', 'card_quality_page', 'image_lab_page'] or (request.endpoint and (request.endpoint.startswith('marketplace_listings.') or request.endpoint.startswith('marketplace_drafts.'))) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if products_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if products_active else 'false' }} }" :aria-expanded="open" aria-label="Товары">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -1988,6 +1988,10 @@
                 </button>
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('products_list') }}" class="sidebar-sublink {% if request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_edit_history'] %}active{% endif %}">Карточки</a>
+                    {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+                    <a href="{{ url_for('marketplace_listings.index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('marketplace_listings.') %}active{% endif %}">Каталог маркетплейсов</a>
+                    <a href="{{ url_for('marketplace_drafts.index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('marketplace_drafts.') %}active{% endif %}">Черновики Ozon</a>
+                    {% endif %}
                     <a href="{{ url_for('bulk_edit_history') }}" class="sidebar-sublink {% if request.endpoint in ['bulk_edit_history', 'bulk_edit_history_detail'] %}active{% endif %}">История операций</a>
                     <a href="{{ url_for('product_sync_status_page') }}" class="sidebar-sublink {% if request.endpoint == 'product_sync_status_page' %}active{% endif %}">Синхронизация</a>
                     <a href="{{ url_for('products_merge') }}" class="sidebar-sublink {% if request.endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations'] %}active{% endif %}">Объединение</a>
@@ -2117,7 +2121,7 @@
             <div style="height:1px;background:#1f1f1f;margin:8px 12px 16px"></div>
 
             <!-- Настройки -->
-            {% set settings_active = request.endpoint in ['api_settings', 'api_logs', 'product_defaults_page'] or (request.endpoint and request.endpoint.startswith('prohibited_words.seller')) %}
+            {% set settings_active = request.endpoint in ['api_settings', 'api_logs', 'product_defaults_page'] or (request.endpoint and (request.endpoint.startswith('prohibited_words.seller') or request.endpoint.startswith('marketplace_accounts.'))) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if settings_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if settings_active else 'false' }} }" :aria-expanded="open" aria-label="Настройки">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -2132,6 +2136,9 @@
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('product_defaults_page') }}" class="sidebar-sublink {% if request.endpoint == 'product_defaults_page' %}active{% endif %}">Дефолты товаров</a>
                     <a href="{{ url_for('api_settings') }}" class="sidebar-sublink {% if request.endpoint == 'api_settings' %}active{% endif %}">API ключи</a>
+                    {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+                    <a href="{{ url_for('marketplace_accounts.index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('marketplace_accounts.') %}active{% endif %}">Маркетплейсы</a>
+                    {% endif %}
                     <a href="{{ url_for('api_logs') }}" class="sidebar-sublink {% if request.endpoint == 'api_logs' %}active{% endif %}">Логи API</a>
                     <a href="{{ url_for('prohibited_words.seller_index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('prohibited_words.seller') %}active{% endif %}">Стоп-слова</a>
                 </div>

@@ -16,6 +16,13 @@ def init_database():
     print("Инициализация базы данных...")
     with app.app_context():
         db.create_all()
+        # Existing local SQLite databases need additive columns before the ORM
+        # can seed adapter metadata. Docker additionally runs the standalone,
+        # fail-fast migration script.
+        from seller_platform import _run_startup_migrations
+        _run_startup_migrations()
+        from services.marketplace_definitions import ensure_marketplace_definitions
+        ensure_marketplace_definitions()
     print("✓ База данных создана")
 
 

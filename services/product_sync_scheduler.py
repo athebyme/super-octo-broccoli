@@ -885,11 +885,9 @@ def sync_marketplaces(flask_app):
     """
     Периодическая синхронизация справочников и категорий всех маркетплейсов.
     """
-    from models import Marketplace, db
+    from models import Marketplace, MarketplaceReferenceAccount
     from services.marketplace_service import MarketplaceService
-    import logging
-
-    logger = logging.getLogger(__name__)
+    from services.ozon_reference_service import OzonReferenceService
     with flask_app.app_context():
         try:
             logger.info("🌍 Starting global marketplace sync...")
@@ -931,6 +929,34 @@ def sync_marketplaces(flask_app):
                     if callable(close):
                         close()
 
+            if flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+                ozon_marketplaces = Marketplace.query.filter_by(
+                    is_active=True,
+                    code='ozon',
+                ).all()
+                for marketplace in ozon_marketplaces:
+                    reference = MarketplaceReferenceAccount.query.filter_by(
+                        marketplace_id=marketplace.id,
+                        connection_status='connected',
+                    ).first()
+                    if reference is None or not reference.has_credentials:
+                        logger.info(
+                            'Ozon taxonomy refresh skipped: reference account unavailable'
+                        )
+                        continue
+                    try:
+                        result = OzonReferenceService.sync_tree(marketplace.id)
+                        if not result.get('success') and not result.get('skipped'):
+                            logger.warning(
+                                'Ozon taxonomy refresh failed for marketplace_id=%s',
+                                marketplace.id,
+                            )
+                    except Exception:
+                        logger.exception(
+                            'Ozon taxonomy refresh crashed for marketplace_id=%s',
+                            marketplace.id,
+                        )
+
             logger.info("✅ Global marketplace sync finished.")
         except Exception as e:
             logger.exception(f"❌ Error in sync_marketplaces: {e}")
@@ -940,6 +966,7 @@ def sync_marketplace_characteristics(flask_app, limit: int = 50):
     """Refresh a bounded stale-schema batch for every active marketplace."""
     from models import Marketplace
     from services.marketplace_service import MarketplaceService
+    from services.ozon_reference_service import OzonReferenceService
 
     with flask_app.app_context():
         for marketplace in Marketplace.query.filter_by(
@@ -968,6 +995,27 @@ def sync_marketplace_characteristics(flask_app, limit: int = 50):
                 close = getattr(client, 'close', None)
                 if callable(close):
                     close()
+
+        if flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            for marketplace in Marketplace.query.filter_by(
+                is_active=True,
+                code='ozon',
+            ).all():
+                try:
+                    result = OzonReferenceService.sync_stale_enabled_types(
+                        marketplace.id,
+                        limit=limit,
+                    )
+                    if result.get('failed') or result.get('dictionaries_failed'):
+                        logger.warning(
+                            'Stale Ozon schema refresh had failures for marketplace_id=%s',
+                            marketplace.id,
+                        )
+                except Exception:
+                    logger.exception(
+                        'Stale Ozon schema refresh crashed for marketplace_id=%s',
+                        marketplace.id,
+                    )
 
 
 
