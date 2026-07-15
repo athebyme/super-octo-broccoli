@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from models import (
+    ImportedProduct,
     Marketplace,
     MarketplaceCatalogSync,
     MarketplaceCredentialEncryptionError,
@@ -96,6 +97,7 @@ class MarketplaceListingService:
         "inactive",
         "unknown",
     }
+    LINK_STATUSES = {"linked", "unlinked", "ambiguous"}
 
     @staticmethod
     def _positive_integer(value: Any, field_name: str) -> int:
@@ -1349,6 +1351,7 @@ class MarketplaceListingService:
         updated = 0
         newly_seen = 0
         warnings = 0
+        page_listings = []
         for base, pair in zip(items, resolved_pairs):
             product_id = base["product_id"]
             offer_id = base["offer_id"]
@@ -1521,6 +1524,7 @@ class MarketplaceListingService:
             listing.sync_fingerprint = cls._fingerprint(snapshot)
             by_product[product_id] = listing
             by_offer[offer_id] = listing
+            page_listings.append(listing)
 
         prior_expected = run.phase_expected_total
         if prior_expected is None:
@@ -1566,6 +1570,19 @@ class MarketplaceListingService:
             run.cursor = next_cursor
 
         try:
+            # Exact offer/vendor identities are reconciled in the same local
+            # transaction as the page.  This never calls Ozon or an LLM and it
+            # never guesses from a title; ambiguous identities remain unlinked.
+            db.session.flush()
+            from services.marketplace_product_links import (
+                MarketplaceProductLinkService,
+            )
+            MarketplaceProductLinkService.reconcile_objects(
+                seller_id=run.seller_id,
+                listings=page_listings,
+                now=now,
+                commit=False,
+            )
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
@@ -1819,6 +1836,7 @@ class MarketplaceListingService:
         marketplace_code: Optional[str] = None,
         account_id: Optional[int] = None,
         normalized_status: Optional[str] = None,
+        link_status: Optional[str] = None,
         include_unavailable: bool = True,
         search: Optional[str] = None,
         page: int = 1,
@@ -1868,6 +1886,25 @@ class MarketplaceListingService:
             query = query.filter(
                 MarketplaceListing.normalized_status == normalized_status
             )
+        if link_status:
+            if link_status not in cls.LINK_STATUSES:
+                raise MarketplaceListingValidationError(
+                    "Неизвестный статус связи"
+                )
+            if link_status == "linked":
+                query = query.filter(
+                    MarketplaceListing.imported_product_id.isnot(None)
+                )
+            elif link_status == "ambiguous":
+                query = query.filter(
+                    MarketplaceListing.imported_product_id.is_(None),
+                    MarketplaceListing.link_status == "ambiguous",
+                )
+            else:
+                query = query.filter(
+                    MarketplaceListing.imported_product_id.is_(None),
+                    MarketplaceListing.link_status != "ambiguous",
+                )
         if not include_unavailable:
             query = query.filter(MarketplaceListing.is_available.is_(True))
         if search:
@@ -1913,6 +1950,12 @@ class MarketplaceListingService:
         listing = MarketplaceListing.query.options(
             joinedload(MarketplaceListing.marketplace),
             joinedload(MarketplaceListing.account),
+            joinedload(MarketplaceListing.imported_product).joinedload(
+                ImportedProduct.product
+            ),
+            joinedload(MarketplaceListing.imported_product).joinedload(
+                ImportedProduct.supplier_product
+            ),
         ).filter_by(id=listing_id, seller_id=seller_id).first()
         if listing is None:
             raise MarketplaceListingNotFound("Листинг не найден")

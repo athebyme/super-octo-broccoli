@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P9 и P10A implemented; P10B unified AI scope next
+Статус: P0–P9, P10A и canonical WB/Ozon product linking implemented; P10B unified AI scope next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -278,7 +278,7 @@ Seller-scoped подключение кабинета:
 Общая published read model:
 
 - seller/account/marketplace scope;
-- optional links to `ImportedProduct` and legacy WB `Product`;
+- audited link to canonical seller-owned `ImportedProduct`; legacy WB projection additionally links `Product`;
 - `offer_id`, external product id and typed identifiers;
 - category/type references;
 - title, status, visibility, moderation and errors;
@@ -319,6 +319,23 @@ Before/after snapshot для content/price/stock writes:
 - expected live state;
 - applied and rollback state;
 - conflict-aware rollback; no blind full replacement.
+
+#### Canonical seller product and channel links
+
+`ImportedProduct` является текущей канонической seller-owned карточкой: общий
+контент, связь с `SupplierProduct` и AI parse cache хранятся один раз. `Product`
+остаётся WB projection, а каждый `MarketplaceListing` — проекцией конкретного
+marketplace/account. Связь хранится через `imported_product_id` и имеет
+`link_status/source/evidence/version`, seller actor и append-only
+`MarketplaceListingLinkEvent`.
+
+Успешная публикация связывает Ozon listing с исходной карточкой напрямую.
+Catalog import существующих карточек делает только deterministic exact
+offer/vendor reconciliation. Одно уникальное совпадение связывается
+автоматически; несколько совпадений дают `ambiguous`; title similarity и LLM
+никогда не создают связь. UI позволяет seller-scoped поиск и optimistic manual
+confirmation. После связи Ozon draft строится из того же neutral fact pack и
+переиспользует `SupplierProduct.ai_parsed_data_json`, без повторного AI parsing.
 
 #### MarketplaceAttributeValue
 
@@ -493,6 +510,7 @@ Definition of done: selected Ozon schema is usable as typed SQL truth with no LL
 ### P3 — listing read model and catalog import
 
 - [x] MarketplaceListing model and WB backfill.
+- [x] Audited canonical `ImportedProduct` links for WB/Ozon, exact reconciliation and manual ambiguity review.
 - [x] Ozon paginated product list + batched attributes/prices/stocks sync.
 - [x] Exact offer/product/SKU identities and status normalization.
 - [x] Full-snapshot missing/archive handling only after complete sweep.
@@ -717,6 +735,7 @@ Definition of done: finance/order UI filters by exact marketplace/account and to
 
 - [x] P10A: exact-role Ozon review/question capability detection and read-only status/cursor sync.
 - [x] P10A: PII-minimized 90-day inbox, separate Ozon UI and local-only AI/template reply drafts.
+- [x] P10B prerequisite: one canonical `ImportedProduct` for WB/Ozon content and AI cache, audited exact/manual listing links.
 - [ ] P10B: `entity_kind=marketplace_listing` with marketplace/account identity.
 - [ ] P10B: deterministic intents accept explicit marketplace; ambiguity causes clarification.
 - [ ] P10B: internal tools are adapter/capability-scoped and least privilege.
@@ -796,6 +815,12 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
     к Docker, comprehensive runner и direct SQLite startup. Rollback не удаляет
     customer data, а runtime retention удаляет text старше 90 дней только после
     completed sweep.
+16. `migrate_add_marketplace_product_links.py` additive/idempotent добавляет
+    provenance/version к `MarketplaceListing`, append-only link events и partial
+    unique `(account_id, imported_product_id)`. Existing WB/publication links
+    получают только bootstrap metadata без копирования контента. Найденный
+    duplicate account/canonical pair блокирует startup до ручной проверки и
+    никогда не исправляется удалением либо произвольным выбором строки.
 
 ## 10. Security и safety invariants
 

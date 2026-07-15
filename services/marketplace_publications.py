@@ -2230,16 +2230,20 @@ class MarketplacePublicationService:
         summary = cls._operation_summary(operation)
         imported_product_id = summary.get("imported_product_id")
         product_type_id = summary.get("product_type_id")
+        canonical_product = None
         if (
             not isinstance(imported_product_id, int)
             or isinstance(imported_product_id, bool)
             or imported_product_id <= 0
-            or ImportedProduct.query.filter_by(
-                id=imported_product_id,
-                seller_id=operation.seller_id,
-            ).first() is None
         ):
             imported_product_id = None
+        else:
+            canonical_product = ImportedProduct.query.filter_by(
+                id=imported_product_id,
+                seller_id=operation.seller_id,
+            ).first()
+            if canonical_product is None:
+                imported_product_id = None
         if (
             not isinstance(product_type_id, int)
             or isinstance(product_type_id, bool)
@@ -2283,7 +2287,6 @@ class MarketplacePublicationService:
                 seller_id=operation.seller_id,
                 marketplace_id=operation.marketplace_id,
                 account_id=operation.account_id,
-                imported_product_id=imported_product_id,
                 product_type_id=product_type_id,
                 offer_id=state["offer_id"],
                 external_product_id=state["external_product_id"],
@@ -2307,7 +2310,28 @@ class MarketplacePublicationService:
             )
             return
 
-        listing.imported_product_id = imported_product_id
+        if canonical_product is not None:
+            linked_conflict = MarketplaceListing.query.filter(
+                MarketplaceListing.seller_id == operation.seller_id,
+                MarketplaceListing.account_id == operation.account_id,
+                MarketplaceListing.imported_product_id == canonical_product.id,
+                MarketplaceListing.id != listing.id,
+            ).first()
+            if (
+                listing.imported_product_id not in (None, canonical_product.id)
+                or linked_conflict is not None
+            ):
+                cls._mark_uncertain(
+                    operation,
+                    code="canonical_product_link_conflict",
+                    message=(
+                        "Ozon подтвердил карточку, но внутренняя карточка уже "
+                        "связана с другой listing identity"
+                    ),
+                    now=now,
+                )
+                return
+
         listing.product_type_id = product_type_id
         listing.external_category_id = state["external_category_id"]
         listing.external_type_id = state["external_type_id"]
@@ -2346,6 +2370,21 @@ class MarketplacePublicationService:
         listing.last_seen_at = now
         listing.sync_fingerprint = OzonProductImportContract.fingerprint(state)
         db.session.flush()
+        if canonical_product is not None:
+            from services.marketplace_product_links import (
+                MarketplaceProductLinkService,
+            )
+            MarketplaceProductLinkService.record_known_link(
+                listing=listing,
+                product=canonical_product,
+                source="confirmed_publication",
+                actor_user_id=operation.created_by_user_id,
+                evidence={
+                    "operation_id": operation.id,
+                    "operation_kind": operation.operation_kind,
+                },
+                now=now,
+            )
 
         draft = operation.draft
         if (

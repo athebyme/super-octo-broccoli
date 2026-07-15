@@ -989,6 +989,18 @@ class MarketplaceDraftService:
             imported_product_id=product.id,
         ).first()
         if existing is not None:
+            linked_listing = MarketplaceListing.query.filter_by(
+                seller_id=seller_id,
+                account_id=account.id,
+                imported_product_id=product.id,
+                offer_id=existing.offer_id,
+            ).first()
+            if (
+                linked_listing is not None
+                and existing.published_listing_id is None
+            ):
+                existing.published_listing_id = linked_listing.id
+                db.session.commit()
             return cls.get_draft(seller_id=seller_id, draft_id=existing.id)
 
         facts_document, provenance, fact_hash = cls._fact_snapshot(product)
@@ -997,9 +1009,13 @@ class MarketplaceDraftService:
             account_id=account.id,
             offer_id=normalized_offer,
         ).first()
-        if duplicate_listing is not None:
+        if duplicate_listing is not None and (
+            duplicate_listing.seller_id != seller_id
+            or duplicate_listing.marketplace_id != account.marketplace_id
+            or duplicate_listing.imported_product_id != product.id
+        ):
             raise MarketplaceDraftConflict(
-                "offer_id уже принадлежит опубликованной карточке этого кабинета"
+                "offer_id принадлежит листингу без подтверждённой связи с этой внутренней карточкой"
             )
 
         selected_type = None
@@ -1009,6 +1025,8 @@ class MarketplaceDraftService:
                 marketplace_id=account.marketplace_id,
                 product_type_id=product_type_id,
             )
+        elif duplicate_listing is not None and duplicate_listing.product_type:
+            selected_type = duplicate_listing.product_type
         else:
             mapping = cls._active_mapping(
                 seller_id=seller_id,
@@ -1023,6 +1041,9 @@ class MarketplaceDraftService:
             account_id=account.id,
             imported_product_id=product.id,
             supplier_product_id=product.supplier_product_id,
+            published_listing_id=(
+                duplicate_listing.id if duplicate_listing is not None else None
+            ),
             category_mapping_id=mapping.id if mapping else None,
             offer_id=normalized_offer,
             status="needs_category",

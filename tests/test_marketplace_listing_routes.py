@@ -10,6 +10,7 @@ from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect
 
 from models import (
+    ImportedProduct,
     Marketplace,
     MarketplaceListing,
     Seller,
@@ -88,11 +89,29 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
                 sync_fingerprint="b" * 64,
             )
             db.session.add_all([own, foreign])
+            own_source = ImportedProduct(
+                seller_id=self.seller1_id,
+                external_id="route-source-own",
+                external_vendor_code="route-internal-own",
+                source_type="synthetic",
+                title="Own internal product",
+                ai_attributes='{"cached": true}',
+            )
+            foreign_source = ImportedProduct(
+                seller_id=self.seller2_id,
+                external_id="route-source-foreign",
+                external_vendor_code="route-internal-foreign",
+                source_type="synthetic",
+                title="Foreign internal product",
+            )
+            db.session.add_all([own_source, foreign_source])
             db.session.commit()
             self.account1_id = account1.id
             self.account2_id = account2.id
             self.own_id = own.id
             self.foreign_id = foreign.id
+            self.own_source_id = own_source.id
+            self.foreign_source_id = foreign_source.id
 
     def tearDown(self):
         with self.app.app_context():
@@ -112,7 +131,7 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
     def _user(seller_id=None):
         seller = SimpleNamespace(id=seller_id) if seller_id else None
         return SimpleNamespace(
-            id=10,
+            id=seller_id or 10,
             seller=seller,
             is_authenticated=True,
             is_active=True,
@@ -161,6 +180,46 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 404)
         registry.assert_not_called()
+
+    def test_manual_product_link_is_strict_tenant_scoped_and_filterable(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            foreign = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/link",
+                json={
+                    "imported_product_id": self.foreign_source_id,
+                    "expected_link_version": 1,
+                },
+            )
+            loose = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/link",
+                json={
+                    "imported_product_id": str(self.own_source_id),
+                    "expected_link_version": "1",
+                },
+            )
+            linked = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/link",
+                json={
+                    "imported_product_id": self.own_source_id,
+                    "expected_link_version": 1,
+                },
+            )
+            filtered = self.client.get(
+                "/marketplaces/listings/api?marketplace=ozon&link_status=linked",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(foreign.status_code, 404)
+        self.assertEqual(loose.status_code, 400)
+        self.assertEqual(linked.status_code, 200)
+        self.assertEqual(
+            linked.get_json()["listing"]["imported_product_id"],
+            self.own_source_id,
+        )
+        self.assertEqual(
+            [item["id"] for item in filtered.get_json()["items"]],
+            [self.own_id],
+        )
 
     def test_sync_json_is_strict_and_passes_authenticated_seller_scope(self):
         run = SimpleNamespace(

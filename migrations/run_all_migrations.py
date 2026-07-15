@@ -1198,6 +1198,10 @@ def main():
                 migrate as migrate_marketplace_listings,
             )
             migrate_marketplace_listings(db_path)
+            from migrate_add_marketplace_product_links import (
+                migrate as migrate_marketplace_product_links,
+            )
+            migrate_marketplace_product_links(db_path)
             from migrate_add_marketplace_drafts import (
                 migrate as migrate_marketplace_drafts,
             )

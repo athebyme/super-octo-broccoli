@@ -6413,6 +6413,10 @@ def _run_startup_migrations():
                 migrate as migrate_marketplace_inbox,
             )
             migrate_marketplace_inbox(sqlite_path)
+            from migrations.migrate_add_marketplace_product_links import (
+                migrate as migrate_marketplace_product_links,
+            )
+            migrate_marketplace_product_links(sqlite_path)
             bind.dispose()
             bind = db.engine
     insp = sa_inspect(bind)

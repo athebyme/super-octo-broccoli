@@ -25,6 +25,7 @@ Seller Hub автоматизирует работу продавца на ма�
 - `services/marketplace_reference_accounts.py`: отдельный admin-owned credential lifecycle только для глобальных Ozon-справочников.
 - `services/ozon_reference_service.py`: strict category/type/attribute/value snapshots, freshness, shrink guards, admin restrictions и bounded refresh-ahead.
 - `services/marketplace_listings.py`, `routes/marketplace_listings.py`: seller-scoped unified listing read model, resumable Ozon catalog sweep и marketplace/account-filtered UI/API.
+- `services/marketplace_product_links.py`: audited exact matching между общей seller-owned `ImportedProduct` и WB/Ozon listing-проекциями; title/LLM fuzzy matching запрещён.
 - `services/marketplace_fact_pack.py`: marketplace-neutral observed facts с field-level provenance; legacy AI output остаётся отдельным unverified suggestion.
 - `services/marketplace_drafts.py`, `routes/marketplace_drafts.py`: seller/account-scoped Ozon drafts, exact category mappings, optimistic edits и deterministic publishability validation без provider/LLM calls.
 - `services/ozon_product_import.py`: whitelist-only контракт `/v3/product/import`, строгая нормализация task status и quota response.
@@ -393,6 +394,7 @@ python migrations/migrate_add_wb_dictionary_provenance.py data/seller_platform.d
 python migrations/migrate_add_marketplace_accounts.py data/seller_platform.db
 python migrations/migrate_add_ozon_references.py data/seller_platform.db
 python migrations/migrate_add_marketplace_listings.py data/seller_platform.db
+python migrations/migrate_add_marketplace_product_links.py data/seller_platform.db
 python migrations/migrate_add_marketplace_drafts.py data/seller_platform.db
 python migrations/migrate_add_marketplace_operations.py data/seller_platform.db
 python migrations/migrate_add_marketplace_auto_publish.py data/seller_platform.db
@@ -408,6 +410,7 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - Создавайте новый идемпотентный script в `migrations/`; не полагайтесь только на `db.create_all()` для существующих БД.
 - Не переписывайте уже развёрнутую миграцию так, чтобы старые инсталляции получили другое поведение.
 - Миграции, добавляющие колонки, которые ORM читает сразу после старта, должны быть fail-fast в `docker-entrypoint.sh`; не скрывайте их ошибку через `|| echo`.
+- `ImportedProduct` — текущая каноническая seller-owned карточка и единственный источник общего контента/AI-кэша. `Product` остаётся WB projection, `MarketplaceListing` — account/channel projection. Ozon catalog sync может auto-link только одно уникальное exact offer/vendor совпадение; title similarity и LLM не создают связь. Ambiguous остаётся unlinked до seller confirmation; link/unlink требуют tenant scope, optimistic `link_version` и append-only event. Одна внутренняя карточка не может быть связана с двумя listings одного account.
 - Подключайте новый script к `docker-entrypoint.sh` и, когда уместно, к comprehensive migration path.
 - Держите DDL и backfill повторно запускаемыми; проверяйте наличие table/column/index.
 - Backfill обязан явно заполнять Python-side default поля вроде `created_at`: таблица, созданная SQLAlchemy, может не иметь server default даже если новый migration DDL его объявляет.

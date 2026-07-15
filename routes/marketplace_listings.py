@@ -20,6 +20,10 @@ from services.marketplace_listings import (
     MarketplaceListingError,
     MarketplaceListingService,
 )
+from services.marketplace_product_links import (
+    MarketplaceProductLinkError,
+    MarketplaceProductLinkService,
+)
 from services.marketplace_warehouses import MarketplaceWarehouseService
 
 
@@ -97,7 +101,7 @@ def _payload_boolean(data: Dict[str, Any], field_name: str, default: bool) -> bo
 
 
 def _error_response(error: Exception, status_code: int = 400):
-    if isinstance(error, MarketplaceListingError):
+    if isinstance(error, (MarketplaceListingError, MarketplaceProductLinkError)):
         status_code = error.status_code
         code = error.code
     else:
@@ -122,6 +126,7 @@ def _listing_filters() -> Dict[str, Any]:
             if request.args.get("account_id") else None
         ),
         "normalized_status": request.args.get("status") or None,
+        "link_status": request.args.get("link_status") or None,
         "include_unavailable": _boolean(
             request.args.get("include_unavailable"),
             "include_unavailable",
@@ -204,7 +209,13 @@ def detail(listing_id: int):
             seller_id=seller_id,
             listing_id=listing_id,
         )
-    except MarketplaceListingError as exc:
+        product_link = MarketplaceProductLinkService.context(
+            seller_id=seller_id,
+            listing_id=listing.id,
+            query=request.args.get("link_search") or None,
+            listing=listing,
+        )
+    except (MarketplaceListingError, MarketplaceProductLinkError) as exc:
         return _error_response(exc)
     if _wants_json():
         warehouse_stocks = (
@@ -219,6 +230,7 @@ def detail(listing_id: int):
             "success": True,
             "listing": listing.to_public_dict(detail=True),
             "warehouse_stocks": [row.to_public_dict() for row in warehouse_stocks],
+            "product_link": product_link,
         })
     warehouse_stocks = []
     proposals = []
@@ -240,6 +252,8 @@ def detail(listing_id: int):
         "marketplace_listing_detail.html",
         listing=listing,
         listing_data=listing.to_public_dict(detail=True),
+        product_link=product_link,
+        link_search=request.args.get("link_search", ""),
         warehouse_stocks=warehouse_stocks,
         commercial_proposals=proposals,
         commercial_feature_enabled=bool(
@@ -253,6 +267,115 @@ def detail(listing_id: int):
             )
         ),
     )
+
+
+def _link_write_payload(data: Dict[str, Any], allowed: set) -> None:
+    unknown = set(data) - allowed - {"csrf_token"}
+    if unknown:
+        raise ValueError("Неизвестные поля: " + ", ".join(sorted(unknown)))
+
+
+@marketplace_listings_bp.route("/<int:listing_id>/link", methods=["POST"])
+@login_required
+def link_product(listing_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    data = _payload()
+    try:
+        _link_write_payload(
+            data,
+            {"imported_product_id", "expected_link_version"},
+        )
+        listing = MarketplaceProductLinkService.link(
+            seller_id=seller_id,
+            listing_id=listing_id,
+            imported_product_id=_payload_integer(
+                data,
+                "imported_product_id",
+                None,
+            ),
+            expected_link_version=_payload_integer(
+                data,
+                "expected_link_version",
+                None,
+            ),
+            actor_user_id=getattr(current_user, "id", None),
+        )
+    except (MarketplaceProductLinkError, ValueError) as exc:
+        db.session.rollback()
+        return _error_response(exc)
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "listing": listing.to_public_dict(detail=True),
+        })
+    flash(
+        "Ozon-листинг связан с общей внутренней карточкой; AI-парсинг и контент будут переиспользованы",
+        "success",
+    )
+    return redirect(url_for("marketplace_listings.detail", listing_id=listing.id))
+
+
+@marketplace_listings_bp.route("/<int:listing_id>/unlink", methods=["POST"])
+@login_required
+def unlink_product(listing_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    data = _payload()
+    try:
+        _link_write_payload(data, {"expected_link_version"})
+        listing = MarketplaceProductLinkService.unlink(
+            seller_id=seller_id,
+            listing_id=listing_id,
+            expected_link_version=_payload_integer(
+                data,
+                "expected_link_version",
+                None,
+            ),
+            actor_user_id=getattr(current_user, "id", None),
+        )
+    except (MarketplaceProductLinkError, ValueError) as exc:
+        db.session.rollback()
+        return _error_response(exc)
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "listing": listing.to_public_dict(detail=True),
+        })
+    flash("Связь с внутренней карточкой удалена", "success")
+    return redirect(url_for("marketplace_listings.detail", listing_id=listing.id))
+
+
+@marketplace_listings_bp.route("/<int:listing_id>/reconcile-link", methods=["POST"])
+@login_required
+def reconcile_product_link(listing_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    data = _payload()
+    try:
+        _link_write_payload(data, set())
+        listing = MarketplaceProductLinkService.reconcile_listing(
+            seller_id=seller_id,
+            listing_id=listing_id,
+        )
+    except (MarketplaceProductLinkError, ValueError) as exc:
+        db.session.rollback()
+        return _error_response(exc)
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "listing": listing.to_public_dict(detail=True),
+        })
+    if listing.imported_product_id:
+        flash("Найдена одна точная внутренняя карточка; связь создана", "success")
+    elif listing.canonical_link_status == "ambiguous":
+        flash("Найдено несколько точных совпадений — выберите карточку вручную", "warning")
+    else:
+        flash("Точного совпадения не найдено; выберите карточку вручную", "info")
+    return redirect(url_for("marketplace_listings.detail", listing_id=listing.id))
 
 
 @marketplace_listings_bp.route("/accounts/<int:account_id>/sync", methods=["POST"])

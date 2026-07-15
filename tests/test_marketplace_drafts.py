@@ -13,6 +13,7 @@ from models import (
     MarketplaceAttributeDefinition,
     MarketplaceAttributeValue,
     MarketplaceCategoryMapping,
+    MarketplaceListing,
     MarketplaceProductType,
     MarketplaceTaxonomyCategory,
     Seller,
@@ -369,6 +370,44 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         self.assertEqual(mapped.product_type_id, self.product_type.id)
         self.assertIsNotNone(mapped.category_mapping_id)
+
+    def test_linked_existing_ozon_listing_reuses_fact_pack_as_update_draft(self):
+        product = self._product(
+            external_id="already-on-ozon",
+            ai_physical=True,
+        )
+        listing = MarketplaceListing(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+            offer_id=product.external_vendor_code,
+            external_product_id="987654321",
+            title="Существующая карточка Ozon",
+            normalized_status="active",
+            link_status="linked",
+            link_source="seller_confirmation",
+            sync_fingerprint="c" * 64,
+        )
+        db.session.add(listing)
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+        )
+        detail = draft.to_public_dict(detail=True)
+        self.assertEqual(draft.published_listing_id, listing.id)
+        self.assertEqual(draft.product_type_id, self.product_type.id)
+        self.assertEqual(draft.offer_id, listing.offer_id)
+        self.assertEqual(
+            json.loads(draft.source_facts_json)["unverified_suggestions"]
+            ["legacy_ai"]["physical"]["weight_g"],
+            150,
+        )
+        self.assertEqual(detail["content"]["name"], product.title)
 
     def test_description_4191_is_built_from_content_and_conflicts_fail_validation(self):
         _, draft = self._ready_draft(external_id="description-source")

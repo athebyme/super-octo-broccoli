@@ -7,6 +7,7 @@ import unittest
 from flask import Flask
 
 from models import (
+    ImportedProduct,
     Marketplace,
     MarketplaceCatalogSync,
     MarketplaceListing,
@@ -442,6 +443,34 @@ class MarketplaceListingServiceTest(unittest.TestCase):
             [payload["filter"]["visibility"] for payload in adapter.list_payloads],
             ["ALL", "ARCHIVED"],
         )
+
+    def test_catalog_page_links_one_exact_internal_offer_without_ai(self):
+        canonical = ImportedProduct(
+            seller_id=self.seller1.id,
+            external_id="source-active",
+            external_vendor_code="offer-active",
+            source_type="synthetic",
+            title="Общая карточка",
+            ai_attributes='{"cached": true}',
+        )
+        db.session.add(canonical)
+        db.session.commit()
+
+        run = MarketplaceListingService.sync_ozon_account(
+            seller_id=self.seller1.id,
+            account_id=self.account1.id,
+            max_pages=1,
+            adapter=SyntheticCatalogAdapter(),
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        self.assertEqual(run.status, "paused")
+        listing = MarketplaceListing.query.filter_by(
+            account_id=self.account1.id,
+            offer_id="offer-active",
+        ).one()
+        self.assertEqual(listing.imported_product_id, canonical.id)
+        self.assertEqual(listing.link_source, "exact_offer_identity")
+        self.assertEqual(listing.canonical_link_status, "linked")
 
     def test_failed_archived_phase_preserves_unseen_listing_and_resume_cursor(self):
         stale = self._stale_listing()

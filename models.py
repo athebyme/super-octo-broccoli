@@ -4671,6 +4671,26 @@ class MarketplaceListing(db.Model):
     price_summary_json = db.Column(db.Text, default='{}', nullable=False)
     stock_summary_json = db.Column(db.Text, default='{}', nullable=False)
 
+    # ``ImportedProduct`` is the seller-owned canonical product/content source.
+    # Marketplace listings are channel/account projections and must never own a
+    # second copy of AI parsing results.  These fields make the existing FK an
+    # explicit, reviewable and optimistically versioned relationship.
+    link_status = db.Column(
+        db.String(20),
+        default='unlinked',
+        nullable=False,
+    )
+    link_source = db.Column(db.String(40))
+    link_evidence_json = db.Column(db.Text, default='{}', nullable=False)
+    link_version = db.Column(db.Integer, default=1, nullable=False)
+    linked_at = db.Column(db.DateTime)
+    linked_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+
     upstream_created_at = db.Column(db.DateTime)
     upstream_updated_at = db.Column(db.DateTime)
     list_synced_at = db.Column(db.DateTime)
@@ -4707,6 +4727,10 @@ class MarketplaceListing(db.Model):
     )
     legacy_product = db.relationship('Product')
     imported_product = db.relationship('ImportedProduct')
+    linked_by_user = db.relationship(
+        'User',
+        foreign_keys=[linked_by_user_id],
+    )
     product_type = db.relationship('MarketplaceProductType')
     last_catalog_sync = db.relationship(
         'MarketplaceCatalogSync',
@@ -4729,6 +4753,14 @@ class MarketplaceListing(db.Model):
             "'archived','inactive','unknown')",
             name='ck_marketplace_listing_normalized_status',
         ),
+        db.CheckConstraint(
+            "link_status IN ('unlinked','linked','ambiguous')",
+            name='ck_marketplace_listing_link_status',
+        ),
+        db.CheckConstraint(
+            'link_version >= 1',
+            name='ck_marketplace_listing_link_version',
+        ),
         db.Index(
             'idx_marketplace_listing_seller_scope',
             'seller_id',
@@ -4747,6 +4779,15 @@ class MarketplaceListing(db.Model):
             'external_category_id',
             'external_type_id',
         ),
+        db.Index(
+            'uq_marketplace_listing_account_canonical',
+            'account_id',
+            'imported_product_id',
+            unique=True,
+            sqlite_where=db.text(
+                'account_id IS NOT NULL AND imported_product_id IS NOT NULL'
+            ),
+        ),
     )
 
     @staticmethod
@@ -4756,6 +4797,13 @@ class MarketplaceListing(db.Model):
         except (TypeError, json.JSONDecodeError):
             return fallback
         return value if isinstance(value, type(fallback)) else fallback
+
+    @property
+    def canonical_link_status(self) -> str:
+        """Return a safe status for rows created before link metadata existed."""
+        if self.imported_product_id is not None:
+            return 'linked'
+        return self.link_status if self.link_status == 'ambiguous' else 'unlinked'
 
     def to_public_dict(self, *, detail: bool = False) -> dict:
         data = {
@@ -4770,6 +4818,10 @@ class MarketplaceListing(db.Model):
             'account_label': self.account.label if self.account else None,
             'legacy_product_id': self.legacy_product_id,
             'imported_product_id': self.imported_product_id,
+            'link_status': self.canonical_link_status,
+            'link_source': self.link_source,
+            'link_version': self.link_version,
+            'linked_at': self.linked_at.isoformat() if self.linked_at else None,
             'offer_id': self.offer_id,
             'external_product_id': self.external_product_id,
             'primary_sku': self.primary_sku,
@@ -4796,6 +4848,10 @@ class MarketplaceListing(db.Model):
         }
         if detail:
             data.update({
+                'link_evidence': self._json_value(
+                    self.link_evidence_json,
+                    {},
+                ),
                 'identifiers': self._json_value(self.identifiers_json, {}),
                 'description': self.description,
                 'statuses': self._json_value(self.statuses_json, {}),
@@ -4837,6 +4893,98 @@ class MarketplaceListing(db.Model):
                 ),
             })
         return data
+
+
+class MarketplaceListingLinkEvent(db.Model):
+    """Append-only audit of canonical-product/listing relationship changes."""
+    __tablename__ = 'marketplace_listing_link_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    previous_imported_product_id = db.Column(db.Integer)
+    imported_product_id = db.Column(db.Integer)
+    action = db.Column(db.String(20), nullable=False)
+    source = db.Column(db.String(40), nullable=False)
+    evidence_json = db.Column(db.Text, default='{}', nullable=False)
+    actor_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    link_version = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship(
+        'MarketplaceListing',
+        backref=db.backref(
+            'link_events',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    actor_user = db.relationship('User', foreign_keys=[actor_user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'listing_id',
+            'link_version',
+            name='uq_marketplace_listing_link_event_version',
+        ),
+        db.CheckConstraint(
+            "action IN ('auto_link','manual_link','unlink','ambiguous','bootstrap')",
+            name='ck_marketplace_listing_link_event_action',
+        ),
+        db.CheckConstraint(
+            'link_version >= 1',
+            name='ck_marketplace_listing_link_event_version',
+        ),
+        db.Index(
+            'idx_marketplace_listing_link_event_scope',
+            'seller_id',
+            'listing_id',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'listing_id': self.listing_id,
+            'previous_imported_product_id': self.previous_imported_product_id,
+            'imported_product_id': self.imported_product_id,
+            'action': self.action,
+            'source': self.source,
+            'link_version': self.link_version,
+            'actor_user_id': self.actor_user_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class MarketplaceQualityAssessment(db.Model):
