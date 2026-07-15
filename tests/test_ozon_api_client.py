@@ -102,6 +102,30 @@ class OzonSellerAPIClientTest(unittest.TestCase):
         self.assertEqual(sleeps, [1])
         self.assertTrue(session.calls[0][1].endswith("/v4/product/info/limit"))
 
+    def test_analytics_is_allowlisted_read_only_and_retries_without_mutation(self):
+        payload = {
+            "date_from": "2026-07-09",
+            "date_to": "2026-07-15",
+            "dimension": ["sku"],
+            "metrics": ["ordered_units"],
+            "filters": [],
+            "limit": 1000,
+            "offset": 0,
+        }
+        client, session, sleeps = self._client([
+            requests.Timeout("synthetic timeout"),
+            FakeResponse(200, {"result": {"data": [], "totals": [0]}}),
+        ])
+
+        result = client.get_analytics_data(payload)
+
+        self.assertEqual(result["result"]["data"], [])
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(sleeps, [1])
+        self.assertTrue(session.calls[0][1].endswith("/v1/analytics/data"))
+        self.assertEqual(session.calls[0][2]["json"], payload)
+        self.assertEqual(OZON_ENDPOINTS["analytics_data"].retry_class, "read")
+
     def test_read_post_honors_bounded_retry_after(self):
         client, session, sleeps = self._client([
             FakeResponse(429, {}, {"Retry-After": "99"}),
@@ -175,6 +199,7 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "/v2/product/info/stocks-by-warehouse/fbs",
             "/v1/product/info/stocks-by-warehouse/fbo",
             "/v2/warehouse/list",
+            "/v1/analytics/data",
             "/v1/finance/accrual/by-day",
         ):
             self.assertIn(required, paths)
@@ -219,6 +244,30 @@ class OzonAdapterTest(unittest.TestCase):
         self.assertIs(registry.get("OZON"), adapter)
         with self.assertRaises(Exception):
             registry.register(adapter)
+
+    def test_analytics_capability_delegates_to_typed_read_method(self):
+        calls = []
+
+        class Client:
+            def __init__(self, credentials):
+                self.credentials = credentials
+
+            def get_analytics_data(self, payload):
+                calls.append(payload)
+                return {"result": {"data": [], "totals": [0]}}
+
+        adapter = OzonAdapter(client_factory=Client)
+        credentials = MarketplaceCredentials(
+            external_account_id="42",
+            api_key="synthetic-key",
+        )
+        payload = {"dimension": ["day"]}
+
+        response = adapter.read_analytics(credentials, payload)
+
+        self.assertIn("analytics_read", adapter.capabilities)
+        self.assertEqual(calls, [payload])
+        self.assertEqual(response["result"]["data"], [])
 
 
 if __name__ == "__main__":

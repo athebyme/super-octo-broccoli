@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P7 implemented; P8 quality/analytics next
+Статус: P0–P8 implemented; P9 orders/finance next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -119,6 +119,7 @@ unified chat
 - `dictionary_id`, `max_value_count`;
 - `attribute_complex_id`, `complex_is_collection`, `is_collection`;
 - `category_dependent`, `group_id`, `group_name`, `description`.
+- `is_aspect`, который нормализуется локально как `is_filterable` и не смешивается с обязательностью.
 
 Один `type_id` без `description_category_id` недостаточен в доменном контракте, даже если upstream ID сегодня глобально уникален.
 
@@ -176,7 +177,9 @@ unified chat
 
 ### 3.7 Аналитика и финансы
 
-- Product analytics нормализуется в marketplace-neutral facts (`views`, `cart_adds`, `orders`, `revenue`, conversion rates), сохраняя raw metric name/version.
+- Product analytics читается только через manifest-bound `/v1/analytics/data`. Реализованный P8 contract запрашивает один dimension за раз (`sku`, затем `day`), фиксированный список метрик и bounded pagination; malformed/duplicate/NaN/negative response не сохраняется как завершённый snapshot.
+- Product analytics нормализуется в definition-tagged facts (`views`, `cart_additions`, `ordered_units`, `ordered_revenue_rub`, conversion/delivery/cancel/return metrics), сохраняя provider metric, unit, definition version и `cross_marketplace_comparable=false`.
+- Каждый analytics run привязан к exact seller/account/period. Failed partial run не заменяет last-good snapshot, а неоднозначный локальный SKU блокирует read до provider call. Unmatched Ozon SKU остаётся наблюдаемым фактом без fake listing.
 - Premium-only metrics обязаны возвращать `unavailable_by_plan`, а не нули.
 - `/v3/finance/transaction/list` и `/v3/finance/transaction/totals` отключены 06.07.2026 и запрещены в новом adapter.
 - Новый finance ingestion строится на актуальных feeds:
@@ -241,6 +244,7 @@ class MarketplaceAdapter:
     def update_prices(credentials, payloads) -> BatchResult: ...
     def read_stocks(credentials, cursor) -> Page: ...
     def update_stocks(credentials, payloads) -> BatchResult: ...
+    def read_analytics(credentials, payload) -> Mapping: ...
 ```
 
 Обязательные свойства:
@@ -321,6 +325,22 @@ Category/type/attribute-scoped dictionary cache:
 - availability/freshness/version;
 - no global reuse across unrelated Ozon categories;
 - paginated sync checkpoint and search support.
+
+#### MarketplaceAnalyticsSync / MarketplaceMetricFact
+
+- durable exact `seller + marketplace + account + period` snapshot attempt;
+- product/day phases, bounded offsets and per-page commits;
+- only a fully completed run is readable as last-good data;
+- every fact retains normalized/provider metric, unit, definition and source endpoint;
+- cross-marketplace comparison is denied unless a future explicit normalized definition allows it.
+
+#### MarketplaceQualityAssessment
+
+- one current exact-account assessment per `MarketplaceListing`;
+- nullable score with honest `scored|schema_stale|unscorable` state;
+- provider-specific reasons plus common severity/impact;
+- schema/listing fingerprints and optional fresh analytics snapshot identity;
+- public entity scope is always `marketplace_listing + marketplace_code + account_id`.
 
 ### 4.3 Legacy compatibility
 
@@ -634,11 +654,22 @@ Definition of done: WB and Ozon can run concurrently for one seller without shar
 
 ### P8 — quality and analytics
 
-- Common quality input DTO with adapter schema context.
-- Ozon content score against fresh required/filterable attributes.
-- Ozon analytics sync into normalized metric facts.
-- Marketplace-specific reason codes plus common severity/impact.
-- Existing UI collections preserve marketplace/account/entity kind.
+- [x] Common quality input DTO with adapter schema context.
+- [x] Ozon content score against fresh required/filterable attributes.
+- [x] Ozon analytics sync into normalized metric facts.
+- [x] Marketplace-specific reason codes plus common severity/impact.
+- [x] Existing UI collections preserve marketplace/account/entity kind.
+
+Реализованы отдельные `/marketplaces/quality` и `/marketplaces/analytics`, а не
+косметический selector над WB-таблицами. Analytics sync сохраняет product/day
+facts только после strict envelope validation; last-good read переживает failed
+refresh, а scheduler bounded возобновляет большие snapshots. Quality scorer
+работает без LLM/API, требует fresh Ozon schema и listing attributes snapshot,
+использует `is_aspect -> is_filterable`; устаревшая truth даёт `score=NULL`.
+Performance reasons получают только свежий completed 30d snapshot того же
+account. UI хранит selection как `entity_kind=marketplace_listing` вместе с
+`marketplace_code=ozon` и `account_id` и явно предупреждает, что WB/Ozon метрики
+не сопоставимы без нового versioned definition contract.
 
 Definition of done: comparisons never mix WB and Ozon metrics without an explicit normalized definition.
 
@@ -704,6 +735,10 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
     fail-fast подключён к Docker/comprehensive path и вызывается direct SQLite
     startup, потому что простой `ALTER TABLE` не может снять старый
     `UNIQUE(seller_id)`.
+12. `migrate_add_marketplace_quality_analytics.py` additive/idempotent добавляет
+    normalized `is_filterable`, analytics sync/fact и quality tables с account
+    indexes/checks/partial running unique. Он запускается fail-fast после
+    listings/references во всех Docker/comprehensive/direct SQLite paths.
 
 ## 10. Security и safety invariants
 

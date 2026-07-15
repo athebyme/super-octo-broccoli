@@ -3626,6 +3626,10 @@ class MarketplaceAttributeDefinition(db.Model):
     complex_is_collection = db.Column(db.Boolean, default=False, nullable=False)
     is_collection = db.Column(db.Boolean, default=False, nullable=False)
     category_dependent = db.Column(db.Boolean, default=False, nullable=False)
+    # Ozon ``is_aspect``: the attribute participates in catalog/search filters.
+    # Keep the provider name out of higher layers; quality uses this normalized
+    # flag together with ``is_required``.
+    is_filterable = db.Column(db.Boolean, default=False, nullable=False)
     group_id = db.Column(db.String(100))
     group_name = db.Column(db.String(500))
     sort_order = db.Column(db.Integer, default=0, nullable=False)
@@ -4833,6 +4837,402 @@ class MarketplaceListing(db.Model):
                 ),
             })
         return data
+
+
+class MarketplaceQualityAssessment(db.Model):
+    """Current marketplace-scoped quality projection for one listing.
+
+    WB quality remains on ``Product``.  This projection deliberately carries
+    the full seller/account/listing scope so a future common UI cannot infer
+    ownership from a bare listing id.
+    """
+    __tablename__ = 'marketplace_quality_assessments'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    analytics_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_analytics_syncs.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+
+    status = db.Column(db.String(30), nullable=False, default='unscorable')
+    severity = db.Column(db.String(20), nullable=False, default='critical')
+    score = db.Column(db.Float)
+    impact = db.Column(db.Float, nullable=False, default=0)
+    schema_hash = db.Column(db.String(64))
+    listing_fingerprint = db.Column(db.String(64), nullable=False)
+    definition_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='marketplace-quality-v1',
+    )
+    breakdown_json = db.Column(db.Text, nullable=False, default='{}')
+    reasons_json = db.Column(db.Text, nullable=False, default='[]')
+    metrics_json = db.Column(db.Text, nullable=False, default='{}')
+    evaluated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship(
+        'MarketplaceListing',
+        backref=db.backref(
+            'quality_assessment',
+            uselist=False,
+            cascade='all, delete-orphan',
+        ),
+    )
+    analytics_sync = db.relationship('MarketplaceAnalyticsSync')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'listing_id',
+            name='uq_marketplace_quality_listing',
+        ),
+        db.CheckConstraint(
+            "status IN ('scored','schema_stale','unscorable')",
+            name='ck_marketplace_quality_status',
+        ),
+        db.CheckConstraint(
+            "severity IN ('critical','warning','good','excellent')",
+            name='ck_marketplace_quality_severity',
+        ),
+        db.CheckConstraint(
+            'score IS NULL OR (score >= 0 AND score <= 100)',
+            name='ck_marketplace_quality_score',
+        ),
+        db.CheckConstraint(
+            'impact >= 0',
+            name='ck_marketplace_quality_impact',
+        ),
+        db.Index(
+            'idx_marketplace_quality_scope',
+            'seller_id',
+            'account_id',
+            'status',
+            'severity',
+        ),
+    )
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    def to_public_dict(self) -> dict:
+        listing = self.listing
+        return {
+            'id': self.id,
+            'entity_kind': 'marketplace_listing',
+            'seller_id': self.seller_id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'listing_id': self.listing_id,
+            'offer_id': listing.offer_id if listing else None,
+            'external_product_id': (
+                listing.external_product_id if listing else None
+            ),
+            'primary_sku': listing.primary_sku if listing else None,
+            'title': listing.title if listing else None,
+            'status': self.status,
+            'severity': self.severity,
+            'score': self.score,
+            'impact': self.impact,
+            'definition_version': self.definition_version,
+            'schema_hash': self.schema_hash,
+            'breakdown': self._json_value(self.breakdown_json, {}),
+            'reasons': self._json_value(self.reasons_json, []),
+            'metrics': self._json_value(self.metrics_json, {}),
+            'analytics_sync_id': self.analytics_sync_id,
+            'evaluated_at': (
+                self.evaluated_at.isoformat() if self.evaluated_at else None
+            ),
+        }
+
+
+class MarketplaceAnalyticsSync(db.Model):
+    """Durable last-good analytics snapshot attempt for one account/period."""
+    __tablename__ = 'marketplace_analytics_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    period_code = db.Column(db.String(10), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='running')
+    phase = db.Column(db.String(20), nullable=False, default='product')
+    next_offset = db.Column(db.Integer, nullable=False, default=0)
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    row_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_rows = db.Column(db.Integer, nullable=False, default=0)
+    unmatched_rows = db.Column(db.Integer, nullable=False, default=0)
+    fact_count = db.Column(db.Integer, nullable=False, default=0)
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-analytics-v1',
+    )
+    metrics_json = db.Column(db.Text, nullable=False, default='[]')
+    totals_json = db.Column(db.Text, nullable=False, default='{}')
+    response_timestamp = db.Column(db.String(80))
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_page_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "period_code IN ('7d','30d')",
+            name='ck_marketplace_analytics_period_code',
+        ),
+        db.CheckConstraint(
+            "status IN ('running','completed','failed','cancelled')",
+            name='ck_marketplace_analytics_status',
+        ),
+        db.CheckConstraint(
+            "phase IN ('product','day','completed')",
+            name='ck_marketplace_analytics_phase',
+        ),
+        db.CheckConstraint(
+            'period_start <= period_end',
+            name='ck_marketplace_analytics_period',
+        ),
+        db.CheckConstraint(
+            'next_offset >= 0 AND page_count >= 0 AND row_count >= 0 '
+            'AND matched_rows >= 0 AND unmatched_rows >= 0 AND fact_count >= 0',
+            name='ck_marketplace_analytics_counters',
+        ),
+        db.Index(
+            'idx_marketplace_analytics_scope_period',
+            'seller_id',
+            'account_id',
+            'period_start',
+            'period_end',
+            'status',
+        ),
+        db.Index(
+            'uq_marketplace_analytics_active_scope',
+            'account_id',
+            'period_code',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+            postgresql_where=db.text("status = 'running'"),
+        ),
+    )
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'period_code': self.period_code,
+            'period_start': (
+                self.period_start.isoformat() if self.period_start else None
+            ),
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'status': self.status,
+            'phase': self.phase,
+            'page_count': self.page_count,
+            'row_count': self.row_count,
+            'matched_rows': self.matched_rows,
+            'unmatched_rows': self.unmatched_rows,
+            'fact_count': self.fact_count,
+            'contract_version': self.contract_version,
+            'metrics': self._json_value(self.metrics_json, []),
+            'totals': self._json_value(self.totals_json, {}),
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'last_page_at': (
+                self.last_page_at.isoformat() if self.last_page_at else None
+            ),
+            'completed_at': (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+        }
+
+
+class MarketplaceMetricFact(db.Model):
+    """One normalized, definition-tagged metric inside a completed sync."""
+    __tablename__ = 'marketplace_metric_facts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_analytics_syncs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    dimension_kind = db.Column(db.String(20), nullable=False)
+    dimension_id = db.Column(db.String(100), nullable=False)
+    dimension_name = db.Column(db.String(500))
+    fact_date = db.Column(db.Date)
+    metric_code = db.Column(db.String(60), nullable=False)
+    provider_metric = db.Column(db.String(60), nullable=False)
+    metric_value = db.Column(db.Numeric(20, 4), nullable=False)
+    unit = db.Column(db.String(20), nullable=False)
+    definition_code = db.Column(db.String(120), nullable=False)
+    cross_marketplace_comparable = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False,
+    )
+    source_endpoint = db.Column(
+        db.String(100),
+        nullable=False,
+        default='/v1/analytics/data',
+    )
+    observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    sync = db.relationship(
+        'MarketplaceAnalyticsSync',
+        backref=db.backref('metric_facts', lazy='dynamic', cascade='all, delete-orphan'),
+    )
+    listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'sync_id',
+            'dimension_kind',
+            'dimension_id',
+            'metric_code',
+            name='uq_marketplace_metric_fact',
+        ),
+        db.CheckConstraint(
+            "dimension_kind IN ('listing','day')",
+            name='ck_marketplace_metric_dimension_kind',
+        ),
+        db.CheckConstraint(
+            "(dimension_kind = 'listing' AND fact_date IS NULL) OR "
+            "(dimension_kind = 'day' AND fact_date IS NOT NULL)",
+            name='ck_marketplace_metric_dimension_date',
+        ),
+        db.CheckConstraint(
+            "unit IN ('count','rub','percent')",
+            name='ck_marketplace_metric_unit',
+        ),
+        db.CheckConstraint(
+            'metric_value >= 0',
+            name='ck_marketplace_metric_nonnegative',
+        ),
+        db.Index(
+            'idx_marketplace_metric_listing',
+            'seller_id',
+            'account_id',
+            'listing_id',
+            'metric_code',
+        ),
+        db.Index(
+            'idx_marketplace_metric_day',
+            'sync_id',
+            'fact_date',
+            'metric_code',
+        ),
+    )
 
 
 class MarketplaceWarehouseSync(db.Model):

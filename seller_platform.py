@@ -6292,6 +6292,9 @@ register_marketplace_operation_routes(app)
 from routes.marketplace_commercial import register_marketplace_commercial_routes
 register_marketplace_commercial_routes(app)
 
+from routes.marketplace_insights import register_marketplace_insight_routes
+register_marketplace_insight_routes(app)
+
 # ============= РОУТЫ БРЕНДОВ =============
 from routes.brands import register_brand_routes
 register_brand_routes(app)
@@ -6385,6 +6388,10 @@ def _run_startup_migrations():
                 migrate as migrate_marketplace_auto_publish,
             )
             migrate_marketplace_auto_publish(sqlite_path)
+            from migrations.migrate_add_marketplace_quality_analytics import (
+                migrate as migrate_marketplace_quality_analytics,
+            )
+            migrate_marketplace_quality_analytics(sqlite_path)
             bind.dispose()
             bind = db.engine
     insp = sa_inspect(bind)
@@ -6437,6 +6444,7 @@ def _run_startup_migrations():
         ('marketplaces', 'categories_snapshot_hash', 'VARCHAR(64)'),
         ('marketplaces', 'total_product_types', 'INTEGER DEFAULT 0'),
         ('marketplace_attribute_definitions', 'restriction_value_ids_json', 'TEXT'),
+        ('marketplace_attribute_definitions', 'is_filterable', 'BOOLEAN DEFAULT 0 NOT NULL'),
         # Standard photos — минимальный порог фото для глобального правила продавца
         ('product_defaults', 'min_photos', 'INTEGER'),
     ]

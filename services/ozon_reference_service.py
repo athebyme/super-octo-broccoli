@@ -683,6 +683,11 @@ class OzonReferenceService:
                     "category_dependent",
                     index,
                 ),
+                "is_filterable": cls._optional_boolean(
+                    item,
+                    "is_aspect",
+                    index,
+                ),
                 "group_id": cls._external_optional_integer(
                     item.get("group_id"),
                     f"attribute[{index}].group_id",
@@ -894,6 +899,7 @@ class OzonReferenceService:
             bool(attribute.complex_is_collection),
             bool(attribute.is_collection),
             bool(attribute.category_dependent),
+            bool(attribute.is_filterable),
             attribute.group_id,
             attribute.group_name,
             int(attribute.sort_order or 0),
@@ -916,6 +922,7 @@ class OzonReferenceService:
         attribute.complex_is_collection = item["complex_is_collection"]
         attribute.is_collection = item["is_collection"]
         attribute.category_dependent = item["category_dependent"]
+        attribute.is_filterable = item["is_filterable"]
         attribute.group_id = item["group_id"]
         attribute.group_name = item["group_name"]
         attribute.sort_order = item["sort_order"]

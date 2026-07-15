@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Scheduler refreshes Ozon references only behind the dark-launch flag."""
 
+from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 import os
 import unittest
@@ -8,12 +10,20 @@ import unittest
 from cryptography.fernet import Fernet
 from flask import Flask
 
-from models import Marketplace, MarketplaceReferenceAccount, db
+from models import (
+    Marketplace,
+    MarketplaceReferenceAccount,
+    Seller,
+    SellerMarketplaceAccount,
+    User,
+    db,
+)
 from services.product_sync_scheduler import (
     poll_ozon_commercial_operations,
     poll_ozon_marketplace_operations,
     sync_marketplace_characteristics,
     sync_marketplaces,
+    sync_ozon_analytics_accounts,
 )
 
 
@@ -46,8 +56,28 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
             )
             reference.set_credentials({"api_key": "scheduler-secret"})
             db.session.add(reference)
+            user = User(
+                username="ozon-scheduler",
+                email="ozon-scheduler@test.local",
+                is_active=True,
+            )
+            user.set_password("synthetic-password")
+            seller = Seller(user=user, company_name="Ozon scheduler")
+            db.session.add(seller)
+            db.session.flush()
+            account = SellerMarketplaceAccount(
+                seller_id=seller.id,
+                marketplace_id=marketplace.id,
+                external_account_id="seller-123",
+                label="Synthetic Ozon",
+                is_active=True,
+                connection_status="connected",
+            )
+            db.session.add(account)
             db.session.commit()
             self.marketplace_id = marketplace.id
+            self.seller_id = seller.id
+            self.account_id = account.id
 
     def tearDown(self):
         with self.app.app_context():
@@ -154,6 +184,49 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
         ) as poll:
             poll_ozon_commercial_operations(self.app)
         poll.assert_called_once_with(limit=20, allow_submission=True)
+
+    def test_analytics_scheduler_is_bounded_read_only_and_refreshes_quality(self):
+        completed_at = datetime.utcnow()
+        run = SimpleNamespace(status="completed", completed_at=completed_at)
+        with patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService._running_run",
+            return_value=None,
+        ), patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService._fresh_cached_sync",
+            return_value=None,
+        ), patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService.sync_account",
+            return_value=run,
+        ) as sync, patch(
+            "services.marketplace_quality."
+            "MarketplaceQualityService.recompute_account",
+            return_value={"processed": 0},
+        ) as quality:
+            result = sync_ozon_analytics_accounts(self.app, limit=1)
+
+        self.assertEqual(result["selected"], 1)
+        self.assertEqual(result["completed"], 1)
+        sync.assert_called_once()
+        sync_kwargs = sync.call_args.kwargs
+        self.assertEqual(sync_kwargs["seller_id"], self.seller_id)
+        self.assertEqual(sync_kwargs["account_id"], self.account_id)
+        self.assertEqual(sync_kwargs["period_code"], "30d")
+        self.assertFalse(sync_kwargs["force"])
+        self.assertEqual(sync_kwargs["max_pages"], 2)
+        quality.assert_called_once()
+
+    def test_analytics_scheduler_flag_blocks_read_calls(self):
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        with patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService.sync_account",
+        ) as sync:
+            result = sync_ozon_analytics_accounts(self.app)
+        self.assertEqual(result["selected"], 0)
+        sync.assert_not_called()
 
 
 if __name__ == "__main__":

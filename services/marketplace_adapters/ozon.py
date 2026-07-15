@@ -29,6 +29,7 @@ class OzonAdapter(MarketplaceAdapter):
             MarketplaceCapability.STOCKS_READ,
             MarketplaceCapability.STOCKS_WRITE,
             MarketplaceCapability.WAREHOUSES_READ,
+            MarketplaceCapability.ANALYTICS_READ,
         )
     })
     endpoint_versions = {
@@ -259,3 +260,10 @@ class OzonAdapter(MarketplaceAdapter):
         payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         return self._client(credentials).get_warehouses(payload)
+
+    def read_analytics(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_analytics_data(payload)

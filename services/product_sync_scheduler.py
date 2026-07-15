@@ -354,6 +354,19 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True
     )
 
+    # Ozon analytics is a separate account-scoped read model. A ten-minute
+    # bounded runner both resumes large pages and starts snapshots whose
+    # four-hour cache expired; it never writes to Ozon.
+    scheduler.add_job(
+        func=lambda: sync_ozon_analytics_accounts(flask_app),
+        trigger=IntervalTrigger(minutes=10),
+        id='ozon_analytics_sync',
+        name='Sync account-scoped Ozon analytics facts (read-only)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Первоначальная загрузка аналитики через 30 сек после старта (если данных нет)
     scheduler.add_job(
         func=lambda: initial_analytics_sync_if_empty(flask_app),
@@ -1153,6 +1166,88 @@ def poll_ozon_commercial_operations(flask_app, limit: int = 20):
             )
         return result
 
+def sync_ozon_analytics_accounts(flask_app, limit=3):
+    """Resume/start a bounded set of Ozon 30-day analytics snapshots."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 10:
+        return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 1}
+    with flask_app.app_context():
+        if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0}
+        from models import Marketplace, SellerMarketplaceAccount, db
+        from services.marketplace_analytics import MarketplaceAnalyticsService
+        from services.marketplace_quality import MarketplaceQualityService
+
+        candidates = SellerMarketplaceAccount.query.join(Marketplace).filter(
+            Marketplace.code == 'ozon',
+            Marketplace.is_active.is_(True),
+            SellerMarketplaceAccount.is_active.is_(True),
+            SellerMarketplaceAccount.connection_status == 'connected',
+        ).order_by(
+            SellerMarketplaceAccount.is_default.desc(),
+            SellerMarketplaceAccount.id.asc(),
+        ).limit(50).all()
+        due = []
+        current_time = datetime.utcnow()
+        for account in candidates:
+            running = MarketplaceAnalyticsService._running_run(
+                seller_id=account.seller_id,
+                account_id=account.id,
+                period_code='30d',
+                now=current_time,
+            )
+            if running is not None:
+                due.append(account)
+            else:
+                cached = MarketplaceAnalyticsService._fresh_cached_sync(
+                    seller_id=account.seller_id,
+                    account_id=account.id,
+                    period_code='30d',
+                    now=current_time,
+                    today=current_time.date(),
+                )
+                if cached is None:
+                    due.append(account)
+            if len(due) >= limit:
+                break
+
+        result = {'selected': len(due), 'completed': 0, 'running': 0, 'failed': 0}
+        for account in due:
+            try:
+                run = MarketplaceAnalyticsService.sync_account(
+                    seller_id=account.seller_id,
+                    account_id=account.id,
+                    period_code='30d',
+                    force=False,
+                    max_pages=2,
+                    now=current_time,
+                    today=current_time.date(),
+                )
+                result['completed' if run.status == 'completed' else 'running'] += 1
+                if (
+                    run.status == 'completed'
+                    and run.completed_at
+                    and run.completed_at >= current_time - timedelta(minutes=2)
+                ):
+                    MarketplaceQualityService.recompute_account(
+                        seller_id=account.seller_id,
+                        account_id=account.id,
+                        limit=500,
+                        now=current_time,
+                    )
+            except Exception as exc:
+                db.session.rollback()
+                result['failed'] += 1
+                logger.error(
+                    'Ozon analytics scheduler failed for account=%s: %s',
+                    account.id,
+                    type(exc).__name__,
+                )
+        if result['selected'] or result['failed']:
+            logger.info(
+                'Ozon analytics scheduler: selected=%s completed=%s running=%s failed=%s',
+                result['selected'], result['completed'], result['running'], result['failed'],
+            )
+        return result
 
 
 def shutdown_scheduler():
