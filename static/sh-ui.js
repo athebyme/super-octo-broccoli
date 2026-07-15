@@ -277,4 +277,21 @@
             }
         });
     });
+
+    /* ─────────────────────────────────────────────
+       Прогрессивные улучшения сайдбара:
+       aria-current на активной ссылке + title-тултип
+       (полезен в свёрнутом рельсе, где виден только значок)
+       ───────────────────────────────────────────── */
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.sidebar-link.active, .sidebar-sublink.active').forEach(function (el) {
+            el.setAttribute('aria-current', 'page');
+        });
+        document.querySelectorAll('.sidebar-link').forEach(function (el) {
+            if (el.hasAttribute('title')) return;
+            const span = el.querySelector('span');
+            const label = span && span.textContent.trim();
+            if (label) el.setAttribute('title', label);
+        });
+    });
 })();

@@ -440,3 +440,71 @@ a.sh-chip:hover, button.sh-chip:hover, .sh-chip--clickable:hover {
 @media (max-width: 480px) {
     .sh-notif-pop { position: fixed; top: 58px; right: 12px; left: 12px; width: auto; max-width: none; }
 }
+/* Колокольчик/тема на тёмном мобильном хедере */
+.mobile-header .sh-icon-btn { color: #b4b4b4; }
+.mobile-header .sh-icon-btn:hover { color: #fff; background: #1f1f1f; }
+.mobile-header .sh-notif-badge { border-color: var(--bg-sidebar); }
+.mobile-header-actions { display: flex; align-items: center; gap: 2px; }
+
+/* ─────────────────────────────────────────────
+   Слим-топбар (десктоп)
+   ───────────────────────────────────────────── */
+.sh-topbar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    height: 56px;
+    padding: 0 20px 0 24px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+}
+@media (min-width: 1024px) { .sh-topbar { display: flex; } }
+.sh-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.sh-topbar-right { display: flex; align-items: center; gap: 4px; }
+.sh-topbar-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    min-width: 220px;
+    padding: 0 8px 0 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-muted);
+    font-size: 13px;
+    font-family: var(--font-body);
+    cursor: pointer;
+    transition: border-color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+.sh-topbar-search:hover { border-color: var(--text-muted); }
+.sh-topbar-search:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sh-topbar-search svg { width: 15px; height: 15px; flex-shrink: 0; }
+.sh-topbar-search-label { flex: 1; text-align: left; }
+.sh-topbar-kbd {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 6px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xs);
+    color: var(--text-muted);
+}
+.sh-topbar-divider { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+/* Хлебные крошки в топбаре */
+.sh-crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sh-crumbs a { color: var(--text-secondary); text-decoration: none; white-space: nowrap; }
+.sh-crumbs a:hover { color: var(--text); }
+.sh-crumbs-sep { color: var(--text-muted); }
+.sh-crumbs-current { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

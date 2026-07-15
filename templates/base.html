@@ -2058,8 +2058,9 @@
     {% block extra_head %}{% endblock %}
 </head>
 
-<body x-data="{ sidebarOpen: true, mobileMenuOpen: false }" @keydown.escape="mobileMenuOpen = false">
+<body x-data="{ sidebarOpen: (() => { try { return localStorage.getItem('sh-sidebar') !== 'closed'; } catch(e){ return true; } })(), mobileMenuOpen: false }" x-init="$watch('sidebarOpen', v => { try { localStorage.setItem('sh-sidebar', v ? 'open' : 'closed'); } catch(e){} })" @keydown.escape="mobileMenuOpen = false">
     {% if current_user.is_authenticated %}
+    {% from "macros/icons.html" import icon %}
 
     <!-- Skip to content -->
     <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:px-4 focus:py-2 focus:bg-white focus:text-[var(--text)] focus:rounded-lg focus:shadow-lg focus:text-sm focus:font-medium">
@@ -2074,7 +2075,13 @@
             </svg>
         </button>
         <span>Seller Hub</span>
-        <div style="width:36px"></div>
+        <div class="mobile-header-actions">
+            {% include "partials/notification_center.html" %}
+            <button type="button" class="sh-icon-btn" @click="window.toggleTheme()" aria-label="Сменить тему">
+                <span class="theme-when-light">{{ icon('moon', size=18) }}</span>
+                <span class="theme-when-dark">{{ icon('sun', size=18) }}</span>
+            </button>
+        </div>
     </div>
 
     <!-- Mobile overlay -->
@@ -2360,23 +2367,6 @@
 
         </nav>
 
-        <!-- Notifications bell (always visible) -->
-        <div class="sidebar-section" style="padding: 4px 8px; margin-bottom: 4px;">
-            <a href="{{ url_for('notifications_page') }}"
-               class="sidebar-link {% if request.endpoint == 'notifications_page' %}active{% endif %}"
-               :class="{ 'notif-bell-active': $store.notif.unread > 0 }"
-               style="position:relative">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-                </svg>
-                <span x-show="sidebarOpen" x-cloak>Уведомления</span>
-                <span x-show="$store.notif.unread > 0"
-                      x-text="$store.notif.unread > 99 ? '99+' : $store.notif.unread"
-                      class="notif-badge absolute inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
-                      :style="sidebarOpen ? 'right: 8px; top: 50%; transform: translateY(-50%)' : 'top: 2px; right: 2px'"
-                      x-cloak></span>
-            </a>
-        </div>
 
         <!-- User -->
         <div class="sidebar-footer">
@@ -2421,6 +2411,28 @@
 
     <!-- Main -->
     <div class="main-content" :style="sidebarOpen ? 'margin-left: var(--sidebar-w)' : 'margin-left: var(--sidebar-collapsed)'">
+
+        <!-- Topbar (десктоп) -->
+        <header class="sh-topbar" role="banner">
+            <div class="sh-topbar-left">
+                {% block topbar_left %}{% endblock %}
+            </div>
+            <div class="sh-topbar-right">
+                <button type="button" class="sh-topbar-search"
+                        @click="window.dispatchEvent(new CustomEvent('toggle-cmdpalette'))"
+                        aria-label="Поиск по разделам">
+                    {{ icon('search', size=15) }}
+                    <span class="sh-topbar-search-label">Поиск…</span>
+                    <span class="sh-topbar-kbd">⌘K</span>
+                </button>
+                <div class="sh-topbar-divider"></div>
+                {% include "partials/notification_center.html" %}
+                <button type="button" class="sh-icon-btn" @click="window.toggleTheme()" aria-label="Сменить тему" title="Сменить тему">
+                    <span class="theme-when-light">{{ icon('moon', size=18) }}</span>
+                    <span class="theme-when-dark">{{ icon('sun', size=18) }}</span>
+                </button>
+            </div>
+        </header>
 
         <!-- Flash -->
         {% with messages = get_flashed_messages(with_categories=true) %}
