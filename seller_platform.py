@@ -1344,6 +1344,13 @@ def api_tasks_tray():
     except Exception:
         pass
 
+    # Отсечь «зомби»: задачи, застрявшие в running/pending (воркер умер, не обновив
+    # статус). Показываем только начатые за последние 12 часов; started_at=None
+    # (например, только что запущенная синхронизация) остаётся.
+    from datetime import timedelta
+    _fresh_iso = (datetime.utcnow() - timedelta(hours=12)).isoformat()
+    items = [x for x in items if not x['started_at'] or x['started_at'] >= _fresh_iso]
+
     items.sort(key=lambda x: x['started_at'] or '', reverse=True)
     return jsonify({'items': items[:25], 'count': len(items)})
 

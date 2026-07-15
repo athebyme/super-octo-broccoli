@@ -36,6 +36,7 @@ class TestTasksTrayApi(unittest.TestCase):
 
     @classmethod
     def _seed(cls):
+        from datetime import datetime, timedelta
         from models import User, Seller, BackgroundJob
         u1 = User(username='t1', email='t1@e.com', password_hash='x')
         cls.db.session.add(u1); cls.db.session.flush()
@@ -63,6 +64,10 @@ class TestTasksTrayApi(unittest.TestCase):
             # завершённая задача продавца 1 — НЕ активна, в трей не идёт
             BackgroundJob(job_uid='j-done', seller_id=s1.id, job_type='bulk_wb_import',
                           status='completed', total=3, processed=3),
+            # «зомби»: running, но начата давно (воркер умер) — должна быть отсечена
+            BackgroundJob(job_uid='j-zombie', seller_id=s1.id, job_type='bulk_wb_import',
+                          status='running', total=10, processed=2,
+                          created_at=datetime.utcnow() - timedelta(days=90)),
         ])
         cls.db.session.commit()
 
@@ -109,6 +114,13 @@ class TestTasksTrayApi(unittest.TestCase):
         data2 = self._client(self.user2_id).get('/api/tasks/tray').get_json()
         self.assertEqual([i['kind'] for i in data2['items']], ['import'])
         self.assertEqual(data2['items'][0]['progress'], 20)  # 1/5
+
+    def test_zombie_excluded(self):
+        # У продавца 1 две running-задачи import (свежая j-own + зомби 90 дней),
+        # но трей показывает только свежую.
+        data = self._client(self.user1_id).get('/api/tasks/tray').get_json()
+        imp = [i for i in data['items'] if i['kind'] == 'import']
+        self.assertEqual(len(imp), 1)
 
     def test_empty_tray(self):
         data = self._client(self.user3_id).get('/api/tasks/tray').get_json()
