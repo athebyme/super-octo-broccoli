@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Вход - Seller Hub</title>
+    <script>
+    /* Тема до рендера: сохранённый выбор или системная (без FOUC) */
+    (function () {
+        var t; try { t = localStorage.getItem('sh-theme'); } catch (e) {}
+        if (!t && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark';
+        if (t) document.documentElement.setAttribute('data-theme', t);
+    })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26,6 +34,21 @@
             --border-light: #f0eeeb;
             --font-display: 'Instrument Serif', Georgia, serif;
             --font-body: 'Inter', -apple-system, sans-serif;
+            color-scheme: light;
+        }
+
+        [data-theme="dark"] {
+            color-scheme: dark;
+            --bg: #131211;
+            --bg-card: #1c1a19;
+            --bg-sidebar: #0a0a0a;
+            --text: #ebe7e2;
+            --text-secondary: #a39d96;
+            --text-muted: #746e67;
+            --accent: #d97757;
+            --accent-light: #33251f;
+            --border: #2b2825;
+            --border-light: #221f1d;
         }
 
         body {

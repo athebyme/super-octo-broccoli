@@ -508,3 +508,24 @@ a.sh-chip:hover, button.sh-chip:hover, .sh-chip--clickable:hover {
 .sh-crumbs a:hover { color: var(--text); }
 .sh-crumbs-sep { color: var(--text-muted); }
 .sh-crumbs-current { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ─────────────────────────────────────────────
+   Категорийная иконка уведомления (страница /notifications)
+   Токен-фон вместо gradient, который глушится override → серый
+   ───────────────────────────────────────────── */
+.sh-notif-cat {
+    width: 40px; height: 40px;
+    border-radius: var(--r-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--bg-hover);
+    color: var(--text-muted);
+}
+.sh-notif-cat--info    { background: var(--info-bg);   color: var(--info); }
+.sh-notif-cat--success { background: var(--ok-bg);     color: var(--ok); }
+.sh-notif-cat--warning { background: var(--warn-bg);   color: var(--warn); }
+.sh-notif-cat--error   { background: var(--danger-bg); color: var(--danger); }
+.sh-notif-cat--promo   { background: var(--accent-light); color: var(--accent); }
+[data-theme="dark"] .sh-notif-cat--promo { color: var(--accent); }
