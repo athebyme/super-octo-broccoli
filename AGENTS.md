@@ -689,9 +689,22 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - Токены-масштабы в `base.html`: радиусы `--r-xs/sm/md/pill` (карточки ≤ `--r-md` = 8px),
   elevation `--shadow-1/2/3` (только оверлеи/hover, не плоские карточки), мотн
   `--ease-out/-in/-in-out` + `--dur-1/2/3`, единая z-шкала оверлеев
-  `--z-dropdown/-sticky/-backdrop/-overlay/-toast/-cmdpal`. Chart-серии должны идти
-  через отдельную категорийную палитру (не через семантические status-токены);
-  токенизация графиков — открытый follow-up.
+  `--z-dropdown/-sticky/-backdrop/-overlay/-toast/-cmdpal`.
+- Графики токенизированы: `--chart-1..6` (light+dark, dataviz-validated на CVD/контраст) —
+  единственный источник цветов серий; НЕ используйте status-токены и не хардкодьте hex
+  в конфигах Chart.js. Helper `window.shChart` (sh-ui.js): `palette/color/fade/textMuted/grid`
+  + `register(chart, recolor)` перекрашивает графики по событию `sh-theme-change` (его шлёт
+  `toggleTheme`). Свотчи легенд в разметке идут через `var(--chart-N)`, чтобы совпадать с
+  сериями. Затронуты `analytics.html`, `finances.html`, `finance_detail.html`.
+- ⌘K-палитра ищет товары: `GET /api/products/search?q=` (login-scoped, tenant, reuse фильтра
+  `vendor_code/title/brand/nm_id`, limit 20). `shCmdPalette` делает debounced fetch и рендерит
+  группу «Товары» рядом со статическими разделами; клавнавигация по объединённому списку.
+- Трей фоновых задач: `GET /api/tasks/tray` — read-only агрегатор активных операций из
+  seller-scoped таблиц (BackgroundJob/AgentTask/AutoPublishRun/ImageGenerationExperiment/
+  EnrichmentJob/PriceChangeBatch + `Seller.api_sync_status`), нормализованная форма
+  `{kind,title,status,progress,started_at,link}`, per-source try/except, ничего не мутирует.
+  `Alpine.store('tasks')` (адаптивный поллинг) + `partials/tasks_tray.html` (поповер у
+  колокольчика, показывается только при активных задачах) смонтирован в топбар и мобильный хедер.
 - Все интерактивные `.sh-*` обязаны иметь `:focus-visible` (кольцо `--focus-ring`) и
   `:active`. В `base.html` есть глобальный `@media (prefers-reduced-motion: reduce)` —
   не добавляйте немаскируемую анимацию. Статусные компоненты (`.sh-alert`,

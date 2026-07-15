@@ -17,64 +17,118 @@
             activeIndex: -1,
             empty: false,
             items: [],
+            _seq: 0,
+            _timer: null,
 
+            // Собрать видимые пункты (разделы + товары) в порядке DOM
+            collect() {
+                this.items = Array.from(this.$root.querySelectorAll('.sh-cmdpal-item'))
+                    .filter(el => el.style.display !== 'none');
+                if (this.activeIndex >= this.items.length) this.activeIndex = this.items.length - 1;
+                if (this.activeIndex < 0 && this.items.length) this.activeIndex = 0;
+                this.updateEmpty();
+                this.highlight();
+            },
+
+            // Открытие палитры / полный сброс
             refresh() {
-                this.items = Array.from(this.$root.querySelectorAll('.sh-cmdpal-item'));
+                this.query = '';
+                this.clearProducts();
                 this.filter();
             },
 
             filter() {
-                const q = (this.query || '').trim().toLowerCase();
-                let firstVisible = -1;
-                this.items.forEach((el, i) => {
-                    const text = (el.textContent || '').toLowerCase();
-                    const match = !q || text.indexOf(q) !== -1;
-                    el.style.display = match ? '' : 'none';
-                    el.classList.remove('active');
-                    if (match && firstVisible === -1) firstVisible = i;
-                });
-                // Скрыть заголовки групп без видимых пунктов
-                this.$root.querySelectorAll('.sh-cmdpal-group').forEach(function (g) {
-                    let sib = g.nextElementSibling, anyVisible = false;
-                    while (sib && !sib.classList.contains('sh-cmdpal-group')) {
-                        if (sib.classList.contains('sh-cmdpal-item') && sib.style.display !== 'none') {
-                            anyVisible = true; break;
-                        }
-                        sib = sib.nextElementSibling;
-                    }
-                    g.style.display = anyVisible ? '' : 'none';
-                });
-                this.empty = firstVisible === -1 && this.items.length > 0;
-                this.activeIndex = firstVisible;
-                this.highlight();
+                this.filterStatic();
+                this.searchProducts();
             },
 
-            visibleItems() {
-                return this.items.filter(function (el) { return el.style.display !== 'none'; });
+            // Фильтрация статических разделов по подстроке
+            filterStatic() {
+                const q = (this.query || '').trim().toLowerCase();
+                this.$root.querySelectorAll('.sh-cmdpal-item:not([data-cmd-product])').forEach(function (el) {
+                    const match = !q || (el.textContent || '').toLowerCase().indexOf(q) !== -1;
+                    el.style.display = match ? '' : 'none';
+                });
+                this.$root.querySelectorAll('.sh-cmdpal-group:not(.sh-cmdpal-products-group)').forEach(function (g) {
+                    let sib = g.nextElementSibling, vis = false;
+                    while (sib && !sib.classList.contains('sh-cmdpal-group')) {
+                        if (sib.classList.contains('sh-cmdpal-item') && !sib.hasAttribute('data-cmd-product') && sib.style.display !== 'none') { vis = true; break; }
+                        sib = sib.nextElementSibling;
+                    }
+                    g.style.display = vis ? '' : 'none';
+                });
+                this.activeIndex = 0;
+                this.collect();
+            },
+
+            // Debounced поиск товаров через API (гонки гасятся seq)
+            searchProducts() {
+                const q = (this.query || '').trim();
+                if (this._timer) clearTimeout(this._timer);
+                if (q.length < 2) { this._seq++; this.clearProducts(); this.collect(); return; }
+                const self = this;
+                const seq = ++this._seq;
+                this._timer = setTimeout(function () {
+                    fetch('/api/products/search?q=' + encodeURIComponent(q))
+                        .then(r => (r.ok ? r.json() : { items: [] }))
+                        .then(d => { if (seq === self._seq) self.renderProducts(d.items || []); })
+                        .catch(() => { if (seq === self._seq) self.renderProducts([]); });
+                }, 250);
+            },
+
+            renderProducts(list) {
+                const wrap = this.$root.querySelector('[data-cmd-products]');
+                const group = this.$root.querySelector('.sh-cmdpal-products-group');
+                if (!wrap) return;
+                wrap.innerHTML = '';
+                if (group) group.style.display = list.length ? '' : 'none';
+                list.forEach(function (p) {
+                    const a = document.createElement('a');
+                    a.href = p.url || '#';
+                    a.className = 'sh-cmdpal-item';
+                    a.setAttribute('data-cmd-product', '');
+                    const label = document.createElement('span');
+                    label.className = 'sh-cmdpal-item-label';
+                    label.textContent = p.title || p.vendor_code || ('nmID ' + (p.nm_id || ''));
+                    a.appendChild(label);
+                    const hintText = [p.vendor_code, p.nm_id].filter(Boolean).join(' · ');
+                    if (hintText) {
+                        const hint = document.createElement('span');
+                        hint.className = 'sh-cmdpal-item-hint';
+                        hint.textContent = hintText;
+                        a.appendChild(hint);
+                    }
+                    wrap.appendChild(a);
+                });
+                this.collect();
+            },
+
+            clearProducts() {
+                const wrap = this.$root.querySelector('[data-cmd-products]');
+                const group = this.$root.querySelector('.sh-cmdpal-products-group');
+                if (wrap) wrap.innerHTML = '';
+                if (group) group.style.display = 'none';
+            },
+
+            updateEmpty() {
+                this.empty = !this.items.length && (this.query || '').trim().length > 0;
             },
 
             highlight() {
-                this.items.forEach(function (el) { el.classList.remove('active'); });
+                this.$root.querySelectorAll('.sh-cmdpal-item.active').forEach(el => el.classList.remove('active'));
                 const el = this.items[this.activeIndex];
-                if (el && el.style.display !== 'none') {
-                    el.classList.add('active');
-                    el.scrollIntoView({ block: 'nearest' });
-                }
+                if (el) { el.classList.add('active'); el.scrollIntoView({ block: 'nearest' }); }
             },
 
             move(dir) {
-                const vis = this.visibleItems();
-                if (!vis.length) return;
-                let cur = vis.indexOf(this.items[this.activeIndex]);
-                if (cur === -1) cur = dir > 0 ? -1 : 0;
-                cur = (cur + dir + vis.length) % vis.length;
-                this.activeIndex = this.items.indexOf(vis[cur]);
+                if (!this.items.length) return;
+                this.activeIndex = (((this.activeIndex + dir) % this.items.length) + this.items.length) % this.items.length;
                 this.highlight();
             },
 
             choose() {
                 const el = this.items[this.activeIndex];
-                if (el && el.style.display !== 'none') el.click();
+                if (el) el.click();
             }
         };
     };
@@ -119,6 +173,53 @@
         }
     };
     window._notifChime = chime;
+
+    /* ─────────────────────────────────────────────
+       shChart — токен-палитра для Chart.js/inline-SVG,
+       перекраска графиков при смене темы (sh-theme-change)
+       ───────────────────────────────────────────── */
+    window.shChart = {
+        _read(name, fallback) {
+            try {
+                const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+                return v || fallback;
+            } catch (e) { return fallback; }
+        },
+        palette() {
+            const out = [];
+            for (let i = 1; i <= 6; i++) out.push(this._read('--chart-' + i, '#888888'));
+            return out;
+        },
+        color(i) { return this.palette()[(((i - 1) % 6) + 6) % 6]; },
+        text()      { return this._read('--text', '#1a1a1a'); },
+        textMuted() { return this._read('--text-muted', '#9a9a9a'); },
+        grid()      { return this._read('--border-light', '#eeeeee'); },
+        surface()   { return this._read('--bg-card', '#ffffff'); },
+        border()    { return this._read('--border', '#e8e5e1'); },
+        fade(hex, alpha) {
+            const a = alpha == null ? 0.1 : alpha;
+            hex = (hex || '').trim().replace('#', '');
+            if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+            const n = parseInt(hex, 16);
+            if (isNaN(n) || hex.length !== 6) return 'rgba(136,136,136,' + a + ')';
+            return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+        },
+        _charts: [],
+        register(chart, recolor) {
+            if (!chart || typeof recolor !== 'function') return chart;
+            try { recolor(chart, this); if (chart.update) chart.update('none'); } catch (e) {}
+            this._charts.push({ chart, recolor });
+            return chart;
+        },
+        onThemeChange() {
+            const self = this;
+            this._charts = this._charts.filter(c => c.chart && (c.chart.ctx || c.chart.canvas));
+            this._charts.forEach(function (c) {
+                try { c.recolor(c.chart, self); if (c.chart.update) c.chart.update('none'); } catch (e) {}
+            });
+        }
+    };
+    window.addEventListener('sh-theme-change', function () { window.shChart.onThemeChange(); });
 
     function plural(n, forms) {
         const m10 = n % 10, m100 = n % 100;
@@ -274,6 +375,41 @@
                 const dd = Math.floor(h / 24);
                 if (dd < 7) return dd + ' ' + plural(dd, ['день', 'дня', 'дней']) + ' назад';
                 return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+            }
+        });
+
+        /* ── Трей фоновых задач: агрегатор /api/tasks/tray ── */
+        Alpine.store('tasks', {
+            items: [],
+            count: 0,
+            open: false,
+            _timer: null,
+
+            init() { this.tick(); },
+
+            tick() {
+                const self = this;
+                this.poll().then(function () {
+                    const delay = (self.count > 0 || self.open) ? 10000 : 30000;
+                    if (self._timer) clearTimeout(self._timer);
+                    self._timer = setTimeout(function () { self.tick(); }, delay);
+                });
+            },
+
+            async poll() {
+                try {
+                    const r = await fetch('/api/tasks/tray');
+                    const d = await r.json();
+                    this.items = d.items || [];
+                    this.count = d.count || 0;
+                } catch (e) {}
+            },
+
+            toggle() { this.open = !this.open; if (this.open) this.poll(); },
+            close() { this.open = false; },
+            relTime(iso) {
+                const s = Alpine.store('notif');
+                return s ? s.relTime(iso) : '';
             }
         });
     });

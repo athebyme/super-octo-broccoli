@@ -131,8 +131,8 @@
             <div class="flex items-center justify-between mb-6">
                 <h2 class="text-lg font-semibold text-gray-900">Доходы и расходы по неделям</h2>
                 <div class="flex items-center gap-4 text-xs">
-                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-emerald-400"></span> К перечислению</span>
-                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-rose-400"></span> Расходы</span>
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full" style="background:var(--chart-3)"></span> К перечислению</span>
+                    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full" style="background:var(--chart-6)"></span> Расходы</span>
                 </div>
             </div>
             <div class="h-72" x-show="weeklyData.length">
@@ -155,7 +155,7 @@
                 <template x-for="item in expenseBreakdown" :key="item.name">
                     <div class="flex items-center justify-between">
                         <span class="flex items-center gap-2 text-sm">
-                            <span class="w-3 h-3 rounded-full" :style="'background:' + item.color"></span>
+                            <span class="w-3 h-3 rounded-full" :style="'background: var(--chart-' + item.ci + ')'"></span>
                             <span class="text-gray-600" x-text="item.name"></span>
                         </span>
                         <div class="text-right">
@@ -353,12 +353,12 @@ function financesPage() {
             // Build expense breakdown for donut
             const b = this.breakdown;
             const items = [
-                { name: 'Комиссия WB', amount: b.commission || 0, color: '#6366f1' },
-                { name: 'Логистика', amount: b.logistics || 0, color: '#f59e0b' },
-                { name: 'Хранение', amount: b.storage || 0, color: '#10b981' },
-                { name: 'Штрафы', amount: b.penalties || 0, color: '#ef4444' },
-                { name: 'Удержания', amount: b.deductions || 0, color: '#8b5cf6' },
-                { name: 'Приёмка', amount: b.acceptance || 0, color: '#f97316' },
+                { name: 'Комиссия WB', amount: b.commission || 0, ci: 1 },
+                { name: 'Логистика', amount: b.logistics || 0, ci: 2 },
+                { name: 'Хранение', amount: b.storage || 0, ci: 3 },
+                { name: 'Штрафы', amount: b.penalties || 0, ci: 4 },
+                { name: 'Удержания', amount: b.deductions || 0, ci: 5 },
+                { name: 'Приёмка', amount: b.acceptance || 0, ci: 6 },
             ].filter(i => i.amount > 0);
 
             const expTotal = items.reduce((s, i) => s + i.amount, 0);
@@ -386,7 +386,8 @@ function financesPage() {
                 (w.logistics || 0) + (w.storage || 0) + (w.penalties || 0)
             );
 
-            this.revenueChart = new Chart(this.$refs.revenueChart, {
+            const P = window.shChart;
+            this.revenueChart = P.register(new Chart(this.$refs.revenueChart, {
                 type: 'line',
                 data: {
                     labels,
@@ -394,18 +395,18 @@ function financesPage() {
                         {
                             label: 'К перечислению',
                             data: this.weeklyData.map(w => w.forPay),
-                            borderColor: '#34d399',
-                            backgroundColor: 'rgba(52,211,153,0.1)',
+                            borderColor: P.color(3),
+                            backgroundColor: P.fade(P.color(3), 0.1),
                             fill: true, tension: 0.4, borderWidth: 2.5,
-                            pointBackgroundColor: '#34d399', pointRadius: 3, pointHoverRadius: 6,
+                            pointBackgroundColor: P.color(3), pointRadius: 3, pointHoverRadius: 6,
                         },
                         {
                             label: 'Расходы',
                             data: expensesData,
-                            borderColor: '#fb7185',
-                            backgroundColor: 'rgba(251,113,133,0.08)',
+                            borderColor: P.color(6),
+                            backgroundColor: P.fade(P.color(6), 0.08),
                             fill: true, tension: 0.4, borderWidth: 2.5,
-                            pointBackgroundColor: '#fb7185', pointRadius: 3, pointHoverRadius: 6,
+                            pointBackgroundColor: P.color(6), pointRadius: 3, pointHoverRadius: 6,
                         },
                     ]
                 },
@@ -414,17 +415,22 @@ function financesPage() {
                     interaction: { mode: 'index', intersect: false },
                     plugins: {
                         legend: { display: false },
-                        tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 },
+                        tooltip: { backgroundColor: P._read('--bg-sidebar', '#0a0a0a'), cornerRadius: 8, padding: 12 },
                     },
                     scales: {
-                        x: { grid: { display: false }, ticks: { color: '#9ca3af' } },
-                        y: { grid: { color: '#f3f4f6' }, ticks: { color: '#9ca3af', callback: v => {
+                        x: { grid: { display: false }, ticks: { color: P.textMuted() } },
+                        y: { grid: { color: P.grid() }, ticks: { color: P.textMuted(), callback: v => {
                             if (Math.abs(v) >= 1000000) return (v/1000000).toFixed(1) + 'M';
                             if (Math.abs(v) >= 1000) return (v/1000).toFixed(0) + 'k';
                             return v;
                         }}},
                     }
                 }
+            }), (c, p) => {
+                c.data.datasets[0].borderColor = p.color(3); c.data.datasets[0].backgroundColor = p.fade(p.color(3), 0.1); c.data.datasets[0].pointBackgroundColor = p.color(3);
+                c.data.datasets[1].borderColor = p.color(6); c.data.datasets[1].backgroundColor = p.fade(p.color(6), 0.08); c.data.datasets[1].pointBackgroundColor = p.color(6);
+                c.options.plugins.tooltip.backgroundColor = p._read('--bg-sidebar', '#0a0a0a');
+                c.options.scales.x.ticks.color = p.textMuted(); c.options.scales.y.ticks.color = p.textMuted(); c.options.scales.y.grid.color = p.grid();
             });
         },
 
@@ -432,13 +438,15 @@ function financesPage() {
             if (!this.$refs.expenseDonut || !this.expenseBreakdown.length) return;
             if (this.expenseDonutChart) this.expenseDonutChart.destroy();
 
-            this.expenseDonutChart = new Chart(this.$refs.expenseDonut, {
+            const P = window.shChart;
+            const cis = this.expenseBreakdown.map(e => e.ci);
+            this.expenseDonutChart = P.register(new Chart(this.$refs.expenseDonut, {
                 type: 'doughnut',
                 data: {
                     labels: this.expenseBreakdown.map(e => e.name),
                     datasets: [{
                         data: this.expenseBreakdown.map(e => e.amount),
-                        backgroundColor: this.expenseBreakdown.map(e => e.color),
+                        backgroundColor: cis.map(ci => P.color(ci)),
                         borderWidth: 0, hoverOffset: 6,
                     }]
                 },
@@ -447,9 +455,12 @@ function financesPage() {
                     cutout: '72%',
                     plugins: {
                         legend: { display: false },
-                        tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 },
+                        tooltip: { backgroundColor: P._read('--bg-sidebar', '#0a0a0a'), cornerRadius: 8, padding: 12 },
                     }
                 }
+            }), (c, p) => {
+                c.data.datasets[0].backgroundColor = cis.map(ci => p.color(ci));
+                c.options.plugins.tooltip.backgroundColor = p._read('--bg-sidebar', '#0a0a0a');
             });
         },
     };
