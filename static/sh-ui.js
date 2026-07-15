@@ -377,6 +377,41 @@
                 return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
             }
         });
+
+        /* ── Трей фоновых задач: агрегатор /api/tasks/tray ── */
+        Alpine.store('tasks', {
+            items: [],
+            count: 0,
+            open: false,
+            _timer: null,
+
+            init() { this.tick(); },
+
+            tick() {
+                const self = this;
+                this.poll().then(function () {
+                    const delay = (self.count > 0 || self.open) ? 10000 : 30000;
+                    if (self._timer) clearTimeout(self._timer);
+                    self._timer = setTimeout(function () { self.tick(); }, delay);
+                });
+            },
+
+            async poll() {
+                try {
+                    const r = await fetch('/api/tasks/tray');
+                    const d = await r.json();
+                    this.items = d.items || [];
+                    this.count = d.count || 0;
+                } catch (e) {}
+            },
+
+            toggle() { this.open = !this.open; if (this.open) this.poll(); },
+            close() { this.open = false; },
+            relTime(iso) {
+                const s = Alpine.store('notif');
+                return s ? s.relTime(iso) : '';
+            }
+        });
     });
 
     /* ─────────────────────────────────────────────

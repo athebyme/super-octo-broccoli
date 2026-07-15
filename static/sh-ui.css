@@ -440,6 +440,32 @@ a.sh-chip:hover, button.sh-chip:hover, .sh-chip--clickable:hover {
 @media (max-width: 480px) {
     .sh-notif-pop { position: fixed; top: 58px; right: 12px; left: 12px; width: auto; max-width: none; }
 }
+/* ─────────────────────────────────────────────
+   Трей фоновых задач (поповер у колокольчика)
+   Переиспользует popover-оболочку .sh-notif-*
+   ───────────────────────────────────────────── */
+.sh-tray { position: relative; }
+.sh-tray-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border-light);
+    text-decoration: none;
+    transition: background-color var(--dur-1) var(--ease-out);
+}
+.sh-tray-item:last-child { border-bottom: none; }
+.sh-tray-item:hover { background: var(--bg-hover); }
+.sh-tray-ico { flex-shrink: 0; margin-top: 1px; color: var(--accent); display: inline-flex; }
+.sh-tray-body { flex: 1; min-width: 0; }
+.sh-tray-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sh-tray-meta { display: flex; gap: 8px; align-items: center; margin-top: 3px; font-size: 11px; color: var(--text-muted); }
+.sh-tray-status { text-transform: none; }
+.sh-tray-item .sh-progress { margin-top: 8px; height: 4px; }
+.sh-tray-empty { padding: 40px 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.sh-tray-empty svg { width: 32px; height: 32px; margin: 0 auto 10px; opacity: 0.55; display: block; }
+.mobile-header .sh-tray-badge { border-color: var(--bg-sidebar); }
+
 /* Колокольчик/тема на тёмном мобильном хедере */
 .mobile-header .sh-icon-btn { color: #b4b4b4; }
 .mobile-header .sh-icon-btn:hover { color: #fff; background: #1f1f1f; }

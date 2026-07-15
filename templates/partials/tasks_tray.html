@@ -1,0 +1,56 @@
+{#
+    Трей фоновых задач — иконка+поповер у колокольчика.
+    Данные — Alpine.store('tasks') (static/sh-ui.js), источник /api/tasks/tray.
+    Показывается только когда есть активные задачи.
+#}
+{% from "macros/icons.html" import icon %}
+<div class="sh-tray" x-data x-show="$store.tasks.count > 0" x-cloak
+     @click.away="$store.tasks.open && $store.tasks.close()"
+     @keydown.escape="$store.tasks.close()">
+
+    <button type="button" class="sh-icon-btn sh-tray-btn"
+            @click="$store.tasks.toggle()"
+            :aria-expanded="$store.tasks.open" aria-haspopup="true" aria-label="Фоновые задачи">
+        {{ icon('activity', size=20) }}
+        <span class="sh-notif-badge sh-tray-badge" x-show="$store.tasks.count > 0" x-cloak
+              x-text="$store.tasks.count > 99 ? '99+' : $store.tasks.count"></span>
+    </button>
+
+    <div class="sh-notif-pop" x-show="$store.tasks.open" x-cloak
+         x-transition:enter="transition ease-out duration-150"
+         x-transition:enter-start="opacity-0 -translate-y-1"
+         x-transition:enter-end="opacity-100 translate-y-0"
+         x-transition:leave="transition ease-in duration-100"
+         x-transition:leave-start="opacity-100 translate-y-0"
+         x-transition:leave-end="opacity-0 -translate-y-1"
+         role="dialog" aria-label="Фоновые задачи">
+
+        <div class="sh-notif-head"><span class="sh-notif-head-title">Фоновые задачи</span></div>
+
+        <div class="sh-notif-list">
+            <template x-if="$store.tasks.items.length === 0">
+                <div class="sh-tray-empty">
+                    {{ icon('activity', size=32, stroke=1.5) }}
+                    <div>Нет активных задач</div>
+                </div>
+            </template>
+
+            <template x-for="(item, idx) in $store.tasks.items" :key="idx">
+                <a :href="item.link || '#'" class="sh-tray-item">
+                    <span class="sh-tray-ico">{{ icon('activity', size=16) }}</span>
+                    <div class="sh-tray-body">
+                        <div class="sh-tray-title" x-text="item.title"></div>
+                        <div class="sh-tray-meta">
+                            <span class="sh-tray-status" x-text="({running:'Выполняется',pending:'В очереди',queued:'В очереди',remote_running:'Выполняется',finalizing:'Завершение',applying:'Применяется'})[item.status] || item.status"></span>
+                            <span x-show="item.started_at" x-text="'· ' + $store.tasks.relTime(item.started_at)"></span>
+                        </div>
+                        <div class="sh-progress" :class="item.progress === null ? 'sh-progress--indeterminate' : ''"
+                             x-show="item.status !== 'pending' && item.status !== 'queued'">
+                            <div class="sh-progress-bar" :style="item.progress !== null ? ('width:' + item.progress + '%') : ''"></div>
+                        </div>
+                    </div>
+                </a>
+            </template>
+        </div>
+    </div>
+</div>

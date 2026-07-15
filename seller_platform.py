@@ -1239,6 +1239,115 @@ def api_settings():
 
 # ============= КАРТОЧКИ ТОВАРОВ =============
 
+@app.route('/api/tasks/tray')
+@login_required
+def api_tasks_tray():
+    """Read-only агрегатор активных фоновых операций текущего продавца для трея
+    в топбаре. Собирает статус из уже существующих seller-scoped таблиц и ничего
+    не мутирует; каждый источник изолирован try/except."""
+    if not current_user.seller:
+        return jsonify({'items': [], 'count': 0})
+    from models import (BackgroundJob, AgentTask, AutoPublishRun,
+                        ImageGenerationExperiment, EnrichmentJob, PriceChangeBatch)
+    sid = current_user.seller.id
+    items = []
+
+    def pct(done, total):
+        try:
+            if total and total > 0:
+                return max(0, min(100, round(done / total * 100)))
+        except Exception:
+            pass
+        return None
+
+    def iso(dt):
+        return dt.isoformat() if dt else None
+
+    # 1. BackgroundJob — импорт/публикация, обновление фото
+    try:
+        _labels = {'bulk_wb_import': 'Публикация в WB'}
+        for j in (BackgroundJob.query
+                  .filter(BackgroundJob.seller_id == sid,
+                          BackgroundJob.status.in_(['pending', 'running']))
+                  .order_by(BackgroundJob.created_at.desc()).limit(10).all()):
+            items.append({'kind': 'import', 'title': _labels.get(j.job_type, 'Фоновая задача'),
+                          'status': j.status, 'progress': pct(j.processed, j.total),
+                          'started_at': iso(j.created_at), 'link': '/supplier-updates'})
+    except Exception:
+        pass
+
+    # 2. AgentTask — ИИ-задачи
+    try:
+        for t in (AgentTask.query
+                  .filter(AgentTask.seller_id == sid,
+                          AgentTask.status.in_(['queued', 'running']))
+                  .order_by(AgentTask.created_at.desc()).limit(10).all()):
+            items.append({'kind': 'agent', 'title': t.title or t.current_step_label or 'ИИ-задача',
+                          'status': t.status, 'progress': pct(t.completed_steps, t.total_steps),
+                          'started_at': iso(t.started_at or t.created_at), 'link': '/agents'})
+    except Exception:
+        pass
+
+    # 3. AutoPublishRun — авто-публикация
+    try:
+        for r in (AutoPublishRun.query
+                  .filter(AutoPublishRun.seller_id == sid, AutoPublishRun.status == 'running')
+                  .order_by(AutoPublishRun.created_at.desc()).limit(5).all()):
+            items.append({'kind': 'publish', 'title': 'Авто-публикация', 'status': r.status,
+                          'progress': pct(r.total_published, r.total_candidates),
+                          'started_at': iso(r.started_at or r.created_at), 'link': '/auto-publish'})
+    except Exception:
+        pass
+
+    # 4. Фотостудия (image lab)
+    try:
+        from services.image_lab_service import ACTIVE_STATUSES as _IL_ACTIVE
+        for e in (ImageGenerationExperiment.query
+                  .filter(ImageGenerationExperiment.seller_id == sid,
+                          ImageGenerationExperiment.status.in_(list(_IL_ACTIVE)))
+                  .order_by(ImageGenerationExperiment.created_at.desc()).limit(10).all()):
+            items.append({'kind': 'image', 'title': 'Фотостудия', 'status': e.status,
+                          'progress': None, 'started_at': iso(e.started_at or e.created_at),
+                          'link': '/image-lab'})
+    except Exception:
+        pass
+
+    # 5. EnrichmentJob — обогащение карточек
+    try:
+        for j in (EnrichmentJob.query
+                  .filter(EnrichmentJob.seller_id == sid,
+                          EnrichmentJob.status.in_(['pending', 'running']))
+                  .order_by(EnrichmentJob.created_at.desc()).limit(5).all()):
+            items.append({'kind': 'enrich', 'title': 'Обогащение карточек', 'status': j.status,
+                          'progress': pct(j.processed, j.total),
+                          'started_at': iso(j.created_at), 'link': '/products'})
+    except Exception:
+        pass
+
+    # 6. PriceChangeBatch — применение цен в WB
+    try:
+        for b in (PriceChangeBatch.query
+                  .filter(PriceChangeBatch.seller_id == sid, PriceChangeBatch.status == 'applying')
+                  .order_by(PriceChangeBatch.created_at.desc()).limit(5).all()):
+            items.append({'kind': 'price', 'title': b.name or 'Изменение цен', 'status': b.status,
+                          'progress': pct(b.applied_count, b.total_items),
+                          'started_at': iso(b.created_at), 'link': '/prices'})
+    except Exception:
+        pass
+
+    # 7. Синхронизация каталога (флаг на Seller)
+    try:
+        if current_user.seller.api_sync_status == 'syncing':
+            items.append({'kind': 'sync', 'title': 'Синхронизация каталога', 'status': 'running',
+                          'progress': None, 'started_at': iso(getattr(current_user.seller, 'api_last_sync', None)),
+                          'link': '/products'})
+    except Exception:
+        pass
+
+    items.sort(key=lambda x: x['started_at'] or '', reverse=True)
+    return jsonify({'items': items[:25], 'count': len(items)})
+
+
 @app.route('/api/products/search')
 @login_required
 def api_products_search():

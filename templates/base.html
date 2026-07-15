@@ -2082,7 +2082,8 @@
         </button>
         <span>Seller Hub</span>
         <div class="mobile-header-actions">
-            {% include "partials/notification_center.html" %}
+            {% include "partials/tasks_tray.html" %}
+                {% include "partials/notification_center.html" %}
             <button type="button" class="sh-icon-btn" @click="window.toggleTheme()" aria-label="Сменить тему">
                 <span class="theme-when-light">{{ icon('moon', size=18) }}</span>
                 <span class="theme-when-dark">{{ icon('sun', size=18) }}</span>
@@ -2432,6 +2433,7 @@
                     <span class="sh-topbar-kbd">⌘K</span>
                 </button>
                 <div class="sh-topbar-divider"></div>
+                {% include "partials/tasks_tray.html" %}
                 {% include "partials/notification_center.html" %}
                 <button type="button" class="sh-icon-btn" @click="window.toggleTheme()" aria-label="Сменить тему" title="Сменить тему">
                     <span class="theme-when-light">{{ icon('moon', size=18) }}</span>
