@@ -1,6 +1,7 @@
 """Seller-facing marketplace product drafts and deterministic validation."""
 
 import json
+import secrets
 from typing import Any, Dict, Optional
 
 from flask import (
@@ -22,6 +23,7 @@ from services.marketplace_drafts import (
     MarketplaceDraftService,
     MarketplaceDraftValidationError,
 )
+from services.marketplace_publications import MarketplacePublicationService
 
 
 marketplace_drafts_bp = Blueprint(
@@ -105,6 +107,16 @@ def _boolean(value: Any, field_name: str, *, default: bool = False) -> bool:
 
 def _feature_enabled() -> bool:
     return bool(current_app.config.get("MARKETPLACE_OZON_ENABLED", False))
+
+
+def _publication_enabled() -> bool:
+    return bool(
+        _feature_enabled()
+        and current_app.config.get(
+            "MARKETPLACE_OZON_PUBLICATION_ENABLED",
+            False,
+        )
+    )
 
 
 def _feature_disabled_response():
@@ -308,13 +320,29 @@ def detail(draft_id: int):
             )
             if type_query else []
         )
+        operations = MarketplacePublicationService.list_for_draft(
+            seller_id=seller_id,
+            draft_id=draft.id,
+            limit=20,
+        )
     except MarketplaceDraftError as exc:
         return _error_response(exc)
     if _wants_json():
         return jsonify({
             "success": True,
             "draft": draft.to_public_dict(detail=True),
+            "operations": [
+                operation.to_public_dict(detail=False)
+                for operation in operations
+            ],
         })
+    active_operation = next(
+        (
+            operation for operation in operations
+            if operation.status in MarketplacePublicationService.ACTIVE_STATUSES
+        ),
+        None,
+    )
     return render_template(
         "marketplace_draft_detail.html",
         draft=draft,
@@ -322,6 +350,10 @@ def detail(draft_id: int):
         type_query=type_query,
         type_options=type_options,
         ozon_enabled=_feature_enabled(),
+        publication_enabled=_publication_enabled(),
+        publication_idempotency_key=secrets.token_urlsafe(24),
+        operations=operations,
+        active_operation=active_operation,
     )
 
 

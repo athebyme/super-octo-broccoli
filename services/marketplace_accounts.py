@@ -14,8 +14,13 @@ from sqlalchemy.exc import IntegrityError
 from models import (
     Marketplace,
     MarketplaceCredentialEncryptionError,
+    MarketplaceOperation,
     SellerMarketplaceAccount,
     db,
+)
+from services.marketplace_operation_locks import (
+    release_account_operation_lock,
+    try_account_operation_lock,
 )
 from services.marketplace_adapters import (
     ConnectionCheck,
@@ -61,6 +66,15 @@ class MarketplaceAccountService:
         "limited",
         "error",
         "disconnected",
+    }
+    RECONCILIATION_REQUIRED_STATUSES = {
+        "submitting",
+        "submitted",
+        "polling",
+        "uncertain",
+    }
+    ACCOUNT_MUTATION_BLOCKING_STATUSES = RECONCILIATION_REQUIRED_STATUSES | {
+        "queued",
     }
 
     @staticmethod
@@ -183,7 +197,70 @@ class MarketplaceAccountService:
 
         marketplace = cls._marketplace("ozon")
         if account_id is None:
-            account = None
+            return cls._save_normalized_ozon_account(
+                seller_id=seller_id,
+                marketplace=marketplace,
+                account=None,
+                external_account_id=external_account_id,
+                label=label,
+                normalized_api_key=normalized_api_key,
+                is_default=is_default,
+            )
+
+        account_id = cls._positive_integer(account_id, "account_id")
+        cls.get_owned_account(
+            seller_id=seller_id,
+            account_id=account_id,
+            marketplace_code="ozon",
+        )
+        claim = try_account_operation_lock(account_id)
+        if claim is None:
+            raise MarketplaceAccountConflict(
+                "Кабинет используется публикацией или сверкой; повторите позже"
+            )
+        try:
+            db.session.expire_all()
+            account = cls.get_owned_account(
+                seller_id=seller_id,
+                account_id=account_id,
+                marketplace_code="ozon",
+            )
+            blocking = MarketplaceOperation.query.filter(
+                MarketplaceOperation.seller_id == seller_id,
+                MarketplaceOperation.account_id == account.id,
+                MarketplaceOperation.status.in_(
+                    cls.ACCOUNT_MUTATION_BLOCKING_STATUSES
+                ),
+            ).first()
+            if blocking is not None:
+                raise MarketplaceAccountConflict(
+                    "Client-Id и API key нельзя менять во время Ozon write"
+                )
+            return cls._save_normalized_ozon_account(
+                seller_id=seller_id,
+                marketplace=marketplace,
+                account=account,
+                external_account_id=external_account_id,
+                label=label,
+                normalized_api_key=normalized_api_key,
+                is_default=is_default,
+            )
+        finally:
+            release_account_operation_lock(claim)
+
+    @classmethod
+    def _save_normalized_ozon_account(
+        cls,
+        *,
+        seller_id: int,
+        marketplace: Marketplace,
+        account: Optional[SellerMarketplaceAccount],
+        external_account_id: str,
+        label: str,
+        normalized_api_key: Optional[str],
+        is_default: bool,
+    ) -> SellerMarketplaceAccount:
+        if account is None:
             existing_count = SellerMarketplaceAccount.query.filter_by(
                 seller_id=seller_id,
                 marketplace_id=marketplace.id,
@@ -192,12 +269,6 @@ class MarketplaceAccountService:
                 raise MarketplaceAccountConflict(
                     "Достигнут лимит подключений Ozon для продавца"
                 )
-        else:
-            account = cls.get_owned_account(
-                seller_id=seller_id,
-                account_id=account_id,
-                marketplace_code="ozon",
-            )
 
         duplicate_query = SellerMarketplaceAccount.query.filter_by(
             seller_id=seller_id,
@@ -299,10 +370,50 @@ class MarketplaceAccountService:
         registry=None,
         now: Optional[datetime] = None,
     ) -> Tuple[SellerMarketplaceAccount, ConnectionCheck]:
-        account = cls.get_owned_account(
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        cls.get_owned_account(
             seller_id=seller_id,
             account_id=account_id,
         )
+        claim = try_account_operation_lock(account_id)
+        if claim is None:
+            raise MarketplaceAccountConflict(
+                "Кабинет используется публикацией или сверкой; повторите позже"
+            )
+        try:
+            db.session.expire_all()
+            account = cls.get_owned_account(
+                seller_id=seller_id,
+                account_id=account_id,
+            )
+            blocking = MarketplaceOperation.query.filter(
+                MarketplaceOperation.seller_id == seller_id,
+                MarketplaceOperation.account_id == account.id,
+                MarketplaceOperation.status.in_(
+                    cls.ACCOUNT_MUTATION_BLOCKING_STATUSES
+                ),
+            ).first()
+            if blocking is not None:
+                raise MarketplaceAccountConflict(
+                    "Проверка подключения недоступна во время Ozon write"
+                )
+            return cls._check_connection_owned(
+                account=account,
+                registry=registry,
+                now=now,
+            )
+        finally:
+            release_account_operation_lock(claim)
+
+    @classmethod
+    def _check_connection_owned(
+        cls,
+        *,
+        account: SellerMarketplaceAccount,
+        registry=None,
+        now: Optional[datetime] = None,
+    ) -> Tuple[SellerMarketplaceAccount, ConnectionCheck]:
         if not account.has_credentials:
             raise MarketplaceAccountValidationError(
                 "У подключения нет сохранённых credentials"
@@ -445,6 +556,62 @@ class MarketplaceAccountService:
             seller_id=seller_id,
             account_id=account_id,
         )
+        claim = try_account_operation_lock(account.id)
+        if claim is None:
+            raise MarketplaceAccountConflict(
+                "Кабинет используется публикацией или сверкой; повторите позже"
+            )
+        try:
+            db.session.expire_all()
+            account = cls.get_owned_account(
+                seller_id=seller_id,
+                account_id=account_id,
+            )
+            blocking = MarketplaceOperation.query.filter(
+                MarketplaceOperation.seller_id == seller_id,
+                MarketplaceOperation.account_id == account.id,
+                MarketplaceOperation.status.in_(
+                    cls.RECONCILIATION_REQUIRED_STATUSES
+                ),
+            ).first()
+            unsafe_queued = MarketplaceOperation.query.filter_by(
+                seller_id=seller_id,
+                account_id=account.id,
+                status="queued",
+            ).filter(
+                MarketplaceOperation.attempt_count > 0,
+            ).first()
+            if blocking is not None or unsafe_queued is not None:
+                raise MarketplaceAccountConflict(
+                    "API key нельзя удалить, пока Ozon write требует сверки"
+                )
+
+            now = datetime.utcnow()
+            queued = MarketplaceOperation.query.filter_by(
+                seller_id=seller_id,
+                account_id=account.id,
+                status="queued",
+                attempt_count=0,
+            ).all()
+            for operation in queued:
+                operation.status = "cancelled"
+                operation.error_code = "account_disconnected_before_submission"
+                operation.error_message = (
+                    "Операция отменена до Ozon write при отключении кабинета"
+                )
+                operation.quota_reserved = 0
+                operation.next_poll_at = None
+                operation.completed_at = now
+
+            return cls._disconnect_owned_account(account)
+        finally:
+            release_account_operation_lock(claim)
+
+    @classmethod
+    def _disconnect_owned_account(
+        cls,
+        account: SellerMarketplaceAccount,
+    ) -> SellerMarketplaceAccount:
         was_default = bool(account.is_default)
         account.clear_credentials()
         account.is_active = False

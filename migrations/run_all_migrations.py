@@ -1202,6 +1202,10 @@ def main():
                 migrate as migrate_marketplace_drafts,
             )
             migrate_marketplace_drafts(db_path)
+            from migrate_add_marketplace_operations import (
+                migrate as migrate_marketplace_operations,
+            )
+            migrate_marketplace_operations(db_path)
             from migrate_add_image_generation_lab import migrate as migrate_image_lab
             migrate_image_lab(db_path)
             from migrate_add_image_lab_reference_watermark import (

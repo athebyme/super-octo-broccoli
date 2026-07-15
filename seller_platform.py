@@ -94,6 +94,10 @@ app.config['MARKETPLACE_OZON_ENABLED'] = (
     os.environ.get('MARKETPLACE_OZON_ENABLED', '').strip().lower()
     in ('1', 'true', 'yes', 'on')
 )
+app.config['MARKETPLACE_OZON_PUBLICATION_ENABLED'] = (
+    os.environ.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', '').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
 
 # Публичный URL сервера для внешнего доступа (WB media/save, превью)
 # Пример: http://176.123.45.230:5000  или  https://myshop.example.com
@@ -6273,6 +6277,9 @@ register_marketplace_listing_routes(app)
 
 from routes.marketplace_drafts import register_marketplace_draft_routes
 register_marketplace_draft_routes(app)
+
+from routes.marketplace_operations import register_marketplace_operation_routes
+register_marketplace_operation_routes(app)
 
 # ============= РОУТЫ БРЕНДОВ =============
 from routes.brands import register_brand_routes

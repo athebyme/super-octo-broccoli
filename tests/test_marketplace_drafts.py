@@ -79,8 +79,8 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             attributes_sync_status="success",
             attributes_schema_hash="schema-hash",
             attributes_version=3,
-            attributes_count=2,
-            required_attributes_count=2,
+            attributes_count=3,
+            required_attributes_count=3,
         )
         db.session.add(self.product_type)
         db.session.flush()
@@ -114,7 +114,23 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             values_version=1,
             values_count=1,
         )
-        db.session.add_all([self.brand_attribute, self.country_attribute])
+        self.description_attribute = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id="4191",
+            name="Аннотация",
+            data_type="String",
+            is_required=True,
+            max_value_count=1,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=self.now,
+        )
+        db.session.add_all([
+            self.brand_attribute,
+            self.country_attribute,
+            self.description_attribute,
+        ])
         db.session.flush()
         self.russia = MarketplaceAttributeValue(
             marketplace_id=self.marketplace.id,
@@ -354,6 +370,46 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertEqual(mapped.product_type_id, self.product_type.id)
         self.assertIsNotNone(mapped.category_mapping_id)
 
+    def test_description_4191_is_built_from_content_and_conflicts_fail_validation(self):
+        _, draft = self._ready_draft(external_id="description-source")
+        content = draft.to_public_dict(detail=True)["content"]
+        content["description"] = "Новое подтверждённое описание"
+        changed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"content": content},
+        )
+        valid = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=changed.id,
+            expected_version=changed.version,
+        )
+        self.assertTrue(valid.to_public_dict(detail=True)["validation"]["publishable"])
+
+        attributes = valid.to_public_dict(detail=True)["attributes"]
+        attributes.append({
+            "attribute_id": "4191",
+            "complex_id": "0",
+            "values": [{"value": "Старое описание"}],
+        })
+        conflicting = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=valid.id,
+            expected_version=valid.version,
+            patch={"attributes": attributes},
+        )
+        invalid = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=conflicting.id,
+            expected_version=conflicting.version,
+        )
+        codes = {
+            item["code"]
+            for item in invalid.to_public_dict(detail=True)["validation"]["errors"]
+        }
+        self.assertIn("description_attribute_conflict", codes)
+
     def test_mapping_is_seller_scoped_and_foreign_draft_is_hidden(self):
         self._ready_draft()
         foreign_product = self._product(
@@ -430,8 +486,8 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             last_seen_at=self.now,
         )
         db.session.add(complex_attribute)
-        self.product_type.attributes_count = 3
-        self.product_type.required_attributes_count = 3
+        self.product_type.attributes_count = 4
+        self.product_type.required_attributes_count = 4
         self.product_type.attributes_schema_hash = "schema-complex"
         self.product_type.attributes_version = 4
         db.session.commit()

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Операции Ozon — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-semibold" style="color:var(--text)">Операции Ozon</h1>
+            <p class="mt-1 text-sm" style="color:var(--text-secondary)">Durable-журнал публикаций, task polling и live reconciliation.</p>
+        </div>
+        <div class="flex gap-2">
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index') }}">Черновики</a>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Листинги</a>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <div class="mt-4 rounded-md border px-4 py-3 text-sm"
+         style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>
+    {% endfor %}
+    {% endwith %}
+
+    <form method="get" class="sh-card p-4 mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет</span>
+            <select name="account_id" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for account in accounts %}
+                <option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Статус</span>
+            <select name="status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for status in ['queued', 'submitting', 'submitted', 'polling', 'uncertain', 'succeeded', 'partial', 'failed', 'cancelled'] %}
+                <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="flex items-end justify-end">
+            <button class="sh-btn sh-btn--secondary" type="submit">Применить</button>
+        </div>
+    </form>
+
+    <div class="mt-5 flex items-center justify-between gap-3">
+        <p class="text-sm" style="color:var(--text-secondary)">Найдено: {{ pagination.total }}</p>
+        <p class="text-xs" style="color:var(--text-muted)">Страница {{ pagination.page }} из {{ pagination.pages or 1 }}</p>
+    </div>
+
+    {% if operations %}
+    <div class="mt-3 space-y-3">
+        {% for operation in operations %}
+        {% set summary = operation._json_value(operation.request_summary_json, {}) %}
+        <a class="sh-card block p-4" href="{{ url_for('marketplace_operations.detail', operation_id=operation.id) }}">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2 text-xs" style="color:var(--text-muted)">
+                        <span style="color:var(--accent)">Ozon</span>
+                        <span>{{ operation.account.label if operation.account else 'кабинет удалён' }}</span>
+                        <span>#{{ operation.id }}</span>
+                        <span>{{ operation.operation_kind }}</span>
+                    </div>
+                    <h2 class="mt-2 font-semibold break-all" style="color:var(--text)">{{ summary.get('offer_id', 'offer не сохранён') }}</h2>
+                    {% if operation.error_message %}<p class="mt-1 text-xs" style="color:var(--danger, #b42318)">{{ operation.error_message }}</p>{% endif %}
+                </div>
+                <div class="sm:text-right shrink-0">
+                    <div class="text-sm font-medium" style="color:var(--text)">{{ operation.status }}</div>
+                    <div class="mt-1 text-xs" style="color:var(--text-muted)">{{ operation.created_at.strftime('%d.%m.%Y %H:%M:%S') if operation.created_at else '—' }}</div>
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="sh-card mt-3 px-4 py-10 text-center text-sm" style="color:var(--text-muted)">Операций по выбранным фильтрам нет.</div>
+    {% endif %}
+
+    {% if pagination.pages > 1 %}
+    <nav class="mt-5 flex items-center justify-center gap-2" aria-label="Пагинация">
+        {% if pagination.has_prev %}
+        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.index', page=pagination.prev_num, account_id=filters.account_id, status=filters.status) }}">Назад</a>
+        {% endif %}
+        {% if pagination.has_next %}
+        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.index', page=pagination.next_num, account_id=filters.account_id, status=filters.status) }}">Дальше</a>
+        {% endif %}
+    </nav>
+    {% endif %}
+</div>
+{% endblock %}

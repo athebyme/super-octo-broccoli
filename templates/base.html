@@ -1975,7 +1975,7 @@
             </div>
 
             <!-- Товары -->
-            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history', 'card_quality_page', 'image_lab_page'] or (request.endpoint and (request.endpoint.startswith('marketplace_listings.') or request.endpoint.startswith('marketplace_drafts.'))) %}
+            {% set products_active = request.endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_sync_status_page', 'products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export', 'product_enrich', 'products_enrich_bulk', 'bulk_edit_history', 'bulk_edit_history_detail', 'product_edit_history', 'card_quality_page', 'image_lab_page'] or (request.endpoint and (request.endpoint.startswith('marketplace_listings.') or request.endpoint.startswith('marketplace_drafts.') or request.endpoint.startswith('marketplace_operations.'))) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if products_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if products_active else 'false' }} }" :aria-expanded="open" aria-label="Товары">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -1991,6 +1991,7 @@
                     {% if config.get('MARKETPLACE_OZON_ENABLED') %}
                     <a href="{{ url_for('marketplace_listings.index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('marketplace_listings.') %}active{% endif %}">Каталог маркетплейсов</a>
                     <a href="{{ url_for('marketplace_drafts.index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('marketplace_drafts.') %}active{% endif %}">Черновики Ozon</a>
+                    <a href="{{ url_for('marketplace_operations.index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('marketplace_operations.') %}active{% endif %}">Операции Ozon</a>
                     {% endif %}
                     <a href="{{ url_for('bulk_edit_history') }}" class="sidebar-sublink {% if request.endpoint in ['bulk_edit_history', 'bulk_edit_history_detail'] %}active{% endif %}">История операций</a>
                     <a href="{{ url_for('product_sync_status_page') }}" class="sidebar-sublink {% if request.endpoint == 'product_sync_status_page' %}active{% endif %}">Синхронизация</a>

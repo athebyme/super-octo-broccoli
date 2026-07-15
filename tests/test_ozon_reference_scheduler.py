@@ -10,6 +10,7 @@ from flask import Flask
 
 from models import Marketplace, MarketplaceReferenceAccount, db
 from services.product_sync_scheduler import (
+    poll_ozon_marketplace_operations,
     sync_marketplace_characteristics,
     sync_marketplaces,
 )
@@ -88,6 +89,38 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
             sync_marketplace_characteristics(self.app)
         tree.assert_not_called()
         schemas.assert_not_called()
+
+    def test_operation_reconciliation_survives_flag_disable_without_queued_write(self):
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        self.app.config["MARKETPLACE_OZON_PUBLICATION_ENABLED"] = False
+        with patch(
+            "services.marketplace_publications."
+            "MarketplacePublicationService.poll_due_operations",
+            return_value={
+                "selected": 1,
+                "processed": 1,
+                "busy": 0,
+                "failed": 0,
+            },
+        ) as poll:
+            result = poll_ozon_marketplace_operations(self.app, limit=7)
+        self.assertEqual(result["processed"], 1)
+        poll.assert_called_once_with(limit=7, allow_submission=False)
+
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = True
+        self.app.config["MARKETPLACE_OZON_PUBLICATION_ENABLED"] = True
+        with patch(
+            "services.marketplace_publications."
+            "MarketplacePublicationService.poll_due_operations",
+            return_value={
+                "selected": 0,
+                "processed": 0,
+                "busy": 0,
+                "failed": 0,
+            },
+        ) as poll:
+            poll_ozon_marketplace_operations(self.app)
+        poll.assert_called_once_with(limit=20, allow_submission=True)
 
 
 if __name__ == "__main__":

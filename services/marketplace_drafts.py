@@ -27,6 +27,7 @@ from models import (
     MarketplaceAttributeValue,
     MarketplaceCategoryMapping,
     MarketplaceListing,
+    MarketplaceOperation,
     MarketplaceProductDraft,
     MarketplaceProductType,
     MarketplaceTaxonomyCategory,
@@ -68,12 +69,22 @@ class MarketplaceDraftService:
     MAX_ATTRIBUTE_VALUES = 100
     MAX_IMAGES = 30
     MAX_BARCODES = 100
+    MAX_IMPORT_BARCODES = 1
+    MAX_OZON_OFFER_ID_CHARS = 50
+    OZON_DESCRIPTION_ATTRIBUTE_ID = "4191"
     MAX_VALIDATION_ITEMS = 250
     DIMENSION_UNITS = {"MILLIMETERS", "CENTIMETERS", "INCHES"}
     WEIGHT_UNITS = {"GRAMS", "KILOGRAMS", "POUNDS"}
     VAT_VALUES = {"0", "0.05", "0.07", "0.1", "0.10", "0.2", "0.20", "0.22"}
     CURRENCY_CODES = {"RUB"}
     DATA_TYPES = {"string", "integer", "decimal", "boolean"}
+    ACTIVE_PUBLICATION_STATUSES = {
+        "queued",
+        "submitting",
+        "submitted",
+        "polling",
+        "uncertain",
+    }
 
     @staticmethod
     def _positive_integer(value: Any, field_name: str) -> int:
@@ -90,6 +101,23 @@ class MarketplaceDraftService:
                 f"{field_name} должен быть boolean"
             )
         return value
+
+    @classmethod
+    def _assert_no_active_publication(
+        cls,
+        draft: MarketplaceProductDraft,
+    ) -> None:
+        active = MarketplaceOperation.query.filter(
+            MarketplaceOperation.seller_id == draft.seller_id,
+            MarketplaceOperation.marketplace_id == draft.marketplace_id,
+            MarketplaceOperation.account_id == draft.account_id,
+            MarketplaceOperation.draft_id == draft.id,
+            MarketplaceOperation.status.in_(cls.ACTIVE_PUBLICATION_STATUSES),
+        ).first()
+        if active is not None:
+            raise MarketplaceDraftConflict(
+                "Черновик нельзя менять, пока публикация не завершена"
+            )
 
     @staticmethod
     def _text(
@@ -1327,6 +1355,7 @@ class MarketplaceDraftService:
             raise MarketplaceDraftConflict(
                 "Опубликованный или архивный черновик нельзя редактировать"
             )
+        cls._assert_no_active_publication(draft)
 
         product_type_changed = False
         if "offer_id" in patch:
@@ -1468,6 +1497,7 @@ class MarketplaceDraftService:
             raise MarketplaceDraftConflict(
                 "Опубликованный или архивный черновик нельзя обновлять"
             )
+        cls._assert_no_active_publication(draft)
         facts_document, provenance, fact_hash = cls._fact_snapshot(
             draft.imported_product
         )
@@ -1529,7 +1559,9 @@ class MarketplaceDraftService:
         attributes: list,
         complex_groups: list,
         errors: list,
+        implicitly_supplied: Optional[set] = None,
     ) -> None:
+        implicitly_supplied = implicitly_supplied or set()
         definitions = MarketplaceAttributeDefinition.query.filter_by(
             product_type_id=product_type.id,
             is_available=True,
@@ -1632,7 +1664,7 @@ class MarketplaceDraftService:
         for definition in definitions:
             if definition.is_required and occurrences.get(
                 definition.external_attribute_id, 0
-            ) == 0:
+            ) == 0 and definition.external_attribute_id not in implicitly_supplied:
                 errors.append(cls._validation_item(
                     "required_attribute_missing",
                     f"attributes.{definition.external_attribute_id}",
@@ -1820,9 +1852,10 @@ class MarketplaceDraftService:
                 "offer_id_required", "offer_id",
                 "offer_id обязателен в /v3/product/import с 10.07.2026",
             ))
-        elif len(draft.offer_id) > 200:
+        elif len(draft.offer_id) > cls.MAX_OZON_OFFER_ID_CHARS:
             errors.append(cls._validation_item(
-                "offer_id_too_long", "offer_id", "offer_id длиннее 200 символов"
+                "offer_id_too_long", "offer_id",
+                f"offer_id длиннее {cls.MAX_OZON_OFFER_ID_CHARS} символов для /v3/product/import",
             ))
         listing = MarketplaceListing.query.filter_by(
             account_id=draft.account_id,
@@ -1866,6 +1899,8 @@ class MarketplaceDraftService:
             ))
 
         content = cls._stored_json(draft.content_json, dict)
+        attributes = cls._stored_json(draft.attributes_json, list)
+        implicit_attribute_ids = set()
         if not isinstance(content.get("name"), str) or not content.get("name", "").strip():
             errors.append(cls._validation_item(
                 "name_required", "content.name", "Название товара обязательно"
@@ -1874,14 +1909,67 @@ class MarketplaceDraftService:
             errors.append(cls._validation_item(
                 "name_too_long", "content.name", "Название длиннее 500 символов"
             ))
+        description_value = content.get("description")
         if (
-            not isinstance(content.get("description"), str)
-            or not content.get("description", "").strip()
+            not isinstance(description_value, str)
+            or not description_value.strip()
         ):
             errors.append(cls._validation_item(
                 "description_required", "content.description",
                 "Описание товара обязательно",
             ))
+
+        if product_type is not None:
+            description_definitions = MarketplaceAttributeDefinition.query.filter_by(
+                product_type_id=product_type.id,
+                external_attribute_id=cls.OZON_DESCRIPTION_ATTRIBUTE_ID,
+                is_available=True,
+                is_enabled=True,
+            ).all()
+            if len(description_definitions) != 1:
+                errors.append(cls._validation_item(
+                    "description_attribute_unavailable",
+                    "content.description",
+                    "Fresh Ozon schema должен содержать один enabled атрибут описания 4191",
+                ))
+            elif (
+                description_definitions[0].dictionary_id
+                or description_definitions[0].attribute_complex_id
+            ):
+                errors.append(cls._validation_item(
+                    "description_attribute_unsupported",
+                    "content.description",
+                    "Атрибут описания 4191 имеет неподдерживаемую Ozon schema",
+                ))
+            elif isinstance(description_value, str) and description_value.strip():
+                implicit_attribute_ids.add(cls.OZON_DESCRIPTION_ATTRIBUTE_ID)
+
+        description_attributes = [
+            item for item in attributes
+            if isinstance(item, dict)
+            and item.get("attribute_id") == cls.OZON_DESCRIPTION_ATTRIBUTE_ID
+        ]
+        if len(description_attributes) > 1:
+            errors.append(cls._validation_item(
+                "description_attribute_duplicated",
+                "attributes.4191",
+                "Атрибут описания 4191 продублирован",
+            ))
+        elif description_attributes and isinstance(description_value, str):
+            values = description_attributes[0].get("values")
+            if (
+                not isinstance(values, list)
+                or len(values) != 1
+                or not isinstance(values[0], dict)
+                or values[0].get("dictionary_value_id") not in (None, "")
+                or not isinstance(values[0].get("value"), str)
+                or values[0]["value"].strip() != description_value.strip()
+            ):
+                errors.append(cls._validation_item(
+                    "description_attribute_conflict",
+                    "attributes.4191",
+                    "Атрибут 4191 должен точно совпадать с content.description",
+                ))
 
         media = cls._stored_json(draft.media_json, dict)
         images = media.get("images") if isinstance(media, dict) else None
@@ -1923,11 +2011,18 @@ class MarketplaceDraftService:
         dimensions = cls._stored_json(draft.dimensions_json, dict)
         for field_name in ("width", "height", "depth", "weight"):
             try:
-                cls._decimal(
+                rendered = cls._decimal(
                     dimensions.get(field_name),
                     f"dimensions.{field_name}",
                     positive=True,
                 )
+                parsed = Decimal(rendered)
+                if parsed != parsed.to_integral_value():
+                    errors.append(cls._validation_item(
+                        "physical_fact_not_integer",
+                        f"dimensions.{field_name}",
+                        f"{field_name} должен быть целым числом в выбранной единице Ozon",
+                    ))
             except MarketplaceDraftValidationError:
                 errors.append(cls._validation_item(
                     "physical_fact_required",
@@ -1946,9 +2041,10 @@ class MarketplaceDraftService:
             ))
 
         barcodes = cls._stored_json(draft.barcodes_json, list)
-        if len(barcodes) > cls.MAX_BARCODES:
+        if len(barcodes) > cls.MAX_IMPORT_BARCODES:
             errors.append(cls._validation_item(
-                "barcodes_limit", "barcodes", "Слишком много штрихкодов"
+                "barcodes_limit", "barcodes",
+                "/v3/product/import принимает один штрихкод; дополнительные добавляются отдельным workflow",
             ))
         seen_barcodes = set()
         for index, barcode in enumerate(barcodes):
@@ -2006,11 +2102,12 @@ class MarketplaceDraftService:
         if product_type and OzonReferenceService.reference_is_fresh(product_type, now=now):
             cls._validate_attributes(
                 product_type=product_type,
-                attributes=cls._stored_json(draft.attributes_json, list),
+                attributes=attributes,
                 complex_groups=cls._stored_json(
                     draft.complex_attributes_json, list
                 ),
                 errors=errors,
+                implicitly_supplied=implicit_attribute_ids,
             )
 
         if len(errors) > cls.MAX_VALIDATION_ITEMS:
@@ -2062,6 +2159,7 @@ class MarketplaceDraftService:
             raise MarketplaceDraftConflict(
                 "Опубликованный или архивный черновик нельзя валидировать заново"
             )
+        cls._assert_no_active_publication(draft)
         result = cls._build_validation_result(draft)
         draft.validation_result_json = cls._canonical_json(result, dict)
         draft.validation_status = "valid" if result["publishable"] else "invalid"

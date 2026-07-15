@@ -266,6 +266,19 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True,
     )
 
+    # Durable Ozon operations must keep reconciling after a rollout flag is
+    # disabled. Only definitely-not-submitted queued rows require the separate
+    # publication flag; submitting/uncertain rows are never abandoned.
+    scheduler.add_job(
+        func=lambda: poll_ozon_marketplace_operations(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='poll_ozon_marketplace_operations',
+        name='Poll and reconcile durable Ozon product operations',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Фоновая синхронизация брендов с WB (каждые 6 часов)
     scheduler.add_job(
         func=lambda: sync_brands_background(flask_app),
@@ -1016,6 +1029,43 @@ def sync_marketplace_characteristics(flask_app, limit: int = 50):
                         'Stale Ozon schema refresh crashed for marketplace_id=%s',
                         marketplace.id,
                     )
+
+
+def poll_ozon_marketplace_operations(flask_app, limit: int = 20):
+    """Advance a bounded due batch without ever logging payloads or secrets."""
+    from services.marketplace_publications import MarketplacePublicationService
+
+    with flask_app.app_context():
+        allow_submission = bool(
+            flask_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+            and flask_app.config.get(
+                'MARKETPLACE_OZON_PUBLICATION_ENABLED',
+                False,
+            )
+        )
+        try:
+            result = MarketplacePublicationService.poll_due_operations(
+                limit=limit,
+                allow_submission=allow_submission,
+            )
+        except Exception:
+            logger.exception('Durable Ozon operation poll failed')
+            return {
+                'selected': 0,
+                'processed': 0,
+                'busy': 0,
+                'failed': 1,
+            }
+        if result['selected'] or result['failed']:
+            logger.info(
+                'Durable Ozon operation poll: selected=%s processed=%s busy=%s failed=%s queued_submission=%s',
+                result['selected'],
+                result['processed'],
+                result['busy'],
+                result['failed'],
+                allow_submission,
+            )
+        return result
 
 
 

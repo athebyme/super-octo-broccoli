@@ -4107,6 +4107,357 @@ class MarketplaceProductDraft(db.Model):
         return data
 
 
+class MarketplaceOperation(db.Model):
+    """Durable seller-scoped journal for marketplace side effects.
+
+    Provider writes are never represented only by an in-memory request.  The
+    operation row is committed before HTTP submission and remains the source
+    of truth when a transport failure makes the upstream result ambiguous.
+    Raw provider responses and credentials are deliberately not stored here.
+    """
+    __tablename__ = 'marketplace_operations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    draft_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_drafts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    parent_operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+
+    operation_kind = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(30), nullable=False, default='queued')
+    idempotency_key = db.Column(db.String(128), nullable=False)
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    contract_version = db.Column(db.String(80), nullable=False)
+    draft_version = db.Column(db.Integer)
+    request_summary_json = db.Column(db.Text, nullable=False, default='{}')
+
+    quota_snapshot_json = db.Column(db.Text, nullable=False, default='{}')
+    quota_reserved = db.Column(db.Integer, nullable=False, default=0)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    poll_count = db.Column(db.Integer, nullable=False, default=0)
+    reconcile_count = db.Column(db.Integer, nullable=False, default=0)
+
+    external_task_id = db.Column(db.String(100))
+    provider_request_ids_json = db.Column(db.Text, nullable=False, default='[]')
+    item_results_json = db.Column(db.Text, nullable=False, default='[]')
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+
+    submitted_at = db.Column(db.DateTime)
+    last_polled_at = db.Column(db.DateTime)
+    next_poll_at = db.Column(db.DateTime)
+    deadline_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    draft = db.relationship('MarketplaceProductDraft')
+    listing = db.relationship('MarketplaceListing')
+    created_by = db.relationship('User')
+    parent_operation = db.relationship(
+        'MarketplaceOperation',
+        remote_side=[id],
+        backref=db.backref('child_operations', lazy='dynamic'),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'operation_kind',
+            'idempotency_key',
+            name='uq_marketplace_operation_idempotency',
+        ),
+        db.CheckConstraint(
+            "operation_kind IN ('product_import','product_import_rollback')",
+            name='ck_marketplace_operation_kind',
+        ),
+        db.CheckConstraint(
+            "status IN ('queued','submitting','submitted','polling',"
+            "'succeeded','partial','failed','uncertain','cancelled')",
+            name='ck_marketplace_operation_status',
+        ),
+        db.CheckConstraint(
+            'quota_reserved >= 0 AND quota_reserved <= 100',
+            name='ck_marketplace_operation_quota_reserved',
+        ),
+        db.Index(
+            'idx_marketplace_operation_due',
+            'status',
+            'next_poll_at',
+        ),
+        db.Index(
+            'idx_marketplace_operation_seller_status',
+            'seller_id',
+            'marketplace_id',
+            'status',
+            'updated_at',
+        ),
+        db.Index(
+            'uq_marketplace_operation_active_draft',
+            'draft_id',
+            unique=True,
+            sqlite_where=db.text(
+                "draft_id IS NOT NULL AND status IN ("
+                "'queued','submitting','submitted','polling','uncertain')"
+            ),
+        ),
+    )
+    __mapper_args__ = {'version_id_col': version}
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in {'succeeded', 'partial', 'failed', 'cancelled'}
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        data = {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'draft_id': self.draft_id,
+            'listing_id': self.listing_id,
+            'parent_operation_id': self.parent_operation_id,
+            'operation_kind': self.operation_kind,
+            'status': self.status,
+            'request_fingerprint': self.request_fingerprint,
+            'contract_version': self.contract_version,
+            'draft_version': self.draft_version,
+            'quota_reserved': self.quota_reserved,
+            'attempt_count': self.attempt_count,
+            'poll_count': self.poll_count,
+            'reconcile_count': self.reconcile_count,
+            'external_task_id': self.external_task_id,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'submitted_at': (
+                self.submitted_at.isoformat() if self.submitted_at else None
+            ),
+            'last_polled_at': (
+                self.last_polled_at.isoformat() if self.last_polled_at else None
+            ),
+            'next_poll_at': (
+                self.next_poll_at.isoformat() if self.next_poll_at else None
+            ),
+            'deadline_at': (
+                self.deadline_at.isoformat() if self.deadline_at else None
+            ),
+            'completed_at': (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+            'created_by_user_id': self.created_by_user_id,
+            'version': self.version,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data.update({
+                'request_summary': self._json_value(
+                    self.request_summary_json,
+                    {},
+                ),
+                'quota_snapshot': self._json_value(
+                    self.quota_snapshot_json,
+                    {},
+                ),
+                'provider_request_ids': self._json_value(
+                    self.provider_request_ids_json,
+                    [],
+                ),
+                'item_results': self._json_value(
+                    self.item_results_json,
+                    [],
+                ),
+            })
+        return data
+
+
+class MarketplaceListingSnapshot(db.Model):
+    """Exact before/submitted/confirmed state owned by one operation.
+
+    Snapshot payloads are whitelist-normalized internal data.  Public
+    serializers expose only fingerprints and rollback metadata so a route can
+    never accidentally echo a full product payload or a provider response.
+    """
+    __tablename__ = 'marketplace_listing_snapshots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='CASCADE'),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    draft_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_drafts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    rollback_operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+
+    snapshot_kind = db.Column(db.String(50), nullable=False)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    before_fingerprint = db.Column(db.String(64))
+    submitted_fingerprint = db.Column(db.String(64), nullable=False)
+    confirmed_fingerprint = db.Column(db.String(64))
+    before_state_json = db.Column(db.Text, nullable=False, default='{}')
+    submitted_state_json = db.Column(db.Text, nullable=False)
+    confirmed_state_json = db.Column(db.Text, nullable=False, default='{}')
+    rollback_state_json = db.Column(db.Text, nullable=False, default='{}')
+    rollback_status = db.Column(
+        db.String(30),
+        nullable=False,
+        default='not_requested',
+    )
+    rollback_error_code = db.Column(db.String(100))
+    rollback_error_message = db.Column(db.String(1000))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    operation = db.relationship(
+        'MarketplaceOperation',
+        foreign_keys=[operation_id],
+        backref=db.backref('snapshot', uselist=False),
+    )
+    draft = db.relationship('MarketplaceProductDraft')
+    listing = db.relationship('MarketplaceListing')
+    rollback_operation = db.relationship(
+        'MarketplaceOperation',
+        foreign_keys=[rollback_operation_id],
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "snapshot_kind IN ('product_import')",
+            name='ck_marketplace_listing_snapshot_kind',
+        ),
+        db.CheckConstraint(
+            "rollback_status IN ('not_requested','unavailable','available',"
+            "'pending','succeeded','failed','conflict')",
+            name='ck_marketplace_listing_snapshot_rollback_status',
+        ),
+        db.Index(
+            'idx_marketplace_snapshot_seller_listing',
+            'seller_id',
+            'listing_id',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'operation_id': self.operation_id,
+            'draft_id': self.draft_id,
+            'listing_id': self.listing_id,
+            'rollback_operation_id': self.rollback_operation_id,
+            'snapshot_kind': self.snapshot_kind,
+            'source_fingerprint': self.source_fingerprint,
+            'before_fingerprint': self.before_fingerprint,
+            'submitted_fingerprint': self.submitted_fingerprint,
+            'confirmed_fingerprint': self.confirmed_fingerprint,
+            'rollback_status': self.rollback_status,
+            'rollback_error_code': self.rollback_error_code,
+            'rollback_error_message': self.rollback_error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class MarketplaceCatalogSync(db.Model):
     """Durable, seller/account-scoped full catalog reconciliation run.
 

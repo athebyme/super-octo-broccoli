@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Операция Ozon недоступна — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 sm:px-6 py-10">
+    <section class="sh-card p-5">
+        <p class="text-xs uppercase" style="color:var(--danger, #b42318)">{{ code or 'marketplace_operation_error' }}</p>
+        <h1 class="mt-2 text-xl font-semibold" style="color:var(--text)">Операция Ozon не выполнена</h1>
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">{{ error }}</p>
+        <a class="sh-btn sh-btn--secondary mt-5" href="{{ url_for('marketplace_operations.index') }}">К журналу операций</a>
+    </section>
+</div>
+{% endblock %}

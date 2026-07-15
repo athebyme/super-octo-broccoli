@@ -20,7 +20,7 @@
                 {{ draft.product_type.category.full_path ~ ' / ' ~ draft.product_type.name if draft.product_type else 'Точная Ozon category/type ещё не выбрана' }}
             </p>
         </div>
-        {% if ozon_enabled %}
+        {% if ozon_enabled and not active_operation and draft.status not in ['published', 'archived'] %}
         <div class="flex flex-wrap gap-2">
             <form method="post" action="{{ url_for('marketplace_drafts.validate', draft_id=draft.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -34,6 +34,10 @@
                 <button class="sh-btn sh-btn--secondary" type="submit">Обновить факты</button>
             </form>
         </div>
+        {% elif active_operation %}
+        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=active_operation.id) }}">
+            Операция #{{ active_operation.id }} · {{ active_operation.status }}
+        </a>
         {% endif %}
     </div>
 
@@ -84,7 +88,7 @@
                    style="border-color:var(--border);color:var(--text)">
             <button class="sh-btn sh-btn--secondary" type="submit">Найти тип</button>
         </form>
-        {% if type_options and ozon_enabled %}
+        {% if type_options and ozon_enabled and not active_operation and draft.status not in ['published', 'archived'] %}
         <form method="post" action="{{ url_for('marketplace_drafts.update', draft_id=draft.id) }}" class="mt-3 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="expected_version" value="{{ draft.version }}">
@@ -113,7 +117,7 @@
             <h2 class="font-semibold" style="color:var(--text)">Идентичность и контент</h2>
             <label class="block mt-3">
                 <span class="block text-xs mb-1" style="color:var(--text-muted)">offer_id — обязателен в Ozon с 10.07.2026</span>
-                <input name="offer_id" value="{{ draft.offer_id }}" maxlength="200" required
+                <input name="offer_id" value="{{ draft.offer_id }}" maxlength="50" required
                        class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                        style="border-color:var(--border);color:var(--text)">
             </label>
@@ -153,7 +157,7 @@
             </section>
             {% endfor %}
         </div>
-        {% if ozon_enabled %}
+        {% if ozon_enabled and not active_operation and draft.status not in ['published', 'archived'] %}
         <div class="flex justify-end"><button class="sh-btn sh-btn--primary" type="submit">Сохранить черновик</button></div>
         {% endif %}
     </form>
@@ -164,9 +168,51 @@
         <pre class="mt-3 max-h-[40rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ {'facts': draft_data.source_facts, 'provenance': draft_data.provenance} | tojson(indent=2) }}</pre>
     </details>
 
-    <div class="mt-5 rounded-md border px-4 py-3 text-sm"
-         style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
-        Публикация намеренно отсутствует: P5 добавит quota preflight, durable operation, task polling и reconciliation ambiguous result.
-    </div>
+    <section class="sh-card p-4 mt-5" aria-labelledby="ozon-publication-heading">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <h2 id="ozon-publication-heading" class="font-semibold" style="color:var(--text)">Публикация Ozon</h2>
+                <p class="mt-1 text-xs" style="color:var(--text-muted)">
+                    Перед write платформа повторно проверит весь payload, отсутствие offer_id в ALL/ARCHIVED и текущую квоту. Неопределённый HTTP-результат никогда не повторяется автоматически.
+                </p>
+            </div>
+            <a class="text-sm shrink-0" style="color:var(--accent)" href="{{ url_for('marketplace_operations.index') }}">Все операции</a>
+        </div>
+
+        {% if publication_enabled and draft.status == 'ready' and draft.validation_status == 'valid' and not active_operation %}
+        <form class="mt-4" method="post"
+              action="{{ url_for('marketplace_operations.publish_draft', draft_id=draft.id) }}"
+              onsubmit="return confirm('Отправить полностью проверенный черновик в Ozon? Операция будет зафиксирована до API write.')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="expected_version" value="{{ draft.version }}">
+            <input type="hidden" name="idempotency_key" value="{{ publication_idempotency_key }}">
+            <button class="sh-btn sh-btn--primary" type="submit">Опубликовать подтверждённый черновик</button>
+        </form>
+        {% elif active_operation %}
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">
+            Выполняется <a style="color:var(--accent)" href="{{ url_for('marketplace_operations.detail', operation_id=active_operation.id) }}">операция #{{ active_operation.id }}</a>. До её завершения черновик заблокирован от изменений.
+        </p>
+        {% elif draft.status == 'published' and draft.published_listing_id %}
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">
+            Публикация подтверждена. <a style="color:var(--accent)" href="{{ url_for('marketplace_listings.detail', listing_id=draft.published_listing_id) }}">Открыть листинг</a>.
+        </p>
+        {% elif not publication_enabled %}
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">Новые write-операции выключены настройкой <code>MARKETPLACE_OZON_PUBLICATION_ENABLED</code>. Уже отправленные операции продолжают сверяться.</p>
+        {% else %}
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">Сначала исправьте ошибки и получите статус <code>ready / valid</code>.</p>
+        {% endif %}
+
+        {% if operations %}
+        <div class="mt-4 divide-y" style="border-color:var(--border)">
+            {% for item in operations %}
+            <a class="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between"
+               href="{{ url_for('marketplace_operations.detail', operation_id=item.id) }}">
+                <span class="text-sm" style="color:var(--text)">#{{ item.id }} · {{ item.operation_kind }}</span>
+                <span class="text-xs" style="color:var(--text-muted)">{{ item.status }} · {{ item.created_at.strftime('%d.%m.%Y %H:%M:%S') if item.created_at else '—' }}</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </section>
 </div>
 {% endblock %}

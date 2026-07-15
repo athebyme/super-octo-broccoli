@@ -12,9 +12,17 @@ from flask import Flask
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect
 
-from models import Marketplace, Seller, SellerMarketplaceAccount, User, db
+from models import (
+    Marketplace,
+    MarketplaceOperation,
+    Seller,
+    SellerMarketplaceAccount,
+    User,
+    db,
+)
 from routes.marketplace_accounts import register_marketplace_account_routes
 from services.marketplace_accounts import (
+    MarketplaceAccountConflict,
     MarketplaceAccountConfigurationError,
     MarketplaceAccountNotFound,
     MarketplaceAccountService,
@@ -113,6 +121,28 @@ class MarketplaceAccountsTest(unittest.TestCase):
         }
         values.update(overrides)
         return MarketplaceAccountService.save_ozon_account(**values)
+
+    @staticmethod
+    def _operation(account, *, status, attempt_count=0):
+        operation = MarketplaceOperation(
+            seller_id=account.seller_id,
+            marketplace_id=account.marketplace_id,
+            account_id=account.id,
+            operation_kind="product_import",
+            status=status,
+            idempotency_key=f"disconnect-{status}-{attempt_count}",
+            request_fingerprint="a" * 64,
+            contract_version="ozon-product-import-v3-2026-07-10",
+            request_summary_json="{}",
+            quota_snapshot_json="{}",
+            quota_reserved=1,
+            attempt_count=attempt_count,
+            provider_request_ids_json="[]",
+            item_results_json="[]",
+        )
+        db.session.add(operation)
+        db.session.commit()
+        return operation
 
     def test_credentials_are_encrypted_and_absent_from_public_contract(self):
         with self.app.app_context():
@@ -219,6 +249,92 @@ class MarketplaceAccountsTest(unittest.TestCase):
             self.assertFalse(first.has_credentials)
             self.assertEqual(first.connection_status, "disconnected")
             self.assertTrue(second.is_default)
+
+    def test_disconnect_cancels_only_never_submitted_queue(self):
+        with self.app.app_context():
+            account = self._save()
+            operation = self._operation(
+                account,
+                status="queued",
+                attempt_count=0,
+            )
+
+            MarketplaceAccountService.disconnect(
+                seller_id=self.seller1_id,
+                account_id=account.id,
+            )
+
+            db.session.refresh(account)
+            db.session.refresh(operation)
+            self.assertFalse(account.has_credentials)
+            self.assertEqual(operation.status, "cancelled")
+            self.assertEqual(
+                operation.error_code,
+                "account_disconnected_before_submission",
+            )
+            self.assertEqual(operation.quota_reserved, 0)
+            self.assertIsNotNone(operation.completed_at)
+
+    def test_disconnect_preserves_credentials_needed_for_reconciliation(self):
+        for status, attempt_count in (
+            ("uncertain", 1),
+            ("submitted", 1),
+            ("queued", 1),
+        ):
+            with self.subTest(status=status):
+                with self.app.app_context():
+                    account = self._save(
+                        external_account_id=f"blocking-{status}",
+                    )
+                    operation = self._operation(
+                        account,
+                        status=status,
+                        attempt_count=attempt_count,
+                    )
+
+                    with self.assertRaises(MarketplaceAccountConflict):
+                        MarketplaceAccountService.disconnect(
+                            seller_id=self.seller1_id,
+                            account_id=account.id,
+                        )
+
+                    db.session.refresh(account)
+                    db.session.refresh(operation)
+                    self.assertTrue(account.has_credentials)
+                    self.assertTrue(account.is_active)
+                    self.assertEqual(operation.status, status)
+
+    def test_active_write_blocks_account_edit_and_connection_recheck(self):
+        with self.app.app_context():
+            account = self._save()
+            operation = self._operation(
+                account,
+                status="submitted",
+                attempt_count=1,
+            )
+            registry = MagicMock()
+
+            with self.assertRaises(MarketplaceAccountConflict):
+                MarketplaceAccountService.save_ozon_account(
+                    seller_id=self.seller1_id,
+                    account_id=account.id,
+                    external_account_id=account.external_account_id,
+                    label="Изменённое имя",
+                    api_key=None,
+                )
+            with self.assertRaises(MarketplaceAccountConflict):
+                MarketplaceAccountService.check_connection(
+                    seller_id=self.seller1_id,
+                    account_id=account.id,
+                    registry=registry,
+                )
+
+            db.session.refresh(account)
+            db.session.refresh(operation)
+            self.assertEqual(account.label, "Основной Ozon")
+            self.assertTrue(account.has_credentials)
+            self.assertEqual(operation.status, "submitted")
+            registry.get.assert_not_called()
 
     def test_json_create_and_list_never_echo_api_key(self):
         user_patch, login_patch = self._login_patches(self.seller1_id)

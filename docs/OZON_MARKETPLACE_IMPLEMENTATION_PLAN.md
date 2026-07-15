@@ -1,8 +1,8 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P4 implemented; P5 durable manual publication next  
-Дата аудита контрактов: 2026-07-14  
-Владелец: Seller Hub  
+Статус: P0–P4 и P5a implemented; P5b media/update/compensation next
+Дата аудита контрактов: 2026-07-15
+Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
 
 ## 1. Что именно входит в «поддержку Ozon»
@@ -133,6 +133,13 @@ unified chat
 - Перед write вызывается `POST /v4/product/info/limit`. С 24.02.2026 Ozon применяет общий лимит товарных операций, а с 09.06.2026 response содержит `operation_limits`.
 - Локальная очередь резервирует quota до HTTP. Deferred хвост не объявляется успешно обработанным.
 - Повтор ambiguous write не выполняется вслепую: сначала import task/reconciliation по `offer_id` и live product state.
+- Реализованный P5a route использует `/v3/product/import` только для нового offer:
+  exact preflight по `ALL` и `ARCHIVED` блокирует существующий товар. Несмотря на
+  общий create/update upstream метод, локальные create и update workflows не
+  смешиваются, потому что у них разные before-state и rollback semantics.
+- `operation_limits`, добавленный 09.06.2026, имеет приоритет над legacy counters;
+  присутствующая, но malformed новая форма блокирует write и не падает обратно на
+  оптимистичный legacy limit.
 
 ### 3.4 Идентификаторы Ozon
 
@@ -399,8 +406,8 @@ supplier fact pack
 | Reference admin | taxonomy/schema/value | existing | description category/type/attribute | P2 |
 | Existing catalog import | listing sync | Product backfill | product list/info | P3 |
 | Supplier draft | marketplace draft | WB mapping | Ozon mapping | P4 |
-| Manual publish | async operation | WB importer bridge | v3 import + status | P5 |
-| Images | media adapter | media/save | import/pictures | P5 |
+| Manual create publish | async operation | WB importer bridge | v3 import + status | P5a |
+| Update/media compensation | versioned operation | media/save | full import/pictures/archive | P5b |
 | Prices | proposal/apply adapter | current WB | Ozon price import | P6 |
 | Stocks | warehouse-scoped proposal | WB warehouse | Ozon FBS warehouse | P6 |
 | Auto-publish | capability pipeline | current | quota-aware Ozon | P7 |
@@ -507,20 +514,60 @@ semantics, data types/counts, явные positive dimensions/units, public media
 barcodes и explicit price/old_price/VAT/currency_code=RUB для текущего rollout.
 `images360` запрещён согласно изменению 10.07.2026.
 Результат содержит machine-readable errors/warnings и schema hash/version; UI
-находится на `/marketplaces/drafts/`. Никакой publish action в P4 не существует.
+находится на `/marketplaces/drafts/`. P4 сам не выполняет side effect; кнопку
+ручного write добавляет только отдельный P5a-контур и feature flag.
 
 Definition of done: draft can be proven publishable/blocked with exact structured reasons.
 
-### P5 — manual publication and media
+### P5a — durable manual create publication
 
-- Full `/v3/product/import` payload builder.
-- `/v4/product/info/limit` preflight and quota reservation.
-- Durable MarketplaceOperation, task polling and per-item results.
-- Ambiguous transport reconciliation before retry.
-- Media URLs, order, primary image and Ozon limits.
-- Content snapshots and conflict-aware rollback by submitting a validated prior full state.
+- [x] Full whitelist-only `/v3/product/import` payload builder for one validated draft.
+- [x] Strict offer/title/attributes/description-4191/media/barcode/physical/price/VAT contract; `images360` absent.
+- [x] `/v4/product/info/limit` preflight, typed `operation_limits` parsing and local quota reservation.
+- [x] Durable `MarketplaceOperation` + `MarketplaceListingSnapshot` committed before write.
+- [x] Create-only live preflight across `ALL` and `ARCHIVED`; existing offer fails before quota/write.
+- [x] Task polling, exact per-item result normalization and listing projection finalization.
+- [x] Ambiguous transport/malformed-success reconciliation without automatic write retry.
+- [x] Separate dark write flag, seller-scoped audit UI/API and minute scheduler recovery.
+- [x] Account-level lock across submission/reconciliation, credential edit, connection check and disconnect.
+- [x] Tenant/CSRF/strict JSON/no-secret/migration/recovery/deadline tests.
 
-Definition of done: manually confirmed draft reaches imported/failed terminal state honestly and can be audited.
+Реализовано в `feature/ozon-marketplace`: новый write требует одновременно
+`MARKETPLACE_OZON_ENABLED=1` и `MARKETPLACE_OZON_PUBLICATION_ENABLED=1`.
+Operation и exact submitted snapshot фиксируются до HTTP; `submitting` и
+`attempt_count=1` фиксируются до вызова adapter. Definitive prewrite outage
+остаётся безопасной `queued`, а любой неизвестный результат после начала write —
+`uncertain`. Scheduler продолжает submitted/polling/uncertain reconciliation
+даже после выключения write flag. После 24 часов без подтверждаемого task status
+автоматический polling останавливается, но ручная сверка остаётся доступна.
+
+Disconnect отменяет только никогда не отправленную очередь (`attempt_count=0`).
+Credentials и account identity нельзя изменить или удалить, пока они нужны
+Ozon write/reconciliation. Public API не возвращает payload, idempotency key или
+provider raw response.
+
+Definition of done: вручную подтверждённый новый offer честно достигает
+`succeeded|failed|partial` либо остаётся явно видимым `uncertain`, не отправляется
+повторно вслепую и полностью аудируется локально.
+
+### P5b — update, media lifecycle and compensation
+
+- Separate full-state update operation for an existing offer; create path never mutates it implicitly.
+- Media ordering/primary-image/picture workflow probes and contract fixtures beyond basic import URLs.
+- Live post-write comparison strong enough to distinguish our ambiguous write from an external concurrent change.
+- Verified upstream archive/restore contract and conflict-aware compensation for newly created listing.
+- Validated prior-full-state rollback for update only where upstream semantics make it safe.
+- Manual resolution workflow for terminal `uncertain`, including explicit quota release policy and audit reason.
+
+На 15.07.2026 официальный канал подтверждает `/v1/product/unarchive` и beta
+`/v1/product/visibility/set`, но точный актуальный archive endpoint/contract не
+удалось подтвердить в официальной технической документации. Поэтому P5a snapshot
+честно имеет `rollback_status=unavailable` и manual archive instruction; beta
+visibility не используется как выдуманный rollback.
+
+Definition of done: existing offers and full media lifecycle обновляются отдельным
+validated workflow, а каждая обещанная compensation подтверждена официальным
+контрактом и synthetic contract fixtures.
 
 ### P6 — price, stock and warehouses
 
@@ -603,6 +650,9 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 6. Unique indexes создаются после duplicate audit; conflicts сохраняются в migration report и не удаляются автоматически.
 7. Новые ORM-required columns подключаются fail-fast в Docker entrypoint.
 8. Rollback deploy не удаляет новые tables/columns; старый runtime продолжает игнорировать их.
+9. `migrate_add_marketplace_operations.py` additive/idempotent создаёт journal,
+   exact snapshots, idempotency constraint и partial unique active-draft index;
+   Docker запускает его fail-fast после draft/listing prerequisites.
 
 ## 10. Security и safety invariants
 
@@ -636,7 +686,9 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 - idempotent upserts and complete-snapshot availability transitions;
 - optimistic draft updates;
 - async operation state machine;
-- snapshot → write → rollback and conflict cases.
+- snapshot → committed attempt → task/live reconciliation and conflict cases;
+- account credential edit/disconnect races, safe queued cancellation and uncertain preservation;
+- compensation/rollback tests добавляются только вместе с подтверждённым P5b endpoint contract.
 
 ### Route
 
@@ -658,7 +710,7 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 
 ## 12. Rollout
 
-1. `MARKETPLACE_OZON_ENABLED=0`: schema/code dark launch.
+1. `MARKETPLACE_OZON_ENABLED=0` и `MARKETPLACE_OZON_PUBLICATION_ENABLED=0`: schema/code dark launch.
 2. Enable account UI for admins/internal seller only.
 3. Enable reference sync and catalog read-only.
 4. Enable draft validation for allowlisted categories.
@@ -667,7 +719,11 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 7. Enable auto-publish only after quota/reconciliation SLOs hold.
 8. Expand analytics/orders/finance independently by capability flag.
 
-Rollback switch is per capability and account. Disabling Ozon stops new work but preserves queued/uncertain operations for reconciliation.
+Publication rollback switch отдельный: его выключение останавливает новые writes и
+не отправляет safe queued rows, но submitted/polling/uncertain операции продолжают
+reconciliation. General Ozon flag также не должен бросать уже начатый write.
+Account disconnect отменяет только queued rows без попытки и сохраняет credentials
+для любого потенциально выполненного upstream side effect.
 
 ## 13. Observability and SLOs
 
@@ -703,6 +759,10 @@ Initial targets:
 6. Official reference data is SQL truth, not RAG.
 7. Old Ozon category and finance endpoints are not used as fallbacks.
 8. WB compatibility is preserved through a strangler/dual-read migration.
+9. P5a publication is create-only; existing Ozon offer requires a separate update operation.
+10. A write attempt is committed before adapter call and an ambiguous result is never auto-retried.
+11. Automatic create rollback is unavailable until the exact official archive contract is verified; beta visibility is not treated as archive.
+12. Account credentials/identity cannot change while an operation is active or needs reconciliation.
 
 ## 15. Questions resolved by implementation probes, not guesses
 
@@ -715,5 +775,6 @@ The following values can change by seller plan/account and are deliberately disc
 - large dictionary pagination behavior;
 - finance feed retention and page boundaries;
 - content-change push subscription support.
+- exact archive/restore contract and archive-vs-visibility semantics before P5b compensation.
 
 Any probe result is cached with timestamp and account scope. A missing capability produces an actionable status in UI; it never silently changes business semantics.

@@ -27,6 +27,9 @@ Seller Hub автоматизирует работу продавца на ма�
 - `services/marketplace_listings.py`, `routes/marketplace_listings.py`: seller-scoped unified listing read model, resumable Ozon catalog sweep и marketplace/account-filtered UI/API.
 - `services/marketplace_fact_pack.py`: marketplace-neutral observed facts с field-level provenance; legacy AI output остаётся отдельным unverified suggestion.
 - `services/marketplace_drafts.py`, `routes/marketplace_drafts.py`: seller/account-scoped Ozon drafts, exact category mappings, optimistic edits и deterministic publishability validation без provider/LLM calls.
+- `services/ozon_product_import.py`: whitelist-only контракт `/v3/product/import`, строгая нормализация task status и quota response.
+- `services/marketplace_publications.py`, `routes/marketplace_operations.py`: durable seller-scoped Ozon create operations, snapshots, manual submit, polling/reconciliation и audit UI/API.
+- `services/marketplace_operation_locks.py`: account-level non-blocking file lock для publication, credential mutation, health check и disconnect в одном host/filesystem namespace.
 - `templates/`: Jinja2 UI. Общая оболочка и design tokens находятся в `templates/base.html`.
 - `static/`: CSS/JS без отдельного frontend build. TailwindCSS и Alpine.js подключены через CDN.
 - `migrations/`: идемпотентные SQLite migration scripts. Это не Alembic.
@@ -40,9 +43,9 @@ Seller Hub автоматизирует работу продавца на ма�
 - `SellerMarketplaceAccount` является operational account текущего seller: Ozon хранит non-secret `Client-Id` отдельно от Fernet-encrypted API key. Один seller может иметь до 10 кабинетов одного маркетплейса; default выбирается только внутри `seller + marketplace`.
 - Новый credential path fail-closed требует валидный `ENCRYPTION_KEY`; fallback на plaintext, сохранённый для legacy WB колонок, здесь запрещён. Секрет не входит в `repr`, JSON/HTML, status/error или logs.
 - `MarketplaceRegistry` явно регистрирует `LegacyWildberriesAdapter` и `OzonAdapter`. Endpoint versions хранятся per capability; Ozon transport не принимает произвольный URL/path.
-- Ozon read-only POST может bounded-retry transport/429/5xx. Ozon write POST автоматически не повторяется после transport/5xx/malformed success: возвращается ambiguous state, который будущий durable operation обязан reconcile до повтора.
+- Ozon read-only POST может bounded-retry transport/429/5xx. Ozon write POST автоматически не повторяется после transport/5xx/malformed success: durable operation переходит в `uncertain` и сначала сверяется по task/offer live state.
 - Актуальный Ozon manifest использует description-category v1, product list/info v3, product attributes v4, product import v3 + status v1, limits v4, prices read v5/update v1, stocks read v4/update v2, warehouses v2 и finance feeds v1. Deprecated category/product endpoints, warehouse v1 и отключённые finance v3 запрещены. В `/v3/product/import` `offer_id` обязателен, а `images360` удалён 10.07.2026.
-- Seller UI `/marketplaces/accounts/` и live Ozon checks включаются только через `MARKETPLACE_OZON_ENABLED=1`; default `0` является dark launch. Отключение feature flag не мешает seller удалить сохранённый ключ.
+- Seller account/catalog/draft UI и live Ozon checks включаются через `MARKETPLACE_OZON_ENABLED=1`; новый product write требует также `MARKETPLACE_OZON_PUBLICATION_ENABLED=1`. Оба default `0`. Выключение publication flag запрещает отправку queued rows, но scheduler продолжает submitted/polling/uncertain reconciliation.
 - Ozon reference truth хранится отдельно от WB-shaped `MarketplaceCategory`: `MarketplaceTaxonomyCategory`, `MarketplaceProductType`, `MarketplaceAttributeDefinition` и `MarketplaceAttributeValue`. Идентичность типа всегда `description_category_id + type_id`; value ID никогда не переносится между attribute/type scopes.
 - Global Ozon taxonomy использует только явно настроенный `MarketplaceReferenceAccount`, никогда случайный seller key. Tree обновляется каждые 24 часа, stale enabled schemas bounded-пакетом каждые 6 часов; required dictionaries синхронизируются eager в общем dictionary budget. Все scope jobs используют non-blocking file claims.
 - Последний полный Ozon snapshot остаётся structured truth до hard TTL 48 часов. Empty/malformed/duplicate/partial/anomalously shrunk ответ не меняет reference rows. Dictionary checkpoint наблюдаемый и не является resume cursor: без staging retry обязан начать с нуля. Admin restriction может быть только exact subset fresh official dictionary; required attribute нельзя отключить.
@@ -51,7 +54,11 @@ Seller Hub автоматизирует работу продавца на ма�
 - Seller catalog UI/API находится на `/marketplaces/listings/`, фильтруется только внутри `current_user.seller`, а внешний read запускается только для составного `seller_id + account_id` после connected/active/expiry checks. Один account сериализуется DB running-index и non-blocking file claim; один HTTP запуск ограничен 50 list pages, UI использует bounded 5-page пакет.
 - `MarketplaceProductDraft` является отдельной seller/account-specific проекцией `ImportedProduct`, а не HTTP body и не `Product`. `MarketplaceCategoryMapping` уникален внутри seller + marketplace + supplier/source scope + normalized source category; автоматически применяется только `active` exact mapping на доступный enabled type.
 - Draft UI/API `/marketplaces/drafts/` использует optimistic `expected_version`; draft/account/imported source проверяются составно с seller. Выключенный feature flag блокирует draft writes, но оставляет существующее состояние read-only.
-- Текущий Ozon слой не включает publication side effects. Их нельзя добавлять в routes/LLM tools напрямую: следующий слой обязан повторно провалидировать full state, выполнить quota preflight и использовать `MarketplaceOperation`, snapshots и reconciliation.
+- Ручная Ozon publication P5a является create-only: existing offer в `ALL|ARCHIVED` блокирует write и требует будущего отдельного update workflow. Перед HTTP write сервис повторно валидирует весь draft/schema, строит whitelist payload, фиксирует operation+snapshot, проверяет live offer и `/v4/product/info/limit`, резервирует quota и только затем вызывает adapter.
+- `MarketplaceOperation` хранит durable lifecycle и bounded sanitized results, а `MarketplaceListingSnapshot` — exact submitted/confirmed state. Raw provider response, idempotency key, credentials и submitted payload не возвращаются public routes. Один account write/reconcile сериализуется file claim; scheduler обрабатывает bounded due batch каждую минуту.
+- Автоматический rollback созданной карточки намеренно не включён: на дату аудита 15.07.2026 точный актуальный официальный archive-контракт не подтверждён. Snapshot фиксирует `automatic_rollback_contract_unverified` и manual archive instruction; не подменяйте archive beta-методом visibility и не добавляйте guessed endpoint.
+- Изменение Client-Id/API key, connection recheck и disconnect используют тот же account lock. Credential mutation блокируется при любой active operation; disconnect отменяет только `queued` с `attempt_count=0`, но сохраняет ключ для submitted/polling/uncertain и любого write с ненулевой попыткой.
+- File claim координирует процессы только на общем host/filesystem. Текущий Compose имеет singleton scheduler и один web container; перед multi-host/web-replica rollout P11 обязан заменить claim распределённой блокировкой либо гарантировать shared lock filesystem.
 
 ### Единый AI-помощник
 
@@ -222,7 +229,7 @@ DISABLE_SECURE_COOKIE=1 PORT=5001 python seller_platform.py
 
 Откройте `http://localhost:5001/login`. `DISABLE_SECURE_COOKIE=1` допустим только для локального HTTP. Без `DATABASE_URL` основная база создаётся в `data/seller_platform.db`.
 
-Ozon account/catalog/draft UI остаётся выключенным по умолчанию. Для локальной проверки сначала задайте валидный Fernet `ENCRYPTION_KEY`, затем явно экспортируйте `MARKETPLACE_OZON_ENABLED=1`. Seller проверяет кабинет в `/marketplaces/accounts/`, запускает bounded read-only catalog sweep в `/marketplaces/listings/` и готовит локальные validated drafts в `/marketplaces/drafts/`. Draft validation не вызывает Ozon или LLM. Unit tests используют synthetic credentials и не вызывают Ozon.
+Ozon account/catalog/draft UI остаётся выключенным по умолчанию. Для локальной проверки сначала задайте валидный Fernet `ENCRYPTION_KEY`, затем явно экспортируйте `MARKETPLACE_OZON_ENABLED=1`. Seller проверяет кабинет в `/marketplaces/accounts/`, запускает bounded read-only catalog sweep в `/marketplaces/listings/` и готовит локальные validated drafts в `/marketplaces/drafts/`. Draft validation не вызывает Ozon или LLM. Ручной create-write дополнительно и независимо включается `MARKETPLACE_OZON_PUBLICATION_ENABLED=1`; операции и их reconciliation видны в `/marketplaces/operations/`. Никогда не включайте write flag только ради unit tests: они используют synthetic credentials/adapters и не вызывают Ozon.
 
 Для non-interactive init передайте `ADMIN_USERNAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` через окружение и выполните:
 
@@ -352,6 +359,7 @@ python migrations/migrate_add_marketplace_accounts.py data/seller_platform.db
 python migrations/migrate_add_ozon_references.py data/seller_platform.db
 python migrations/migrate_add_marketplace_listings.py data/seller_platform.db
 python migrations/migrate_add_marketplace_drafts.py data/seller_platform.db
+python migrations/migrate_add_marketplace_operations.py data/seller_platform.db
 python migrations/run_all_migrations.py data/seller_platform.db
 ```
 
@@ -377,6 +385,7 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - Ozon global reference route доступен только admin и только при feature flag; удаление reference secret остаётся доступным при rollback flag. Reference account не разрешено использовать для seller catalog, prices, stocks или публикации.
 - `MarketplaceListing`, catalog sync run и account всегда читаются/изменяются с тем же `seller_id`; фильтр по голому listing/account ID запрещён. Enrichment response не может добавить чужой `product_id` или конфликтующий `offer_id` в запрошенный page exact-set.
 - `MarketplaceProductDraft`, его `ImportedProduct`, account, marketplace и category mapping обязаны иметь один seller/marketplace scope. `corrected_by_user_id` берётся из authenticated user и повторно сверяется с `Seller.user_id`; body не может назначить автора исправления.
+- `MarketplaceOperation` и snapshot всегда выбираются с `operation.id + current_user.seller.id`; их account/draft/listing scope повторно сверяется. Public serializer не отдаёт `idempotency_key`, submitted state или credentials.
 - Любой internal agent request обязан пройти agent authentication, task ownership и assignment-to-seller checks.
 - Запрос объекта выполняйте составным условием `id + seller_id`; проверка одного ID недостаточна.
 - Область сущности всегда типизирована: `/products/<id>` означает `Product`, а страницы импорта/поставщика — `ImportedProduct`; числовой ID без `entity_kind` неоднозначен.
@@ -467,6 +476,16 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - Draft update требует typed positive `expected_version`; boolean/float/numeric string в JSON не coercion-ятся. Source drift не перезаписывает user fields: validation возвращает `source_facts_stale`, а отдельный refresh меняет только fact snapshot/provenance.
 - Dictionary value валидируется как exact `(product_type_id, attribute_id, external_value_id, display value)` по fresh official cache и optional admin restriction. Required/complex/max-count/type semantics проверяет Python; неизвестный data type блокирует draft. Значение другого category/type scope не переносится.
 - Physical fields принимаются только как положительные явные values с units; price, VAT и `currency_code=RUB` для текущего rollout должны быть явными. Media принимает только bounded public HTTP(S) URLs; `images360` отклоняется как удалённое поле. `offer_id` обязателен и уникален внутри account.
+
+### Ozon publication operations
+
+- User route не вызывает Ozon напрямую. Разрешённый путь: seller scope → fresh full draft validation → whitelist builder → committed `MarketplaceOperation` + `MarketplaceListingSnapshot` → live absence preflight → quota reservation → adapter write → task polling/reconciliation.
+- P5a создаёт только отсутствующий `offer_id`. Найденный upstream offer, включая archived, завершает operation ошибкой до quota/write; update требует отдельного full-state workflow и не маскируется create path.
+- `submitting` и `attempt_count > 0` выставляются и commit-ятся до вызова write adapter. Transport/5xx/malformed success после этого считается ambiguous; повтор `/v3/product/import` запрещён. Definitive validated API rejection может стать `failed`.
+- Poll/status response обязан совпасть exact-set по offer, иметь bounded items/errors и известные statuses. Неполный, foreign, duplicate или malformed response не считается успехом. После 24 часов неудачного task polling automatic retry прекращается с видимым `uncertain`; ручной poll остаётся возможен.
+- Live reconciliation без task id разрешена только когда committed before-state доказывает отсутствие offer до write. Она не выполняет новый write. `uncertain` сохраняет quota reservation и credentials до подтверждения либо явной будущей recovery-процедуры.
+- Выключение `MARKETPLACE_OZON_PUBLICATION_ENABLED` запрещает новый write и отправку безопасной queued operation, но не отменяет уже начатую сверку. Disconnect не может удалить ключ, нужный для reconciliation.
+- Rollback snapshot обязателен, но автоматическая archive-команда остаётся `unavailable` до официально подтверждённого и покрытого contract fixtures endpoint. UI не должен обещать кнопку отката, если upstream compensation не реализована.
 
 ## LLM policy, budgets и prompt cache
 
