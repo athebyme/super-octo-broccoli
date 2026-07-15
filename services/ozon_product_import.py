@@ -364,18 +364,19 @@ class OzonProductImportContract:
             })
 
         media = cls._stored_json(draft.media_json, dict)
-        if set(media) - {"images"}:
+        if set(media) - {"images", "primary_image", "color_image"}:
             raise OzonProductImportPayloadError(
                 "Draft media contains fields outside the current Ozon contract"
             )
         images = media.get("images")
+        primary_image = media.get("primary_image")
         if (
             not isinstance(images, list)
-            or not images
-            or len(images) > cls.MAX_IMAGES
+            or (not images and primary_image in (None, ""))
+            or len(images) > cls.MAX_IMAGES - (1 if primary_image else 0)
         ):
             raise OzonProductImportPayloadError(
-                f"Ozon import requires 1..{cls.MAX_IMAGES} images"
+                f"Ozon import requires 1..{cls.MAX_IMAGES} main images total"
             )
         normalized_images = [
             cls._required_text(
@@ -387,6 +388,28 @@ class OzonProductImportContract:
         ]
         if len(set(normalized_images)) != len(normalized_images):
             raise OzonProductImportPayloadError("Ozon image URLs are duplicated")
+        normalized_primary = None
+        if primary_image not in (None, ""):
+            normalized_primary = cls._required_text(
+                primary_image,
+                "media.primary_image",
+                maximum=2_000,
+            )
+            if normalized_primary in normalized_images:
+                raise OzonProductImportPayloadError(
+                    "Ozon primary_image duplicates images"
+                )
+        normalized_color = None
+        if media.get("color_image") not in (None, ""):
+            normalized_color = cls._required_text(
+                media["color_image"],
+                "media.color_image",
+                maximum=2_000,
+            )
+            if normalized_color in set(normalized_images) | {normalized_primary}:
+                raise OzonProductImportPayloadError(
+                    "Ozon color_image duplicates a main image"
+                )
 
         dimensions = cls._stored_json(draft.dimensions_json, dict)
         expected_dimensions = {
@@ -462,6 +485,10 @@ class OzonProductImportContract:
                 "dimensions.width",
             ),
         }
+        if normalized_primary:
+            item["primary_image"] = normalized_primary
+        if normalized_color:
+            item["color_image"] = normalized_color
         if barcodes:
             item["barcode"] = cls._required_text(
                 barcodes[0],

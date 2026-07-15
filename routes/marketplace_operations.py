@@ -1,5 +1,7 @@
 """Seller-facing audit and manual control for durable marketplace operations."""
 
+import secrets
+
 from typing import Any, Dict, Optional
 
 from flask import (
@@ -95,6 +97,22 @@ def _integer(
             f"{field_name} должен быть положительным"
         )
     return parsed
+
+
+def _boolean(value: Any, field_name: str) -> bool:
+    if request.is_json:
+        if not isinstance(value, bool):
+            raise MarketplacePublicationValidationError(
+                f"{field_name} должен быть boolean"
+            )
+        return value
+    if value == "1":
+        return True
+    if value in (None, "", "0"):
+        return False
+    raise MarketplacePublicationValidationError(
+        f"{field_name} должен быть checkbox boolean"
+    )
 
 
 def _publication_enabled() -> bool:
@@ -256,6 +274,7 @@ def _get_operation_response(operation_id: int, *, force_json: bool = False):
             if operation.operation_kind in MarketplaceCommercialService.COMMERCIAL_OPERATION_KINDS
             else _publication_enabled()
         ),
+        rollback_idempotency_key=secrets.token_urlsafe(24),
     )
 
 
@@ -314,6 +333,176 @@ def publish_draft(draft_id: int):
     flash(
         "Операция Ozon сохранена; результат отслеживается асинхронно",
         "success",
+    )
+    return redirect(url_for(
+        "marketplace_operations.detail",
+        operation_id=operation.id,
+    ))
+
+
+@marketplace_operations_bp.route(
+    "/drafts/<int:draft_id>/update",
+    methods=["POST"],
+)
+@login_required
+def update_draft(draft_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    if not _publication_enabled():
+        disabled = MarketplacePublicationError(
+            "Обновление карточек Ozon отключено отдельным feature flag"
+        )
+        disabled.status_code = 404
+        disabled.code = "ozon_publication_disabled"
+        return _error_response(disabled)
+    try:
+        data = _payload()
+        if set(data) - {"expected_version", "idempotency_key", "confirm_write"}:
+            raise MarketplacePublicationValidationError(
+                "Допустимы только expected_version, idempotency_key и confirm_write"
+            )
+        if not _boolean(data.get("confirm_write"), "confirm_write"):
+            raise MarketplacePublicationValidationError(
+                "Full-state update требует явного confirm_write=true"
+            )
+        operation = MarketplacePublicationService.start_update(
+            seller_id=seller_id,
+            draft_id=draft_id,
+            expected_version=_integer(
+                data.get("expected_version"),
+                "expected_version",
+            ),
+            idempotency_key=data.get("idempotency_key"),
+            created_by_user_id=getattr(current_user, "id", None),
+        )
+    except Exception as exc:
+        return _write_failure(exc, seller_id=seller_id, action="product_update")
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "operation": _operation_document(operation),
+        }), 200 if operation.is_terminal else 202
+    flash(
+        "Full-state update Ozon зафиксирован; результат и live-state сверяются",
+        "success",
+    )
+    return redirect(url_for(
+        "marketplace_operations.detail",
+        operation_id=operation.id,
+    ))
+
+
+@marketplace_operations_bp.route(
+    "/<int:operation_id>/rollback",
+    methods=["POST"],
+)
+@login_required
+def rollback(operation_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    if not _publication_enabled():
+        disabled = MarketplacePublicationError(
+            "Rollback карточек Ozon отключён отдельным feature flag"
+        )
+        disabled.status_code = 404
+        disabled.code = "ozon_publication_disabled"
+        return _error_response(disabled)
+    try:
+        data = _payload()
+        if set(data) - {"expected_version", "idempotency_key", "confirm_write"}:
+            raise MarketplacePublicationValidationError(
+                "Допустимы только expected_version, idempotency_key и confirm_write"
+            )
+        if not _boolean(data.get("confirm_write"), "confirm_write"):
+            raise MarketplacePublicationValidationError(
+                "Rollback требует отдельного явного confirm_write=true"
+            )
+        parent = MarketplacePublicationService.get_operation(
+            seller_id=seller_id,
+            operation_id=operation_id,
+        )
+        common = {
+            "seller_id": seller_id,
+            "operation_id": operation_id,
+            "expected_version": _integer(
+                data.get("expected_version"),
+                "expected_version",
+            ),
+            "idempotency_key": data.get("idempotency_key"),
+            "created_by_user_id": getattr(current_user, "id", None),
+        }
+        if parent.operation_kind == "product_import":
+            operation = MarketplacePublicationService.start_create_rollback(
+                **common
+            )
+        elif parent.operation_kind == "product_update":
+            operation = MarketplacePublicationService.start_update_rollback(
+                **common
+            )
+        else:
+            raise MarketplacePublicationValidationError(
+                "Этот вид операции не поддерживает product rollback"
+            )
+    except Exception as exc:
+        return _write_failure(exc, seller_id=seller_id, action="product_rollback")
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "operation": _operation_document(operation),
+        }), 200 if operation.is_terminal else 202
+    flash("Отдельная rollback-операция Ozon создана", "success")
+    return redirect(url_for(
+        "marketplace_operations.detail",
+        operation_id=operation.id,
+    ))
+
+
+@marketplace_operations_bp.route(
+    "/<int:operation_id>/resolve-uncertain",
+    methods=["POST"],
+)
+@login_required
+def resolve_uncertain(operation_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        data = _payload()
+        if set(data) - {"expected_version", "reason", "confirm_stop"}:
+            raise MarketplacePublicationValidationError(
+                "Допустимы только expected_version, reason и confirm_stop"
+            )
+        if not _boolean(data.get("confirm_stop"), "confirm_stop"):
+            raise MarketplacePublicationValidationError(
+                "Ручная остановка требует confirm_stop=true"
+            )
+        operation = MarketplacePublicationService.resolve_uncertain(
+            seller_id=seller_id,
+            operation_id=operation_id,
+            expected_version=_integer(
+                data.get("expected_version"),
+                "expected_version",
+            ),
+            reason=data.get("reason"),
+            resolved_by_user_id=getattr(current_user, "id", None),
+        )
+    except Exception as exc:
+        return _write_failure(
+            exc,
+            seller_id=seller_id,
+            action="resolve_uncertain",
+        )
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "operation": _operation_document(operation),
+        })
+    flash(
+        "Автоматическая сверка остановлена, local quota освобождена; "
+        "upstream outcome остаётся uncertain",
+        "warning",
     )
     return redirect(url_for(
         "marketplace_operations.detail",

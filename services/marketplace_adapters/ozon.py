@@ -183,6 +183,27 @@ class OzonAdapter(MarketplaceAdapter):
     ) -> Dict[str, Any]:
         return self._client(credentials).submit_products(payload)
 
+    def submit_product_pictures(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).submit_product_pictures(payload)
+
+    def archive_products(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).archive_products(payload)
+
+    def unarchive_products(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).unarchive_products(payload)
+
     def get_submission(
         self,
         credentials: MarketplaceCredentials,

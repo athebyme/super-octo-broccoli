@@ -74,6 +74,15 @@ OZON_ENDPOINTS: Mapping[str, OzonEndpointSpec] = MappingProxyType({
     "product_import_status": OzonEndpointSpec(
         "/v1/product/import/info", "catalog_read", "read"
     ),
+    "product_pictures_import": OzonEndpointSpec(
+        "/v1/product/pictures/import", "catalog_write", "write"
+    ),
+    "product_archive": OzonEndpointSpec(
+        "/v1/product/archive", "catalog_write", "write"
+    ),
+    "product_unarchive": OzonEndpointSpec(
+        "/v1/product/unarchive", "catalog_write", "write"
+    ),
     "product_prices": OzonEndpointSpec(
         "/v5/product/info/prices", "prices_read", "read"
     ),
@@ -427,6 +436,15 @@ class OzonSellerAPIClient:
 
     def submit_products(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("product_import", payload)
+
+    def submit_product_pictures(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("product_pictures_import", payload)
+
+    def archive_products(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("product_archive", payload)
+
+    def unarchive_products(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("product_unarchive", payload)
 
     def get_product_import_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("product_import_status", payload)

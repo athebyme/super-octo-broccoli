@@ -48,6 +48,19 @@
     <div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--danger, #b42318);color:var(--text)">
         Результат upstream нельзя доказать. Платформа не повторяет write; выполняется только task/live-сверка.
     </div>
+    {% if operation.operation_kind in ['product_import', 'product_import_rollback', 'product_update', 'product_update_rollback'] and operation.next_poll_at %}
+    <details class="sh-card p-4 mt-3">
+        <summary class="cursor-pointer text-sm font-medium" style="color:var(--text)">Остановить автоматическую сверку вручную</summary>
+        <p class="mt-2 text-xs" style="color:var(--text-muted)">Это не объявит write успешным или неуспешным. Outcome останется uncertain, повтор write останется запрещён, local quota reservation будет освобождена.</p>
+        <form class="mt-3 space-y-3" method="post" action="{{ url_for('marketplace_operations.resolve_uncertain', operation_id=operation.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="expected_version" value="{{ operation.version }}">
+            <label class="block"><span class="block text-xs mb-1" style="color:var(--text-muted)">Причина и результат ручной проверки в Ozon Seller</span><textarea name="reason" minlength="10" maxlength="1000" required rows="3" class="w-full rounded-md border p-3 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></textarea></label>
+            <label class="flex items-start gap-2 text-sm" style="color:var(--text-secondary)"><input type="checkbox" name="confirm_stop" value="1" required><span>Понимаю, что автоматическая сверка остановится, но неизвестный upstream outcome не станет подтверждённым.</span></label>
+            <button class="sh-btn sh-btn--secondary" type="submit">Остановить сверку и освободить local quota</button>
+        </form>
+    </details>
+    {% endif %}
     {% endif %}
 
     {% if operation.error_message %}
@@ -137,6 +150,15 @@
         {% if is_commercial and operation.operation_kind in ['price_update', 'stock_update'] and operation.status == 'succeeded' and operation_data.snapshot.rollback_status == 'available' %}<form method="post" action="{{ url_for('marketplace_commercial.create_rollback', operation_id=operation.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary" type="submit">Создать rollback proposal</button></form>{% endif %}</div>
         <p class="mt-2 text-sm" style="color:var(--text-secondary)">Статус rollback: {{ operation_data.snapshot.rollback_status }}{% if operation_data.snapshot.rollback_error_message %} · {{ operation_data.snapshot.rollback_error_message }}{% endif %}</p>
         <p class="mt-2 text-xs break-all" style="color:var(--text-muted)">before {{ operation_data.snapshot.before_fingerprint or '—' }} · submitted {{ operation_data.snapshot.submitted_fingerprint }} · confirmed {{ operation_data.snapshot.confirmed_fingerprint or '—' }}</p>
+        {% if not is_commercial and operation.operation_kind in ['product_import', 'product_update'] and operation.status == 'succeeded' and operation_data.snapshot.rollback_status == 'available' %}
+        <form class="mt-4 rounded border p-3" style="border-color:var(--border)" method="post" action="{{ url_for('marketplace_operations.rollback', operation_id=operation.id) }}" onsubmit="return confirm('Создать отдельный Ozon rollback write? Перед отправкой live-state будет проверен ещё раз.')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="expected_version" value="{{ operation.version }}">
+            <input type="hidden" name="idempotency_key" value="{{ rollback_idempotency_key }}">
+            <label class="flex items-start gap-2 text-sm" style="color:var(--text-secondary)"><input type="checkbox" name="confirm_write" value="1" required><span>{% if operation.operation_kind == 'product_import' %}Понимаю: созданная этой операцией карточка будет перемещена в архив, если её полный state не менялся.{% else %}Понимаю: текущая карточка будет полностью заменена точным prior-state из snapshot.{% endif %}</span></label>
+            <button class="sh-btn sh-btn--secondary mt-3" type="submit">{{ 'Архивировать созданную карточку' if operation.operation_kind == 'product_import' else 'Восстановить prior-state' }}</button>
+        </form>
+        {% endif %}
     </section>
     {% endif %}
 </div>

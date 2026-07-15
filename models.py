@@ -4215,6 +4215,7 @@ class MarketplaceOperation(db.Model):
         ),
         db.CheckConstraint(
             "operation_kind IN ('product_import','product_import_rollback',"
+            "'product_update','product_update_rollback',"
             "'price_update','stock_update','price_rollback','stock_rollback')",
             name='ck_marketplace_operation_kind',
         ),
@@ -4423,7 +4424,7 @@ class MarketplaceListingSnapshot(db.Model):
 
     __table_args__ = (
         db.CheckConstraint(
-            "snapshot_kind IN ('product_import','price','stock')",
+            "snapshot_kind IN ('product_import','product_update','price','stock')",
             name='ck_marketplace_listing_snapshot_kind',
         ),
         db.CheckConstraint(

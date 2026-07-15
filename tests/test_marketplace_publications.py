@@ -2,6 +2,7 @@
 """Ozon product import is strict, durable, idempotent and tenant-scoped."""
 
 from datetime import datetime, timedelta
+from copy import deepcopy
 import json
 import unittest
 from unittest.mock import MagicMock, patch
@@ -40,6 +41,7 @@ from services.ozon_product_import import (
     OzonProductImportPayloadError,
     OzonProductImportProtocolError,
 )
+from services.ozon_product_state import OzonProductStateContract
 
 
 SYNTHETIC_CREDENTIALS = MarketplaceCredentials(
@@ -144,6 +146,185 @@ class SyntheticPublicationAdapter:
             }
         }
 
+
+class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
+    """Synthetic exact-state adapter for update/archive state machines."""
+
+    def __init__(self, live_payload=None, *, create_mode=False):
+        super().__init__(offer_exists=not create_mode)
+        self.live_payload = deepcopy(live_payload)
+        self.archived = False
+        self.pending_payload = None
+        self.archive_calls = []
+        self.full_read_calls = []
+
+    def _item(self):
+        if not self.live_payload:
+            raise AssertionError("synthetic live payload is unavailable")
+        return self.live_payload["items"][0]
+
+    def list_products(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.list_calls.append(payload)
+        visibility = payload["filter"]["visibility"]
+        visible = self.live_payload is not None and (
+            (visibility == "ALL" and not self.archived)
+            or (visibility == "ARCHIVED" and self.archived)
+        )
+        items = []
+        if visible:
+            items = [{
+                "product_id": 987654,
+                "offer_id": self._item()["offer_id"],
+                "archived": self.archived,
+                "has_fbo_stocks": False,
+                "has_fbs_stocks": False,
+            }]
+        return {
+            "result": {"items": items, "total": len(items), "last_id": ""}
+        }
+
+    def get_operation_limits(self, credentials):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        return {
+            "operation_limits": [{
+                "operation": "product_update" if self.live_payload else "product_create",
+                "limit": 100,
+                "usage": 1,
+                "remaining": 99,
+            }]
+        }
+
+    def submit_products(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.submitted_payloads.append(deepcopy(payload))
+        self.pending_payload = deepcopy(payload)
+        return {"result": {"task_id": 456}}
+
+    def get_submission(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.status_calls.append(payload)
+        if self.pending_payload is not None:
+            self.live_payload = self.pending_payload
+            self.pending_payload = None
+            self.offer_exists = True
+            self.archived = False
+        return {
+            "result": {
+                "items": [{
+                    "offer_id": self._item()["offer_id"],
+                    "product_id": 987654,
+                    "status": "imported",
+                    "errors": [],
+                }],
+                "total": 1,
+            }
+        }
+
+    def get_products(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.full_read_calls.append(("info", deepcopy(payload)))
+        item = self._item()
+        media = self._media(item)
+        return {"items": [{
+            "id": 987654,
+            "offer_id": item["offer_id"],
+            "name": item["name"],
+            "description": self._description(item),
+            "description_category_id": item["description_category_id"],
+            "type_id": item["type_id"],
+            "is_archived": self.archived,
+            "barcodes": [item["barcode"]] if item.get("barcode") else [],
+            "primary_image": media["primary_image"],
+            "images": [media["primary_image"], *media["images"]],
+            "statuses": {},
+            "visibility_details": {},
+            "errors": [],
+        }]}
+
+    def get_product_attributes(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.full_read_calls.append(("attributes", deepcopy(payload)))
+        item = self._item()
+        return {
+            "result": [{
+                "id": 987654,
+                "offer_id": item["offer_id"],
+                "name": item["name"],
+                "description_category_id": item["description_category_id"],
+                "type_id": item["type_id"],
+                "attributes": deepcopy(item["attributes"]),
+                "complex_attributes": deepcopy(item["complex_attributes"]),
+                "width": item["width"],
+                "height": item["height"],
+                "depth": item["depth"],
+                "dimension_unit": item["dimension_unit"],
+                "weight": item["weight"],
+                "weight_unit": item["weight_unit"],
+                "barcodes": [item["barcode"]] if item.get("barcode") else [],
+                "images": [],
+                "sku": 7654321,
+            }],
+            "total": 1,
+            "last_id": "",
+        }
+
+    def read_prices(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.full_read_calls.append(("prices", deepcopy(payload)))
+        item = self._item()
+        price = {
+            "price": item["price"],
+            "currency_code": item["currency_code"],
+            "vat": item["vat"],
+        }
+        if item.get("old_price"):
+            price["old_price"] = item["old_price"]
+        return {
+            "items": [{
+                "product_id": 987654,
+                "offer_id": item["offer_id"],
+                "price": price,
+            }],
+            "total": 1,
+            "cursor": "",
+        }
+
+    def get_product_pictures(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.full_read_calls.append(("pictures", deepcopy(payload)))
+        media = self._media(self._item())
+        return {"items": [{
+            "product_id": 987654,
+            "primary_photo": [media["primary_image"]],
+            "photo": media["images"],
+            "color_photo": [media["color_image"]] if media.get("color_image") else [],
+            "errors": [],
+        }]}
+
+    def archive_products(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.archive_calls.append(deepcopy(payload))
+        self.archived = True
+        return {"result": True}
+
+    @staticmethod
+    def _media(item):
+        images = list(item.get("images", []))
+        primary = item.get("primary_image")
+        if not primary:
+            primary = images.pop(0)
+        result = {"primary_image": primary, "images": images}
+        if item.get("color_image"):
+            result["color_image"] = item["color_image"]
+        return result
+
+    @staticmethod
+    def _description(item):
+        for attribute in item.get("attributes", []):
+            if attribute.get("id") == 4191 and attribute.get("values"):
+                return attribute["values"][0].get("value")
+        return None
 
 class OzonPublicationFixture:
     def setUp(self):
@@ -327,6 +508,62 @@ class OzonPublicationFixture:
                 credentials=SYNTHETIC_CREDENTIALS,
             )
 
+    def desired_payload(self):
+        return OzonProductImportContract.build_payload(self.draft)
+
+    def prior_payload(self):
+        payload = deepcopy(self.desired_payload())
+        item = payload["items"][0]
+        item["name"] = "Предыдущее название"
+        item["price"] = "900"
+        item["old_price"] = "1100"
+        item["images"] = ["https://img.test/prior.jpg"]
+        for attribute in item["attributes"]:
+            if attribute["id"] == 4191:
+                attribute["values"] = [{"value": "Предыдущее описание"}]
+        return payload
+
+    def attach_listing(self, payload=None):
+        payload = payload or self.prior_payload()
+        item = payload["items"][0]
+        listing = MarketplaceListing(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account.id,
+            imported_product_id=self.source.id,
+            product_type_id=self.product_type.id,
+            offer_id=item["offer_id"],
+            external_product_id="987654",
+            title=item["name"],
+            normalized_status="active",
+            is_available=True,
+            is_archived=False,
+            stock_summary_json=json.dumps({"preserve": True}),
+            sync_fingerprint="b" * 64,
+        )
+        db.session.add(listing)
+        db.session.flush()
+        self.draft.published_listing_id = listing.id
+        db.session.commit()
+        self.expected_version = self.draft.version
+        return listing
+
+    def start_update(self, adapter, *, key="product-update-key-0001"):
+        with patch.object(
+            MarketplaceDraftService,
+            "_build_validation_result",
+            return_value=self.validation_result(),
+        ):
+            return MarketplacePublicationService.start_update(
+                seller_id=self.seller.id,
+                draft_id=self.draft.id,
+                expected_version=self.expected_version,
+                idempotency_key=key,
+                created_by_user_id=self.user.id,
+                adapter=adapter,
+                credentials=SYNTHETIC_CREDENTIALS,
+            )
+
 
 class OzonProductImportContractTest(OzonPublicationFixture, unittest.TestCase):
     def test_builder_is_whitelist_only_and_maps_description_attribute(self):
@@ -461,7 +698,7 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         db.session.refresh(self.draft)
         self.assertEqual(self.draft.status, "published")
         self.assertEqual(self.draft.published_listing_id, listing.id)
-        self.assertEqual(completed.snapshot.rollback_status, "unavailable")
+        self.assertEqual(completed.snapshot.rollback_status, "available")
 
         repeated = self.start(adapter)
         self.assertEqual(repeated.id, completed.id)
@@ -480,6 +717,30 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         operation = self.start(adapter, key="publication-key-ambiguous")
         self.assertEqual(operation.status, "uncertain")
         self.assertEqual(operation.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_manual_uncertain_resolution_releases_only_local_quota(self):
+        adapter = SyntheticPublicationAdapter(ambiguous=True)
+        operation = self.start(adapter, key="publication-key-manual-resolution")
+        self.assertEqual(operation.status, "uncertain")
+        self.assertEqual(operation.quota_reserved, 1)
+
+        resolved = MarketplacePublicationService.resolve_uncertain(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            expected_version=operation.version,
+            reason="Проверено вручную в кабинете; результат пока неясен",
+            resolved_by_user_id=self.user.id,
+        )
+        self.assertEqual(resolved.status, "uncertain")
+        self.assertEqual(resolved.quota_reserved, 0)
+        self.assertIsNone(resolved.next_poll_at)
+        self.assertEqual(resolved.error_code, "manual_uncertain_resolution")
+        summary = json.loads(resolved.request_summary_json)
+        self.assertEqual(
+            summary["manual_resolution"]["upstream_outcome"],
+            "still_uncertain",
+        )
         self.assertEqual(len(adapter.submitted_payloads), 1)
 
         completed = MarketplacePublicationService.poll_operation(
@@ -577,6 +838,135 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
             MarketplaceOperation.query.filter_by(seller_id=self.seller.id).count(),
             1,
         )
+
+    def test_full_state_update_and_exact_prior_state_rollback(self):
+        prior = self.prior_payload()
+        listing = self.attach_listing(prior)
+        adapter = SyntheticFullStateAdapter(prior)
+
+        operation = self.start_update(adapter)
+        self.assertEqual(operation.operation_kind, "product_update")
+        self.assertEqual(operation.status, "submitted")
+        self.assertEqual(operation.snapshot.snapshot_kind, "product_update")
+        self.assertEqual(
+            operation.snapshot.before_fingerprint,
+            OzonProductStateContract.fingerprint(prior),
+        )
+        self.assertEqual(operation.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+        completed = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=operation.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(completed.snapshot.rollback_status, "available")
+        self.assertEqual(
+            completed.snapshot.confirmed_fingerprint,
+            OzonProductStateContract.fingerprint(self.desired_payload()),
+        )
+        db.session.refresh(listing)
+        self.assertEqual(json.loads(listing.stock_summary_json), {"preserve": True})
+        self.assertEqual(listing.title, "Безопасный товар")
+
+        rollback = MarketplacePublicationService.start_update_rollback(
+            seller_id=self.seller.id,
+            operation_id=completed.id,
+            expected_version=completed.version,
+            idempotency_key="product-update-rollback-key-0001",
+            created_by_user_id=self.user.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        self.assertEqual(rollback.operation_kind, "product_update_rollback")
+        self.assertEqual(rollback.status, "submitted")
+        db.session.refresh(completed.snapshot)
+        self.assertEqual(completed.snapshot.rollback_status, "pending")
+
+        restored = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=rollback.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        self.assertEqual(restored.status, "succeeded")
+        self.assertEqual(
+            OzonProductStateContract.fingerprint(adapter.live_payload),
+            OzonProductStateContract.fingerprint(prior),
+        )
+        db.session.refresh(completed.snapshot)
+        self.assertEqual(completed.snapshot.rollback_status, "succeeded")
+        self.assertEqual(len(adapter.submitted_payloads), 2)
+
+    def test_update_rollback_drift_fails_before_second_write(self):
+        prior = self.prior_payload()
+        self.attach_listing(prior)
+        adapter = SyntheticFullStateAdapter(prior)
+        completed = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=self.start_update(
+                adapter,
+                key="product-update-key-drift",
+            ).id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        drifted = deepcopy(adapter.live_payload)
+        drifted["items"][0]["name"] = "Внешнее изменение"
+        adapter.live_payload = drifted
+
+        rollback = MarketplacePublicationService.start_update_rollback(
+            seller_id=self.seller.id,
+            operation_id=completed.id,
+            expected_version=completed.version,
+            idempotency_key="product-update-rollback-key-drift",
+            created_by_user_id=self.user.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        self.assertEqual(rollback.status, "failed")
+        self.assertEqual(rollback.error_code, "update_before_state_drift")
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+        db.session.refresh(completed.snapshot)
+        self.assertEqual(completed.snapshot.rollback_status, "conflict")
+
+    def test_create_compensation_archives_only_unchanged_created_listing(self):
+        desired = self.desired_payload()
+        adapter = SyntheticFullStateAdapter(create_mode=True)
+        created = self.start(adapter, key="publication-key-archive")
+        completed = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id,
+            operation_id=created.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(completed.snapshot.rollback_status, "available")
+        self.assertEqual(
+            OzonProductStateContract.fingerprint(adapter.live_payload),
+            OzonProductStateContract.fingerprint(desired),
+        )
+
+        archived = MarketplacePublicationService.start_create_rollback(
+            seller_id=self.seller.id,
+            operation_id=completed.id,
+            expected_version=completed.version,
+            idempotency_key="product-create-archive-key-0001",
+            created_by_user_id=self.user.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )
+        self.assertEqual(archived.status, "succeeded")
+        self.assertEqual(archived.operation_kind, "product_import_rollback")
+        self.assertEqual(adapter.archive_calls, [{"product_id": [987654]}])
+        db.session.refresh(completed.snapshot)
+        self.assertEqual(completed.snapshot.rollback_status, "succeeded")
+        listing = db.session.get(MarketplaceListing, completed.listing_id)
+        self.assertTrue(listing.is_archived)
+        db.session.refresh(self.draft)
+        self.assertEqual(self.draft.status, "archived")
 
 
 if __name__ == "__main__":

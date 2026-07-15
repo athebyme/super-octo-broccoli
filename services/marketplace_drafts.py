@@ -1242,17 +1242,29 @@ class MarketplaceDraftService:
 
     @classmethod
     def _normalize_media(cls, value: Any) -> dict:
-        if not isinstance(value, dict) or set(value) - {"images"}:
+        allowed = {"images", "primary_image", "color_image"}
+        if not isinstance(value, dict) or set(value) - allowed:
             raise MarketplaceDraftValidationError(
-                "media должен содержать только images; images360 больше не поддерживается Ozon"
+                "media поддерживает только images, primary_image и color_image; "
+                "images360 больше не поддерживается Ozon"
             )
         images = value.get("images", [])
-        if not isinstance(images, list) or len(images) > cls.MAX_IMAGES:
+        primary_image = value.get("primary_image")
+        if primary_image not in (None, ""):
+            primary_image = cls._text(
+                primary_image,
+                "media.primary_image",
+                maximum=2_000,
+            )
+        else:
+            primary_image = None
+        maximum_images = cls.MAX_IMAGES - (1 if primary_image else 0)
+        if not isinstance(images, list) or len(images) > maximum_images:
             raise MarketplaceDraftValidationError(
-                f"media.images должен быть массивом до {cls.MAX_IMAGES} URL"
+                f"media.images должен быть массивом до {maximum_images} URL"
             )
         result = []
-        seen = set()
+        seen = {primary_image} if primary_image else set()
         for index, image in enumerate(images):
             image = cls._text(
                 image,
@@ -1265,7 +1277,22 @@ class MarketplaceDraftService:
                 )
             seen.add(image)
             result.append(image)
-        return {"images": result}
+        normalized = {"images": result}
+        if primary_image:
+            normalized["primary_image"] = primary_image
+        color_image = value.get("color_image")
+        if color_image not in (None, ""):
+            color_image = cls._text(
+                color_image,
+                "media.color_image",
+                maximum=2_000,
+            )
+            if color_image in seen:
+                raise MarketplaceDraftValidationError(
+                    "media.color_image не должен дублировать основную фотографию"
+                )
+            normalized["color_image"] = color_image
+        return normalized
 
     @classmethod
     def _normalize_barcodes(cls, value: Any) -> list:
@@ -1351,9 +1378,9 @@ class MarketplaceDraftService:
             raise MarketplaceDraftConflict(
                 "Черновик изменился; обновите страницу и повторите"
             )
-        if draft.status in {"published", "archived"}:
+        if draft.status == "archived":
             raise MarketplaceDraftConflict(
-                "Опубликованный или архивный черновик нельзя редактировать"
+                "Архивный черновик нельзя редактировать до восстановления listing"
             )
         cls._assert_no_active_publication(draft)
 
@@ -1493,9 +1520,9 @@ class MarketplaceDraftService:
             raise MarketplaceDraftConflict(
                 "Черновик изменился; обновите страницу и повторите"
             )
-        if draft.status in {"published", "archived"}:
+        if draft.status == "archived":
             raise MarketplaceDraftConflict(
-                "Опубликованный или архивный черновик нельзя обновлять"
+                "Архивный черновик нельзя обновлять до восстановления listing"
             )
         cls._assert_no_active_publication(draft)
         facts_document, provenance, fact_hash = cls._fact_snapshot(
@@ -1973,19 +2000,30 @@ class MarketplaceDraftService:
 
         media = cls._stored_json(draft.media_json, dict)
         images = media.get("images") if isinstance(media, dict) else None
-        if not isinstance(images, list) or not images:
+        primary_image = media.get("primary_image") if isinstance(media, dict) else None
+        color_image = media.get("color_image") if isinstance(media, dict) else None
+        if not isinstance(images, list) or (not images and not primary_image):
             errors.append(cls._validation_item(
-                "images_required", "media.images", "Нужна хотя бы одна фотография"
+                "images_required", "media", "Нужна хотя бы одна основная фотография"
             ))
         else:
-            if len(images) > cls.MAX_IMAGES:
+            maximum_images = cls.MAX_IMAGES - (1 if primary_image else 0)
+            if len(images) > maximum_images:
                 errors.append(cls._validation_item(
                     "images_limit", "media.images",
-                    f"Допустимо не более {cls.MAX_IMAGES} фотографий",
+                    f"Допустимо не более {maximum_images} фотографий в images",
                 ))
             seen_images = set()
-            for index, value in enumerate(images):
-                field = f"media.images[{index}]"
+            checked_images = []
+            if primary_image is not None:
+                checked_images.append(("media.primary_image", primary_image))
+            checked_images.extend(
+                (f"media.images[{index}]", value)
+                for index, value in enumerate(images)
+            )
+            if color_image is not None:
+                checked_images.append(("media.color_image", color_image))
+            for field, value in checked_images:
                 if not isinstance(value, str) or len(value) > 2_000:
                     errors.append(cls._validation_item(
                         "image_url_invalid", field, "Некорректный URL изображения"
@@ -2155,9 +2193,9 @@ class MarketplaceDraftService:
             raise MarketplaceDraftConflict(
                 "Черновик изменился; обновите страницу и повторите"
             )
-        if draft.status in {"published", "archived"}:
+        if draft.status == "archived":
             raise MarketplaceDraftConflict(
-                "Опубликованный или архивный черновик нельзя валидировать заново"
+                "Архивный черновик нельзя валидировать до восстановления listing"
             )
         cls._assert_no_active_publication(draft)
         result = cls._build_validation_result(draft)

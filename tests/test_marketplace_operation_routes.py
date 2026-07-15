@@ -367,6 +367,113 @@ class MarketplaceOperationRoutesTest(unittest.TestCase):
         self.assertEqual(csrf.status_code, 400)
         start.assert_not_called()
 
+    def test_update_requires_typed_explicit_confirmation(self):
+        operation = SimpleNamespace(
+            id=101,
+            is_terminal=False,
+            snapshot=None,
+            to_public_dict=lambda detail=False: {
+                "id": 101,
+                "status": "submitted",
+            },
+        )
+        url = f"/marketplaces/operations/drafts/{self.own_draft_id}/update"
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch, patch.object(
+            MarketplacePublicationService,
+            "start_update",
+            return_value=operation,
+        ) as start:
+            missing = self.client.post(url, json={
+                "expected_version": 1,
+                "idempotency_key": "route-update-key-0001",
+            })
+            loose = self.client.post(url, json={
+                "expected_version": 1,
+                "idempotency_key": "route-update-key-0001",
+                "confirm_write": "true",
+            })
+            unknown = self.client.post(url, json={
+                "expected_version": 1,
+                "idempotency_key": "route-update-key-0001",
+                "confirm_write": True,
+                "seller_id": self.seller2_id,
+            })
+            valid = self.client.post(url, json={
+                "expected_version": 1,
+                "idempotency_key": "route-update-key-0001",
+                "confirm_write": True,
+            })
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(loose.status_code, 400)
+        self.assertEqual(unknown.status_code, 400)
+        self.assertEqual(valid.status_code, 202)
+        start.assert_called_once_with(
+            seller_id=self.seller1_id,
+            draft_id=self.own_draft_id,
+            expected_version=1,
+            idempotency_key="route-update-key-0001",
+            created_by_user_id=self.user1_id,
+        )
+
+    def test_product_rollback_dispatches_by_owned_parent_kind(self):
+        child = SimpleNamespace(
+            id=102,
+            is_terminal=False,
+            snapshot=None,
+            to_public_dict=lambda detail=False: {
+                "id": 102,
+                "status": "submitted",
+            },
+        )
+        parent = SimpleNamespace(operation_kind="product_update")
+        url = f"/marketplaces/operations/{self.own_operation_id}/rollback"
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch, patch.object(
+            MarketplacePublicationService,
+            "get_operation",
+            return_value=parent,
+        ) as get_parent, patch.object(
+            MarketplacePublicationService,
+            "start_update_rollback",
+            return_value=child,
+        ) as rollback:
+            missing = self.client.post(url, json={
+                "expected_version": 3,
+                "idempotency_key": "route-rollback-key-0001",
+                "confirm_write": False,
+            })
+            valid = self.client.post(url, json={
+                "expected_version": 3,
+                "idempotency_key": "route-rollback-key-0001",
+                "confirm_write": True,
+            })
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(valid.status_code, 202)
+        get_parent.assert_called_once_with(
+            seller_id=self.seller1_id,
+            operation_id=self.own_operation_id,
+        )
+        rollback.assert_called_once_with(
+            seller_id=self.seller1_id,
+            operation_id=self.own_operation_id,
+            expected_version=3,
+            idempotency_key="route-rollback-key-0001",
+            created_by_user_id=self.user1_id,
+        )
+
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            foreign = self.client.post(
+                f"/marketplaces/operations/{self.foreign_operation_id}/rollback",
+                json={
+                    "expected_version": 1,
+                    "idempotency_key": "route-foreign-rollback-key",
+                    "confirm_write": True,
+                },
+            )
+        self.assertEqual(foreign.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P4 и P5a implemented; P5b media/update/compensation next
+Статус: P0–P6 implemented; P7 product UX/suppliers/auto-publish next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -558,21 +558,21 @@ catalog shapes без scalar data и технически не может выз
 Проверка `/v1/roles` редуцируется к фиксированным boolean capabilities для
 archive/unarchive, pictures import, price import и stock update; произвольные
 названия ролей/методов наружу не выводятся.
-Это discovery-инструмент, а не реализация update/compensation и не основание
-обещать rollback без synthetic contract fixtures.
+Live probe остаётся обязательным staging gate для конкретного кабинета; runtime
+контракты дополнительно закреплены synthetic exact-shape fixtures.
 
-- Separate full-state update operation for an existing offer; create path never mutates it implicitly.
-- Media ordering/primary-image/picture workflow probes and contract fixtures beyond basic import URLs.
-- Live post-write comparison strong enough to distinguish our ambiguous write from an external concurrent change.
-- Verified upstream archive/restore contract and conflict-aware compensation for newly created listing.
-- Validated prior-full-state rollback for update only where upstream semantics make it safe.
-- Manual resolution workflow for terminal `uncertain`, including explicit quota release policy and audit reason.
+- [x] Separate full-state update operation for an existing offer; create path never mutates it implicitly.
+- [x] Media ordering/primary-image/current pictures v2 contract; `primary + images <= 30`, optional color image, no images360.
+- [x] Live post-write comparison against exact prior/submitted/third state.
+- [x] `/v1/product/archive` conflict-aware compensation for an unchanged newly created listing; beta visibility is not substituted.
+- [x] Validated prior-full-state rollback for update as a separate confirmed async operation.
+- [x] Manual `uncertain` stop with audit reason and local quota release that does not falsify upstream outcome.
 
-На 15.07.2026 официальный канал подтверждает `/v1/product/unarchive` и beta
-`/v1/product/visibility/set`, но точный актуальный archive endpoint/contract не
-удалось подтвердить в официальной технической документации. Поэтому P5a snapshot
-честно имеет `rollback_status=unavailable` и manual archive instruction; beta
-visibility не используется как выдуманный rollback.
+Create snapshot становится `rollback_status=available` только после confirmed
+listing identity. Archive preflight повторно читает полный state и прекращает
+компенсацию при любом drift. Archive write фиксирует attempt до HTTP, не
+ретраится и считается succeeded только когда catalog read видит exact product в
+`ARCHIVED`. Per-account role probe остаётся rollout prerequisite.
 
 Definition of done: existing offers and full media lifecycle обновляются отдельным
 validated workflow, а каждая обещанная compensation подтверждена официальным
@@ -673,6 +673,9 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 9. `migrate_add_marketplace_operations.py` additive/idempotent создаёт journal,
    exact snapshots, idempotency constraint и partial unique active-draft index;
    Docker запускает его fail-fast после draft/listing prerequisites.
+10. `migrate_add_marketplace_product_updates.py` после P6 commercial migration
+    расширяет operation/snapshot CHECK contracts для full update/rollback,
+    сохраняя existing operations, snapshots и proposal foreign keys.
 
 ## 10. Security и safety invariants
 
@@ -779,9 +782,9 @@ Initial targets:
 6. Official reference data is SQL truth, not RAG.
 7. Old Ozon category and finance endpoints are not used as fallbacks.
 8. WB compatibility is preserved through a strangler/dual-read migration.
-9. P5a publication is create-only; existing Ozon offer requires a separate update operation.
+9. Create publication is create-only; existing Ozon offer uses a separate full-state update operation.
 10. A write attempt is committed before adapter call and an ambiguous result is never auto-retried.
-11. Automatic create rollback is unavailable until the exact official archive contract is verified; beta visibility is not treated as archive.
+11. Create rollback uses exact `/v1/product/archive` with full-state drift gate; beta visibility is not treated as archive.
 12. Account credentials/identity cannot change while an operation is active or needs reconciliation.
 
 ## 15. Questions resolved by implementation probes, not guesses
@@ -795,6 +798,6 @@ The following values can change by seller plan/account and are deliberately disc
 - large dictionary pagination behavior;
 - finance feed retention and page boundaries;
 - content-change push subscription support.
-- exact archive/restore contract and archive-vs-visibility semantics before P5b compensation.
+- archive/unarchive role availability for each staged seller account.
 
 Any probe result is cached with timestamp and account scope. A missing capability produces an actionable status in UI; it never silently changes business semantics.
