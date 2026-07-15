@@ -1195,9 +1195,13 @@ def main():
             )
             migrate_ozon_references(db_path)
             from migrate_add_marketplace_listings import (
+                STARTUP_BACKFILL_LIMIT,
                 migrate as migrate_marketplace_listings,
             )
-            migrate_marketplace_listings(db_path)
+            migrate_marketplace_listings(
+                db_path,
+                backfill_limit=STARTUP_BACKFILL_LIMIT,
+            )
             from migrate_add_marketplace_product_links import (
                 migrate as migrate_marketplace_product_links,
             )
@@ -1206,6 +1210,10 @@ def main():
                 migrate as migrate_marketplace_canonical_content,
             )
             migrate_marketplace_canonical_content(db_path)
+            from migrate_add_marketplace_rollout import (
+                migrate as migrate_marketplace_rollout,
+            )
+            migrate_marketplace_rollout(db_path)
             from migrate_add_marketplace_drafts import (
                 migrate as migrate_marketplace_drafts,
             )

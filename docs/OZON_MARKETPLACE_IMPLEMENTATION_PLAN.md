@@ -851,11 +851,38 @@ Definition of done: AI cannot cross accounts or invoke an unsupported/bypassed w
 
 ### P11 — hardening and migration parity
 
-- Backfill all WB Product rows to MarketplaceListing.
-- Dual-read comparison metrics, then common read path.
-- Load tests for 200-product batches and large dictionaries.
-- Contract fixtures for rate limit, quota, auth expiry, partial async result and provider drift.
-- Disaster recovery/runbook, feature flags and operational dashboards.
+- [x] Backfill all WB Product rows to MarketplaceListing.
+- [x] Dual-read comparison metrics, then guarded common read path.
+- [x] Load tests for 200-product batches and large dictionaries.
+- [x] Contract fixtures for rate limit, quota, auth expiry, partial async result and provider drift.
+- [x] Disaster recovery/runbook, feature flags and operational dashboards.
+
+Реализовано в `feature/ozon-marketplace`: startup migration переносит не больше
+200 отсутствующих WB rows, после чего `MarketplaceProjectionRun` продолжает
+seller-scoped keyset sweep короткими DB-leased batches. Backfill атомарно
+фиксирует projection и cursor, а crash повторяет только незакоммиченный batch.
+Scheduler обрабатывает до трёх sellers в минуту по oldest activity; CLI и UI
+используют тот же service и не могут запросить больше 200 rows.
+
+Отдельный `wb_parity` run хранит covering watermark, matched/missing/mismatched
+counters, field histogram и bounded sample только из IDs/имён полей. Последнее
+изменение `Product`, новый/изменившийся direct canonical link, отсутствующая
+projection или любой field drift закрывают cutover. Флаг
+`MARKETPLACE_WB_COMMON_READ_ENABLED=1` является только запросом: `/products`
+использует общую listing membership лишь при exact completed parity, иначе без
+ошибки остаётся на legacy query. Даже после зелёной проверки SQL-level guard
+повторно обнаруживает отсутствующую projection в момент выполнения списка и
+возвращает полную legacy membership, поэтому concurrent insert/delete не может
+скрыть карточку.
+
+Dashboard `/marketplaces/readiness/` объединяет effective flags, WB migration
+state и secret-free Ozon account/reference/listing/draft/operation/sync health.
+Recovery CLI — `scripts/manage_marketplace_rollout.py`, полный staged rollout,
+provider failure и disaster recovery порядок — `docs/OZON_PRODUCTION_RUNBOOK.md`.
+Stable fixtures покрывают 429/Retry-After, 401 expiry, exhausted quota, partial
+async exact-set и third-state provider drift. Load tests проходят 205 WB rows
+двумя batches и официальный dictionary snapshot из 10 001 values тремя cursor
+pages без partial cache exposure. Unit/contract tests не вызывают provider.
 
 Definition of done: WB behavior is parity-tested and Ozon is production-ready for staged sellers.
 
@@ -875,7 +902,10 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 2. `db.create_all()` поддерживает новые инсталляции; отдельный script обновляет существующие SQLite DB.
 3. Migration создаёт Ozon marketplace definition без credentials.
 4. Legacy WB token не копируется в логи/JSON. Runtime compatibility service может создать WB account из raw encrypted column без decrypt/re-encrypt migration.
-5. Текущий WB listing compatibility backfill идемпотентен, но всё ещё выполняется startup migration; до large-catalog rollout P11 обязан вынести его в bounded resumable job. Документация не считает текущую startup transaction финальным operational design.
+5. WB listing compatibility migration идемпотентно переносит максимум 200
+   отсутствующих rows. Полный backfill/repair вынесен в DB-leased bounded
+   `MarketplaceProjectionRun` с seller scope, stable target и keyset cursor;
+   startup transaction больше не зависит от размера каталога.
 6. Unique indexes создаются после duplicate audit; conflicts сохраняются в migration report и не удаляются автоматически.
 7. Новые ORM-required columns подключаются fail-fast в Docker entrypoint.
 8. Rollback deploy не удаляет новые tables/columns; старый runtime продолжает игнорировать их.
@@ -917,6 +947,10 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
     reviewed reverse proposals и partial unique pending scope после canonical
     product-link prerequisites. Он не backfill-ит и не меняет карточки, а
     fail-fast запускается в Docker, comprehensive runner и direct SQLite path.
+18. `migrate_add_marketplace_rollout.py` additive/idempotent создаёт только
+    durable WB projection/parity run journal и partial unique active scope. Он
+    не сканирует `products`, fail-fast подключён после listing/link migration во
+    всех startup paths, а rollback deploy оставляет таблицу нетронутой.
 
 ## 10. Security и safety invariants
 

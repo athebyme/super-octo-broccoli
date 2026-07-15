@@ -457,6 +457,67 @@ class OzonReferenceServiceTest(unittest.TestCase):
         self.assertEqual(values[0].value, "Бренд А")
         self.assertIsNotNone(attribute.values_sync_checkpoint)
 
+    def test_large_dictionary_uses_three_bounded_cursor_pages(self):
+        product_type = self._create_type_with_schema()
+        schema_adapter = SyntheticOzonAdapter(attributes={
+            "result": [_attribute(31, "Большой словарь", dictionary_id=900)]
+        })
+        self.assertTrue(OzonReferenceService.sync_attributes(
+            product_type.id,
+            adapter=schema_adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+        )["success"])
+        attribute = MarketplaceAttributeDefinition.query.filter_by(
+            product_type_id=product_type.id,
+            external_attribute_id="31",
+        ).one()
+        pages = [
+            {
+                "result": [
+                    {"id": value_id, "value": f"Значение {value_id}"}
+                    for value_id in range(start, stop)
+                ],
+                "has_next": has_next,
+            }
+            for start, stop, has_next in (
+                (1, 5001, True),
+                (5001, 10001, True),
+                (10001, 10002, False),
+            )
+        ]
+        adapter = SyntheticOzonAdapter(value_pages=pages)
+
+        result = OzonReferenceService.sync_attribute_values(
+            attribute.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            now=datetime(2026, 7, 16, 12, 0, 0),
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["total"], 10_001)
+        self.assertEqual(
+            [payload["last_value_id"] for payload in adapter.value_payloads],
+            [0, 5000, 10000],
+        )
+        self.assertTrue(all(
+            payload["limit"] == OzonReferenceService.VALUES_PAGE_SIZE
+            for payload in adapter.value_payloads
+        ))
+        self.assertEqual(
+            MarketplaceAttributeValue.query.filter_by(
+                attribute_id=attribute.id,
+            ).count(),
+            10_001,
+        )
+        last = MarketplaceAttributeValue.query.filter_by(
+            attribute_id=attribute.id,
+            external_value_id="10001",
+        ).one()
+        self.assertEqual(last.value_normalized, "значение 10001")
+        db.session.refresh(attribute)
+        self.assertIsNone(attribute.values_sync_checkpoint)
+
     def test_attribute_configuration_is_strict_and_restriction_is_official_subset(self):
         product_type = self._create_type_with_schema()
         schema_adapter = SyntheticOzonAdapter(attributes={

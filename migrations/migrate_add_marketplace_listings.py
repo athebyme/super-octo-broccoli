@@ -2,21 +2,22 @@
 # -*- coding: utf-8 -*-
 """Add the durable marketplace listing projection and catalog sync journal.
 
-The migration is additive and repeatable.  It also performs an idempotent WB
-compatibility backfill: every legacy ``products`` row gets exactly one
-``marketplace_listings`` row without changing or deleting the WB projection.
+The migration is additive and repeatable.  Its historical direct-call contract
+still performs the complete idempotent WB compatibility backfill.  P11 startup
+paths explicitly pass a 200-row limit so deploy latency is never proportional
+to catalog size; the durable runtime worker resumes the remaining keyset.
 """
 
 import hashlib
 import json
 import os
 import sqlite3
-import sys
 from typing import Any, Dict, Iterable, Optional
 
 
 MAX_JSON_BYTES = 262_144
 MAX_DESCRIPTION_CHARS = 100_000
+STARTUP_BACKFILL_LIMIT = 200
 
 
 def _tables(connection: sqlite3.Connection) -> set:
@@ -280,7 +281,11 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
         )
 
 
-def _select_products(connection: sqlite3.Connection) -> Iterable[sqlite3.Row]:
+def _select_products(
+    connection: sqlite3.Connection,
+    *,
+    limit: Optional[int],
+) -> Iterable[sqlite3.Row]:
     product_columns = _columns(connection, "products")
     optional = (
         "imt_id", "vendor_code", "title", "description", "subject_id",
@@ -292,12 +297,33 @@ def _select_products(connection: sqlite3.Connection) -> Iterable[sqlite3.Row]:
         name for name in optional if name in product_columns
     ]
     connection.row_factory = sqlite3.Row
+    if limit is None:
+        # Preserve the deployed migration's original direct-call contract.
+        return connection.execute(
+            "SELECT " + ", ".join(select_columns) + " FROM products ORDER BY id"
+        ).fetchall()
     return connection.execute(
-        "SELECT " + ", ".join(select_columns) + " FROM products ORDER BY id"
+        "SELECT "
+        + ", ".join(f"p.{name} AS {name}" for name in select_columns)
+        + " FROM products AS p "
+        "LEFT JOIN marketplace_listings AS ml "
+        "ON ml.legacy_product_id = p.id "
+        "WHERE ml.id IS NULL ORDER BY p.id LIMIT ?",
+        (limit,),
     ).fetchall()
 
 
-def _backfill_wb(connection: sqlite3.Connection) -> int:
+def _backfill_wb(
+    connection: sqlite3.Connection,
+    *,
+    limit: Optional[int],
+) -> int:
+    if limit is not None and (
+        not isinstance(limit, int) or isinstance(limit, bool) or limit < 0
+    ):
+        raise ValueError("backfill limit must be a non-negative integer")
+    if limit == 0:
+        return 0
     marketplace = connection.execute(
         "SELECT id FROM marketplaces WHERE code = 'wb' LIMIT 1"
     ).fetchone()
@@ -305,20 +331,33 @@ def _backfill_wb(connection: sqlite3.Connection) -> int:
         raise RuntimeError("WB marketplace definition is missing")
     wb_marketplace_id = int(marketplace[0])
 
+    product_rows = list(_select_products(connection, limit=limit))
+    product_ids = [int(row["id"]) for row in product_rows]
+
     imported_by_product: Dict[int, int] = {}
-    if "product_id" in _columns(connection, "imported_products"):
-        imported_by_product = {
-            int(row[0]): int(row[1])
-            for row in connection.execute('''
+    if product_ids and "product_id" in _columns(connection, "imported_products"):
+        if limit is None:
+            imported_rows = connection.execute('''
                 SELECT product_id, MAX(id)
                 FROM imported_products
                 WHERE product_id IS NOT NULL
                 GROUP BY product_id
             ''').fetchall()
+        else:
+            placeholders = ",".join("?" for _ in product_ids)
+            imported_rows = connection.execute(f'''
+                SELECT product_id, MAX(id)
+                FROM imported_products
+                WHERE product_id IN ({placeholders})
+                GROUP BY product_id
+            ''', product_ids).fetchall()
+        imported_by_product = {
+            int(row[0]): int(row[1])
+            for row in imported_rows
         }
 
     inserted = 0
-    for row in _select_products(connection):
+    for row in product_rows:
         data = dict(row)
         product_id = int(data["id"])
         if connection.execute(
@@ -447,6 +486,7 @@ def apply_migration(
     connection: sqlite3.Connection,
     *,
     verbose: bool = True,
+    backfill_limit: Optional[int] = None,
 ) -> int:
     before = {
         row[0]
@@ -455,7 +495,7 @@ def apply_migration(
         ).fetchall()
     }
     _ensure_schema(connection)
-    inserted = _backfill_wb(connection)
+    inserted = _backfill_wb(connection, limit=backfill_limit)
     after = {
         row[0]
         for row in connection.execute(
@@ -463,17 +503,28 @@ def apply_migration(
         ).fetchall()
     }
     if verbose:
-        print(
-            "Marketplace listing migration completed successfully "
-            f"(WB backfill inserted {inserted})"
-        )
+        if backfill_limit is None:
+            print(
+                "Marketplace listing migration completed successfully "
+                f"(WB backfill inserted {inserted})"
+            )
+        else:
+            print(
+                "Marketplace listing migration completed successfully "
+                f"(bounded WB backfill inserted {inserted}, "
+                f"limit {backfill_limit})"
+            )
     return len(after - before) + inserted
 
 
-def migrate(db_path: str) -> None:
+def migrate(
+    db_path: str,
+    *,
+    backfill_limit: Optional[int] = None,
+) -> None:
     connection = sqlite3.connect(db_path)
     try:
-        apply_migration(connection)
+        apply_migration(connection, backfill_limit=backfill_limit)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -483,9 +534,14 @@ def migrate(db_path: str) -> None:
 
 
 if __name__ == "__main__":
-    database = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else os.environ.get("DATABASE_PATH", "data/seller_platform.db")
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "database",
+        nargs="?",
+        default=os.environ.get("DATABASE_PATH", "data/seller_platform.db"),
     )
-    migrate(database)
+    parser.add_argument("--backfill-limit", type=int)
+    arguments = parser.parse_args()
+    migrate(arguments.database, backfill_limit=arguments.backfill_limit)

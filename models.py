@@ -5004,6 +5004,157 @@ class MarketplaceListingLinkEvent(db.Model):
         }
 
 
+class MarketplaceProjectionRun(db.Model):
+    """Bounded WB projection/backfill or dual-read parity sweep.
+
+    A run owns a stable ``target_product_id`` watermark and advances by the
+    legacy ``Product.id`` keyset.  ``lease_owner`` is deliberately omitted from
+    public serialization; it only provides a short database-backed execution
+    claim so two web/worker processes cannot process the same batch.
+    """
+    __tablename__ = 'marketplace_projection_runs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    run_kind = db.Column(db.String(30), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    cursor_product_id = db.Column(db.Integer, nullable=False, default=0)
+    target_product_id = db.Column(db.Integer, nullable=False, default=0)
+
+    scanned_count = db.Column(db.Integer, nullable=False, default=0)
+    inserted_count = db.Column(db.Integer, nullable=False, default=0)
+    updated_count = db.Column(db.Integer, nullable=False, default=0)
+    unchanged_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_count = db.Column(db.Integer, nullable=False, default=0)
+    missing_count = db.Column(db.Integer, nullable=False, default=0)
+    mismatched_count = db.Column(db.Integer, nullable=False, default=0)
+    mismatch_fields_json = db.Column(db.Text, nullable=False, default='{}')
+    mismatch_sample_json = db.Column(db.Text, nullable=False, default='[]')
+
+    lease_owner = db.Column(db.String(64))
+    lease_expires_at = db.Column(db.DateTime)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    heartbeat_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "run_kind IN ('wb_backfill','wb_parity')",
+            name='ck_marketplace_projection_run_kind',
+        ),
+        db.CheckConstraint(
+            "status IN ('pending','running','paused','completed','failed')",
+            name='ck_marketplace_projection_run_status',
+        ),
+        db.CheckConstraint(
+            'cursor_product_id >= 0 AND target_product_id >= 0',
+            name='ck_marketplace_projection_run_cursor',
+        ),
+        db.CheckConstraint(
+            'scanned_count >= 0 AND inserted_count >= 0 '
+            'AND updated_count >= 0 AND unchanged_count >= 0 '
+            'AND matched_count >= 0 AND missing_count >= 0 '
+            'AND mismatched_count >= 0',
+            name='ck_marketplace_projection_run_counts',
+        ),
+        db.Index(
+            'idx_marketplace_projection_run_scope',
+            'seller_id',
+            'marketplace_id',
+            'run_kind',
+            'created_at',
+        ),
+        db.Index(
+            'idx_marketplace_projection_run_status',
+            'status',
+            'heartbeat_at',
+        ),
+        db.Index(
+            'uq_marketplace_projection_run_active',
+            'seller_id',
+            'marketplace_id',
+            'run_kind',
+            unique=True,
+            sqlite_where=db.text(
+                "status IN ('pending','running','paused')"
+            ),
+        ),
+    )
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    def to_public_dict(self) -> dict:
+        parity_ratio = None
+        if self.run_kind == 'wb_parity' and self.scanned_count:
+            parity_ratio = round(self.matched_count / self.scanned_count, 6)
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'run_kind': self.run_kind,
+            'status': self.status,
+            'cursor_product_id': self.cursor_product_id,
+            'target_product_id': self.target_product_id,
+            'scanned_count': self.scanned_count,
+            'inserted_count': self.inserted_count,
+            'updated_count': self.updated_count,
+            'unchanged_count': self.unchanged_count,
+            'matched_count': self.matched_count,
+            'missing_count': self.missing_count,
+            'mismatched_count': self.mismatched_count,
+            'parity_ratio': parity_ratio,
+            'mismatch_fields': self._json_value(
+                self.mismatch_fields_json,
+                {},
+            ),
+            'mismatch_sample': self._json_value(
+                self.mismatch_sample_json,
+                [],
+            ),
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'heartbeat_at': (
+                self.heartbeat_at.isoformat() if self.heartbeat_at else None
+            ),
+            'completed_at': (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class MarketplaceCanonicalContentProposal(db.Model):
     """Reviewed Ozon observation -> canonical common-content mutation.
 

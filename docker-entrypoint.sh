@@ -135,9 +135,11 @@ python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace 
 python migrations/migrate_add_marketplace_accounts.py /app/data/seller_platform.db
 python migrations/migrate_add_ozon_references.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_reference_freshness.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_listings.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_listings.py \
+  /app/data/seller_platform.db --backfill-limit 200
 python migrations/migrate_add_marketplace_product_links.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_canonical_content.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_rollout.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_drafts.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_operations.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_commercial.py /app/data/seller_platform.db

@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}Готовность маркетплейсов — Seller Hub{% endblock %}
+
+{% macro status_badge(value) -%}
+  {% set good = value in ['completed', 'success', 'connected', 'succeeded', 'valid'] %}
+  {% set warn = value in ['running', 'pending', 'paused', 'unchecked', 'partial', 'uncertain'] %}
+  <span class="sh-badge sh-badge--sm {% if good %}sh-badge--green{% elif warn %}sh-badge--amber{% else %}sh-badge--red{% endif %}">{{ value or 'нет данных' }}</span>
+{%- endmacro %}
+
+{% block content %}
+{% set wb = readiness.wb_projection %}
+{% set ozon = readiness.ozon %}
+<div class="sh-page">
+  <div class="sh-page-header">
+    <div class="sh-page-header-content">
+      <div>
+        <h1 class="sh-page-title">Готовность маркетплейсов</h1>
+        <p class="sh-page-subtitle">Backfill, dual-read parity, Ozon health и безопасные rollout-флаги в одном месте</p>
+      </div>
+      <div class="sh-page-actions">
+        <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index') }}">Общий каталог</a>
+        <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_operations.index') }}">Операции</a>
+      </div>
+    </div>
+  </div>
+
+  {% if readiness.stage_ready %}
+  <div class="sh-alert sh-alert--success mb-5" role="status">
+    <div><strong>Staged rollout готов</strong><div class="text-xs mt-1">WB projection совпадает, Ozon account/reference health зелёный, uncertain writes отсутствуют.</div></div>
+  </div>
+  {% else %}
+  <div class="sh-alert sh-alert--warning mb-5" role="status">
+    <div>
+      <strong>Rollout пока закрыт</strong>
+      <div class="text-xs mt-1">Это не ломает текущий WB: common read при необходимости автоматически использует legacy fallback.</div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if readiness.blockers %}
+  <section class="sh-card p-4 sm:p-5 mb-5" aria-labelledby="blockers-title">
+    <h2 id="blockers-title" class="text-base font-semibold mb-3" style="color:var(--text)">Что блокирует rollout</h2>
+    <div class="space-y-2">
+      {% for code in readiness.blockers %}
+      <div class="sh-alert sh-alert--danger py-2">
+        <div><strong>{{ blocker_labels.get(code, code) }}</strong><div class="text-xs mt-1"><code>{{ code }}</code></div></div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if readiness.warnings %}
+  <section class="sh-card p-4 sm:p-5 mb-5">
+    <h2 class="text-base font-semibold mb-3" style="color:var(--text)">Требует внимания, но не скрывается</h2>
+    <ul class="space-y-2 text-sm" style="color:var(--text-secondary)">
+      {% for code in readiness.warnings %}<li>• {{ warning_labels.get(code, code) }} <code class="text-xs">{{ code }}</code></li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <section class="sh-card p-4 sm:p-5 mb-5" aria-labelledby="flags-title">
+    <div class="flex items-start justify-between gap-3 mb-4">
+      <div><h2 id="flags-title" class="text-base font-semibold" style="color:var(--text)">Feature flags</h2><p class="text-xs mt-1" style="color:var(--text-muted)">Экран только показывает effective config; менять env здесь нельзя.</p></div>
+      <span class="sh-badge sh-badge--sm">{{ readiness.generated_at }}</span>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {% for name, enabled in readiness.flags.items() %}
+      <div class="rounded-lg border p-3" style="border-color:var(--border);background:var(--bg-subtle)">
+        <div class="text-xs break-all" style="color:var(--text-muted)">{{ name }}</div>
+        <div class="mt-2">{% if enabled %}<span class="sh-badge sh-badge--green sh-badge--sm">ON</span>{% else %}<span class="sh-badge sh-badge--sm">OFF</span>{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="sh-card p-4 sm:p-5 mb-5" aria-labelledby="wb-title">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-4">
+      <div>
+        <h2 id="wb-title" class="text-base font-semibold" style="color:var(--text)">WB → MarketplaceListing</h2>
+        <p class="text-xs mt-1" style="color:var(--text-muted)">Каждая кнопка обрабатывает максимум 200 локальных карточек и не вызывает WB/Ozon.</p>
+      </div>
+      {% if wb.cutover_ready %}<span class="sh-badge sh-badge--green">parity exact</span>{% else %}<span class="sh-badge sh-badge--amber">legacy fallback</span>{% endif %}
+    </div>
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><div class="text-xs" style="color:var(--text-muted)">Legacy Product</div><div class="text-xl font-semibold mt-1">{{ wb.legacy_product_count }}</div></div>
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><div class="text-xs" style="color:var(--text-muted)">Projection</div><div class="text-xl font-semibold mt-1">{{ wb.projection_count }}</div></div>
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><div class="text-xs" style="color:var(--text-muted)">Первый пропуск / link drift</div><div class="text-xl font-semibold mt-1">{{ wb.first_missing_product_id or wb.first_link_mismatch_product_id or '—' }}</div></div>
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><div class="text-xs" style="color:var(--text-muted)">Watermark</div><div class="text-xl font-semibold mt-1">{{ wb.product_id_watermark }}</div></div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {% for label, run in [('Backfill', wb.latest_backfill), ('Dual-read parity', wb.latest_parity)] %}
+      <div class="rounded-lg border p-4" style="border-color:var(--border);background:var(--bg-subtle)">
+        <div class="flex items-center justify-between gap-2"><strong>{{ label }}</strong>{{ status_badge(run.status if run else none) }}</div>
+        {% if run %}
+        <dl class="grid grid-cols-2 gap-2 mt-3 text-xs">
+          <div><dt style="color:var(--text-muted)">Cursor / target</dt><dd>{{ run.cursor_product_id }} / {{ run.target_product_id }}</dd></div>
+          <div><dt style="color:var(--text-muted)">Scanned</dt><dd>{{ run.scanned_count }}</dd></div>
+          <div><dt style="color:var(--text-muted)">Inserted / updated</dt><dd>{{ run.inserted_count }} / {{ run.updated_count }}</dd></div>
+          <div><dt style="color:var(--text-muted)">Missing / mismatch</dt><dd>{{ run.missing_count }} / {{ run.mismatched_count }}</dd></div>
+        </dl>
+        {% if run.error_code %}<div class="sh-alert sh-alert--danger mt-3 text-xs"><code>{{ run.error_code }}</code> · {{ run.error_message }}</div>{% endif %}
+        {% if run.mismatch_sample %}<details class="mt-3 text-xs"><summary class="cursor-pointer">Безопасный sample расхождений</summary><pre class="mt-2 overflow-auto">{{ run.mismatch_sample | tojson(indent=2) }}</pre></details>{% endif %}
+        {% if run.status in ['pending', 'running'] %}
+        <form class="mt-3" method="post" action="{{ url_for('marketplace_readiness.control_run', run_id=run.id, action='pause') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">Пауза между batches</button>
+        </form>
+        {% elif run.status in ['paused', 'failed'] and readiness.flags.wb_projection and (run.run_kind != 'wb_parity' or readiness.flags.wb_dual_read) %}
+        <form class="mt-3" method="post" action="{{ url_for('marketplace_readiness.control_run', run_id=run.id, action='resume') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">Продолжить с cursor</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="flex flex-wrap gap-2 mt-4">
+      {% if readiness.flags.wb_projection %}
+      <form method="post" action="{{ url_for('marketplace_readiness.backfill') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">Продолжить backfill ≤200</button></form>
+      {% if readiness.flags.wb_dual_read %}
+      <form method="post" action="{{ url_for('marketplace_readiness.parity') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">Продолжить parity ≤200</button></form>
+      {% endif %}
+      <form method="post" action="{{ url_for('marketplace_readiness.backfill') }}" onsubmit="return confirm('Начать полный локальный repair sweep с Product.id=0? За этот запрос всё равно обработается не больше 200 карточек.')"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="force_full" value="1"><button class="sh-btn sh-btn--danger sh-btn--sm" type="submit">Начать repair sweep</button></form>
+      {% else %}
+      <span class="text-xs" style="color:var(--text-muted)">Локальные действия скрыты, пока WB projection выключена.</span>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="sh-card p-4 sm:p-5 mb-5" aria-labelledby="ozon-title">
+    <div class="flex items-center justify-between gap-3 mb-4"><div><h2 id="ozon-title" class="text-base font-semibold" style="color:var(--text)">Ozon operational health</h2><p class="text-xs mt-1" style="color:var(--text-muted)">Только агрегаты и безопасные коды; credentials и provider payload здесь не читаются.</p></div>{% if readiness.publication_ready %}<span class="sh-badge sh-badge--green">publication ready</span>{% else %}<span class="sh-badge sh-badge--amber">write gate closed</span>{% endif %}</div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><div class="text-xs" style="color:var(--text-muted)">Accounts connected / total</div><div class="text-xl font-semibold mt-1">{{ ozon.accounts.connected }} / {{ ozon.accounts.total }}</div><div class="text-xs mt-1">expired: {{ ozon.accounts.expired }}</div></div>
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><div class="text-xs" style="color:var(--text-muted)">Listings available / total</div><div class="text-xl font-semibold mt-1">{{ ozon.listings.available }} / {{ ozon.listings.total }}</div><div class="text-xs mt-1">linked: {{ ozon.listings.linked }}</div></div>
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><div class="text-xs" style="color:var(--text-muted)">Operations active</div><div class="text-xl font-semibold mt-1">{{ ozon.operations.active }}</div><div class="text-xs mt-1">uncertain: {{ ozon.operations.uncertain }} · failed: {{ ozon.operations.failed }}</div></div>
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><div class="text-xs" style="color:var(--text-muted)">Reference snapshot</div><div class="mt-2">{% if ozon.reference.fresh %}<span class="sh-badge sh-badge--green sh-badge--sm">fresh</span>{% else %}<span class="sh-badge sh-badge--red sh-badge--sm">stale / invalid</span>{% endif %}</div><div class="text-xs mt-2">{{ ozon.reference.categories_status or 'нет данных' }} · v{{ ozon.reference.categories_version }} · {{ ozon.reference.total_product_types }} типов</div></div>
+    </div>
+
+    {% if ozon.accounts['items'] %}
+    <div class="overflow-x-auto mb-5">
+      <table class="min-w-full text-sm">
+        <thead><tr class="text-left" style="color:var(--text-muted)"><th class="py-2 pr-4">Кабинет</th><th class="py-2 pr-4">Connection</th><th class="py-2 pr-4">Credential</th><th class="py-2">Последняя проверка</th></tr></thead>
+        <tbody>
+          {% for account in ozon.accounts['items'] %}
+          <tr class="border-t" style="border-color:var(--border)"><td class="py-3 pr-4"><a style="color:var(--accent)" href="{{ url_for('marketplace_accounts.index') }}">{{ account.label }}</a></td><td class="py-3 pr-4">{{ status_badge(account.connection_status) }}</td><td class="py-3 pr-4">{% if account.has_credentials %}<span class="sh-badge sh-badge--green sh-badge--sm">stored</span>{% else %}<span class="sh-badge sh-badge--red sh-badge--sm">missing</span>{% endif %}</td><td class="py-3">{{ account.connection_checked_at or 'не проверялся' }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><strong class="text-sm">Draft validation</strong><pre class="text-xs mt-2 overflow-auto">{{ ozon.drafts.validation | tojson(indent=2) }}</pre></div>
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><strong class="text-sm">Operation statuses</strong><pre class="text-xs mt-2 overflow-auto">{{ ozon.operations.statuses | tojson(indent=2) }}</pre></div>
+      <div class="rounded-lg border p-3" style="border-color:var(--border)"><strong class="text-sm">Commercial proposals</strong><pre class="text-xs mt-2 overflow-auto">{{ ozon.commercial_proposals.statuses | tojson(indent=2) }}</pre></div>
+      {% for name, sync in ozon.syncs.items() %}<div class="rounded-lg border p-3" style="border-color:var(--border)"><strong class="text-sm">{{ name }} sync</strong><pre class="text-xs mt-2 overflow-auto">{{ sync.statuses | tojson(indent=2) }}</pre></div>{% endfor %}
+    </div>
+  </section>
+
+  <p class="text-xs" style="color:var(--text-muted)">Recovery-команды и порядок отключения флагов описаны в <code>docs/OZON_PRODUCTION_RUNBOOK.md</code>.</p>
+</div>
+{% endblock %}

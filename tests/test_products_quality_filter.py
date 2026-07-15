@@ -19,6 +19,7 @@ class TestProductsQualityFilter(unittest.TestCase):
         cls.app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {}
         cls.app.config['WTF_CSRF_ENABLED'] = False
         cls.app.config['TESTING'] = True
+        cls.app.config['MARKETPLACE_WB_COMMON_READ_ENABLED'] = False
         # StaticPool ensures all sessions/connections (including request contexts)
         # share one in-memory DB. Don't keep app context alive between requests —
         # that would cause g._login_user to bleed across requests.
@@ -35,7 +36,7 @@ class TestProductsQualityFilter(unittest.TestCase):
 
     @classmethod
     def _seed(cls):
-        from models import User, Seller, Product
+        from models import Marketplace, User, Seller, Product
         user = User(username='seller1', email='seller1@example.com', password_hash='x')
         cls.db.session.add(user)
         cls.db.session.flush()
@@ -44,6 +45,13 @@ class TestProductsQualityFilter(unittest.TestCase):
         cls.db.session.add(seller)
         cls.db.session.flush()
         cls.user_id = user.id
+        cls.seller_id = seller.id
+        cls.db.session.add(Marketplace(
+            name='Wildberries',
+            code='wb',
+            adapter_code='wb',
+            is_active=True,
+        ))
         cls.db.session.add_all([
             # v2 "weak" definition: non-empty attention_reasons (see
             # services/card_quality_scorer.compute_attention). A high raw
@@ -67,6 +75,7 @@ class TestProductsQualityFilter(unittest.TestCase):
             # reasons (e.g. behavioral signal) — v1 would wrongly skip this.
             Product(seller_id=seller.id, nm_id=6, vendor_code='HIGH-SCORE-HAS-REASONS', is_active=True,
                     quality_score=95, nm_rating=9.5, attention_reasons='no_views'),
+            Product(seller_id=seller.id, nm_id=7, vendor_code='DISABLED-COMMON-READ', is_active=False),
         ])
         cls.db.session.commit()
 
@@ -105,6 +114,44 @@ class TestProductsQualityFilter(unittest.TestCase):
         self.assertIn('WEAK-QUALITY', html)
         self.assertIn('STRONG-1', html)
         self.assertIn('STRONG-EMPTY-REASONS', html)
+
+    def test_guarded_common_read_keeps_product_filters_working(self):
+        from datetime import datetime, timedelta
+        from services.marketplace_rollout import MarketplaceRolloutService
+
+        with self.app.app_context():
+            backfill_at = datetime.utcnow() + timedelta(seconds=1)
+            backfill = MarketplaceRolloutService.run_backfill_batch(
+                seller_id=self.seller_id,
+                now=backfill_at,
+            )
+            while backfill is not None and backfill.status == 'running':
+                backfill = MarketplaceRolloutService.run_backfill_batch(
+                    seller_id=self.seller_id,
+                    now=backfill_at,
+                )
+            parity_at = backfill_at + timedelta(seconds=1)
+            parity = MarketplaceRolloutService.run_parity_batch(
+                seller_id=self.seller_id,
+                now=parity_at,
+            )
+            while parity is not None and parity.status == 'running':
+                parity = MarketplaceRolloutService.run_parity_batch(
+                    seller_id=self.seller_id,
+                    now=parity_at,
+                )
+
+        self.app.config['MARKETPLACE_WB_COMMON_READ_ENABLED'] = True
+        try:
+            response = self._client().get('/products?active_only=1')
+        finally:
+            self.app.config['MARKETPLACE_WB_COMMON_READ_ENABLED'] = False
+
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('Общий read-path активен', html)
+        self.assertIn('STRONG-1', html)
+        self.assertNotIn('DISABLED-COMMON-READ', html)
 
 
 if __name__ == '__main__':

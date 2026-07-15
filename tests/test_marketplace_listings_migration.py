@@ -145,3 +145,64 @@ def test_wb_backfill_has_stable_offer_fallback_and_bounds_invalid_legacy_json():
     assert json.loads(row[2]) == {"photos": []}
     assert json.loads(row[3]) == []
     assert json.loads(row[4]) == {}
+
+
+def test_startup_backfill_is_bounded_and_resumes_by_missing_keyset():
+    connection = sqlite3.connect(":memory:")
+    try:
+        _legacy_schema(connection)
+        connection.execute("INSERT INTO sellers(id) VALUES (1)")
+        connection.executemany(
+            "INSERT INTO products(id, seller_id, nm_id, is_active) "
+            "VALUES (?, 1, ?, 1)",
+            [(index, 900_000 + index) for index in range(1, 206)],
+        )
+        first = apply_migration(
+            connection,
+            verbose=False,
+            backfill_limit=200,
+        )
+        first_count = connection.execute(
+            "SELECT COUNT(*) FROM marketplace_listings"
+        ).fetchone()[0]
+        second = apply_migration(
+            connection,
+            verbose=False,
+            backfill_limit=200,
+        )
+        second_count = connection.execute(
+            "SELECT COUNT(*) FROM marketplace_listings"
+        ).fetchone()[0]
+        third = apply_migration(
+            connection,
+            verbose=False,
+            backfill_limit=200,
+        )
+    finally:
+        connection.close()
+
+    assert first > 0
+    assert first_count == 200
+    assert second == 5
+    assert second_count == 205
+    assert third == 0
+
+
+def test_direct_migration_keeps_the_deployed_full_backfill_default():
+    connection = sqlite3.connect(":memory:")
+    try:
+        _legacy_schema(connection)
+        connection.execute("INSERT INTO sellers(id) VALUES (1)")
+        connection.executemany(
+            "INSERT INTO products(id, seller_id, nm_id, is_active) "
+            "VALUES (?, 1, ?, 1)",
+            [(index, 910_000 + index) for index in range(1, 206)],
+        )
+        apply_migration(connection, verbose=False)
+        count = connection.execute(
+            "SELECT COUNT(*) FROM marketplace_listings"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert count == 205

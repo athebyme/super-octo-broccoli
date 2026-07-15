@@ -106,6 +106,21 @@ app.config['MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED'] = (
     os.environ.get('MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED', '').strip().lower()
     in ('1', 'true', 'yes', 'on')
 )
+# WB projection maintenance is local/read-only and safe by default.  The
+# visible catalog cutover stays dark until an operator explicitly requests it;
+# runtime still falls back to Product if the latest parity sweep is not exact.
+app.config['MARKETPLACE_WB_PROJECTION_ENABLED'] = (
+    os.environ.get('MARKETPLACE_WB_PROJECTION_ENABLED', '1').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+app.config['MARKETPLACE_WB_DUAL_READ_ENABLED'] = (
+    os.environ.get('MARKETPLACE_WB_DUAL_READ_ENABLED', '1').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+app.config['MARKETPLACE_WB_COMMON_READ_ENABLED'] = (
+    os.environ.get('MARKETPLACE_WB_COMMON_READ_ENABLED', '0').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
 
 # Публичный URL сервера для внешнего доступа (WB media/save, превью)
 # Пример: http://176.123.45.230:5000  или  https://myshop.example.com
@@ -1307,13 +1322,44 @@ def products_list():
         sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
         sort_order = request.args.get('order', 'desc')  # 'asc' или 'desc'
 
-        # Построение запроса
-        query = Product.query.filter_by(seller_id=current_user.seller.id)
+        # Построение запроса.  P11 can use MarketplaceListing as the WB catalog
+        # membership source only after a completed exact parity sweep.  A
+        # requested-but-not-ready cutover falls back to the legacy query.
+        try:
+            from services.marketplace_rollout import MarketplaceRolloutService
+            base_catalog_query, marketplace_read_state = (
+                MarketplaceRolloutService.wb_product_query(
+                    seller_id=current_user.seller.id,
+                    common_read_requested=bool(app.config.get(
+                        'MARKETPLACE_WB_COMMON_READ_ENABLED',
+                        False,
+                    )),
+                )
+            )
+        except Exception as rollout_error:
+            app.logger.warning(
+                'WB common-read readiness unavailable for seller_id=%s: %s',
+                current_user.seller.id,
+                type(rollout_error).__name__,
+            )
+            base_catalog_query = Product.query.filter_by(
+                seller_id=current_user.seller.id,
+            )
+            marketplace_read_state = {
+                'read_mode': 'legacy_fallback',
+                'common_read_requested': bool(app.config.get(
+                    'MARKETPLACE_WB_COMMON_READ_ENABLED',
+                    False,
+                )),
+                'cutover_ready': False,
+                'blockers': ['rollout_readiness_unavailable'],
+            }
+        query = base_catalog_query
 
         if active_only:
-            query = query.filter_by(is_active=True)
+            query = query.filter(Product.is_active.is_(True))
         elif disabled_only:
-            query = query.filter_by(is_active=False)
+            query = query.filter(Product.is_active.is_(False))
 
         if search:
             # Поиск по артикулу, названию или бренду
@@ -1449,8 +1495,8 @@ def products_list():
         total_products = pagination.total  # Количество товаров после применения всех фильтров
 
         # Для активных товаров - всегда показываем общее количество активных (без фильтров)
-        active_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True).count()
-        disabled_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=False).count()
+        active_products = base_catalog_query.filter(Product.is_active.is_(True)).count()
+        disabled_products = base_catalog_query.filter(Product.is_active.is_(False)).count()
 
         # Уникальные бренды/категории/поставщики для фильтров: три DISTINCT-скана
         # по каталогу на каждый показ страницы — кешируем бандл на 120с
@@ -1559,6 +1605,7 @@ def products_list():
             suppliers_for_filter=suppliers_for_filter,
             product_supplier_map=product_supplier_map,
             filter_supplier=filter_supplier,
+            marketplace_read_state=marketplace_read_state,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
@@ -6283,6 +6330,9 @@ register_marketplace_account_routes(app)
 from routes.marketplace_listings import register_marketplace_listing_routes
 register_marketplace_listing_routes(app)
 
+from routes.marketplace_readiness import register_marketplace_readiness_routes
+register_marketplace_readiness_routes(app)
+
 from routes.marketplace_drafts import register_marketplace_draft_routes
 register_marketplace_draft_routes(app)
 
@@ -6421,6 +6471,10 @@ def _run_startup_migrations():
                 migrate as migrate_marketplace_canonical_content,
             )
             migrate_marketplace_canonical_content(sqlite_path)
+            from migrations.migrate_add_marketplace_rollout import (
+                migrate as migrate_marketplace_rollout,
+            )
+            migrate_marketplace_rollout(sqlite_path)
             from migrations.migrate_add_image_lab_marketplace_target import (
                 migrate as migrate_image_lab_marketplace_target,
             )

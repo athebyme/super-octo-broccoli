@@ -1,0 +1,77 @@
+{
+  "rate_limit": {
+    "status_code": 429,
+    "headers": {"Retry-After": "12", "X-Ozon-Request-Id": "fixture-rate-1"},
+    "body": {"code": "TOO_MANY_REQUESTS", "message": "slow down"}
+  },
+  "auth_expiry": {
+    "status_code": 401,
+    "headers": {"X-Ozon-Request-Id": "fixture-auth-1"},
+    "body": {"code": "UNAUTHENTICATED", "message": "expired synthetic-api-key for synthetic-client"}
+  },
+  "quota_exhausted": {
+    "operation_limits": [
+      {
+        "operation": "product_create",
+        "limit": 100,
+        "usage": 100,
+        "remaining": 0
+      }
+    ]
+  },
+  "partial_async_result": {
+    "expected_offer_ids": ["fixture-offer-1", "fixture-offer-2"],
+    "response": {
+      "result": {
+        "items": [
+          {
+            "offer_id": "fixture-offer-1",
+            "product_id": 101,
+            "status": "imported",
+            "errors": []
+          },
+          {
+            "offer_id": "fixture-offer-2",
+            "product_id": 0,
+            "status": "failed",
+            "errors": [
+              {"code": "ATTRIBUTE_INVALID", "message": "synthetic failure"}
+            ]
+          }
+        ],
+        "total": 2
+      }
+    }
+  },
+  "provider_drift": {
+    "baseline": {
+      "offer_id": "fixture-offer-1",
+      "product_id": "101",
+      "price": "1000",
+      "currency_code": "RUB",
+      "old_price": "1500"
+    },
+    "proposed": {
+      "offer_id": "fixture-offer-1",
+      "product_id": "101",
+      "price": "1100",
+      "currency_code": "RUB",
+      "old_price": "1500"
+    },
+    "read_response": {
+      "items": [
+        {
+          "offer_id": "fixture-offer-1",
+          "product_id": 101,
+          "price": {
+            "price": "1050",
+            "currency_code": "RUB",
+            "old_price": "1500"
+          }
+        }
+      ],
+      "total": 1,
+      "cursor": ""
+    }
+  }
+}

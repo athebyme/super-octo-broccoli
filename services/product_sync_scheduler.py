@@ -266,6 +266,28 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True,
     )
 
+    # P11 strangler maintenance never calls WB/Ozon.  Each seller advances by
+    # at most 200 Product rows and a short DB lease prevents duplicate batches
+    # if another worker/CLI overlaps the scheduler.
+    scheduler.add_job(
+        func=lambda: maintain_marketplace_projection(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='maintain_marketplace_projection',
+        name='Backfill WB listing projection and collect dual-read parity',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        func=lambda: maintain_marketplace_projection(flask_app),
+        trigger='date',
+        run_date=datetime.utcnow() + timedelta(seconds=15),
+        id='maintain_marketplace_projection_initial',
+        name='Initial bounded WB listing projection maintenance',
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Durable Ozon operations must keep reconciling after a rollout flag is
     # disabled. Only definitely-not-submitted queued rows require the separate
     # publication flag; submitting/uncertain rows are never abandoned.
@@ -1045,6 +1067,48 @@ def sync_marketplaces(flask_app):
             logger.info("✅ Global marketplace sync finished.")
         except Exception as e:
             logger.exception(f"❌ Error in sync_marketplaces: {e}")
+
+
+def maintain_marketplace_projection(flask_app, *, seller_limit=3, batch_size=200):
+    """Advance bounded local WB backfill/parity runs without provider calls."""
+    with flask_app.app_context():
+        if not flask_app.config.get('MARKETPLACE_WB_PROJECTION_ENABLED', True):
+            return {
+                'selected_sellers': 0,
+                'backfill_batches': 0,
+                'parity_batches': 0,
+                'busy': 0,
+                'failed': 0,
+            }
+        try:
+            from services.marketplace_rollout import MarketplaceRolloutService
+            result = MarketplaceRolloutService.maintenance_tick(
+                seller_limit=seller_limit,
+                batch_size=batch_size,
+                dual_read_enabled=bool(flask_app.config.get(
+                    'MARKETPLACE_WB_DUAL_READ_ENABLED',
+                    True,
+                )),
+            )
+        except Exception:
+            logger.exception('Marketplace projection maintenance failed')
+            return {
+                'selected_sellers': 0,
+                'backfill_batches': 0,
+                'parity_batches': 0,
+                'busy': 0,
+                'failed': 1,
+            }
+        if result['backfill_batches'] or result['parity_batches'] or result['failed']:
+            logger.info(
+                'Marketplace projection maintenance: sellers=%s backfill=%s parity=%s busy=%s failed=%s',
+                result['selected_sellers'],
+                result['backfill_batches'],
+                result['parity_batches'],
+                result['busy'],
+                result['failed'],
+            )
+        return result
 
 
 def sync_marketplace_characteristics(flask_app, limit: int = 50):
