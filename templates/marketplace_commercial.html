@@ -1,13 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Цены и остатки Ozon — Seller Hub{% endblock %}
 {% block content %}
+{% set status_labels = {
+    'pending_review': 'Ждёт решения', 'approved': 'Подтверждено',
+    'applying': 'Проверяем Ozon', 'uncertain': 'Нужна сверка',
+    'applied': 'Применено', 'failed': 'Отклонено Ozon',
+    'conflict': 'Данные изменились', 'rejected': 'Отклонено без write',
+    'cancelled': 'Отменено'
+} %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
     <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
             <h1 class="text-2xl font-semibold" style="color:var(--text)">Цены, остатки и склады Ozon</h1>
             <p class="mt-1 text-sm" style="color:var(--text-secondary)">Каждый write проходит proposal, повторный live preflight, durable snapshot и read-after-write сверку.</p>
         </div>
-        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.index') }}">Журнал операций</a>
+        <div class="flex flex-wrap gap-2"><a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Открыть каталог</a><a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.index') }}">Журнал операций</a></div>
     </div>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -22,12 +29,25 @@
     </div>
     {% endif %}
 
-    <form method="get" class="sh-card p-4 mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div class="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div class="sh-card p-4"><div class="text-xs" style="color:var(--accent)">Шаг 1</div><h2 class="mt-1 font-semibold" style="color:var(--text)">Выберите кабинет и синхронизируйте склады</h2><p class="mt-2 text-xs" style="color:var(--text-secondary)">Stock proposal всегда привязан к точному owned warehouse, а не к сумме по карточке.</p></div>
+        <div class="sh-card p-4"><div class="text-xs" style="color:var(--accent)">Шаг 2</div><h2 class="mt-1 font-semibold" style="color:var(--text)">Создайте proposal из карточки</h2><p class="mt-2 text-xs" style="color:var(--text-secondary)">Создание только читает live state и сохраняет сравнение; Ozon write ещё не выполняется.</p></div>
+        <div class="sh-card p-4"><div class="text-xs" style="color:var(--accent)">Шаг 3</div><h2 class="mt-1 font-semibold" style="color:var(--text)">Сверьте и подтвердите</h2><p class="mt-2 text-xs" style="color:var(--text-secondary)">Перед write live state проверяется снова. Можно подтвердить один proposal или exact-set batch до 100.</p></div>
+    </div>
+
+    <form method="get" class="sh-card p-4 mt-5 grid grid-cols-1 sm:grid-cols-4 gap-3">
         <label>
             <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет</span>
             <select name="account_id" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)">
                 <option value="">Все</option>
                 {% for account in accounts %}<option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>{% endfor %}
+            </select>
+        </label>
+        <label>
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Тип proposal</span>
+            <select name="proposal_kind" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for kind in ['price','stock'] %}<option value="{{ kind }}" {% if filters.proposal_kind == kind %}selected{% endif %}>{{ kind }}</option>{% endfor %}
             </select>
         </label>
         <label>
@@ -62,20 +82,27 @@
     {% endif %}
 
     <div class="mt-5 flex items-center justify-between"><p class="text-sm" style="color:var(--text-secondary)">Proposals: {{ pagination.total }}</p><p class="text-xs" style="color:var(--text-muted)">Страница {{ pagination.page }} / {{ pagination.pages or 1 }}</p></div>
-    {% if proposals %}<div class="mt-3 space-y-3">
+    {% set batch_mode = write_enabled and filters.account_id and filters.proposal_kind in ['price','stock'] and filters.status == 'pending_review' %}
+    {% if write_enabled and proposals and not batch_mode %}<p class="mt-3 text-xs" style="color:var(--text-muted)">Для безопасного batch выберите один кабинет, тип proposal и статус «pending_review». Одиночное решение доступно внутри каждого proposal.</p>{% endif %}
+    {% if proposals %}
+    {% if batch_mode %}<form method="post" action="{{ url_for('marketplace_commercial.batch_approve') }}" class="mt-3"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="mb-3 flex flex-col gap-3 rounded border p-3 sm:flex-row sm:items-end sm:justify-between" style="border-color:var(--border)"><div><p class="text-xs" style="color:var(--text-secondary)">Выберите до 100 proposals. Перед одним exact-set write весь набор повторно проверяется по live state.</p><label class="mt-2 flex items-start gap-2 text-xs" style="color:var(--text-secondary)"><input class="mt-0.5" type="checkbox" name="confirm_write" value="1" required><span>Я сверил выбранный набор и подтверждаю один batch write в Ozon.</span></label></div><button class="sh-btn sh-btn--primary" type="submit">Подтвердить выбранные одним batch</button></div>{% endif %}
+    <div class="space-y-3">
         {% for proposal in proposals %}
         {% set before = proposal._json_object(proposal.baseline_state_json) %}
         {% set proposed = proposal._json_object(proposal.proposed_state_json) %}
-        <a class="sh-card block p-4" href="{{ url_for('marketplace_commercial.detail', proposal_id=proposal.id) }}">
+        <article class="sh-card p-4 flex items-start gap-3">
+            {% if batch_mode %}<input class="mt-1" type="checkbox" name="proposal" value="{{ proposal.id }}:{{ proposal.version }}" aria-label="Выбрать proposal {{ proposal.id }}">{% endif %}
+        <a class="block min-w-0 flex-1" href="{{ url_for('marketplace_commercial.detail', proposal_id=proposal.id) }}">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div><div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)"><span style="color:var(--accent)">{{ proposal.proposal_kind }}</span><span>{{ proposal.source }}</span><span>#{{ proposal.id }}</span><span>{{ proposal.account.label if proposal.account else 'account removed' }}</span></div>
                     <p class="mt-2 text-sm break-all" style="color:var(--text)">{{ proposal.listing.offer_id if proposal.listing else 'listing removed' }}</p>
                     <p class="mt-1 text-xs" style="color:var(--text-secondary)">{% if proposal.proposal_kind == 'price' %}{{ before.get('price') }} → {{ proposed.get('price') }} {{ proposed.get('currency_code','') }}{% else %}stock {{ before.get('stock') }} → {{ proposed.get('stock') }} · {{ proposal.warehouse.name if proposal.warehouse else 'warehouse removed' }}{% endif %}</p>
                 </div>
-                <div class="sm:text-right"><div class="text-sm" style="color:var(--text)">{{ proposal.status }}</div><div class="mt-1 text-xs" style="color:var(--text-muted)">v{{ proposal.version }}</div></div>
+                <div class="sm:text-right"><div class="text-sm" style="color:var(--text)">{{ status_labels.get(proposal.status, proposal.status) }}</div><div class="mt-1 text-xs" style="color:var(--text-muted)">{{ proposal.status }} · v{{ proposal.version }}</div></div>
             </div>
         </a>
-        {% endfor %}
-    </div>{% else %}<div class="sh-card mt-3 p-10 text-center text-sm" style="color:var(--text-muted)">Commercial proposals пока нет.</div>{% endif %}
+        </article>{% endfor %}
+    </div>{% if batch_mode %}</form>{% endif %}
+    {% else %}<div class="sh-card mt-3 p-10 text-center text-sm" style="color:var(--text-muted)">Commercial proposals пока нет.</div>{% endif %}
 </div>
 {% endblock %}

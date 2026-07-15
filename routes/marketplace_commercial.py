@@ -140,6 +140,49 @@ def _boolean(value: Any, field_name: str, *, default: bool = False) -> bool:
     raise MarketplaceCommercialValidationError(f"{field_name} должен быть boolean")
 
 
+def _batch_approval_items() -> list:
+    if request.is_json:
+        data = _payload()
+        if set(data) != {"items", "confirm_write"}:
+            raise MarketplaceCommercialValidationError(
+                "Batch approve принимает items и confirm_write"
+            )
+        if not _boolean(data.get("confirm_write"), "confirm_write"):
+            raise MarketplaceCommercialValidationError(
+                "Batch approve требует явное подтверждение write"
+            )
+        return data["items"]
+    if set(request.form) - {"csrf_token", "proposal", "confirm_write"}:
+        raise MarketplaceCommercialValidationError(
+            "Batch approve form содержит неподдерживаемые поля"
+        )
+    if not _boolean(request.form.get("confirm_write"), "confirm_write"):
+        raise MarketplaceCommercialValidationError(
+            "Batch approve требует явное подтверждение write"
+        )
+    items = []
+    for index, raw in enumerate(request.form.getlist("proposal")):
+        if not isinstance(raw, str) or raw.count(":") != 1:
+            raise MarketplaceCommercialValidationError(
+                f"proposal[{index}] имеет неверный формат"
+            )
+        proposal_id, expected_version = raw.split(":", 1)
+        if not (
+            proposal_id.isascii()
+            and proposal_id.isdigit()
+            and expected_version.isascii()
+            and expected_version.isdigit()
+        ):
+            raise MarketplaceCommercialValidationError(
+                f"proposal[{index}] имеет неверный формат"
+            )
+        items.append({
+            "proposal_id": int(proposal_id),
+            "expected_version": int(expected_version),
+        })
+    return items
+
+
 def _feature_enabled() -> bool:
     return bool(current_app.config.get("MARKETPLACE_OZON_ENABLED", False))
 
@@ -231,12 +274,14 @@ def index():
             "account_id",
             required=False,
         )
+        proposal_kind = request.args.get("proposal_kind") or None
         status = request.args.get("status") or None
         page = _integer(request.args.get("page"), "page", default=1)
         per_page = _integer(request.args.get("per_page"), "per_page", default=50)
         pagination = MarketplaceCommercialService.list_proposals(
             seller_id=seller_id,
             account_id=account_id,
+            proposal_kind=proposal_kind,
             status=status,
             page=page,
             per_page=per_page,
@@ -273,7 +318,11 @@ def index():
         pagination=pagination,
         accounts=accounts,
         warehouses=warehouses,
-        filters={"account_id": account_id, "status": status},
+        filters={
+            "account_id": account_id,
+            "proposal_kind": proposal_kind,
+            "status": status,
+        },
         write_enabled=_write_enabled(),
     )
 
@@ -474,9 +523,13 @@ def approve(proposal_id: int):
     try:
         _require_write()
         data = _payload()
-        if set(data) - {"expected_version"}:
+        if set(data) - {"expected_version", "confirm_write"}:
             raise MarketplaceCommercialValidationError(
-                "Approve принимает только expected_version"
+                "Approve принимает expected_version и confirm_write"
+            )
+        if not _boolean(data.get("confirm_write"), "confirm_write"):
+            raise MarketplaceCommercialValidationError(
+                "Approve требует явное подтверждение write"
             )
         proposal = MarketplaceCommercialService.approve_proposal(
             seller_id=seller_id,
@@ -495,6 +548,36 @@ def approve(proposal_id: int):
     return redirect(url_for(
         "marketplace_commercial.detail",
         proposal_id=proposal.id,
+    ))
+
+
+@marketplace_commercial_bp.route("/batch-approve", methods=["POST"])
+@login_required
+def batch_approve():
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        _require_write()
+        proposals = MarketplaceCommercialService.approve_proposals(
+            seller_id=seller_id,
+            items=_batch_approval_items(),
+            reviewed_by_user_id=getattr(current_user, "id", None),
+        )
+    except Exception as exc:
+        return _write_failure(exc, seller_id=seller_id, action="batch_approve")
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "items": [_document(proposal) for proposal in proposals],
+        })
+    flash(
+        f"Batch подтверждён: {len(proposals)} proposals, один exact-set Ozon write",
+        "success",
+    )
+    return redirect(url_for(
+        "marketplace_commercial.index",
+        account_id=proposals[0].account_id,
     ))
 
 

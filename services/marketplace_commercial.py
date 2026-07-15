@@ -85,6 +85,7 @@ class MarketplaceCommercialService:
     MAX_JSON_BYTES = 65_536
     MAX_PRICE_READ_PAGES = 10
     MAX_PRICE_CHANGE_PCT = Decimal("50")
+    MAX_BATCH_APPROVAL = 100
     POLL_INTERVAL = timedelta(seconds=30)
     DEADLINE = timedelta(hours=24)
     ACTIVE_PROPOSAL_STATUSES = {
@@ -114,6 +115,44 @@ class MarketplaceCommercialService:
                 f"{field_name} должен быть положительным целым числом"
             )
         return value
+
+    @classmethod
+    def _approval_items(cls, value: Any) -> list:
+        if (
+            not isinstance(value, (list, tuple))
+            or not 1 <= len(value) <= cls.MAX_BATCH_APPROVAL
+        ):
+            raise MarketplaceCommercialValidationError(
+                f"Batch approval должен содержать 1..{cls.MAX_BATCH_APPROVAL} proposals"
+            )
+        normalized = []
+        seen = set()
+        for index, item in enumerate(value):
+            if not isinstance(item, Mapping) or set(item) != {
+                "proposal_id",
+                "expected_version",
+            }:
+                raise MarketplaceCommercialValidationError(
+                    f"items[{index}] должен содержать proposal_id и expected_version"
+                )
+            proposal_id = cls._positive_integer(
+                item.get("proposal_id"),
+                f"items[{index}].proposal_id",
+            )
+            expected_version = cls._positive_integer(
+                item.get("expected_version"),
+                f"items[{index}].expected_version",
+            )
+            if proposal_id in seen:
+                raise MarketplaceCommercialValidationError(
+                    "Batch approval содержит duplicate proposal_id"
+                )
+            seen.add(proposal_id)
+            normalized.append({
+                "proposal_id": proposal_id,
+                "expected_version": expected_version,
+            })
+        return normalized
 
     @classmethod
     def _json(cls, value: Any, expected_type: type) -> str:
@@ -333,9 +372,23 @@ class MarketplaceCommercialService:
         adapter,
         credentials: MarketplaceCredentials,
     ) -> dict:
+        return cls._read_price_states(
+            listings=[listing],
+            adapter=adapter,
+            credentials=credentials,
+        )[listing.id]
+
+    @classmethod
+    def _read_price_states(
+        cls,
+        *,
+        listings: list,
+        adapter,
+        credentials: MarketplaceCredentials,
+    ) -> dict:
         try:
-            return cls._read_price_state_unwrapped(
-                listing=listing,
+            return cls._read_price_states_unwrapped(
+                listings=listings,
                 adapter=adapter,
                 credentials=credentials,
             )
@@ -349,16 +402,35 @@ class MarketplaceCommercialService:
             ) from None
 
     @classmethod
-    def _read_price_state_unwrapped(
+    def _read_price_states_unwrapped(
         cls,
         *,
-        listing: MarketplaceListing,
+        listings: list,
         adapter,
         credentials: MarketplaceCredentials,
     ) -> dict:
+        if not 1 <= len(listings) <= cls.MAX_BATCH_APPROVAL:
+            raise MarketplaceCommercialValidationError(
+                "Price live read требует 1..100 listings"
+            )
+        expected = {}
+        product_ids = []
+        for listing in listings:
+            identity = (listing.offer_id, str(listing.external_product_id))
+            if identity in expected:
+                raise MarketplaceCommercialConflict(
+                    "Price live read содержит duplicate listing identity"
+                )
+            expected[identity] = listing.id
+            try:
+                product_ids.append(int(listing.external_product_id))
+            except (TypeError, ValueError):
+                raise MarketplaceCommercialConflict(
+                    "Listing содержит некорректный Ozon product_id"
+                ) from None
         cursor = ""
         seen_cursors = set()
-        items = []
+        items = {}
         expected_total = None
         for _page_number in range(cls.MAX_PRICE_READ_PAGES):
             page = OzonPriceContract.normalize_read_page(
@@ -366,7 +438,7 @@ class MarketplaceCommercialService:
                     credentials,
                     {
                         "filter": {
-                            "product_id": [int(listing.external_product_id)],
+                            "product_id": product_ids,
                             "visibility": "ALL",
                         },
                         "cursor": cursor,
@@ -380,7 +452,17 @@ class MarketplaceCommercialService:
                 raise MarketplaceCommercialConflict(
                     "Ozon изменил total во время price preflight"
                 )
-            items.extend(page["items"])
+            for item in page["items"]:
+                identity = (item["offer_id"], item["product_id"])
+                if identity not in expected:
+                    raise MarketplaceCommercialConflict(
+                        "Ozon price preflight вернул чужой товар"
+                    )
+                if identity in items:
+                    raise MarketplaceCommercialConflict(
+                        "Ozon price preflight повторил товар между страницами"
+                    )
+                items[identity] = item
             if not page["cursor"]:
                 break
             next_cursor = page["cursor"]
@@ -394,29 +476,30 @@ class MarketplaceCommercialService:
             raise MarketplaceCommercialConflict(
                 "Ozon price pagination превысила безопасный лимит"
             )
-        matching = [
-            item for item in items
-            if item["offer_id"] == listing.offer_id
-            and item["product_id"] == listing.external_product_id
-        ]
-        if expected_total != len(items) or len(matching) != 1 or len(items) != 1:
+        if (
+            expected_total != len(items)
+            or set(items) != set(expected)
+            or len(items) != len(listings)
+        ):
             raise MarketplaceCommercialConflict(
-                "Ozon price preflight не вернул ровно один ожидаемый товар"
+                "Ozon price preflight не вернул exact-set ожидаемых товаров"
             )
-        item = matching[0]
-        return {
-            "kind": "price",
-            "offer_id": item["offer_id"],
-            "product_id": item["product_id"],
-            "price": item["price"],
-            "old_price": item.get("old_price", "0"),
-            "min_price": item.get("min_price", "0"),
-            "currency_code": item["currency_code"],
-            "auto_action_enabled": item.get("auto_action_enabled"),
-            "auto_add_to_ozon_actions_list_enabled": item.get(
-                "auto_add_to_ozon_actions_list_enabled"
-            ),
-        }
+        result = {}
+        for identity, item in items.items():
+            result[expected[identity]] = {
+                "kind": "price",
+                "offer_id": item["offer_id"],
+                "product_id": item["product_id"],
+                "price": item["price"],
+                "old_price": item.get("old_price", "0"),
+                "min_price": item.get("min_price", "0"),
+                "currency_code": item["currency_code"],
+                "auto_action_enabled": item.get("auto_action_enabled"),
+                "auto_add_to_ozon_actions_list_enabled": item.get(
+                    "auto_add_to_ozon_actions_list_enabled"
+                ),
+            }
+        return result
 
     @classmethod
     def _read_stock_state(
@@ -427,28 +510,95 @@ class MarketplaceCommercialService:
         adapter,
         credentials: MarketplaceCredentials,
     ) -> dict:
-        try:
-            stocks = MarketplaceWarehouseService._fetch_listing_stocks(
-                listing=listing,
-                adapter=adapter,
-                credentials=credentials,
+        return cls._read_stock_targets(
+            targets=[(listing.id, listing, warehouse)],
+            adapter=adapter,
+            credentials=credentials,
+        )[listing.id]
+
+    @classmethod
+    def _read_stock_targets(
+        cls,
+        *,
+        targets: list,
+        adapter,
+        credentials: MarketplaceCredentials,
+    ) -> dict:
+        if not 1 <= len(targets) <= cls.MAX_BATCH_APPROVAL:
+            raise MarketplaceCommercialValidationError(
+                "Stock live read требует 1..100 targets"
             )
+        expected = {}
+        known_listings = set()
+        offers = []
+        seen_offers = set()
+        for key, listing, warehouse in targets:
+            listing_identity = (listing.offer_id, str(listing.external_product_id))
+            identity = (*listing_identity, str(warehouse.external_warehouse_id))
+            if identity in expected:
+                raise MarketplaceCommercialConflict(
+                    "Stock live read содержит duplicate listing/warehouse identity"
+                )
+            expected[identity] = key
+            known_listings.add(listing_identity)
+            if listing.offer_id not in seen_offers:
+                seen_offers.add(listing.offer_id)
+                offers.append(listing.offer_id)
+        cursor = ""
+        seen_cursors = set()
+        matched = {}
+        try:
+            for _page_number in range(MarketplaceWarehouseService.MAX_STOCK_PAGES):
+                page = OzonStockContract.normalize_fbs_page(
+                    adapter.read_stocks_by_warehouse_fbs(
+                        credentials,
+                        {"limit": 100, "cursor": cursor, "offer_id": offers},
+                    )
+                )
+                for item in page["products"]:
+                    listing_identity = (item["offer_id"], item["product_id"])
+                    if listing_identity not in known_listings:
+                        raise MarketplaceCommercialConflict(
+                            "Ozon stock preflight вернул чужой товар"
+                        )
+                    identity = (*listing_identity, item["warehouse_id"])
+                    if identity in expected:
+                        if identity in matched:
+                            raise MarketplaceCommercialConflict(
+                                "Ozon stock preflight повторил target между страницами"
+                            )
+                        matched[identity] = item
+                if not page["has_next"]:
+                    break
+                next_cursor = page["cursor"]
+                if next_cursor == cursor or next_cursor in seen_cursors:
+                    raise MarketplaceCommercialConflict(
+                        "Ozon stock pagination зациклилась"
+                    )
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            else:
+                raise MarketplaceCommercialConflict(
+                    "Ozon stock pagination превысила безопасный лимит"
+                )
         except (OzonAPIError, OzonCommercialContractError, MarketplaceWarehouseError):
             raise MarketplaceCommercialUpstreamError(
-                "Не удалось прочитать точный остаток Ozon по складу"
+                "Не удалось прочитать exact-set остатков Ozon по складам"
             ) from None
-        item = stocks.get(warehouse.external_warehouse_id)
-        if item is None:
+        if set(matched) != set(expected):
             raise MarketplaceCommercialConflict(
-                "На выбранном складе Ozon нет точной строки этого товара"
+                "Ozon stock preflight не вернул каждый выбранный listing/warehouse"
             )
         return {
-            "kind": "stock",
-            "offer_id": item["offer_id"],
-            "product_id": item["product_id"],
-            "warehouse_id": item["warehouse_id"],
-            "sku": item["sku"],
-            "stock": item["free_stock"],
+            expected[identity]: {
+                "kind": "stock",
+                "offer_id": item["offer_id"],
+                "product_id": item["product_id"],
+                "warehouse_id": item["warehouse_id"],
+                "sku": item["sku"],
+                "stock": item["free_stock"],
+            }
+            for identity, item in matched.items()
         }
 
     @classmethod
@@ -459,15 +609,39 @@ class MarketplaceCommercialService:
         adapter,
         credentials: MarketplaceCredentials,
     ) -> dict:
-        if proposal.proposal_kind == "price":
-            return cls._read_price_state(
-                listing=proposal.listing,
+        return cls._read_live_states(
+            proposals=[proposal],
+            adapter=adapter,
+            credentials=credentials,
+        )[proposal.id]
+
+    @classmethod
+    def _read_live_states(
+        cls,
+        *,
+        proposals: list,
+        adapter,
+        credentials: MarketplaceCredentials,
+    ) -> dict:
+        if not proposals or len({proposal.proposal_kind for proposal in proposals}) != 1:
+            raise MarketplaceCommercialValidationError(
+                "Live batch должен содержать один proposal kind"
+            )
+        if proposals[0].proposal_kind == "price":
+            by_listing = cls._read_price_states(
+                listings=[proposal.listing for proposal in proposals],
                 adapter=adapter,
                 credentials=credentials,
             )
-        return cls._read_stock_state(
-            listing=proposal.listing,
-            warehouse=proposal.warehouse,
+            return {
+                proposal.id: by_listing[proposal.listing_id]
+                for proposal in proposals
+            }
+        return cls._read_stock_targets(
+            targets=[
+                (proposal.id, proposal.listing, proposal.warehouse)
+                for proposal in proposals
+            ],
             adapter=adapter,
             credentials=credentials,
         )
@@ -903,27 +1077,100 @@ class MarketplaceCommercialService:
         return proposal
 
     @classmethod
+    def _set_baseline_drift(
+        cls,
+        *,
+        proposal: MarketplaceCommercialProposal,
+        reviewer_id: int,
+        now: datetime,
+    ) -> None:
+        proposal.status = "conflict"
+        proposal.reviewed_by_user_id = reviewer_id
+        proposal.reviewed_at = now
+        proposal.error_code = "commercial_baseline_drift"
+        proposal.error_message = (
+            "Live state изменился после создания proposal; write не отправлен"
+        )
+        if proposal.source == "rollback" and proposal.rollback_of_operation is not None:
+            original_snapshot = proposal.rollback_of_operation.snapshot
+            if original_snapshot is not None:
+                original_snapshot.rollback_status = "conflict"
+                original_snapshot.rollback_error_code = proposal.error_code
+                original_snapshot.rollback_error_message = proposal.error_message
+
+    @classmethod
     def _payload_for_proposal(cls, proposal: MarketplaceCommercialProposal) -> dict:
-        proposed = cls._load_object(proposal.proposed_state_json, "proposed_state")
-        if cls._fingerprint(proposed) != proposal.proposed_fingerprint:
-            raise MarketplaceCommercialConflict("Proposal fingerprint не совпадает")
-        if proposal.proposal_kind == "price":
+        return cls._payload_for_proposals([proposal])
+
+    @classmethod
+    def _payload_for_proposals(cls, proposals: list) -> dict:
+        if not proposals or len(proposals) > cls.MAX_BATCH_APPROVAL:
+            raise MarketplaceCommercialValidationError(
+                "Commercial payload batch имеет недопустимый размер"
+            )
+        kinds = {proposal.proposal_kind for proposal in proposals}
+        if len(kinds) != 1:
+            raise MarketplaceCommercialValidationError(
+                "Один Ozon batch не может смешивать price и stock"
+            )
+        proposed_states = []
+        for proposal in proposals:
+            proposed = cls._load_object(
+                proposal.proposed_state_json,
+                "proposed_state",
+            )
+            if cls._fingerprint(proposed) != proposal.proposed_fingerprint:
+                raise MarketplaceCommercialConflict(
+                    "Proposal fingerprint не совпадает"
+                )
+            proposed_states.append(proposed)
+        if proposals[0].proposal_kind == "price":
             return OzonPriceContract.build_payload([{
                 "offer_id": proposed.get("offer_id"),
                 "product_id": proposed.get("product_id"),
                 "price": proposed.get("price"),
                 "old_price": proposed.get("old_price", "0"),
                 "currency_code": proposed.get("currency_code"),
-            }])
+            } for proposed in proposed_states])
         return OzonStockContract.build_payload([{
             "offer_id": proposed.get("offer_id"),
             "product_id": proposed.get("product_id"),
             "warehouse_id": proposed.get("warehouse_id"),
             "stock": proposed.get("stock"),
-        }])
+        } for proposed in proposed_states])
 
     @classmethod
-    def _create_operation(
+    def _proposal_identity(
+        cls,
+        proposal: MarketplaceCommercialProposal,
+    ) -> tuple:
+        proposed = cls._load_object(
+            proposal.proposed_state_json,
+            "proposed_state",
+        )
+        if proposal.proposal_kind == "price":
+            return (
+                str(proposed.get("offer_id")),
+                str(proposed.get("product_id")),
+            )
+        return (
+            str(proposed.get("offer_id")),
+            str(proposed.get("product_id")),
+            str(proposed.get("warehouse_id")),
+        )
+
+    @staticmethod
+    def _result_identity(proposal_kind: str, item: Mapping[str, Any]) -> tuple:
+        if proposal_kind == "price":
+            return (str(item.get("offer_id")), str(item.get("product_id")))
+        return (
+            str(item.get("offer_id")),
+            str(item.get("product_id")),
+            str(item.get("warehouse_id")),
+        )
+
+    @classmethod
+    def _build_operation(
         cls,
         *,
         proposal: MarketplaceCommercialProposal,
@@ -981,7 +1228,7 @@ class MarketplaceCommercialService:
             before_state_json=proposal.baseline_state_json,
             submitted_state_json=proposal.proposed_state_json,
             rollback_state_json=proposal.baseline_state_json,
-            rollback_status="available",
+            rollback_status="not_requested",
         )
         db.session.add(snapshot)
         if proposal.source == "rollback" and proposal.rollback_of_operation is not None:
@@ -996,11 +1243,26 @@ class MarketplaceCommercialService:
         proposal.reviewed_by_user_id = reviewer_id
         proposal.reviewed_at = now
         proposal.operation_id = operation.id
+        return operation
+
+    @classmethod
+    def _create_operation(
+        cls,
+        *,
+        proposal: MarketplaceCommercialProposal,
+        reviewer_id: int,
+        now: datetime,
+    ) -> MarketplaceOperation:
+        operation = cls._build_operation(
+            proposal=proposal,
+            reviewer_id=reviewer_id,
+            now=now,
+        )
         db.session.commit()
         return operation
 
     @classmethod
-    def _mark_write_failed(
+    def _set_write_failed(
         cls,
         *,
         operation: MarketplaceOperation,
@@ -1020,12 +1282,34 @@ class MarketplaceCommercialService:
         proposal.status = "failed"
         proposal.error_code = operation.error_code
         proposal.error_message = operation.error_message
+        if operation.snapshot is not None:
+            operation.snapshot.rollback_status = "unavailable"
         if proposal.source == "rollback" and proposal.rollback_of_operation is not None:
             original_snapshot = proposal.rollback_of_operation.snapshot
             if original_snapshot is not None:
                 original_snapshot.rollback_status = "failed"
                 original_snapshot.rollback_error_code = operation.error_code
                 original_snapshot.rollback_error_message = operation.error_message
+
+    @classmethod
+    def _mark_write_failed(
+        cls,
+        *,
+        operation: MarketplaceOperation,
+        proposal: MarketplaceCommercialProposal,
+        code: str,
+        message: str,
+        now: datetime,
+        request_id: Optional[str] = None,
+    ) -> None:
+        cls._set_write_failed(
+            operation=operation,
+            proposal=proposal,
+            code=code,
+            message=message,
+            now=now,
+            request_id=request_id,
+        )
         db.session.commit()
 
     @classmethod
@@ -1113,6 +1397,129 @@ class MarketplaceCommercialService:
         db.session.commit()
 
     @classmethod
+    def _submit_batch_locked(
+        cls,
+        *,
+        operations: list,
+        proposals: list,
+        adapter,
+        credentials: MarketplaceCredentials,
+        now: datetime,
+    ) -> None:
+        if (
+            not operations
+            or len(operations) != len(proposals)
+            or len(operations) > cls.MAX_BATCH_APPROVAL
+        ):
+            raise MarketplaceCommercialValidationError(
+                "Commercial batch operation set некорректен"
+            )
+        account_ids = {proposal.account_id for proposal in proposals}
+        kinds = {proposal.proposal_kind for proposal in proposals}
+        if len(account_ids) != 1 or len(kinds) != 1:
+            raise MarketplaceCommercialValidationError(
+                "Один Ozon write batch требует один account и один proposal kind"
+            )
+        for operation, proposal in zip(operations, proposals):
+            if (
+                operation.attempt_count != 0
+                or operation.status != "queued"
+                or proposal.operation_id != operation.id
+                or proposal.status != "approved"
+            ):
+                raise MarketplaceCommercialConflict(
+                    "Один из commercial writes уже мог быть отправлен; batch запрещён"
+                )
+        payload = cls._payload_for_proposals(proposals)
+        for operation, proposal in zip(operations, proposals):
+            operation.status = "submitting"
+            operation.attempt_count = 1
+            operation.submitted_at = now
+            operation.next_poll_at = now
+            proposal.status = "applying"
+        db.session.commit()
+
+        proposal_kind = proposals[0].proposal_kind
+        try:
+            response = (
+                adapter.update_prices(credentials, payload)
+                if proposal_kind == "price"
+                else adapter.update_stocks(credentials, payload)
+            )
+            normalized = (
+                OzonPriceContract.normalize_response(response, payload)
+                if proposal_kind == "price"
+                else OzonStockContract.normalize_response(response, payload)
+            )
+        except OzonAmbiguousWriteError as exc:
+            for operation, proposal in zip(operations, proposals):
+                operation.status = "uncertain"
+                operation.error_code = cls._safe_text(exc.code, maximum=100)
+                operation.error_message = (
+                    "Результат batch Ozon write неизвестен; повтор запрещён"
+                )
+                operation.next_poll_at = now
+                if exc.request_id:
+                    operation.provider_request_ids_json = cls._json(
+                        [exc.request_id[:200]],
+                        list,
+                    )
+                proposal.status = "uncertain"
+                proposal.error_code = operation.error_code
+                proposal.error_message = operation.error_message
+            db.session.commit()
+            return
+        except OzonAPIError as exc:
+            for operation, proposal in zip(operations, proposals):
+                cls._set_write_failed(
+                    operation=operation,
+                    proposal=proposal,
+                    code=exc.code,
+                    message="Ozon отклонил batch commercial write",
+                    now=now,
+                    request_id=exc.request_id,
+                )
+            db.session.commit()
+            return
+        except (OzonCommercialProtocolError, OzonCommercialContractError):
+            for operation, proposal in zip(operations, proposals):
+                operation.status = "uncertain"
+                operation.error_code = "ozon_commercial_batch_response_invalid"
+                operation.error_message = (
+                    "Ozon вернул неизвестный batch response; повтор запрещён"
+                )
+                operation.next_poll_at = now
+                proposal.status = "uncertain"
+                proposal.error_code = operation.error_code
+                proposal.error_message = operation.error_message
+            db.session.commit()
+            return
+
+        results = {
+            cls._result_identity(proposal_kind, item): item
+            for item in normalized["items"]
+        }
+        for operation, proposal in zip(operations, proposals):
+            item = results[cls._proposal_identity(proposal)]
+            operation.item_results_json = cls._json([item], list)
+            if item["updated"] and not item["errors"]:
+                operation.status = "submitted"
+                operation.error_code = None
+                operation.error_message = None
+                operation.next_poll_at = now
+            else:
+                cls._set_write_failed(
+                    operation=operation,
+                    proposal=proposal,
+                    code="ozon_commercial_item_rejected",
+                    message=(
+                        "Ozon отклонил элемент batch; подробности сохранены в операции"
+                    ),
+                    now=now,
+                )
+        db.session.commit()
+
+    @classmethod
     def _project_confirmed_state(
         cls,
         *,
@@ -1171,36 +1578,51 @@ class MarketplaceCommercialService:
         credentials: MarketplaceCredentials,
         now: datetime,
     ) -> None:
-        operation.reconcile_count += 1
-        operation.last_polled_at = now
-        try:
-            live = cls._read_live_state(
-                proposal=proposal,
-                adapter=adapter,
-                credentials=credentials,
+        cls._reconcile_batch_locked(
+            operations=[operation],
+            proposals=[proposal],
+            adapter=adapter,
+            credentials=credentials,
+            now=now,
+        )
+
+    @classmethod
+    def _set_reconciliation_read_failure(
+        cls,
+        *,
+        operation: MarketplaceOperation,
+        proposal: MarketplaceCommercialProposal,
+        now: datetime,
+    ) -> None:
+        if operation.deadline_at and now >= operation.deadline_at:
+            operation.status = "uncertain"
+            operation.next_poll_at = None
+            operation.error_code = "commercial_reconciliation_deadline"
+            operation.error_message = (
+                "Не удалось подтвердить Ozon write за отведённое время"
             )
-            live_fingerprint = cls._fingerprint(live)
-        except (MarketplaceCommercialUpstreamError, MarketplaceCommercialConflict):
-            if operation.deadline_at and now >= operation.deadline_at:
-                operation.status = "uncertain"
-                operation.next_poll_at = None
-                operation.error_code = "commercial_reconciliation_deadline"
-                operation.error_message = (
-                    "Не удалось подтвердить Ozon write за отведённое время"
-                )
-                proposal.status = "uncertain"
-                proposal.error_code = operation.error_code
-                proposal.error_message = operation.error_message
-            else:
-                operation.next_poll_at = now + cls.POLL_INTERVAL
-                if operation.status != "uncertain":
-                    operation.status = "polling"
-                    operation.error_code = "commercial_reconciliation_read_failed"
-                    operation.error_message = (
-                        "Временная live-сверка Ozon не удалась; write не повторяется"
-                    )
-            db.session.commit()
+            proposal.status = "uncertain"
+            proposal.error_code = operation.error_code
+            proposal.error_message = operation.error_message
             return
+        operation.next_poll_at = now + cls.POLL_INTERVAL
+        if operation.status != "uncertain":
+            operation.status = "polling"
+            operation.error_code = "commercial_reconciliation_read_failed"
+            operation.error_message = (
+                "Временная live-сверка Ozon не удалась; write не повторяется"
+            )
+
+    @classmethod
+    def _apply_reconciliation_state(
+        cls,
+        *,
+        operation: MarketplaceOperation,
+        proposal: MarketplaceCommercialProposal,
+        live: dict,
+        now: datetime,
+    ) -> None:
+        live_fingerprint = cls._fingerprint(live)
         if live_fingerprint == proposal.proposed_fingerprint:
             operation.status = "succeeded"
             operation.error_code = None
@@ -1212,10 +1634,6 @@ class MarketplaceCommercialService:
             proposal.error_message = None
             proposal.applied_at = now
             snapshot = operation.snapshot
-            if snapshot is None:
-                raise MarketplaceCommercialConflict(
-                    "Commercial operation snapshot отсутствует"
-                )
             snapshot.confirmed_state_json = cls._json(live, dict)
             snapshot.confirmed_fingerprint = live_fingerprint
             snapshot.rollback_status = "available"
@@ -1230,7 +1648,6 @@ class MarketplaceCommercialService:
                 confirmed=live,
                 now=now,
             )
-            db.session.commit()
             return
         if live_fingerprint == proposal.baseline_fingerprint:
             if operation.error_code == "commercial_reconciliation_read_failed":
@@ -1250,7 +1667,6 @@ class MarketplaceCommercialService:
                 if operation.status != "uncertain":
                     operation.status = "polling"
                 operation.next_poll_at = now + cls.POLL_INTERVAL
-            db.session.commit()
             return
         operation.status = "uncertain"
         operation.error_code = "commercial_live_state_conflict"
@@ -1261,14 +1677,61 @@ class MarketplaceCommercialService:
         proposal.status = "conflict"
         proposal.error_code = operation.error_code
         proposal.error_message = operation.error_message
-        if operation.snapshot is not None:
-            operation.snapshot.rollback_status = "conflict"
+        operation.snapshot.rollback_status = "conflict"
         if proposal.source == "rollback" and proposal.rollback_of_operation is not None:
             original_snapshot = proposal.rollback_of_operation.snapshot
             if original_snapshot is not None:
                 original_snapshot.rollback_status = "conflict"
                 original_snapshot.rollback_error_code = operation.error_code
                 original_snapshot.rollback_error_message = operation.error_message
+
+    @classmethod
+    def _reconcile_batch_locked(
+        cls,
+        *,
+        operations: list,
+        proposals: list,
+        adapter,
+        credentials: MarketplaceCredentials,
+        now: datetime,
+    ) -> None:
+        if not operations or len(operations) != len(proposals):
+            raise MarketplaceCommercialValidationError(
+                "Reconciliation batch set некорректен"
+            )
+        for operation, proposal in zip(operations, proposals):
+            if operation.snapshot is None:
+                raise MarketplaceCommercialConflict(
+                    "Commercial operation snapshot отсутствует"
+                )
+            if operation.id != proposal.operation_id:
+                raise MarketplaceCommercialConflict(
+                    "Commercial operation/proposal linkage повреждён"
+                )
+            operation.reconcile_count += 1
+            operation.last_polled_at = now
+        try:
+            live_states = cls._read_live_states(
+                proposals=proposals,
+                adapter=adapter,
+                credentials=credentials,
+            )
+        except (MarketplaceCommercialUpstreamError, MarketplaceCommercialConflict):
+            for operation, proposal in zip(operations, proposals):
+                cls._set_reconciliation_read_failure(
+                    operation=operation,
+                    proposal=proposal,
+                    now=now,
+                )
+            db.session.commit()
+            return
+        for operation, proposal in zip(operations, proposals):
+            cls._apply_reconciliation_state(
+                operation=operation,
+                proposal=proposal,
+                live=live_states[proposal.id],
+                now=now,
+            )
         db.session.commit()
 
     @classmethod
@@ -1400,6 +1863,162 @@ class MarketplaceCommercialService:
             release_account_operation_lock(lock_file)
 
     @classmethod
+    def approve_proposals(
+        cls,
+        *,
+        seller_id: int,
+        items: Any,
+        reviewed_by_user_id: int,
+        adapter=None,
+        credentials: Optional[MarketplaceCredentials] = None,
+        now: Optional[datetime] = None,
+    ) -> list:
+        """Approve an exact proposal set through one provider batch write."""
+
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        approval_items = cls._approval_items(items)
+        reviewer = cls._validate_user(
+            seller_id=seller_id,
+            user_id=reviewed_by_user_id,
+        )
+
+        def load_and_validate() -> list:
+            proposals = [
+                cls._owned_proposal(
+                    seller_id=seller_id,
+                    proposal_id=item["proposal_id"],
+                )
+                for item in approval_items
+            ]
+            if len({proposal.account_id for proposal in proposals}) != 1:
+                raise MarketplaceCommercialValidationError(
+                    "Batch approval требует proposals одного Ozon account"
+                )
+            if len({proposal.proposal_kind for proposal in proposals}) != 1:
+                raise MarketplaceCommercialValidationError(
+                    "Batch approval не может смешивать price и stock"
+                )
+            for proposal, item in zip(proposals, approval_items):
+                if (
+                    proposal.version != item["expected_version"]
+                    or proposal.status != "pending_review"
+                ):
+                    raise MarketplaceCommercialConflict(
+                        "Один из proposals уже изменился; batch write не начат"
+                    )
+            return proposals
+
+        proposals = load_and_validate()
+        proposal_kind = proposals[0].proposal_kind
+        account_id = proposals[0].account_id
+        _, resolved_adapter, resolved_credentials = cls._resolve_account(
+            seller_id=seller_id,
+            account_id=account_id,
+            proposal_kind=proposal_kind,
+            adapter=adapter,
+            credentials=credentials,
+            now=now,
+            write=True,
+        )
+        lock_file = try_account_operation_lock(account_id)
+        if lock_file is None:
+            raise MarketplaceCommercialBusy("Кабинет Ozon занят другой операцией")
+        current_time = now or datetime.utcnow()
+        proposal_ids = [item["proposal_id"] for item in approval_items]
+        try:
+            db.session.expire_all()
+            proposals = load_and_validate()
+            live_states = cls._read_live_states(
+                proposals=proposals,
+                adapter=resolved_adapter,
+                credentials=resolved_credentials,
+            )
+            drifted = [
+                proposal
+                for proposal in proposals
+                if cls._fingerprint(live_states[proposal.id])
+                != proposal.baseline_fingerprint
+            ]
+            if drifted:
+                for proposal in drifted:
+                    cls._set_baseline_drift(
+                        proposal=proposal,
+                        reviewer_id=reviewer,
+                        now=current_time,
+                    )
+                db.session.commit()
+                raise MarketplaceCommercialConflict(
+                    "Live state части batch изменился; ни один write не отправлен"
+                )
+
+            operations = [
+                cls._build_operation(
+                    proposal=proposal,
+                    reviewer_id=reviewer,
+                    now=current_time,
+                )
+                for proposal in proposals
+            ]
+            db.session.commit()
+            proposals = [
+                cls._owned_proposal(
+                    seller_id=seller_id,
+                    proposal_id=proposal_id,
+                )
+                for proposal_id in proposal_ids
+            ]
+            operations = [
+                cls._owned_operation(
+                    seller_id=seller_id,
+                    operation_id=proposal.operation_id,
+                )
+                for proposal in proposals
+            ]
+            cls._submit_batch_locked(
+                operations=operations,
+                proposals=proposals,
+                adapter=resolved_adapter,
+                credentials=resolved_credentials,
+                now=current_time,
+            )
+            reconcile_proposals = []
+            reconcile_operations = []
+            for proposal_id in proposal_ids:
+                current_proposal = cls._owned_proposal(
+                    seller_id=seller_id,
+                    proposal_id=proposal_id,
+                )
+                current_operation = cls._owned_operation(
+                    seller_id=seller_id,
+                    operation_id=current_proposal.operation_id,
+                )
+                if current_operation.status in {"submitted", "polling", "uncertain"}:
+                    reconcile_proposals.append(current_proposal)
+                    reconcile_operations.append(current_operation)
+            if reconcile_operations:
+                cls._reconcile_batch_locked(
+                    operations=reconcile_operations,
+                    proposals=reconcile_proposals,
+                    adapter=resolved_adapter,
+                    credentials=resolved_credentials,
+                    now=current_time,
+                )
+            return [
+                cls._owned_proposal(
+                    seller_id=seller_id,
+                    proposal_id=proposal_id,
+                )
+                for proposal_id in proposal_ids
+            ]
+        except (StaleDataError, IntegrityError):
+            db.session.rollback()
+            raise MarketplaceCommercialConflict(
+                "Один из proposals уже изменился; batch write не начат"
+            ) from None
+        finally:
+            release_account_operation_lock(lock_file)
+
+    @classmethod
     def approve_proposal(
         cls,
         *,
@@ -1450,12 +2069,10 @@ class MarketplaceCommercialService:
                 credentials=resolved_credentials,
             )
             if cls._fingerprint(live) != proposal.baseline_fingerprint:
-                proposal.status = "conflict"
-                proposal.reviewed_by_user_id = reviewer
-                proposal.reviewed_at = current_time
-                proposal.error_code = "commercial_baseline_drift"
-                proposal.error_message = (
-                    "Live state изменился после создания proposal; write не отправлен"
+                cls._set_baseline_drift(
+                    proposal=proposal,
+                    reviewer_id=reviewer,
+                    now=current_time,
                 )
                 db.session.commit()
                 return proposal
@@ -1653,6 +2270,7 @@ class MarketplaceCommercialService:
         *,
         seller_id: int,
         account_id: Optional[int] = None,
+        proposal_kind: Optional[str] = None,
         status: Optional[str] = None,
         page: int = 1,
         per_page: int = 50,
@@ -1674,6 +2292,14 @@ class MarketplaceCommercialService:
         if account_id is not None:
             account_id = cls._positive_integer(account_id, "account_id")
             query = query.filter(MarketplaceCommercialProposal.account_id == account_id)
+        if proposal_kind is not None:
+            if proposal_kind not in {"price", "stock"}:
+                raise MarketplaceCommercialValidationError(
+                    "Неизвестный proposal_kind"
+                )
+            query = query.filter(
+                MarketplaceCommercialProposal.proposal_kind == proposal_kind
+            )
         if status is not None:
             allowed = {
                 "pending_review", "approved", "rejected", "applying", "applied",

@@ -595,7 +595,7 @@ reconciliation. Ambiguous/malformed response не повторяет write. Roll
 - [x] Durable before/submitted/confirmed snapshots, one-attempt writes and exact single-item response accounting.
 - [x] Drift reconciliation and second-review exact rollback for succeeded price/stock updates.
 - [x] Independent dark write flag plus scheduler recovery that never abandons attempted operations.
-- [ ] Multi-item proposal orchestration and one-call batch apply with per-item snapshots; only the strict max-100 exact-set contract is ready.
+- [x] Multi-item approval for 1..100 proposals of one account/kind: one bulk preflight, one exact-set provider write, one bulk read-after-write and separate per-item operations/snapshots/rollback.
 
 Definition of done: no agent/direct path bypasses proposal and every stock write names an owned warehouse.
 

@@ -309,18 +309,32 @@ class MarketplaceCommercialRoutesTest(unittest.TestCase):
             ) as approve:
                 disabled = self.client.post(
                     f"/marketplaces/commercial/{self.own_proposal_id}/approve",
-                    json={"expected_version": proposal.version},
+                    json={
+                        "expected_version": proposal.version,
+                        "confirm_write": True,
+                    },
                 )
                 self.app.config["MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED"] = True
+                unconfirmed = self.client.post(
+                    f"/marketplaces/commercial/{self.own_proposal_id}/approve",
+                    json={"expected_version": proposal.version},
+                )
                 loose = self.client.post(
                     f"/marketplaces/commercial/{self.own_proposal_id}/approve",
-                    json={"expected_version": str(proposal.version)},
+                    json={
+                        "expected_version": str(proposal.version),
+                        "confirm_write": True,
+                    },
                 )
                 valid = self.client.post(
                     f"/marketplaces/commercial/{self.own_proposal_id}/approve",
-                    json={"expected_version": proposal.version},
+                    json={
+                        "expected_version": proposal.version,
+                        "confirm_write": True,
+                    },
                 )
         self.assertEqual(disabled.status_code, 404)
+        self.assertEqual(unconfirmed.status_code, 400)
         self.assertEqual(loose.status_code, 400)
         self.assertEqual(valid.status_code, 200)
         approve.assert_called_once_with(
@@ -329,6 +343,79 @@ class MarketplaceCommercialRoutesTest(unittest.TestCase):
             expected_version=proposal.version,
             reviewed_by_user_id=self.user1_id,
         )
+
+    def test_batch_approve_is_flagged_and_preserves_exact_typed_set(self):
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with self.app.app_context():
+            proposal = self._own_proposal()
+            items = [{
+                "proposal_id": proposal.id,
+                "expected_version": proposal.version,
+            }]
+            with user_patch, login_patch, patch.object(
+                MarketplaceCommercialService,
+                "approve_proposals",
+                return_value=[proposal],
+            ) as approve:
+                disabled = self.client.post(
+                    "/marketplaces/commercial/batch-approve",
+                    json={"items": items, "confirm_write": True},
+                )
+                self.app.config["MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED"] = True
+                unconfirmed = self.client.post(
+                    "/marketplaces/commercial/batch-approve",
+                    json={"items": items},
+                )
+                unknown = self.client.post(
+                    "/marketplaces/commercial/batch-approve",
+                    json={
+                        "items": items,
+                        "confirm_write": True,
+                        "seller_id": self.seller2_id,
+                    },
+                )
+                valid = self.client.post(
+                    "/marketplaces/commercial/batch-approve",
+                    json={"items": items, "confirm_write": True},
+                )
+        self.assertEqual(disabled.status_code, 404)
+        self.assertEqual(unconfirmed.status_code, 400)
+        self.assertEqual(unknown.status_code, 400)
+        self.assertEqual(valid.status_code, 200)
+        approve.assert_called_once_with(
+            seller_id=self.seller1_id,
+            items=items,
+            reviewed_by_user_id=self.user1_id,
+        )
+
+    def test_batch_approve_rejects_loose_ids_before_account_access(self):
+        self.app.config["MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED"] = True
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            string_id = self.client.post(
+                "/marketplaces/commercial/batch-approve",
+                json={"items": [{
+                    "proposal_id": str(self.own_proposal_id),
+                    "expected_version": 1,
+                }], "confirm_write": True},
+            )
+            boolean_version = self.client.post(
+                "/marketplaces/commercial/batch-approve",
+                json={"items": [{
+                    "proposal_id": self.own_proposal_id,
+                    "expected_version": True,
+                }], "confirm_write": True},
+            )
+            duplicate = self.client.post(
+                "/marketplaces/commercial/batch-approve",
+                json={"items": [
+                    {"proposal_id": self.own_proposal_id, "expected_version": 1},
+                    {"proposal_id": self.own_proposal_id, "expected_version": 1},
+                ], "confirm_write": True},
+            )
+        self.assertEqual(string_id.status_code, 400)
+        self.assertEqual(boolean_version.status_code, 400)
+        self.assertEqual(duplicate.status_code, 400)
 
     def test_warehouse_sync_accepts_only_empty_object(self):
         result = SimpleNamespace(to_public_dict=lambda: {"status": "completed"})
