@@ -1239,6 +1239,39 @@ def api_settings():
 
 # ============= КАРТОЧКИ ТОВАРОВ =============
 
+@app.route('/api/products/search')
+@login_required
+def api_products_search():
+    """JSON-поиск товаров текущего продавца для командной палитры (⌘K).
+    Tenant-scoped; переиспользует тот же фильтр, что и products_list."""
+    if not current_user.seller:
+        return jsonify({'items': []})
+    q = request.args.get('q', '', type=str).strip()
+    if len(q) < 2:
+        return jsonify({'items': []})
+    like = f'%{q}%'
+    rows = (Product.query
+            .filter(Product.seller_id == current_user.seller.id)
+            .filter(or_(
+                Product.vendor_code.ilike(like),
+                Product.title.ilike(like),
+                Product.brand.ilike(like),
+                Product.nm_id.cast(db.String).ilike(like),
+            ))
+            .order_by(Product.updated_at.desc())
+            .limit(20)
+            .all())
+    items = [{
+        'id': p.id,
+        'nm_id': p.nm_id,
+        'vendor_code': p.vendor_code,
+        'title': p.title,
+        'brand': p.brand,
+        'url': url_for('product_detail', product_id=p.id),
+    } for p in rows]
+    return jsonify({'items': items})
+
+
 @app.route('/products')
 @login_required
 def products_list():
