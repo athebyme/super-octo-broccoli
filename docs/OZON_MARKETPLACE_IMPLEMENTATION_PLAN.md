@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P10B, canonical WB/Ozon product linking и one-click local Ozon preparation implemented; P10C next
+Статус: P0–P10B и P10C Image Lab/Content Factory implemented; reviewed reverse common-fact diff next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -741,8 +741,8 @@ Definition of done: finance/order UI filters by exact marketplace/account and to
 - [x] P10B: internal tools are adapter/capability-scoped and least privilege.
 - [x] P10B: one-click canonical/WB → local Ozon draft preparation with immediate deterministic validation and exact mapping/reference readiness UI.
 - [ ] P10C: reviewed Ozon → canonical common-fact diff; automatic dictionary/category round-trip remains prohibited.
-- [ ] P10C: Image Lab uses listing media adapter and Ozon image constraints.
-- [ ] P10C: Content factory selection works over unified listings.
+- [x] P10C: Image Lab uses listing media adapter and Ozon image constraints.
+- [x] P10C: Content factory selection works over unified listings.
 
 P10A реализован `MarketplaceInboxSync`, `MarketplaceInboxItem` и
 `MarketplaceReplyDraft`, строгим `ozon_feedback_contracts` и отдельным UI
@@ -803,6 +803,24 @@ response. `ImportedProduct` остаётся master; для связанного
 осознанную Ozon-проекцию и не перетирает master автоматически. Marketplace-
 specific price, stock, category IDs, media CDN URLs и characteristic IDs в этот
 diff намеренно не входят.
+
+P10C Image Lab использует отдельный `MarketplaceListingMediaService`: browser
+передаёт полный typed Ozon target, а сервис повторно проверяет seller, account,
+canonical link и availability при создании experiment и после atomic worker
+claim. Исходные изображения/visual context всегда берутся из общей
+`ImportedProduct`; Ozon snapshot даёт только bounded image count/fingerprint и
+ограничения канала. Финал `900×1200` остаётся локальным review-only artifact:
+автоматическое attachment/publication запрещено, `images360` не поддерживается,
+а дальнейший draft требует human review и публичного URL.
+
+Content Factory теперь имеет durable source `legacy_wb|marketplace_listing`.
+Ozon source привязан к одному active seller-owned account, выбирает только
+active/non-archived/linked/in-stock listings и хранит typed entity refs отдельно
+от legacy `Product` IDs. В prompt идут общие canonical facts/AI cache/photos и
+локальные Ozon price/stock observations; WB rating и URL не переиспользуются,
+публичный Ozon URL не строится по SKU. Cross-tenant, mixed account, stale source
+и ID overload завершаются до AI-client creation. Старые factories мигрируют как
+`legacy_wb`, поэтому поведение WB не меняется.
 
 Definition of done: AI cannot cross accounts or invoke an unsupported/bypassed write.
 

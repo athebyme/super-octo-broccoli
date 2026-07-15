@@ -158,6 +158,8 @@ python migrations/migrate_add_imported_wb_nm_id.py /app/data/seller_platform.db 
 python migrations/migrate_add_image_generation_lab.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_reference_watermark.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_angle_synthesis.py /app/data/seller_platform.db
+python migrations/migrate_add_image_lab_marketplace_target.py /app/data/seller_platform.db
+python migrations/migrate_add_content_factory_marketplace_scope.py /app/data/seller_platform.db
 python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db || echo "⚠️ Sexopt supplier migration skipped (already applied or error)"
 DATABASE_PATH=/app/data/seller_platform.db python migrations/migrate_add_competitor_monitoring.py || echo "⚠️ Competitor monitoring migration skipped (already applied or error)"
 unset SKIP_SCHEDULER

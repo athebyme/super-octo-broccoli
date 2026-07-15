@@ -52,6 +52,10 @@ from services.infographic_quality import (
     evaluate_background_text,
     evaluate_final_image,
 )
+from services.marketplace_listing_media import (
+    MarketplaceListingMediaError,
+    MarketplaceListingMediaService,
+)
 
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 ACTIVE_STATUSES = frozenset({"queued", "running", "remote_running", "finalizing"})
@@ -545,6 +549,49 @@ def validate_overlay_config(value: Any) -> Optional[Dict[str, str]]:
     return {"title": title, "subtitle": subtitle}
 
 
+def validate_marketplace_target(
+    *,
+    seller_id: int,
+    product_id: int,
+    value: Any,
+) -> Optional[Dict[str, Any]]:
+    """Ground an optional browser target to the exact linked Ozon listing."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ImageLabError("marketplace_target должен быть object или null")
+    allowed = {
+        "entity_kind",
+        "listing_id",
+        "marketplace_code",
+        "account_id",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise ImageLabError(
+            "Неизвестные поля marketplace_target: " + ", ".join(sorted(unknown))
+        )
+    missing = allowed - set(value)
+    if missing:
+        raise ImageLabError(
+            "Отсутствуют поля marketplace_target: " + ", ".join(sorted(missing))
+        )
+    if value.get("entity_kind") != "marketplace_listing":
+        raise ImageLabError(
+            "marketplace_target.entity_kind должен быть marketplace_listing"
+        )
+    try:
+        return MarketplaceListingMediaService.resolve_target(
+            seller_id=seller_id,
+            listing_id=value.get("listing_id"),
+            expected_imported_product_id=product_id,
+            marketplace_code=value.get("marketplace_code"),
+            account_id=value.get("account_id"),
+        )
+    except MarketplaceListingMediaError as exc:
+        raise ImageLabError(str(exc)) from exc
+
+
 def create_experiments(
     *,
     seller_id: int,
@@ -562,6 +609,7 @@ def create_experiments(
     overlay: Any = None,
     additional_prompt: str = "",
     requested_views: Any = None,
+    marketplace_target: Any = None,
 ) -> List[ImageGenerationExperiment]:
     product = ImportedProduct.query.filter_by(id=product_id, seller_id=seller_id).first()
     if not product:
@@ -569,6 +617,11 @@ def create_experiments(
     photos = photo_entries(product.photo_urls)
     if not photos:
         raise ImageLabError("У товара нет исходного фото")
+    target_context = validate_marketplace_target(
+        seller_id=seller_id,
+        product_id=product.id,
+        value=marketplace_target,
+    )
     selected = validate_photo_indices(photo_indices, len(photos))
     if not isinstance(generation_mode, str) or generation_mode not in GENERATION_MODES:
         raise ImageLabError("Неизвестный режим работы с фото")
@@ -702,6 +755,18 @@ def create_experiments(
             experiment = ImageGenerationExperiment(
                 seller_id=seller_id,
                 imported_product_id=product.id,
+                marketplace_listing_id=(
+                    target_context["listing_id"] if target_context else None
+                ),
+                target_context_json=(
+                    json.dumps(
+                        target_context,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    if target_context else None
+                ),
                 backend=backend,
                 model=model,
                 scene_key=scene_key,
@@ -760,6 +825,7 @@ def _run_experiment(app, experiment_id: int) -> None:
             if claimed != 1:
                 return
             experiment = ImageGenerationExperiment.query.get(experiment_id)
+            revalidate_experiment_target(experiment)
             if experiment.backend == "gpu":
                 remote_id = _submit_gpu(experiment)
                 experiment.remote_job_id = remote_id
@@ -779,6 +845,30 @@ def _run_experiment(app, experiment_id: int) -> None:
                 db.session.commit()
         finally:
             db.session.remove()
+
+
+def revalidate_experiment_target(
+    experiment: ImageGenerationExperiment,
+) -> Optional[Dict[str, Any]]:
+    """Re-ground a durable listing target immediately before provider work."""
+    if experiment.marketplace_listing_id is None:
+        return None
+    try:
+        context = MarketplaceListingMediaService.resolve_target(
+            seller_id=experiment.seller_id,
+            listing_id=experiment.marketplace_listing_id,
+            expected_imported_product_id=experiment.imported_product_id,
+        )
+    except MarketplaceListingMediaError as exc:
+        raise ImageLabError(str(exc)) from exc
+    experiment.target_context_json = json.dumps(
+        context,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    db.session.commit()
+    return context
 
 
 def process_pending_once(app, limit: int = 4) -> int:
@@ -1387,6 +1477,23 @@ def _finalize_experiment(
             "reason": "AI scene requires person/object/duplicate/reference review",
         },
     )
+    target_context = _json_load(experiment.target_context_json, {})
+    if isinstance(target_context, dict) and target_context.get("listing_id"):
+        target_summary = {
+            "listing_id": target_context.get("listing_id"),
+            "marketplace_code": target_context.get("marketplace_code"),
+            "account_id": target_context.get("account_id"),
+            "media_fingerprint": (
+                target_context.get("observed_media", {})
+                .get("main_image_fingerprint")
+            ),
+            "output_size_compatible": True,
+            "attachment_ready": False,
+            "automatic_attachment": False,
+            "reason": "local artifact requires human review and a public hosting URL",
+        }
+        quality["marketplace_target"] = target_summary
+        metadata["marketplace_target"] = target_summary
     if not experiment.source_path:
         source_artifact = (
             _source_contact_sheet(source_images) if len(source_images) > 1 else source_images[0]
@@ -1688,6 +1795,7 @@ def experiment_dict(experiment: ImageGenerationExperiment) -> Dict[str, Any]:
         "id": experiment.id,
         "product_id": experiment.imported_product_id,
         "product_title": experiment.imported_product.title if experiment.imported_product else "",
+        "marketplace_target": _json_load(experiment.target_context_json, None),
         "backend": experiment.backend,
         "model": experiment.model,
         "scene_key": experiment.scene_key,

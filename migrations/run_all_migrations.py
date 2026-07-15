@@ -1248,6 +1248,14 @@ def main():
                 migrate as migrate_image_lab_angle_synthesis,
             )
             migrate_image_lab_angle_synthesis(db_path)
+            from migrate_add_image_lab_marketplace_target import (
+                migrate as migrate_image_lab_marketplace_target,
+            )
+            migrate_image_lab_marketplace_target(db_path)
+            from migrate_add_content_factory_marketplace_scope import (
+                migrate as migrate_content_factory_marketplace_scope,
+            )
+            migrate_content_factory_marketplace_scope(db_path)
         except Exception as exc:
             print(f"❌ Post-schema migration failed: {exc}")
             success = False

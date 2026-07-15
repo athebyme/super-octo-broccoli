@@ -641,6 +641,7 @@ class MarketplaceProductLinkService:
             ),
             "ai_cache_available": ai_source is not None,
             "ai_source": ai_source,
+            "has_source_photos": bool(product.photo_urls),
         }
 
     @classmethod

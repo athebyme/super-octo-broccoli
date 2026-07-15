@@ -14,14 +14,19 @@ from dataclasses import dataclass
 
 import re
 import requests as _requests
+from sqlalchemy.orm import joinedload
 
 from models import (
     db, Product, ProductStock, Seller, SupplierProduct, ImportedProduct,
     ProductAnalytics, ContentFactory, ContentItem,
     ContentTemplate, ContentPlan, SocialAccount,
+    MarketplaceAnalyticsSync, MarketplaceListing, MarketplaceMetricFact,
+    SellerMarketplaceAccount,
     CONTENT_PLATFORMS, CONTENT_TYPES, CONTENT_STATUSES,
 )
 from services.ai_service import AIConfig, AIClient, AIProvider
+from services.marketplace_fact_pack import MarketplaceFactPackBuilder
+from services.marketplace_listing_media import MarketplaceListingMediaService
 
 logger = logging.getLogger(__name__)
 
@@ -69,19 +74,19 @@ _BASE_SYSTEM_RULES = """ПРАВИЛА ФОРМАТИРОВАНИЯ:
 
 _BUILTIN_SYSTEM_PROMPTS = {
     'telegram': {
-        'promo_post': 'Ты ведёшь Telegram-канал магазина на Wildberries. Пишешь короткие, живые посты о товарах — как будто рассказываешь знакомому, а не продаёшь. Без пафоса и рекламных штампов.\n\nПримерная структура:\n- Заголовок (короткий, без эмодзи в начале)\n- Зачем этот товар, что в нём хорошего (2-3 предложения)\n- Цена\n- Призыв к действию (ненавязчивый)\n- Хештеги отдельной строкой\n\n' + _BASE_SYSTEM_RULES,
-        'review': 'Ты ведёшь Telegram-канал с обзорами товаров с Wildberries. Пишешь честные, человечные обзоры — как реальный отзыв покупателя.\n\nПримерная структура:\n- Заголовок с оценкой\n- Что за товар, первые впечатления\n- Плюсы и минусы (честно, минимум 1 минус)\n- Для кого подойдёт\n- Цена и вердикт\n- Хештеги\n\n' + _BASE_SYSTEM_RULES,
+        'promo_post': 'Ты ведёшь Telegram-канал магазина на маркетплейсе. Пишешь короткие, живые посты о товарах — как будто рассказываешь знакомому, а не продаёшь. Без пафоса и рекламных штампов.\n\nПримерная структура:\n- Заголовок (короткий, без эмодзи в начале)\n- Зачем этот товар, что в нём хорошего (2-3 предложения)\n- Цена\n- Призыв к действию (ненавязчивый)\n- Хештеги отдельной строкой\n\n' + _BASE_SYSTEM_RULES,
+        'review': 'Ты ведёшь Telegram-канал с обзорами товаров с маркетплейса. Пишешь честные, человечные обзоры — как реальный отзыв покупателя.\n\nПримерная структура:\n- Заголовок с оценкой\n- Что за товар, первые впечатления\n- Плюсы и минусы (честно, минимум 1 минус)\n- Для кого подойдёт\n- Цена и вердикт\n- Хештеги\n\n' + _BASE_SYSTEM_RULES,
         'story_script': 'Ты создаёшь сценарии для Stories/Reels. Короткие, динамичные, без перегруза.\n\nФормат:\nСлайд 1: интрига или вопрос\nСлайды 2-5: раскрытие\nПоследний слайд: призыв к действию\n\nДля каждого слайда — текст на экране.\n\n' + _BASE_SYSTEM_RULES,
         'carousel': 'Ты составляешь подборки товаров для Telegram-канала. Подборка должна звучать как рекомендация от человека, а не как каталог.\n\nСтруктура:\n- Заголовок подборки\n- Каждый товар: название, почему он хорош (1-2 предложения), цена\n- Призыв к действию\n- Хештеги\n\n' + _BASE_SYSTEM_RULES,
     },
     'vk': {
-        'promo_post': 'Ты ведёшь сообщество ВКонтакте для магазина на Wildberries. Пишешь посты о товарах — дружелюбно, без рекламного пафоса. Как будто делишься находкой с подписчиками.\n\nПримерная структура:\n- Заголовок (без эмодзи-спама)\n- Описание товара: что это и зачем (2-3 предложения, живым языком)\n- В чём преимущества\n- Цена\n- Призыв к действию\n- Хештеги\n\n' + _BASE_SYSTEM_RULES,
+        'promo_post': 'Ты ведёшь сообщество ВКонтакте для магазина на маркетплейсе. Пишешь посты о товарах — дружелюбно, без рекламного пафоса. Как будто делишься находкой с подписчиками.\n\nПримерная структура:\n- Заголовок (без эмодзи-спама)\n- Описание товара: что это и зачем (2-3 предложения, живым языком)\n- В чём преимущества\n- Цена\n- Призыв к действию\n- Хештеги\n\n' + _BASE_SYSTEM_RULES,
         'review': 'Ты пишешь обзоры товаров для сообщества ВКонтакте. Честно, по-человечески — как отзыв реального покупателя.\n\n' + _BASE_SYSTEM_RULES,
         'story_script': 'Ты создаёшь сценарии для клипов ВКонтакте. Коротко, динамично, без воды.\n\n' + _BASE_SYSTEM_RULES,
         'carousel': 'Ты составляешь подборки товаров для ВКонтакте. Пиши как рекомендации, а не как каталог.\n\n' + _BASE_SYSTEM_RULES,
     },
     'instagram': {
-        'promo_post': 'Ты ведёшь Instagram магазина на Wildberries. Посты — короткие, живые, без рекламного спама.\n\nСтруктура:\n- Цепляющий заголовок\n- Описание (2-3 предложения)\n- Цена\n- Призыв к действию\n- Хештеги (5-10 штук)\n\n' + _BASE_SYSTEM_RULES,
+        'promo_post': 'Ты ведёшь Instagram магазина на маркетплейсе. Посты — короткие, живые, без рекламного спама.\n\nСтруктура:\n- Цепляющий заголовок\n- Описание (2-3 предложения)\n- Цена\n- Призыв к действию\n- Хештеги (5-10 штук)\n\n' + _BASE_SYSTEM_RULES,
         'review': 'Ты Instagram-блогер. Пишешь честные обзоры товаров.\n\n' + _BASE_SYSTEM_RULES,
         'story_script': 'Ты создаёшь сценарии для Instagram Stories. Коротко и ярко.\n\n' + _BASE_SYSTEM_RULES,
         'carousel': 'Ты составляешь подборки для Instagram-каруселей. Живо и по делу.\n\n' + _BASE_SYSTEM_RULES,
@@ -109,7 +114,7 @@ _BUILTIN_USER_PROMPTS = {
         'Бренд: {brand}\n'
         'Категория: {category}\n'
         'Описание: {description}\n'
-        'Рейтинг на WB: {rating}\n'
+        'Рейтинг на выбранном маркетплейсе: {rating}\n'
         'К посту прикреплено {photo_count} фото.\n\n'
         'Важно:\n'
         '- Заголовок — короткий, без спама из эмодзи и caps lock\n'
@@ -174,7 +179,10 @@ class GenerationResult:
     body_text: Optional[str] = None
     hashtags: Optional[List[str]] = None
     media_urls: Optional[List[str]] = None
+    product_url: Optional[str] = None
     wb_url: Optional[str] = None
+    source_marketplace: Optional[str] = None
+    entity_refs: Optional[List[Dict[str, Any]]] = None
     store_name: Optional[str] = None
     product_names: Optional[List[str]] = None
     quality_score: int = 0
@@ -185,11 +193,136 @@ class GenerationResult:
     error: Optional[str] = None
 
 
+class ContentFactoryScopeError(ValueError):
+    """A catalog source or entity reference is ambiguous or cross-tenant."""
+
+
 class ContentFactoryService:
     """Сервис для работы с контент-фабриками"""
 
     def __init__(self):
         pass
+
+    @staticmethod
+    def _positive_int(value: Any, field_name: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ContentFactoryScopeError(
+                f"{field_name} должен быть положительным целым числом"
+            )
+        return value
+
+    @classmethod
+    def validate_catalog_scope(
+        cls,
+        *,
+        seller_id: int,
+        catalog_source: str,
+        marketplace_account_id: Optional[int],
+    ) -> Optional[SellerMarketplaceAccount]:
+        """Validate the durable source selected in the factory settings."""
+        seller_id = cls._positive_int(seller_id, "seller_id")
+        if catalog_source == "legacy_wb":
+            if marketplace_account_id is not None:
+                raise ContentFactoryScopeError(
+                    "Для legacy WB нельзя указывать marketplace_account_id"
+                )
+            return None
+        if catalog_source != "marketplace_listing":
+            raise ContentFactoryScopeError("Неизвестный источник каталога")
+        account_id = cls._positive_int(
+            marketplace_account_id,
+            "marketplace_account_id",
+        )
+        account = SellerMarketplaceAccount.query.filter_by(
+            id=account_id,
+            seller_id=seller_id,
+            is_active=True,
+        ).first()
+        if (
+            account is None
+            or account.marketplace is None
+            or account.marketplace.code != "ozon"
+        ):
+            raise ContentFactoryScopeError(
+                "Активный seller-owned кабинет Ozon не найден"
+            )
+        return account
+
+    @staticmethod
+    def _uses_marketplace_listings(factory: ContentFactory) -> bool:
+        return (factory.catalog_source or "legacy_wb") == "marketplace_listing"
+
+    @classmethod
+    def selection_ids_for_item(
+        cls,
+        factory: ContentFactory,
+        item: ContentItem,
+    ) -> List[int]:
+        if cls._uses_marketplace_listings(factory):
+            return [
+                ref['id']
+                for ref in item.get_entity_refs()
+                if ref['account_id'] == factory.marketplace_account_id
+            ]
+        return [
+            value for value in item.get_product_ids()
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        ]
+
+    @classmethod
+    def _normalize_entity_refs(
+        cls,
+        factory: ContentFactory,
+        values: Any,
+        *,
+        maximum: int = 10,
+    ) -> List[Dict[str, Any]]:
+        if not cls._uses_marketplace_listings(factory):
+            if values not in (None, []):
+                raise ContentFactoryScopeError(
+                    "Эта фабрика использует legacy WB Product, а не listing refs"
+                )
+            return []
+        account = cls.validate_catalog_scope(
+            seller_id=factory.seller_id,
+            catalog_source="marketplace_listing",
+            marketplace_account_id=factory.marketplace_account_id,
+        )
+        if not isinstance(values, list) or not 1 <= len(values) <= maximum:
+            raise ContentFactoryScopeError(
+                f"entity_refs должен содержать от 1 до {maximum} ссылок"
+            )
+        normalized = []
+        seen = set()
+        allowed = {"entity_kind", "id", "marketplace_code", "account_id"}
+        for index, value in enumerate(values):
+            if not isinstance(value, dict) or set(value) - allowed:
+                raise ContentFactoryScopeError(
+                    f"entity_refs[{index}] имеет неизвестный контракт"
+                )
+            if value.get("entity_kind") != "marketplace_listing":
+                raise ContentFactoryScopeError(
+                    f"entity_refs[{index}].entity_kind должен быть marketplace_listing"
+                )
+            listing_id = cls._positive_int(value.get("id"), f"entity_refs[{index}].id")
+            account_id = cls._positive_int(
+                value.get("account_id"),
+                f"entity_refs[{index}].account_id",
+            )
+            if value.get("marketplace_code") != "ozon" or account_id != account.id:
+                raise ContentFactoryScopeError(
+                    f"entity_refs[{index}] не совпадает с Ozon scope фабрики"
+                )
+            if listing_id in seen:
+                raise ContentFactoryScopeError("entity_refs не должны повторяться")
+            seen.add(listing_id)
+            normalized.append({
+                "entity_kind": "marketplace_listing",
+                "id": listing_id,
+                "marketplace_code": "ozon",
+                "account_id": account.id,
+            })
+        return normalized
 
     # ================================================================
     # AI конфиг
@@ -228,15 +361,13 @@ class ContentFactoryService:
         content_type: str,
         template_id: Optional[int] = None,
         custom_prompt: Optional[str] = None,
+        entity_refs: Optional[List[Dict[str, Any]]] = None,
     ) -> GenerationResult:
         """Генерирует единицу контента через AI."""
 
         start_time = time.time()
 
         try:
-            # Получаем AI клиент
-            client, provider_name, model_name = self._get_ai_client(factory)
-
             # Получаем шаблон
             template = self._get_template(factory, content_type, template_id)
             if not template:
@@ -245,13 +376,33 @@ class ContentFactoryService:
                     error=f"Шаблон для {content_type} на платформе {factory.platform} не найден"
                 )
 
-            # Собираем данные о товарах
-            products_data = self._collect_products_data(product_ids, factory.seller_id)
+            # Собираем данные только из одного типизированного source scope.
+            normalized_refs: List[Dict[str, Any]] = []
+            if self._uses_marketplace_listings(factory):
+                if product_ids:
+                    raise ContentFactoryScopeError(
+                        "MarketplaceListing ID нельзя передавать как product_ids"
+                    )
+                normalized_refs = self._normalize_entity_refs(factory, entity_refs)
+                products_data = self._collect_listing_data(normalized_refs, factory)
+            else:
+                if entity_refs not in (None, []):
+                    raise ContentFactoryScopeError(
+                        "Legacy WB фабрика не принимает entity_refs"
+                    )
+                products_data = self._collect_products_data(
+                    product_ids,
+                    factory.seller_id,
+                )
             if not products_data:
                 return GenerationResult(
                     success=False,
                     error="Товары не найдены"
                 )
+
+            # Scope, exact-set и локальные факты проверены до доступа к AI
+            # credentials/client. Невалидная ссылка заканчивается zero-AI.
+            client, provider_name, model_name = self._get_ai_client(factory)
 
             # Формируем промпт
             if content_type == 'carousel':
@@ -266,13 +417,21 @@ class ContentFactoryService:
             store_name = self._get_store_name(factory)
             char_limit = PLATFORM_CHAR_LIMITS.get(factory.platform, 4096)
             first_product = products_data[0] if products_data else {}
-            wb_url = first_product.get('wb_url', '')
+            product_url = first_product.get('product_url') or first_product.get('wb_url', '')
+            source_marketplace = first_product.get('source_marketplace', 'wb')
 
             # Подставляем контекстные данные в system prompt
             system_prompt = template.system_prompt
-            system_prompt = system_prompt.replace('{wb_url}', wb_url)
+            system_prompt = system_prompt.replace('{wb_url}', product_url)
+            system_prompt = system_prompt.replace('{product_url}', product_url)
             system_prompt = system_prompt.replace('{store_name}', store_name)
             system_prompt = system_prompt.replace('{char_limit}', str(char_limit))
+            if source_marketplace == 'ozon':
+                system_prompt += (
+                    "\n\nИсточник товара — точный кабинет Ozon. Не называй товар "
+                    "карточкой WB/Wildberries и не придумывай публичную ссылку Ozon. "
+                    "Используй только переданные общие факты и наблюдаемую цену Ozon."
+                )
 
             if factory.style_guidelines:
                 system_prompt += f"\n\nДополнительные требования к стилю:\n{factory.style_guidelines}"
@@ -306,7 +465,14 @@ class ContentFactoryService:
                 )
 
             # ========== ШАГ 2: AI-ревью (самокритика) ==========
-            reviewed = self._ai_review_step(client, response, factory.platform, char_limit, wb_url, store_name)
+            reviewed = self._ai_review_step(
+                client,
+                response,
+                factory.platform,
+                char_limit,
+                product_url,
+                store_name,
+            )
             if reviewed:
                 response = reviewed
 
@@ -323,7 +489,14 @@ class ContentFactoryService:
                     max_tokens=3000,
                 )
                 if retry_response:
-                    retry_reviewed = self._ai_review_step(client, retry_response, factory.platform, char_limit, wb_url, store_name)
+                    retry_reviewed = self._ai_review_step(
+                        client,
+                        retry_response,
+                        factory.platform,
+                        char_limit,
+                        product_url,
+                        store_name,
+                    )
                     if retry_reviewed:
                         retry_response = retry_reviewed
                     title, body, hashtags = self._parse_ai_response(retry_response, content_type)
@@ -337,7 +510,7 @@ class ContentFactoryService:
                     )
 
             # ========== ШАГ 4: Гарантированная вставка ссылки ==========
-            body = self._ensure_product_url(body, wb_url)
+            body = self._ensure_product_url(body, product_url)
 
             # Собираем медиа и метаданные
             # Для обзоров берём больше фото
@@ -357,7 +530,13 @@ class ContentFactoryService:
                     f"(factory={factory.id}, type={content_type})"
                 )
 
-            quality = self._score_content(body, content_type, factory.platform, wb_url, store_name)
+            quality = self._score_content(
+                body,
+                content_type,
+                factory.platform,
+                product_url,
+                store_name,
+            )
 
             elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -367,7 +546,10 @@ class ContentFactoryService:
                 body_text=body,
                 hashtags=hashtags,
                 media_urls=media_urls,
-                wb_url=wb_url,
+                product_url=product_url,
+                wb_url=product_url if source_marketplace == 'wb' else None,
+                source_marketplace=source_marketplace,
+                entity_refs=normalized_refs,
                 store_name=store_name,
                 product_names=product_names,
                 quality_score=quality,
@@ -377,6 +559,18 @@ class ContentFactoryService:
                 generation_time_ms=elapsed_ms,
             )
 
+        except ContentFactoryScopeError as exc:
+            logger.warning(
+                "Content generation rejected by catalog scope: factory=%s error=%s",
+                getattr(factory, 'id', None),
+                exc,
+            )
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            return GenerationResult(
+                success=False,
+                error=str(exc),
+                generation_time_ms=elapsed_ms,
+            )
         except Exception as e:
             logger.error(f"Content generation error: {e}", exc_info=True)
             elapsed_ms = int((time.time() - start_time) * 1000)
@@ -393,6 +587,7 @@ class ContentFactoryService:
         content_type: str,
         template_id: Optional[int] = None,
         custom_prompt: Optional[str] = None,
+        entity_refs: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[Optional[ContentItem], Optional[str]]:
         """Генерирует контент и сохраняет в БД.
 
@@ -405,6 +600,7 @@ class ContentFactoryService:
             content_type=content_type,
             template_id=template_id,
             custom_prompt=custom_prompt,
+            entity_refs=entity_refs,
         )
 
         if not result.success:
@@ -425,7 +621,8 @@ class ContentFactoryService:
             generation_time_ms=result.generation_time_ms,
             social_account_id=factory.default_social_account_id,
         )
-        item.set_product_ids(product_ids)
+        item.set_product_ids(product_ids if not result.entity_refs else [])
+        item.set_entity_refs(result.entity_refs or [])
         if result.hashtags:
             item.set_hashtags(result.hashtags)
 
@@ -436,6 +633,8 @@ class ContentFactoryService:
         # Сохраняем метаданные (ссылка WB, магазин, качество)
         platform_specific = {
             'wb_url': result.wb_url or '',
+            'product_url': result.product_url or '',
+            'source_marketplace': result.source_marketplace or 'wb',
             'store_name': result.store_name or '',
             'product_names': result.product_names or [],
             'quality_score': result.quality_score,
@@ -491,10 +690,16 @@ class ContentFactoryService:
 
             item, error = self.generate_and_save(
                 factory=factory,
-                product_ids=[product_id],
+                product_ids=(
+                    [] if product_data.get('entity_ref') else [product_id]
+                ),
                 content_type=content_type,
                 template_id=template_id,
                 custom_prompt=custom_prompt,
+                entity_refs=(
+                    [product_data['entity_ref']]
+                    if product_data.get('entity_ref') else None
+                ),
             )
 
             if item:
@@ -638,6 +843,10 @@ class ContentFactoryService:
 
         # Принудительный выбор конкретных товаров
         if force_product_ids:
+            if self._uses_marketplace_listings(factory):
+                raise ContentFactoryScopeError(
+                    "Для listing source используйте typed entity_refs"
+                )
             forced = self._collect_products_data(force_product_ids, factory.seller_id)
             return forced[:limit]
 
@@ -646,7 +855,9 @@ class ContentFactoryService:
         # Загружаем ВСЕ товары — без лимита, нам нужен полный каталог
         fetch_limit = 1000
 
-        if mode == 'bestsellers':
+        if self._uses_marketplace_listings(factory):
+            raw = self._select_marketplace_listings(factory, fetch_limit)
+        elif mode == 'bestsellers':
             raw = self._select_bestsellers(factory.seller_id, fetch_limit)
         elif mode == 'new_arrivals':
             raw = self._select_new_arrivals(factory.seller_id, fetch_limit)
@@ -694,7 +905,15 @@ class ContentFactoryService:
                 ContentItem.factory_id == factory.id,
             ).all()
             for ci in factory_items:
-                for pid in ci.get_product_ids():
+                if self._uses_marketplace_listings(factory):
+                    used_ids = [
+                        ref['id']
+                        for ref in ci.get_entity_refs()
+                        if ref['account_id'] == factory.marketplace_account_id
+                    ]
+                else:
+                    used_ids = ci.get_product_ids()
+                for pid in used_ids:
                     product_use_count[pid] = product_use_count.get(pid, 0) + 1
         except Exception as e:
             logger.error(f"select_products: failed to load use counts: {e}")
@@ -711,6 +930,8 @@ class ContentFactoryService:
         all_use_counts = {p['id']: product_use_count.get(p['id'], 0) for p in deduped}
         self._last_selection_debug = {
             'mode': mode,
+            'catalog_source': factory.catalog_source or 'legacy_wb',
+            'marketplace_account_id': factory.marketplace_account_id,
             'raw_count': len(raw),
             'deduped_count': len(deduped),
             'excluded_count': excluded_count,
@@ -824,17 +1045,320 @@ class ContentFactoryService:
         ).limit(limit).all()
         return [self._product_to_dict(p) for p in products]
 
+    @staticmethod
+    def _stored_object(raw_value: Any) -> dict:
+        if isinstance(raw_value, dict):
+            return raw_value
+        if not isinstance(raw_value, str) or not raw_value:
+            return {}
+        try:
+            value = json.loads(raw_value)
+        except (TypeError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _finite_number(value: Any) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if number != number or number in (float('inf'), float('-inf')):
+            return None
+        return number
+
+    @classmethod
+    def _listing_has_stock(cls, listing: MarketplaceListing) -> bool:
+        summary = cls._stored_object(listing.stock_summary_json)
+        if summary.get('available') is False:
+            return False
+        present = cls._finite_number(summary.get('present'))
+        if present is not None:
+            return present > 0
+        values = summary.get('values')
+        if isinstance(values, dict):
+            totals = [
+                cls._finite_number(values.get(key))
+                for key in ('present', 'fbo_present', 'fbs_present')
+            ]
+            known = [value for value in totals if value is not None]
+            return sum(known) > 0 if known else False
+        return False
+
+    @classmethod
+    def _listing_price_values(
+        cls,
+        listing: MarketplaceListing,
+    ) -> Tuple[float, float, str]:
+        summary = cls._stored_object(listing.price_summary_json)
+        values = summary.get('values')
+        values = values if isinstance(values, dict) else {}
+        current = next((
+            cls._finite_number(values.get(key))
+            for key in ('marketing_seller_price', 'price', 'retail_price')
+            if cls._finite_number(values.get(key)) is not None
+        ), 0.0)
+        old = next((
+            cls._finite_number(values.get(key))
+            for key in ('old_price', 'retail_price')
+            if cls._finite_number(values.get(key)) is not None
+        ), 0.0)
+        currency = summary.get('currency')
+        if currency not in (None, 'RUB'):
+            raise ContentFactoryScopeError(
+                "Контент-фабрика поддерживает Ozon-цены только в RUB"
+            )
+        return max(current or 0.0, 0.0), max(old or 0.0, 0.0), 'RUB'
+
+    @staticmethod
+    def _listing_entity_ref(listing: MarketplaceListing) -> Dict[str, Any]:
+        return {
+            'entity_kind': 'marketplace_listing',
+            'id': listing.id,
+            'marketplace_code': 'ozon',
+            'account_id': listing.account_id,
+        }
+
+    @classmethod
+    def _marketplace_bestseller_scores(
+        cls,
+        factory: ContentFactory,
+    ) -> Dict[int, float]:
+        sync = MarketplaceAnalyticsSync.query.filter_by(
+            seller_id=factory.seller_id,
+            account_id=factory.marketplace_account_id,
+            period_code='30d',
+            status='completed',
+        ).order_by(
+            MarketplaceAnalyticsSync.completed_at.desc(),
+            MarketplaceAnalyticsSync.id.desc(),
+        ).first()
+        if sync is None:
+            return {}
+        rows = db.session.query(
+            MarketplaceMetricFact.listing_id,
+            db.func.sum(MarketplaceMetricFact.metric_value),
+        ).filter(
+            MarketplaceMetricFact.sync_id == sync.id,
+            MarketplaceMetricFact.listing_id.isnot(None),
+            MarketplaceMetricFact.metric_code == 'ordered_revenue_rub',
+        ).group_by(MarketplaceMetricFact.listing_id).all()
+        return {
+            listing_id: float(value or 0)
+            for listing_id, value in rows
+            if listing_id is not None
+        }
+
+    def _select_marketplace_listings(
+        self,
+        factory: ContentFactory,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        account = self.validate_catalog_scope(
+            seller_id=factory.seller_id,
+            catalog_source=factory.catalog_source or 'legacy_wb',
+            marketplace_account_id=factory.marketplace_account_id,
+        )
+        listings = MarketplaceListing.query.options(
+            joinedload(MarketplaceListing.marketplace),
+            joinedload(MarketplaceListing.account),
+            joinedload(MarketplaceListing.imported_product).joinedload(
+                ImportedProduct.supplier_product
+            ),
+        ).filter(
+            MarketplaceListing.seller_id == factory.seller_id,
+            MarketplaceListing.account_id == account.id,
+            MarketplaceListing.marketplace_id == account.marketplace_id,
+            MarketplaceListing.is_available.is_(True),
+            MarketplaceListing.is_archived.is_(False),
+            MarketplaceListing.normalized_status == 'active',
+            MarketplaceListing.imported_product_id.isnot(None),
+        ).limit(min(max(limit, 1), 1000)).all()
+        listings = [item for item in listings if self._listing_has_stock(item)]
+        mode = factory.product_selection_mode or 'manual'
+        if mode == 'new_arrivals':
+            listings.sort(
+                key=lambda item: item.upstream_created_at or item.created_at or datetime.min,
+                reverse=True,
+            )
+        elif mode == 'bestsellers':
+            scores = self._marketplace_bestseller_scores(factory)
+            listings.sort(
+                key=lambda item: (
+                    scores.get(item.id, 0.0),
+                    item.updated_at or datetime.min,
+                ),
+                reverse=True,
+            )
+        else:
+            listings.sort(
+                key=lambda item: item.updated_at or datetime.min,
+                reverse=True,
+            )
+        products = [self._listing_to_dict(item) for item in listings]
+        if mode == 'rules':
+            rules = factory.get_selection_rules()
+            category = str(rules.get('category') or '').casefold()
+            brand = str(rules.get('brand') or '').casefold()
+            min_price = self._finite_number(rules.get('min_price'))
+            max_price = self._finite_number(rules.get('max_price'))
+            products = [
+                product for product in products
+                if (not category or category in product.get('category', '').casefold())
+                and (not brand or brand in product.get('brand', '').casefold())
+                and (min_price is None or product.get('price', 0) >= min_price)
+                and (max_price is None or product.get('price', 0) <= max_price)
+            ]
+        return products[:limit]
+
+    def _collect_listing_data(
+        self,
+        entity_refs: List[Dict[str, Any]],
+        factory: ContentFactory,
+    ) -> List[Dict[str, Any]]:
+        normalized = self._normalize_entity_refs(factory, entity_refs)
+        account = self.validate_catalog_scope(
+            seller_id=factory.seller_id,
+            catalog_source=factory.catalog_source or 'legacy_wb',
+            marketplace_account_id=factory.marketplace_account_id,
+        )
+        ids = [item['id'] for item in normalized]
+        listings = MarketplaceListing.query.options(
+            joinedload(MarketplaceListing.marketplace),
+            joinedload(MarketplaceListing.account),
+            joinedload(MarketplaceListing.imported_product).joinedload(
+                ImportedProduct.supplier_product
+            ),
+        ).filter(
+            MarketplaceListing.seller_id == factory.seller_id,
+            MarketplaceListing.account_id == account.id,
+            MarketplaceListing.marketplace_id == account.marketplace_id,
+            MarketplaceListing.id.in_(ids),
+            MarketplaceListing.is_available.is_(True),
+            MarketplaceListing.is_archived.is_(False),
+            MarketplaceListing.normalized_status == 'active',
+        ).all()
+        by_id = {listing.id: listing for listing in listings}
+        if set(by_id) != set(ids):
+            raise ContentFactoryScopeError(
+                "Не все Ozon-листинги найдены в точном scope фабрики"
+            )
+        result = []
+        for ref in normalized:
+            listing = by_id[ref['id']]
+            if (
+                listing.marketplace is None
+                or listing.marketplace.code != 'ozon'
+                or listing.canonical_link_status != 'linked'
+                or listing.imported_product is None
+                or not self._listing_has_stock(listing)
+            ):
+                raise ContentFactoryScopeError(
+                    "Ozon-листинг неактивен, без остатка или не связан "
+                    "с общей внутренней карточкой"
+                )
+            result.append(self._listing_to_dict(listing))
+        return result
+
+    def _listing_to_dict(self, listing: MarketplaceListing) -> Dict[str, Any]:
+        product = listing.imported_product
+        if product is None or listing.canonical_link_status != 'linked':
+            raise ContentFactoryScopeError(
+                "Для контента нужна связанная общая внутренняя карточка"
+            )
+        fact_pack = MarketplaceFactPackBuilder.build(product)
+        facts = fact_pack.get('facts', {})
+        identity = facts.get('identity') if isinstance(facts.get('identity'), dict) else {}
+        attributes = (
+            facts.get('attributes')
+            if isinstance(facts.get('attributes'), dict) else {}
+        )
+        price, old_price, currency = self._listing_price_values(listing)
+        discount_info = ''
+        if old_price > price > 0:
+            percent = int((1 - price / old_price) * 100)
+            discount_info = f' (скидка {percent}%, было {int(old_price)} руб.)'
+        characteristics = []
+        for item in attributes.get('characteristics', []):
+            if isinstance(item, dict) and item.get('name'):
+                characteristics.append(f"{item['name']}: {item.get('value', '')}")
+        photos: List[str] = []
+        if product.photo_urls:
+            try:
+                from routes.photos import generate_public_photo_urls
+                photos = generate_public_photo_urls(product)[:10]
+            except Exception as exc:
+                logger.debug(
+                    "Content listing %s canonical photos unavailable: %s",
+                    listing.id,
+                    exc,
+                )
+        sizes = attributes.get('sizes')
+        available_sizes = [str(value) for value in sizes] if isinstance(sizes, list) else []
+        entity_ref = self._listing_entity_ref(listing)
+        return {
+            'id': listing.id,
+            'listing_id': listing.id,
+            'entity_ref': entity_ref,
+            'entity_key': f"marketplace_listing:{listing.id}",
+            'source_marketplace': 'ozon',
+            'source_account_id': listing.account_id,
+            'source_label': f"Ozon · {listing.account.label if listing.account else listing.account_id}",
+            'nm_id': None,
+            'name': identity.get('title') or product.title or listing.title or '',
+            'brand': identity.get('brand') or product.brand or '',
+            'category': identity.get('source_category') or product.category or '',
+            'price': price,
+            'discount_price': price,
+            'currency': currency,
+            'description': identity.get('description') or product.description or '',
+            'vendor_code': product.external_vendor_code or listing.offer_id or '',
+            'photos': photos,
+            'product_url': '',
+            'wb_url': '',
+            'rating': 0,
+            'characteristics': '; '.join(characteristics)[:2000],
+            'discount_info': discount_info,
+            'available_sizes': available_sizes,
+            'sizes_info': (
+                f"Доступные размеры: {', '.join(available_sizes)}"
+                if available_sizes else ''
+            ),
+            'canonical_product_id': product.id,
+            'canonical_fact_hash': fact_pack.get('fact_hash'),
+            'observed_media_count': len(
+                MarketplaceListingMediaService.observed_main_images(listing)
+            ),
+        }
+
     def _collect_products_data(self, product_ids: List[int], seller_id: int) -> List[Dict]:
         """Загружает товары по ID и возвращает данные для промптов."""
-        if not product_ids:
-            return []
+        if not isinstance(product_ids, list) or not 1 <= len(product_ids) <= 10:
+            raise ContentFactoryScopeError(
+                "product_ids должен содержать от 1 до 10 карточек"
+            )
+        normalized = []
+        for index, value in enumerate(product_ids):
+            value = self._positive_int(value, f"product_ids[{index}]")
+            if value in normalized:
+                raise ContentFactoryScopeError("product_ids не должны повторяться")
+            normalized.append(value)
 
         products = Product.query.filter(
-            Product.id.in_(product_ids),
+            Product.id.in_(normalized),
             Product.seller_id == seller_id,
         ).all()
-
-        return [self._product_to_dict(p, validate_photos=True) for p in products]
+        by_id = {product.id: product for product in products}
+        if set(by_id) != set(normalized):
+            raise ContentFactoryScopeError(
+                "Не все WB-товары найдены в seller scope фабрики"
+            )
+        return [
+            self._product_to_dict(by_id[product_id], validate_photos=True)
+            for product_id in normalized
+        ]
 
     def _validate_photo_urls(self, urls: list) -> list:
         """Проверяет доступность фото по URL. Останавливается на первой ошибке.
@@ -975,6 +1499,10 @@ class ContentFactoryService:
 
         return {
             'id': product.id,
+            'entity_ref': None,
+            'entity_key': f"legacy_product:{product.id}",
+            'source_marketplace': 'wb',
+            'source_label': 'Wildberries',
             'nm_id': nm_id,
             'name': product.title or '',
             'brand': product.brand or '',
@@ -984,6 +1512,7 @@ class ContentFactoryService:
             'description': getattr(product, 'description', '') or '',
             'vendor_code': product.vendor_code or '',
             'photos': photos,
+            'product_url': wb_url,
             'wb_url': wb_url,
             'rating': product.nm_rating or 0,
             'characteristics': characteristics,
@@ -1004,7 +1533,18 @@ class ContentFactoryService:
     ) -> Optional[ContentTemplate]:
         """Находит подходящий шаблон. Если в БД нет — использует встроенный."""
         if template_id:
-            return ContentTemplate.query.get(template_id)
+            if isinstance(template_id, bool) or not isinstance(template_id, int):
+                return None
+            return ContentTemplate.query.filter(
+                ContentTemplate.id == template_id,
+                ContentTemplate.platform == factory.platform,
+                ContentTemplate.content_type == content_type,
+                ContentTemplate.is_active.is_(True),
+                db.or_(
+                    ContentTemplate.seller_id == factory.seller_id,
+                    ContentTemplate.is_system.is_(True),
+                ),
+            ).first()
 
         # Сначала ищем шаблон продавца
         template = ContentTemplate.query.filter_by(
@@ -1113,7 +1653,9 @@ class ContentFactoryService:
             '{description}': (product_data.get('description', '') or '')[:500],
             '{vendor_code}': product_data.get('vendor_code', ''),
             '{characteristics}': (product_data.get('characteristics', '') or product_data.get('description', ''))[:500],
-            '{wb_url}': product_data.get('wb_url', ''),
+            '{wb_url}': product_data.get('product_url') or product_data.get('wb_url', ''),
+            '{product_url}': product_data.get('product_url') or product_data.get('wb_url', ''),
+            '{marketplace}': product_data.get('source_marketplace', 'wb').upper(),
             '{store_name}': store_name,
             '{rating}': rating_str,
             '{photo_count}': str(len(product_data.get('photos', []))),
@@ -1144,8 +1686,13 @@ class ContentFactoryService:
         products_list = ""
         for i, p in enumerate(products_data, 1):
             price = p.get('discount_price') or p.get('price', 0)
-            wb_url = p.get('wb_url', '')
-            products_list += f"{i}. {p.get('name', '')} — {int(float(price))} руб. ({p.get('brand', '')})\n   Ссылка: {wb_url}\n"
+            product_url = p.get('product_url') or p.get('wb_url', '')
+            products_list += (
+                f"{i}. {p.get('name', '')} — {int(float(price))} руб. "
+                f"({p.get('brand', '')})\n"
+            )
+            if product_url:
+                products_list += f"   Ссылка: {product_url}\n"
 
         prompt = template.user_prompt_template
         prompt = prompt.replace('{products_list}', products_list)
@@ -1167,7 +1714,7 @@ class ContentFactoryService:
         draft: str,
         platform: str,
         char_limit: int,
-        wb_url: str,
+        product_url: str,
         store_name: str,
     ) -> Optional[str]:
         """Шаг 2: AI проверяет и улучшает черновик. Возвращает улучшенный текст или None."""
@@ -1177,7 +1724,7 @@ class ContentFactoryService:
                 f'--- НАЧАЛО ЧЕРНОВИКА ---\n{draft}\n--- КОНЕЦ ЧЕРНОВИКА ---\n\n'
                 f'ПРОВЕРЬ:\n'
                 f'1. Нет ли markdown-разметки (**, *, ##, ```)? Если есть — убери, замени на эмодзи/заглавные\n'
-                f'2. УДАЛИ все ссылки на wildberries.ru или любые другие URL — ссылка будет добавлена автоматически\n'
+                f'2. УДАЛИ любые URL — только проверенная ссылка будет добавлена автоматически, если она есть\n'
                 f'3. Нет ли юридических форм (ИП, ООО, ОАО, индивидуальный предприниматель)? Если есть — УДАЛИ их полностью\n'
                 f'4. Есть ли призыв к действию?\n'
                 f'5. Есть ли цена?\n'
@@ -1322,19 +1869,14 @@ class ContentFactoryService:
 
         return title, body_text, hashtags
 
-    def _ensure_product_url(self, body: str, wb_url: str) -> str:
+    def _ensure_product_url(self, body: str, product_url: str) -> str:
         """Гарантирует наличие правильной ссылки на товар в тексте.
 
-        1. Удаляет все ссылки wildberries.ru которые AI мог нагаллюцинировать
-        2. Вставляет правильную ссылку перед призывом к действию или в конец текста
+        Любой URL модели удаляется. Только точная известная ссылка добавляется
+        обратно; для Ozon URL не фабрикуется из SKU/product ID.
         """
-        if not wb_url:
-            return body
-
-        # Убираем все WB-ссылки из текста (AI мог вставить неправильные)
-        # Паттерн: https://www.wildberries.ru/catalog/ЛЮБЫЕ_ЦИФРЫ/detail.aspx
         body = re.sub(
-            r'https?://(?:www\.)?wildberries\.ru/catalog/\d+/detail\.aspx\S*',
+            r'https?://[^\s]+',
             '',
             body,
         )
@@ -1350,10 +1892,13 @@ class ContentFactoryService:
         # Убираем лишние пустые строки
         body = re.sub(r'\n{3,}', '\n\n', body).strip()
 
+        if not product_url:
+            return body
+
         # Вставляем правильную ссылку перед последним абзацем (призыв к действию)
         # или просто в конец
         body = body.rstrip()
-        body += f'\n\n👉 {wb_url}'
+        body += f'\n\n👉 {product_url}'
 
         return body
 
@@ -1362,7 +1907,7 @@ class ContentFactoryService:
         body: str,
         content_type: str,
         platform: str,
-        wb_url: str,
+        product_url: str,
         store_name: str,
     ) -> int:
         """Оценка качества контента 0-100."""
@@ -1378,11 +1923,10 @@ class ContentFactoryService:
         if any(w in text.lower() for w in cta_words):
             score += 15
 
-        # Есть ссылка на WB? +15
-        if wb_url and wb_url in text:
+        # Есть точная известная ссылка? +15. Для Ozon отсутствие URL честно и
+        # не заменяется выдуманной ссылкой из SKU.
+        if product_url and product_url in text:
             score += 15
-        elif 'wildberries.ru' in text.lower():
-            score += 10
 
         # В лимите символов? +15
         char_limit = PLATFORM_CHAR_LIMITS.get(platform, 4096)

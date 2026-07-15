@@ -8,22 +8,69 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from flask import render_template, jsonify, request, redirect, url_for, flash
+from flask import current_app, render_template, jsonify, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from models import (
     db, ContentFactory, ContentItem, ContentTemplate,
     ContentPlan, SocialAccount, Product, ProductStock,
+    SellerMarketplaceAccount,
     CONTENT_PLATFORMS, CONTENT_TYPES, CONTENT_TONES,
     CONTENT_STATUSES, PRODUCT_SELECTION_MODES,
 )
 from services.content_factory_service import (
     ContentFactoryService,
+    ContentFactoryScopeError,
     PLATFORM_LABELS, CONTENT_TYPE_LABELS, STATUS_LABELS,
 )
 from services.url_security import safe_float
 
 logger = logging.getLogger(__name__)
+
+
+def _ozon_catalog_accounts(seller_id):
+    accounts = SellerMarketplaceAccount.query.filter_by(
+        seller_id=seller_id,
+        is_active=True,
+    ).order_by(SellerMarketplaceAccount.is_default.desc(), SellerMarketplaceAccount.id).all()
+    return [
+        account for account in accounts
+        if account.marketplace is not None and account.marketplace.code == 'ozon'
+    ]
+
+
+def _catalog_scope_from_form(seller_id):
+    source = request.form.get('catalog_source', 'legacy_wb')
+    raw_account_id = request.form.get('marketplace_account_id', '').strip()
+    account_id = None
+    if raw_account_id:
+        if not raw_account_id.isascii() or not raw_account_id.isdigit():
+            raise ContentFactoryScopeError(
+                'marketplace_account_id должен быть положительным целым числом'
+            )
+        account_id = int(raw_account_id)
+        if account_id <= 0:
+            raise ContentFactoryScopeError(
+                'marketplace_account_id должен быть положительным целым числом'
+            )
+    if source == 'marketplace_listing' and not current_app.config.get(
+        'MARKETPLACE_OZON_ENABLED', False
+    ):
+        raise ContentFactoryScopeError('Ozon-интеграция выключена')
+    account = ContentFactoryService.validate_catalog_scope(
+        seller_id=seller_id,
+        catalog_source=source,
+        marketplace_account_id=account_id,
+    )
+    return source, account.id if account is not None else None
+
+
+def _ensure_factory_catalog_feature(factory):
+    if (
+        (factory.catalog_source or 'legacy_wb') == 'marketplace_listing'
+        and not current_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+    ):
+        raise ContentFactoryScopeError('Ozon-интеграция выключена')
 
 
 def register_content_factory_routes(app):
@@ -100,6 +147,13 @@ def register_content_factory_routes(app):
             content_types = request.form.getlist('content_types')
             if not content_types:
                 content_types = ['promo_post']
+            try:
+                catalog_source, marketplace_account_id = _catalog_scope_from_form(
+                    current_user.seller.id
+                )
+            except ContentFactoryScopeError as exc:
+                flash(str(exc), 'error')
+                return redirect(url_for('content_factory_create'))
 
             factory = ContentFactory(
                 seller_id=current_user.seller.id,
@@ -111,6 +165,8 @@ def register_content_factory_routes(app):
                 ai_provider=request.form.get('ai_provider', 'openai'),
                 ai_model=request.form.get('ai_model', '').strip() or None,
                 product_selection_mode=request.form.get('product_selection_mode', 'manual'),
+                catalog_source=catalog_source,
+                marketplace_account_id=marketplace_account_id,
                 auto_approve=bool(request.form.get('auto_approve')),
                 auto_generate=bool(request.form.get('auto_generate')),
                 generate_interval_minutes=max(30, int(request.form.get('generate_interval_minutes', 120) or 120)),
@@ -147,11 +203,14 @@ def register_content_factory_routes(app):
         accounts = SocialAccount.query.filter_by(
             seller_id=current_user.seller.id, is_active=True
         ).all()
+        marketplace_accounts = _ozon_catalog_accounts(current_user.seller.id)
 
         return render_template(
             'content_factory_form.html',
             factory=None,
             accounts=accounts,
+            marketplace_accounts=marketplace_accounts,
+            ozon_enabled=bool(current_app.config.get('MARKETPLACE_OZON_ENABLED', False)),
             platforms=CONTENT_PLATFORMS,
             content_types=CONTENT_TYPES,
             tones=CONTENT_TONES,
@@ -172,6 +231,28 @@ def register_content_factory_routes(app):
         ).first_or_404()
 
         if request.method == 'POST':
+            try:
+                catalog_source, marketplace_account_id = _catalog_scope_from_form(
+                    current_user.seller.id
+                )
+            except ContentFactoryScopeError as exc:
+                flash(str(exc), 'error')
+                return redirect(url_for('content_factory_edit', factory_id=factory.id))
+            current_scope = (
+                factory.catalog_source or 'legacy_wb',
+                factory.marketplace_account_id,
+            )
+            requested_scope = (catalog_source, marketplace_account_id)
+            if (
+                current_scope != requested_scope
+                and ContentItem.query.filter_by(factory_id=factory.id).first() is not None
+            ):
+                flash(
+                    'Источник карточек нельзя менять после создания контента. '
+                    'Создайте отдельную фабрику для другого кабинета.',
+                    'error',
+                )
+                return redirect(url_for('content_factory_edit', factory_id=factory.id))
             factory.name = request.form.get('name', factory.name).strip()
             factory.description = request.form.get('description', '').strip()
             factory.platform = request.form.get('platform', factory.platform)
@@ -180,6 +261,8 @@ def register_content_factory_routes(app):
             factory.ai_provider = request.form.get('ai_provider', factory.ai_provider)
             factory.ai_model = request.form.get('ai_model', '').strip() or None
             factory.product_selection_mode = request.form.get('product_selection_mode', factory.product_selection_mode)
+            factory.catalog_source = catalog_source
+            factory.marketplace_account_id = marketplace_account_id
             factory.auto_approve = bool(request.form.get('auto_approve'))
             factory.auto_generate = bool(request.form.get('auto_generate'))
             factory.generate_interval_minutes = max(30, int(request.form.get('generate_interval_minutes', 120) or 120))
@@ -223,11 +306,14 @@ def register_content_factory_routes(app):
         accounts = SocialAccount.query.filter_by(
             seller_id=current_user.seller.id, is_active=True
         ).all()
+        marketplace_accounts = _ozon_catalog_accounts(current_user.seller.id)
 
         return render_template(
             'content_factory_form.html',
             factory=factory,
             accounts=accounts,
+            marketplace_accounts=marketplace_accounts,
+            ozon_enabled=bool(current_app.config.get('MARKETPLACE_OZON_ENABLED', False)),
             platforms=CONTENT_PLATFORMS,
             content_types=CONTENT_TYPES,
             tones=CONTENT_TONES,
@@ -265,7 +351,13 @@ def register_content_factory_routes(app):
         templates = service.get_templates_for_factory(factory)
 
         # Товары для генерации
-        products = service.select_products(factory, limit=100)
+        catalog_error = None
+        try:
+            _ensure_factory_catalog_feature(factory)
+            products = service.select_products(factory, limit=100)
+        except ContentFactoryScopeError as exc:
+            products = []
+            catalog_error = str(exc)
 
         return render_template(
             'content_factory_items.html',
@@ -274,6 +366,7 @@ def register_content_factory_routes(app):
             stats=stats,
             templates=templates,
             products=products,
+            catalog_error=catalog_error,
             status_filter=status_filter,
             type_filter=type_filter,
             platform_labels=PLATFORM_LABELS,
@@ -335,9 +428,17 @@ def register_content_factory_routes(app):
         ).first()
         if not factory:
             return jsonify({'error': 'Фабрика не найдена'}), 404
+        try:
+            _ensure_factory_catalog_feature(factory)
+        except ContentFactoryScopeError as exc:
+            return jsonify({'error': str(exc)}), 404
 
-        data = request.get_json() or {}
-        count = min(data.get('count', 5), 20)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Ожидается JSON object'}), 400
+        count = data.get('count', 5)
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 20:
+            return jsonify({'error': 'count должен быть целым числом 1..20'}), 400
 
         from datetime import datetime, timedelta
 
@@ -350,10 +451,17 @@ def register_content_factory_routes(app):
         ).all()
         recent_product_ids = set()
         for ci in recent_items:
-            recent_product_ids.update(ci.get_product_ids())
+            recent_product_ids.update(service.selection_ids_for_item(factory, ci))
 
         # select_products уже содержит логику ротации (приоритет давно не использованным)
-        products = service.select_products(factory, limit=count, exclude_product_ids=recent_product_ids)
+        try:
+            products = service.select_products(
+                factory,
+                limit=count,
+                exclude_product_ids=recent_product_ids,
+            )
+        except ContentFactoryScopeError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         if len(products) < count:
             # Смягчаем кулдаун до 1 дня
@@ -361,7 +469,7 @@ def register_content_factory_routes(app):
             soft_exclude = set()
             for ci in recent_items:
                 if ci.created_at >= soft_cooldown:
-                    soft_exclude.update(ci.get_product_ids())
+                    soft_exclude.update(service.selection_ids_for_item(factory, ci))
             more = service.select_products(factory, limit=count, exclude_product_ids=soft_exclude)
             existing_ids = {p['id'] for p in products}
             for p in more:
@@ -383,7 +491,12 @@ def register_content_factory_routes(app):
                     break
 
         return jsonify({
-            'products': [{'id': p['id'], 'name': p.get('name', '')} for p in products[:count]],
+            'products': [{
+                'id': p['id'],
+                'name': p.get('name', ''),
+                'entity_ref': p.get('entity_ref'),
+                'source_marketplace': p.get('source_marketplace', 'wb'),
+            } for p in products[:count]],
         })
 
     @app.route('/api/content-factory/<int:factory_id>/random-product', methods=['POST'])
@@ -399,71 +512,36 @@ def register_content_factory_routes(app):
         if not factory:
             return jsonify({'error': 'Фабрика не найдена'}), 404
 
-        data = request.get_json() or {}
+        try:
+            _ensure_factory_catalog_feature(factory)
+        except ContentFactoryScopeError as exc:
+            return jsonify({'error': str(exc)}), 404
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Ожидается JSON object'}), 400
         exclude_ids = data.get('exclude_ids', [])
-
-        from datetime import datetime
-        import random as _random
-
-        # Собираем историю использования для ротации
-        used_items = ContentItem.query.filter_by(factory_id=factory.id).all()
-        product_last_used = {}
-        for ci in used_items:
-            for pid in ci.get_product_ids():
-                prev = product_last_used.get(pid)
-                if prev is None or ci.created_at > prev:
-                    product_last_used[pid] = ci.created_at
-
-        # Жёсткое исключение: только переданные exclude_ids (текущий выбор в UI)
+        if not isinstance(exclude_ids, list) or len(exclude_ids) > 20:
+            return jsonify({'error': 'exclude_ids должен быть bounded array'}), 400
         hard_exclude = set()
-        for eid in exclude_ids:
-            hard_exclude.add(int(eid))
+        for value in exclude_ids:
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                return jsonify({'error': 'exclude_ids содержит некорректный ID'}), 400
+            if value in hard_exclude:
+                return jsonify({'error': 'exclude_ids не должен содержать дубли'}), 400
+            hard_exclude.add(value)
 
-        # Базовый фильтр: в наличии + активный
-        # Используем ProductStock для проверки наличия,
-        # т.к. Product.quantity может быть не синхронизирован (Content API не возвращает остатки)
-        stock_subquery = (
-            db.session.query(
-                ProductStock.product_id,
-                db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
+        try:
+            candidates = service.select_products(
+                factory,
+                limit=5,
+                exclude_product_ids=hard_exclude,
             )
-            .group_by(ProductStock.product_id)
-            .subquery()
-        )
-        query = (
-            Product.query
-            .outerjoin(stock_subquery, Product.id == stock_subquery.c.product_id)
-            .filter(
-                Product.seller_id == factory.seller_id,
-                Product.is_active == True,
-                db.or_(
-                    stock_subquery.c.total_qty > 0,
-                    Product.quantity > 0,
-                ),
-            )
-        )
-        if hard_exclude:
-            query = query.filter(~Product.id.in_(hard_exclude))
-
-        # Берём все подходящие товары и сортируем по давности использования
-        candidates = query.all()
+        except ContentFactoryScopeError as exc:
+            return jsonify({'error': str(exc)}), 400
         if not candidates:
             return jsonify({'error': 'Нет доступных товаров (в наличии)'}), 404
-
-        # Сортируем: неиспользованные первые, затем давно использованные
-        def _sort_key(p):
-            last = product_last_used.get(p.id)
-            if last is None:
-                return datetime.min
-            return last
-        candidates.sort(key=_sort_key)
-
-        # Из топ-5 наименее использованных берём рандомный
-        top = candidates[:min(5, len(candidates))]
-        product = _random.choice(top)
-
-        pd = service._product_to_dict(product)
-        return jsonify({'product': pd})
+        return jsonify({'product': candidates[0]})
 
     @app.route('/api/content-factory/<int:factory_id>/generate', methods=['POST'])
     @login_required
@@ -478,14 +556,47 @@ def register_content_factory_routes(app):
         if not factory:
             return jsonify({'error': 'Фабрика не найдена'}), 404
 
-        data = request.get_json() or {}
+        try:
+            _ensure_factory_catalog_feature(factory)
+        except ContentFactoryScopeError as exc:
+            return jsonify({'error': str(exc)}), 404
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Ожидается JSON object'}), 400
         product_ids = data.get('product_ids', [])
+        entity_refs = data.get('entity_refs')
         content_type = data.get('content_type', 'promo_post')
         template_id = data.get('template_id')
         custom_prompt = data.get('custom_prompt')
 
-        if not product_ids:
-            return jsonify({'error': 'Выберите товары для генерации'}), 400
+        if content_type not in CONTENT_TYPES or content_type not in (
+            factory.get_content_types() or CONTENT_TYPES
+        ):
+            return jsonify({'error': 'Тип контента не разрешён фабрикой'}), 400
+        if service._uses_marketplace_listings(factory):
+            if product_ids not in (None, []):
+                return jsonify({
+                    'error': 'MarketplaceListing ID нельзя передавать как product_ids',
+                }), 400
+            try:
+                entity_refs = service._normalize_entity_refs(factory, entity_refs)
+            except ContentFactoryScopeError as exc:
+                return jsonify({'error': str(exc)}), 400
+            product_ids = []
+        else:
+            if entity_refs not in (None, []):
+                return jsonify({'error': 'Legacy WB фабрика не принимает entity_refs'}), 400
+            if not isinstance(product_ids, list) or not 1 <= len(product_ids) <= 10:
+                return jsonify({'error': 'Выберите от 1 до 10 товаров'}), 400
+            seen_ids = set()
+            for value in product_ids:
+                if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    return jsonify({'error': 'product_ids содержит некорректный ID'}), 400
+                if value in seen_ids:
+                    return jsonify({'error': 'product_ids не должен содержать дубли'}), 400
+                seen_ids.add(value)
+            entity_refs = None
 
         item, error = service.generate_and_save(
             factory=factory,
@@ -493,6 +604,7 @@ def register_content_factory_routes(app):
             content_type=content_type,
             template_id=template_id,
             custom_prompt=custom_prompt,
+            entity_refs=entity_refs,
         )
 
         if error:
@@ -516,19 +628,35 @@ def register_content_factory_routes(app):
         if not factory:
             return jsonify({'error': 'Фабрика не найдена'}), 404
 
-        data = request.get_json() or {}
+        try:
+            _ensure_factory_catalog_feature(factory)
+        except ContentFactoryScopeError as exc:
+            return jsonify({'error': str(exc)}), 404
+
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Ожидается JSON object'}), 400
         content_type = data.get('content_type', 'promo_post')
-        count = min(data.get('count', 5), 20)
+        count = data.get('count', 5)
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 20:
+            return jsonify({'error': 'count должен быть целым числом 1..20'}), 400
+        if content_type not in CONTENT_TYPES or content_type not in (
+            factory.get_content_types() or CONTENT_TYPES
+        ):
+            return jsonify({'error': 'Тип контента не разрешён фабрикой'}), 400
         template_id = data.get('template_id')
         custom_prompt = data.get('custom_prompt')
 
-        items, errors = service.generate_bulk(
-            factory=factory,
-            content_type=content_type,
-            count=count,
-            template_id=template_id,
-            custom_prompt=custom_prompt,
-        )
+        try:
+            items, errors = service.generate_bulk(
+                factory=factory,
+                content_type=content_type,
+                count=count,
+                template_id=template_id,
+                custom_prompt=custom_prompt,
+            )
+        except ContentFactoryScopeError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         if not items and errors:
             return jsonify({
@@ -768,9 +896,16 @@ def register_content_factory_routes(app):
         if not item:
             return jsonify({'error': 'Контент не найден'}), 404
 
-        factory = ContentFactory.query.get(item.factory_id)
+        factory = ContentFactory.query.filter_by(
+            id=item.factory_id,
+            seller_id=current_user.seller.id,
+        ).first()
         if not factory:
             return jsonify({'error': 'Фабрика не найдена'}), 404
+        try:
+            _ensure_factory_catalog_feature(factory)
+        except ContentFactoryScopeError as exc:
+            return jsonify({'error': str(exc)}), 404
 
         data = request.get_json() or {}
         custom_prompt = data.get('custom_prompt')
@@ -781,6 +916,7 @@ def register_content_factory_routes(app):
             content_type=item.content_type,
             template_id=item.template_id,
             custom_prompt=custom_prompt,
+            entity_refs=item.get_entity_refs() or None,
         )
 
         if not result.success:
@@ -802,6 +938,10 @@ def register_content_factory_routes(app):
         platform_specific = item.get_platform_specific()
         if result.wb_url:
             platform_specific['wb_url'] = result.wb_url
+        else:
+            platform_specific['wb_url'] = ''
+        platform_specific['product_url'] = result.product_url or ''
+        platform_specific['source_marketplace'] = result.source_marketplace or 'wb'
         if result.store_name:
             platform_specific['store_name'] = result.store_name
         if result.product_names:

@@ -24,6 +24,11 @@
                 {% elif factory.platform == 'tiktok' %}bg-gray-900 text-white
                 {% elif factory.platform == 'youtube' %}bg-red-100 text-red-700
                 {% endif %}">{{ platform_labels.get(factory.platform, factory.platform) }}</span>
+            {% if factory.catalog_source == 'marketplace_listing' %}
+            <span class="sh-badge sh-badge--blue sh-badge--sm">Ozon · {{ factory.marketplace_account.label if factory.marketplace_account else 'кабинет недоступен' }}</span>
+            {% else %}
+            <span class="sh-badge sh-badge--gray sh-badge--sm">Каталог WB</span>
+            {% endif %}
         </div>
         <div class="flex items-center gap-2">
             <a href="{{ url_for('content_factory_calendar', factory_id=factory.id) }}" class="px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 transition">
@@ -36,6 +41,12 @@
             </button>
         </div>
     </div>
+
+    {% if catalog_error %}
+    <div class="sh-alert sh-alert--warning mb-4" role="alert">
+        <div><strong>Источник каталога недоступен.</strong> {{ catalog_error }} Проверьте настройки фабрики и связь Ozon-листингов с общей карточкой.</div>
+    </div>
+    {% endif %}
 
     <!-- Stats row -->
     <div class="flex flex-wrap gap-3 mb-6">
@@ -671,6 +682,7 @@
                             <img :src="selectedProduct.photos[0]" class="w-16 h-16 object-cover rounded-lg bg-gray-100" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22><rect fill=%22%23f3f4f6%22 width=%2240%22 height=%2240%22/><text x=%2220%22 y=%2224%22 text-anchor=%22middle%22 fill=%22%239ca3af%22 font-size=%2212%22>?</text></svg>'">
                             <div class="flex-1 min-w-0">
                                 <div class="font-medium text-sm text-gray-900 truncate" x-text="selectedProduct.name"></div>
+                                <div class="text-[10px] mt-0.5" style="color:var(--accent)" x-text="selectedProduct.source_label || (selectedProduct.source_marketplace === 'ozon' ? 'Ozon' : 'Wildberries')"></div>
                                 <div class="text-xs text-gray-500 mt-0.5">
                                     <span x-text="selectedProduct.brand" class="text-gray-400"></span>
                                     <span class="mx-1">&middot;</span>
@@ -756,6 +768,7 @@
                             </div>
                             <div class="p-2.5">
                                 <div class="text-xs text-gray-400 truncate" x-text="p.brand"></div>
+                                <div class="text-[10px] truncate" style="color:var(--accent)" x-text="p.source_label || (p.source_marketplace === 'ozon' ? 'Ozon' : 'Wildberries')"></div>
                                 <div class="text-sm text-gray-900 leading-tight mt-0.5 line-clamp-2" x-text="p.name" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;"></div>
                                 <div class="flex items-baseline gap-1.5 mt-1.5">
                                     <span class="text-sm font-semibold text-gray-900" x-text="Math.round(p.discount_price || p.price) + ' ₽'"></span>
@@ -816,6 +829,13 @@ function contentItems() {
             );
         },
 
+        sourcePayload(product) {
+            if (product && product.entity_ref) {
+                return { product_ids: [], entity_refs: [product.entity_ref] };
+            }
+            return { product_ids: [Number(product.id)], entity_refs: undefined };
+        },
+
         selectProductFromPicker(product) {
             this.selectedProduct = product;
             this.genProductId = String(product.id);
@@ -853,7 +873,7 @@ function contentItems() {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
                         body: JSON.stringify({
-                            product_ids: [parseInt(this.genProductId)],
+                            ...this.sourcePayload(this.selectedProduct),
                             content_type: this.genContentType,
                             custom_prompt: this.genCustomPrompt || undefined,
                         }),
@@ -908,7 +928,9 @@ function contentItems() {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
                             body: JSON.stringify({
-                                product_ids: [product.id],
+                                ...(product.entity_ref
+                                    ? {product_ids: [], entity_refs: [product.entity_ref]}
+                                    : {product_ids: [Number(product.id)]}),
                                 content_type: this.genContentType,
                                 custom_prompt: this.genCustomPrompt || undefined,
                             }),

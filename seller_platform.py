@@ -6417,6 +6417,14 @@ def _run_startup_migrations():
                 migrate as migrate_marketplace_product_links,
             )
             migrate_marketplace_product_links(sqlite_path)
+            from migrations.migrate_add_image_lab_marketplace_target import (
+                migrate as migrate_image_lab_marketplace_target,
+            )
+            migrate_image_lab_marketplace_target(sqlite_path)
+            from migrations.migrate_add_content_factory_marketplace_scope import (
+                migrate as migrate_content_factory_marketplace_scope,
+            )
+            migrate_content_factory_marketplace_scope(sqlite_path)
             bind.dispose()
             bind = db.engine
     insp = sa_inspect(bind)

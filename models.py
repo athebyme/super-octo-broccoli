@@ -1229,6 +1229,13 @@ class ImageGenerationExperiment(db.Model):
         nullable=True,
         index=True,
     )
+    marketplace_listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    target_context_json = db.Column(db.Text, nullable=True)
     backend = db.Column(db.String(32), nullable=False)
     model = db.Column(db.String(120), nullable=False)
     scene_key = db.Column(db.String(32), nullable=True)
@@ -1268,10 +1275,20 @@ class ImageGenerationExperiment(db.Model):
             'image_generation_experiments', lazy='dynamic', cascade='all, delete-orphan'))
     imported_product = db.relationship(
         'ImportedProduct', backref=db.backref('image_generation_experiments', lazy='dynamic'))
+    marketplace_listing = db.relationship(
+        'MarketplaceListing',
+        backref=db.backref('image_generation_experiments', lazy='dynamic'),
+    )
 
     __table_args__ = (
         db.Index('idx_image_exp_seller_created', 'seller_id', 'created_at'),
         db.Index('idx_image_exp_seller_status', 'seller_id', 'status'),
+        db.Index(
+            'idx_image_exp_seller_listing',
+            'seller_id',
+            'marketplace_listing_id',
+            'created_at',
+        ),
     )
 
 
@@ -8804,6 +8821,16 @@ class ContentFactory(db.Model):
 
     product_selection_mode = db.Column(db.String(20), default='manual')
     product_selection_rules_json = db.Column(db.Text, default='{}')  # {category, brand, price_range}
+    # Existing factories keep the full legacy WB Product path.  A factory can
+    # opt into one exact seller-owned marketplace account without overloading
+    # Product IDs with MarketplaceListing IDs.
+    catalog_source = db.Column(db.String(30), nullable=False, default='legacy_wb')
+    marketplace_account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
 
     ai_provider = db.Column(db.String(20), default='openai')  # openai, claude, gigachat, gemini
     ai_model = db.Column(db.String(100))  # Конкретная модель (если пусто — дефолт провайдера)
@@ -8826,6 +8853,10 @@ class ContentFactory(db.Model):
     seller = db.relationship('Seller', backref=db.backref('content_factories', lazy='dynamic'))
     items = db.relationship('ContentItem', backref='factory', lazy='dynamic', cascade='all, delete-orphan')
     plans = db.relationship('ContentPlan', backref='factory', lazy='dynamic', cascade='all, delete-orphan')
+    marketplace_account = db.relationship(
+        'SellerMarketplaceAccount',
+        foreign_keys=[marketplace_account_id],
+    )
 
     def get_content_types(self):
         try:
@@ -8857,6 +8888,8 @@ class ContentFactory(db.Model):
             'style_guidelines': self.style_guidelines,
             'product_selection_mode': self.product_selection_mode,
             'product_selection_rules': self.get_selection_rules(),
+            'catalog_source': self.catalog_source or 'legacy_wb',
+            'marketplace_account_id': self.marketplace_account_id,
             'ai_provider': self.ai_provider,
             'schedule_cron': self.schedule_cron,
             'auto_approve': self.auto_approve,
@@ -9011,6 +9044,7 @@ class ContentItem(db.Model):
     content_type = db.Column(db.String(30), nullable=False)
 
     product_ids_json = db.Column(db.Text, default='[]')  # IDs товаров
+    entity_refs_json = db.Column(db.Text, nullable=False, default='[]')
     title = db.Column(db.String(500))
     body_text = db.Column(db.Text, nullable=False)
     hashtags_json = db.Column(db.Text, default='[]')
@@ -9052,6 +9086,42 @@ class ContentItem(db.Model):
     def set_product_ids(self, ids):
         self.product_ids_json = json.dumps(ids)
 
+    def get_entity_refs(self):
+        try:
+            values = json.loads(self.entity_refs_json or '[]')
+        except Exception:
+            return []
+        if not isinstance(values, list):
+            return []
+        result = []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            if value.get('entity_kind') != 'marketplace_listing':
+                continue
+            listing_id = value.get('id')
+            account_id = value.get('account_id')
+            if (
+                isinstance(listing_id, bool)
+                or not isinstance(listing_id, int)
+                or listing_id <= 0
+                or isinstance(account_id, bool)
+                or not isinstance(account_id, int)
+                or account_id <= 0
+                or value.get('marketplace_code') != 'ozon'
+            ):
+                continue
+            result.append({
+                'entity_kind': 'marketplace_listing',
+                'id': listing_id,
+                'marketplace_code': 'ozon',
+                'account_id': account_id,
+            })
+        return result
+
+    def set_entity_refs(self, refs):
+        self.entity_refs_json = json.dumps(refs, ensure_ascii=False)
+
     def get_hashtags(self):
         try:
             return json.loads(self.hashtags_json or '[]')
@@ -9068,6 +9138,24 @@ class ContentItem(db.Model):
             public_urls = [u for u in urls if isinstance(u, str) and u.startswith(('http', '/'))]
             if public_urls:
                 return public_urls
+        except Exception:
+            pass
+
+        # Фоллбэк для unified listing: только exact seller-owned link к общей
+        # ImportedProduct. Наблюдённый Ozon media snapshot не становится master.
+        try:
+            refs = self.get_entity_refs()
+            if refs:
+                listing = MarketplaceListing.query.filter_by(
+                    id=refs[0]['id'],
+                    seller_id=self.seller_id,
+                    account_id=refs[0]['account_id'],
+                ).first()
+                if listing and listing.imported_product:
+                    from routes.photos import generate_public_photo_urls
+                    local_urls = generate_public_photo_urls(listing.imported_product)
+                    if local_urls:
+                        return local_urls
         except Exception:
             pass
 
@@ -9113,6 +9201,7 @@ class ContentItem(db.Model):
             'platform': self.platform,
             'content_type': self.content_type,
             'product_ids': self.get_product_ids(),
+            'entity_refs': self.get_entity_refs(),
             'title': self.title,
             'body_text': self.body_text,
             'hashtags': self.get_hashtags(),

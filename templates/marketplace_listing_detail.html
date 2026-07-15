@@ -62,6 +62,11 @@
                     <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('seller_product_wb_preview', product_id=canonical.id) }}">
                         {{ icon('eye', size=16) }} <span>Открыть карточку</span>
                     </a>
+                    {% if canonical.has_source_photos %}
+                    <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('image_lab_page', listing_id=listing.id) }}">
+                        {{ icon('image', size=16) }} <span>Фотостудия для Ozon</span>
+                    </a>
+                    {% endif %}
                     {% if commercial_feature_enabled %}
                     <form method="post" action="{{ url_for('marketplace_drafts.create') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
