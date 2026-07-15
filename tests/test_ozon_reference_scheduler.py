@@ -10,6 +10,7 @@ from flask import Flask
 
 from models import Marketplace, MarketplaceReferenceAccount, db
 from services.product_sync_scheduler import (
+    poll_ozon_commercial_operations,
     poll_ozon_marketplace_operations,
     sync_marketplace_characteristics,
     sync_marketplaces,
@@ -120,6 +121,38 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
             },
         ) as poll:
             poll_ozon_marketplace_operations(self.app)
+        poll.assert_called_once_with(limit=20, allow_submission=True)
+
+    def test_commercial_reconciliation_has_independent_dark_write_flag(self):
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        self.app.config["MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED"] = False
+        with patch(
+            "services.marketplace_commercial."
+            "MarketplaceCommercialService.poll_due_operations",
+            return_value={
+                "selected": 1,
+                "processed": 1,
+                "busy": 0,
+                "failed": 0,
+            },
+        ) as poll:
+            result = poll_ozon_commercial_operations(self.app, limit=7)
+        self.assertEqual(result["processed"], 1)
+        poll.assert_called_once_with(limit=7, allow_submission=False)
+
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = True
+        self.app.config["MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED"] = True
+        with patch(
+            "services.marketplace_commercial."
+            "MarketplaceCommercialService.poll_due_operations",
+            return_value={
+                "selected": 0,
+                "processed": 0,
+                "busy": 0,
+                "failed": 0,
+            },
+        ) as poll:
+            poll_ozon_commercial_operations(self.app)
         poll.assert_called_once_with(limit=20, allow_submission=True)
 
 

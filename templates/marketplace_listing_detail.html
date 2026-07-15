@@ -38,6 +38,44 @@
         </section>
     </div>
 
+    {% if commercial_feature_enabled and listing.marketplace.code == 'ozon' and listing.is_available and not listing.is_archived %}
+    <section class="sh-card p-4 mt-4">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <h2 class="font-semibold" style="color:var(--text)">Безопасное изменение цены Ozon</h2>
+                <p class="mt-1 text-xs" style="color:var(--text-muted)">Сейчас создаётся только proposal. Отдельный approve повторно читает live state и лишь затем фиксирует snapshot перед write.</p>
+            </div>
+            <a class="text-sm" style="color:var(--accent)" href="{{ url_for('marketplace_commercial.index', account_id=listing.account_id) }}">Все proposals</a>
+        </div>
+        <form method="post" action="{{ url_for('marketplace_commercial.create_price_proposal', listing_id=listing.id) }}" class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label><span class="block text-xs mb-1" style="color:var(--text-muted)">Новая базовая цена, RUB</span><input name="price" required inputmode="decimal" value="{{ listing_data.price_summary.get('values', {}).get('price', '') }}" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></label>
+            <label class="flex items-center gap-2 text-sm mt-5" style="color:var(--text-secondary)"><input type="checkbox" name="allow_price_decrease" value="1"> Разрешить снижение</label>
+            <label class="flex items-center gap-2 text-sm mt-5" style="color:var(--text-secondary)"><input type="checkbox" name="allow_large_change" value="1"> Разрешить &gt;50%</label>
+            <div class="flex items-end"><button class="sh-btn sh-btn--secondary" type="submit">Создать proposal</button></div>
+            <label class="md:col-span-4"><span class="block text-xs mb-1" style="color:var(--text-muted)">Обоснование для override (обязательно при включённом флаге)</span><input name="guardrail_note" maxlength="1000" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></label>
+        </form>
+        {% if not commercial_write_enabled %}<p class="mt-3 text-xs" style="color:var(--text-muted)">Approve/write сейчас выключен; proposal останется pending_review.</p>{% endif %}
+    </section>
+
+    <section class="sh-card p-4 mt-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div><h2 class="font-semibold" style="color:var(--text)">Точные FBS/rFBS остатки по складам</h2><p class="mt-1 text-xs" style="color:var(--text-muted)">В write уходит free_stock ровно одного owned warehouse; агрегат карточки не используется.</p></div>
+            <form method="post" action="{{ url_for('marketplace_commercial.refresh_stocks', listing_id=listing.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary" type="submit">Обновить live остатки</button></form>
+        </div>
+        {% if warehouse_stocks %}<div class="mt-4 space-y-3">
+            {% for stock in warehouse_stocks %}<article class="rounded border p-3" style="border-color:var(--border)">
+                <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                    <div><div class="text-sm font-medium" style="color:var(--text)">{{ stock.warehouse.name if stock.warehouse else 'Склад удалён' }}</div><p class="mt-1 text-xs" style="color:var(--text-secondary)">free {{ stock.free_stock }} · present {{ stock.present }} · reserved {{ stock.reserved }} · warehouse {{ stock.warehouse.external_warehouse_id if stock.warehouse else '—' }}{% if not stock.is_available %} · unavailable{% endif %}</p></div>
+                    {% if stock.is_available %}<form method="post" action="{{ url_for('marketplace_commercial.create_stock_proposal', listing_id=listing.id) }}" class="flex flex-wrap items-end gap-2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="warehouse_id" value="{{ stock.warehouse_id }}"><label><span class="block text-xs mb-1" style="color:var(--text-muted)">Новый free_stock</span><input type="number" min="0" step="1" name="stock" required value="{{ stock.free_stock }}" class="w-32 rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></label><button class="sh-btn sh-btn--secondary" type="submit">Создать proposal</button></form>{% endif %}
+                </div>
+            </article>{% endfor %}
+        </div>{% else %}<p class="mt-4 text-sm" style="color:var(--text-muted)">Нет точного warehouse snapshot. Сначала синхронизируйте склады в разделе «Цены и остатки Ozon», затем обновите live остатки.</p>{% endif %}
+    </section>
+
+    {% if commercial_proposals %}<section class="sh-card p-4 mt-4"><h2 class="font-semibold" style="color:var(--text)">Последние commercial proposals</h2><div class="mt-3 space-y-2">{% for proposal in commercial_proposals %}<a class="flex items-center justify-between gap-3 rounded border px-3 py-2 text-sm" style="border-color:var(--border);color:var(--text)" href="{{ url_for('marketplace_commercial.detail', proposal_id=proposal.id) }}"><span>#{{ proposal.id }} · {{ proposal.proposal_kind }} · {{ proposal.source }}</span><span>{{ proposal.status }}</span></a>{% endfor %}</div></section>{% endif %}
+    {% endif %}
+
     {% if listing.description %}
     <section class="sh-card p-4 mt-4">
         <h2 class="font-semibold" style="color:var(--text)">Описание</h2>

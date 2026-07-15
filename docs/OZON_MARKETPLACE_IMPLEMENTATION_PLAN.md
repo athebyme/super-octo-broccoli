@@ -580,20 +580,22 @@ validated workflow, а каждая обещанная compensation подтве
 
 ### P6 — price, stock and warehouses
 
-Aggregate price/stock reads уже входят в полный catalog page enrichment.
-Manifest дополнен current per-warehouse FBS v2, FBO v1 и paginated warehouse
-v2 read paths для live shape verification; persistence warehouse mapping и
-proposal/apply side effects остаются незавершёнными пунктами P6.
-Добавлен ORM-free строгий contract layer для price/stock write envelopes,
-exact-set results и warehouse/FBS pages. Он intentionally не вызывается из UI
-или агента напрямую и сам по себе не включает side effects: durable proposal,
-human approval, свежий before-state и drift reconciliation ещё обязательны.
+Aggregate price/stock reads входят в catalog enrichment, а коммерческий write
+никогда не использует aggregate stock. Отдельный warehouse service принимает
+только полный paginated `/v2/warehouse/list` snapshot и точные FBS/rFBS строки
+`listing + warehouse`; адреса/телефоны не сохраняются. Single-item price/stock
+workflow реализован как read-only proposal → human approve → повторный live
+preflight → committed operation/snapshot → ровно один write → live
+reconciliation. Ambiguous/malformed response не повторяет write. Rollback —
+отдельный proposal с exact live drift gate и вторым human approval.
 
-- Ozon `/v5/product/info/prices`, `/v4/product/info/stocks`, `/v2/warehouse/list` reads.
-- Warehouse mapping and fulfillment-aware quantities.
-- Human proposal apply for price/stock with pricing guardrails.
-- Batch exact-set validation, partial response accounting and snapshots.
-- Drift reconciliation and safe rollback where upstream semantics permit.
+- [x] Current Ozon `/v5/product/info/prices`, aggregate stock v4, warehouse v2, per-warehouse FBS v2 and FBO v1 read contracts.
+- [x] Complete warehouse mapping and exact FBS/rFBS listing quantities with unavailable reconciliation.
+- [x] Human price/stock proposal/apply UI/API with seller scope, optimistic review and pricing guardrails.
+- [x] Durable before/submitted/confirmed snapshots, one-attempt writes and exact single-item response accounting.
+- [x] Drift reconciliation and second-review exact rollback for succeeded price/stock updates.
+- [x] Independent dark write flag plus scheduler recovery that never abandons attempted operations.
+- [ ] Multi-item proposal orchestration and one-call batch apply with per-item snapshots; only the strict max-100 exact-set contract is ready.
 
 Definition of done: no agent/direct path bypasses proposal and every stock write names an owned warehouse.
 

@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 from models import (
     Marketplace,
+    MarketplaceCommercialProposal,
     MarketplaceCredentialEncryptionError,
     MarketplaceOperation,
     SellerMarketplaceAccount,
@@ -232,9 +233,19 @@ class MarketplaceAccountService:
                     cls.ACCOUNT_MUTATION_BLOCKING_STATUSES
                 ),
             ).first()
-            if blocking is not None:
+            pending_commercial = MarketplaceCommercialProposal.query.filter(
+                MarketplaceCommercialProposal.seller_id == seller_id,
+                MarketplaceCommercialProposal.account_id == account.id,
+                MarketplaceCommercialProposal.status.in_((
+                    "pending_review",
+                    "approved",
+                    "applying",
+                    "uncertain",
+                )),
+            ).first()
+            if blocking is not None or pending_commercial is not None:
                 raise MarketplaceAccountConflict(
-                    "Client-Id и API key нельзя менять во время Ozon write"
+                    "Client-Id и API key нельзя менять при активном Ozon proposal/write"
                 )
             return cls._save_normalized_ozon_account(
                 seller_id=seller_id,
@@ -602,6 +613,21 @@ class MarketplaceAccountService:
                 operation.quota_reserved = 0
                 operation.next_poll_at = None
                 operation.completed_at = now
+
+            proposals = MarketplaceCommercialProposal.query.filter(
+                MarketplaceCommercialProposal.seller_id == seller_id,
+                MarketplaceCommercialProposal.account_id == account.id,
+                MarketplaceCommercialProposal.status.in_((
+                    "pending_review",
+                    "approved",
+                )),
+            ).all()
+            for proposal in proposals:
+                proposal.status = "cancelled"
+                proposal.error_code = "account_disconnected_before_submission"
+                proposal.error_message = (
+                    "Proposal отменён до Ozon write при отключении кабинета"
+                )
 
             return cls._disconnect_owned_account(account)
         finally:

@@ -16,6 +16,10 @@ from flask_login import current_user, login_required
 
 from models import db
 from services.marketplace_accounts import MarketplaceAccountService
+from services.marketplace_commercial import (
+    MarketplaceCommercialError,
+    MarketplaceCommercialService,
+)
 from services.marketplace_publications import (
     MarketplacePublicationError,
     MarketplacePublicationService,
@@ -103,6 +107,16 @@ def _publication_enabled() -> bool:
     )
 
 
+def _commercial_enabled() -> bool:
+    return bool(
+        current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+        and current_app.config.get(
+            "MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED",
+            False,
+        )
+    )
+
+
 def _operation_document(operation) -> dict:
     result = operation.to_public_dict(detail=True)
     result["snapshot"] = (
@@ -117,7 +131,7 @@ def _error_response(
     *,
     force_json: bool = False,
 ):
-    if isinstance(error, MarketplacePublicationError):
+    if isinstance(error, (MarketplacePublicationError, MarketplaceCommercialError)):
         status_code = status_code or error.status_code
         code = error.code
         validation = getattr(error, "validation", None)
@@ -142,7 +156,7 @@ def _error_response(
 
 
 def _write_failure(error: Exception, *, seller_id: int, action: str):
-    if isinstance(error, MarketplacePublicationError):
+    if isinstance(error, (MarketplacePublicationError, MarketplaceCommercialError)):
         return _error_response(error)
     db.session.rollback()
     current_app.logger.exception(
@@ -237,7 +251,11 @@ def _get_operation_response(operation_id: int, *, force_json: bool = False):
         "marketplace_operation_detail.html",
         operation=operation,
         operation_data=document,
-        can_submit_queued=_publication_enabled(),
+        can_submit_queued=(
+            _commercial_enabled()
+            if operation.operation_kind in MarketplaceCommercialService.COMMERCIAL_OPERATION_KINDS
+            else _publication_enabled()
+        ),
     )
 
 
@@ -318,11 +336,22 @@ def poll(operation_id: int):
             raise MarketplacePublicationValidationError(
                 "Poll не принимает полей"
             )
-        operation = MarketplacePublicationService.poll_operation(
+        current = MarketplacePublicationService.get_operation(
             seller_id=seller_id,
             operation_id=operation_id,
-            allow_submission=_publication_enabled(),
         )
+        if current.operation_kind in MarketplaceCommercialService.COMMERCIAL_OPERATION_KINDS:
+            operation = MarketplaceCommercialService.poll_operation(
+                seller_id=seller_id,
+                operation_id=operation_id,
+                allow_submission=_commercial_enabled(),
+            )
+        else:
+            operation = MarketplacePublicationService.poll_operation(
+                seller_id=seller_id,
+                operation_id=operation_id,
+                allow_submission=_publication_enabled(),
+            )
     except Exception as exc:
         return _write_failure(exc, seller_id=seller_id, action="poll")
     if _wants_json():

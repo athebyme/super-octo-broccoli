@@ -11,6 +11,7 @@
 {% block content %}
 {% set summary = operation_data.request_summary %}
 {% set quota = operation_data.quota_snapshot %}
+{% set is_commercial = operation.operation_kind in ['price_update', 'stock_update', 'price_rollback', 'stock_rollback'] %}
 <div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
     <a href="{{ url_for('marketplace_operations.index') }}" class="text-sm" style="color:var(--accent)">← Операции Ozon</a>
     <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -61,14 +62,22 @@
             <h2 class="font-semibold" style="color:var(--text)">Контракт</h2>
             <dl class="mt-3 space-y-2 text-sm">
                 <div><dt class="text-xs" style="color:var(--text-muted)">Версия</dt><dd style="color:var(--text)">{{ operation.contract_version }}</dd></div>
-                <div><dt class="text-xs" style="color:var(--text-muted)">Draft / version</dt><dd style="color:var(--text)">{% if operation.draft_id %}<a style="color:var(--accent)" href="{{ url_for('marketplace_drafts.detail', draft_id=operation.draft_id) }}">#{{ operation.draft_id }}</a>{% else %}удалён{% endif %} / {{ operation.draft_version or '—' }}</dd></div>
+                {% if is_commercial %}<div><dt class="text-xs" style="color:var(--text-muted)">Proposal</dt><dd style="color:var(--text)">{% if summary.get('proposal_id') %}<a style="color:var(--accent)" href="{{ url_for('marketplace_commercial.detail', proposal_id=summary.proposal_id) }}">#{{ summary.proposal_id }}</a>{% else %}—{% endif %}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Listing / warehouse</dt><dd style="color:var(--text)">{{ operation.listing_id or '—' }} / {{ summary.get('warehouse_id', '—') }}</dd></div>
+                {% else %}<div><dt class="text-xs" style="color:var(--text-muted)">Draft / version</dt><dd style="color:var(--text)">{% if operation.draft_id %}<a style="color:var(--accent)" href="{{ url_for('marketplace_drafts.detail', draft_id=operation.draft_id) }}">#{{ operation.draft_id }}</a>{% else %}удалён{% endif %} / {{ operation.draft_version or '—' }}</dd></div>{% endif %}
                 <div><dt class="text-xs" style="color:var(--text-muted)">Task ID</dt><dd class="break-all" style="color:var(--text)">{{ operation.external_task_id or '—' }}</dd></div>
                 <div><dt class="text-xs" style="color:var(--text-muted)">Fingerprint</dt><dd class="break-all text-xs" style="color:var(--text)">{{ operation.request_fingerprint }}</dd></div>
             </dl>
         </section>
         <section class="sh-card p-4">
-            <h2 class="font-semibold" style="color:var(--text)">Квота</h2>
-            {% if quota %}
+            <h2 class="font-semibold" style="color:var(--text)">{{ 'Safety boundary' if is_commercial else 'Квота' }}</h2>
+            {% if is_commercial %}
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Scope</dt><dd style="color:var(--text)">ровно один listing{% if summary.get('warehouse_id') %} / склад{% endif %}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Write retry</dt><dd style="color:var(--text)">запрещён после первой попытки</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Подтверждение</dt><dd style="color:var(--text)">live read-after-write</dd></div>
+            </dl>
+            {% elif quota %}
             <dl class="mt-3 space-y-2 text-sm">
                 <div><dt class="text-xs" style="color:var(--text-muted)">Источник</dt><dd style="color:var(--text)">{{ quota.get('source', '—') }}</dd></div>
                 <div><dt class="text-xs" style="color:var(--text-muted)">Остаток upstream</dt><dd style="color:var(--text)">{{ quota.get('remaining', '—') }}</dd></div>
@@ -88,13 +97,20 @@
     </div>
 
     <section class="sh-card p-4 mt-4">
-        <h2 class="font-semibold" style="color:var(--text)">Состав запроса</h2>
+        <h2 class="font-semibold" style="color:var(--text)">{{ 'Before / proposed' if is_commercial else 'Состав запроса' }}</h2>
+        {% if is_commercial %}
+        <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Live before-state</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ summary.get('before', {}) | tojson(indent=2) }}</pre></div>
+            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Submitted state</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ summary.get('proposed', {}) | tojson(indent=2) }}</pre></div>
+        </div>
+        {% else %}
         <dl class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
             <div><dt class="text-xs" style="color:var(--text-muted)">Атрибутов</dt><dd style="color:var(--text)">{{ summary.get('attribute_count', '—') }}</dd></div>
             <div><dt class="text-xs" style="color:var(--text-muted)">Complex groups</dt><dd style="color:var(--text)">{{ summary.get('complex_group_count', '—') }}</dd></div>
             <div><dt class="text-xs" style="color:var(--text-muted)">Изображений</dt><dd style="color:var(--text)">{{ summary.get('image_count', '—') }}</dd></div>
             <div><dt class="text-xs" style="color:var(--text-muted)">Barcode</dt><dd style="color:var(--text)">{{ 'да' if summary.get('has_barcode') else 'нет' }}</dd></div>
         </dl>
+        {% endif %}
     </section>
 
     {% if operation_data.item_results %}
@@ -117,7 +133,8 @@
 
     {% if operation_data.snapshot %}
     <section class="sh-card p-4 mt-4">
-        <h2 class="font-semibold" style="color:var(--text)">Snapshot и rollback</h2>
+        <div class="flex flex-wrap items-start justify-between gap-3"><h2 class="font-semibold" style="color:var(--text)">Snapshot и rollback</h2>
+        {% if is_commercial and operation.operation_kind in ['price_update', 'stock_update'] and operation.status == 'succeeded' and operation_data.snapshot.rollback_status == 'available' %}<form method="post" action="{{ url_for('marketplace_commercial.create_rollback', operation_id=operation.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary" type="submit">Создать rollback proposal</button></form>{% endif %}</div>
         <p class="mt-2 text-sm" style="color:var(--text-secondary)">Статус rollback: {{ operation_data.snapshot.rollback_status }}{% if operation_data.snapshot.rollback_error_message %} · {{ operation_data.snapshot.rollback_error_message }}{% endif %}</p>
         <p class="mt-2 text-xs break-all" style="color:var(--text-muted)">before {{ operation_data.snapshot.before_fingerprint or '—' }} · submitted {{ operation_data.snapshot.submitted_fingerprint }} · confirmed {{ operation_data.snapshot.confirmed_fingerprint or '—' }}</p>
     </section>

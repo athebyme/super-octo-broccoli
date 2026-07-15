@@ -162,11 +162,15 @@ class SyntheticCatalogAdapter:
                 "offer_id": (
                     "offer-archived" if product_id == "202" else "offer-active"
                 ),
-                "currency_code": "RUB",
                 "price": {
+                    "auto_action_enabled": False,
+                    "auto_add_to_ozon_actions_list_enabled": False,
+                    "currency_code": "RUB",
                     "marketing_seller_price": "1200.00",
                     "old_price": "1500.00",
                     "min_price": "900.00",
+                    "net_price": "700.00",
+                    "price": "1200.00",
                     "retail_price": "1200.00",
                     "vat": "0.20",
                 },
@@ -352,6 +356,38 @@ class MarketplaceListingServiceTest(unittest.TestCase):
                     "last_id": "",
                 }
             })
+
+    def test_current_v5_price_fields_are_kept_and_deprecated_fields_are_dropped(self):
+        page = MarketplaceListingService.normalize_prices_page({
+            "items": [{
+                "product_id": 101,
+                "offer_id": "offer-active",
+                "price": {
+                    "auto_action_enabled": False,
+                    "auto_add_to_ozon_actions_list_enabled": True,
+                    "currency_code": "RUB",
+                    "marketing_seller_price": "1200.00",
+                    "min_price": "900.00",
+                    "net_price": "700.00",
+                    "old_price": "1500.00",
+                    "price": "1200.00",
+                    "retail_price": "1200.00",
+                    "vat": "0.20",
+                    "premium_price": "1.00",
+                    "recommended_price": "2.00",
+                },
+                "commissions": {},
+                "marketing_actions": {},
+            }],
+            "total": 1,
+            "cursor": "",
+        })
+        summary = page["items"]["101"]["summary"]
+        self.assertEqual(summary["currency"], "RUB")
+        self.assertEqual(summary["values"]["price"], "1200.00")
+        self.assertEqual(summary["values"]["net_price"], "700.00")
+        self.assertNotIn("premium_price", summary["values"])
+        self.assertNotIn("recommended_price", summary["values"])
 
     def test_paused_run_resumes_and_only_complete_sweep_marks_missing(self):
         stale = self._stale_listing()

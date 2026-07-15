@@ -14,12 +14,13 @@ from flask import (
 )
 from flask_login import current_user, login_required
 
-from models import db
+from models import MarketplaceCommercialProposal, db
 from services.marketplace_accounts import MarketplaceAccountService
 from services.marketplace_listings import (
     MarketplaceListingError,
     MarketplaceListingService,
 )
+from services.marketplace_warehouses import MarketplaceWarehouseService
 
 
 marketplace_listings_bp = Blueprint(
@@ -206,14 +207,51 @@ def detail(listing_id: int):
     except MarketplaceListingError as exc:
         return _error_response(exc)
     if _wants_json():
+        warehouse_stocks = (
+            MarketplaceWarehouseService.list_listing_stocks(
+                seller_id=seller_id,
+                listing_id=listing.id,
+            )
+            if listing.marketplace and listing.marketplace.code == "ozon"
+            else []
+        )
         return jsonify({
             "success": True,
             "listing": listing.to_public_dict(detail=True),
+            "warehouse_stocks": [row.to_public_dict() for row in warehouse_stocks],
         })
+    warehouse_stocks = []
+    proposals = []
+    if listing.marketplace and listing.marketplace.code == "ozon":
+        warehouse_stocks = MarketplaceWarehouseService.list_listing_stocks(
+            seller_id=seller_id,
+            listing_id=listing.id,
+            include_unavailable=True,
+        )
+        proposals = MarketplaceCommercialProposal.query.filter_by(
+            seller_id=seller_id,
+            account_id=listing.account_id,
+            listing_id=listing.id,
+        ).order_by(
+            MarketplaceCommercialProposal.created_at.desc(),
+            MarketplaceCommercialProposal.id.desc(),
+        ).limit(20).all()
     return render_template(
         "marketplace_listing_detail.html",
         listing=listing,
         listing_data=listing.to_public_dict(detail=True),
+        warehouse_stocks=warehouse_stocks,
+        commercial_proposals=proposals,
+        commercial_feature_enabled=bool(
+            current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+        ),
+        commercial_write_enabled=bool(
+            current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+            and current_app.config.get(
+                "MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED",
+                False,
+            )
+        ),
     )
 
 

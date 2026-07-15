@@ -1636,6 +1636,13 @@ class MarketplacePublicationService:
             seller_id=seller_id,
             operation_id=operation_id,
         )
+        if operation.operation_kind not in {
+            "product_import",
+            "product_import_rollback",
+        }:
+            raise MarketplacePublicationValidationError(
+                "Commercial operation должна обрабатываться commercial service"
+            )
         if operation.status in cls.TERMINAL_STATUSES:
             return operation
         account_id = operation.account_id
@@ -1723,6 +1730,10 @@ class MarketplacePublicationService:
             due_statuses.add("queued")
         operations = MarketplaceOperation.query.join(Marketplace).filter(
             Marketplace.code == "ozon",
+            MarketplaceOperation.operation_kind.in_((
+                "product_import",
+                "product_import_rollback",
+            )),
             MarketplaceOperation.status.in_(due_statuses),
             MarketplaceOperation.next_poll_at.isnot(None),
             MarketplaceOperation.next_poll_at <= current_time,

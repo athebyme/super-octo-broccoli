@@ -114,6 +114,49 @@ class OzonPriceContractTest(unittest.TestCase):
                 with self.assertRaises(OzonCommercialProtocolError):
                     OzonPriceContract.normalize_response(invalid, expected)
 
+    def test_current_price_read_page_is_canonical_and_strict(self):
+        page = OzonPriceContract.normalize_read_page({
+            "items": [{
+                "offer_id": "seller-offer-1",
+                "product_id": 12345,
+                "price": {
+                    "price": 1250.5,
+                    "old_price": 1500.0,
+                    "min_price": 900,
+                    "net_price": 700,
+                    "currency_code": "RUB",
+                    "auto_action_enabled": False,
+                    "auto_add_to_ozon_actions_list_enabled": True,
+                },
+            }],
+            "total": 1,
+            "cursor": "",
+        })
+        self.assertEqual(page["items"][0]["price"], "1250.5")
+        self.assertEqual(page["items"][0]["old_price"], "1500")
+        self.assertEqual(page["items"][0]["currency_code"], "RUB")
+
+        for invalid in (
+            {"items": [], "total": True, "cursor": ""},
+            {"items": [{
+                "offer_id": "seller-offer-1",
+                "product_id": 12345,
+                "price": {"price": "0", "currency_code": "RUB"},
+            }], "total": 1, "cursor": ""},
+            {"items": [{
+                "offer_id": "seller-offer-1",
+                "product_id": 12345,
+                "price": {
+                    "price": "10",
+                    "currency_code": "RUB",
+                    "auto_action_enabled": 1,
+                },
+            }], "total": 1, "cursor": ""},
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(OzonCommercialProtocolError):
+                    OzonPriceContract.normalize_read_page(invalid)
+
 
 class OzonStockContractTest(unittest.TestCase):
     def _item(self, **overrides):

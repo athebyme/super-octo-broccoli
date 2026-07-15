@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Ozon proposal #{{ proposal.id }} — Seller Hub{% endblock %}
+{% block extra_head %}{% if proposal.status in ['approved','applying','uncertain'] %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
+{% block content %}
+{% set before = proposal_data.baseline_state %}
+{% set proposed = proposal_data.proposed_state %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+    <a href="{{ url_for('marketplace_commercial.index', account_id=proposal.account_id) }}" class="text-sm" style="color:var(--accent)">← Цены и остатки Ozon</a>
+    <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div><div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)"><span style="color:var(--accent)">{{ proposal.proposal_kind }}</span><span>{{ proposal.source }}</span><span>#{{ proposal.id }}</span><span>{{ proposal.account.label if proposal.account else 'account removed' }}</span></div>
+            <h1 class="mt-2 text-2xl font-semibold break-all" style="color:var(--text)">{{ proposal.listing.offer_id if proposal.listing else 'Листинг удалён' }}</h1>
+            <p class="mt-1 text-sm" style="color:var(--text-secondary)">Статус <strong>{{ proposal.status }}</strong> · optimistic version {{ proposal.version }}</p>
+        </div>
+        {% if proposal.status == 'pending_review' %}<div class="flex flex-wrap gap-2">
+            {% if write_enabled %}<form method="post" action="{{ url_for('marketplace_commercial.approve', proposal_id=proposal.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="expected_version" value="{{ proposal.version }}"><button class="sh-btn sh-btn--primary" type="submit">Подтвердить write</button></form>{% endif %}
+            <form method="post" action="{{ url_for('marketplace_commercial.reject', proposal_id=proposal.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="expected_version" value="{{ proposal.version }}"><button class="sh-btn sh-btn--secondary" type="submit">Отклонить без write</button></form>
+        </div>{% endif %}
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>{% endfor %}{% endwith %}
+    {% if proposal.status == 'pending_review' and not write_enabled %}<div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--border);color:var(--text-secondary)">Approve выключен отдельным commercial write flag; proposal сохранён.</div>{% endif %}
+    {% if proposal.error_message %}<div class="sh-card p-4 mt-4"><div class="text-xs" style="color:var(--danger, #b42318)">{{ proposal.error_code }}</div><p class="mt-2 text-sm" style="color:var(--text)">{{ proposal.error_message }}</p></div>{% endif %}
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-5">
+        <section class="sh-card p-4"><h2 class="font-semibold" style="color:var(--text)">Live before-state</h2><pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ before | tojson(indent=2) }}</pre><p class="mt-3 text-xs break-all" style="color:var(--text-muted)">{{ proposal.baseline_fingerprint }}</p></section>
+        <section class="sh-card p-4"><h2 class="font-semibold" style="color:var(--text)">Предлагаемое состояние</h2><pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ proposed | tojson(indent=2) }}</pre><p class="mt-3 text-xs break-all" style="color:var(--text-muted)">{{ proposal.proposed_fingerprint }}</p></section>
+    </div>
+    <section class="sh-card p-4 mt-4"><h2 class="font-semibold" style="color:var(--text)">Guardrails</h2><pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ proposal_data.guardrails | tojson(indent=2) }}</pre></section>
+
+    {% if proposal.operation %}<section class="sh-card p-4 mt-4"><div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="font-semibold" style="color:var(--text)">Durable operation #{{ proposal.operation.id }}</h2><p class="mt-1 text-sm" style="color:var(--text-secondary)">{{ proposal.operation.operation_kind }} · {{ proposal.operation.status }} · attempts {{ proposal.operation.attempt_count }} · reconcile {{ proposal.operation.reconcile_count }}</p></div><a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id) }}">Открыть журнал</a></div></section>{% endif %}
+</div>
+{% endblock %}

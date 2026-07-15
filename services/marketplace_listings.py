@@ -918,11 +918,13 @@ class MarketplaceListingService:
             )
         allowed_price = {
             "auto_action_enabled",
+            "auto_add_to_ozon_actions_list_enabled",
+            "currency_code",
             "marketing_seller_price",
             "min_price",
+            "net_price",
             "old_price",
-            "premium_price",
-            "recommended_price",
+            "price",
             "retail_price",
             "vat",
         }
@@ -930,7 +932,10 @@ class MarketplaceListingService:
             key: cls._bounded_value(price[key], f"{field_name}.price.{key}")
             for key in sorted(allowed_price.intersection(price))
         }
-        currency = raw.get("currency_code", raw.get("currency"))
+        currency = price.get(
+            "currency_code",
+            raw.get("currency_code", raw.get("currency")),
+        )
         return {
             "available": bool(values),
             "currency": cls._optional_provider_text(

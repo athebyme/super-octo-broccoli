@@ -279,6 +279,16 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    scheduler.add_job(
+        func=lambda: poll_ozon_commercial_operations(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='poll_ozon_commercial_operations',
+        name='Reconcile reviewed Ozon price and stock operations',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Фоновая синхронизация брендов с WB (каждые 6 часов)
     scheduler.add_job(
         func=lambda: sync_brands_background(flask_app),
@@ -1059,6 +1069,43 @@ def poll_ozon_marketplace_operations(flask_app, limit: int = 20):
         if result['selected'] or result['failed']:
             logger.info(
                 'Durable Ozon operation poll: selected=%s processed=%s busy=%s failed=%s queued_submission=%s',
+                result['selected'],
+                result['processed'],
+                result['busy'],
+                result['failed'],
+                allow_submission,
+            )
+        return result
+
+
+def poll_ozon_commercial_operations(flask_app, limit: int = 20):
+    """Reconcile commercial writes; only never-attempted rows honor write flag."""
+    from services.marketplace_commercial import MarketplaceCommercialService
+
+    with flask_app.app_context():
+        allow_submission = bool(
+            flask_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+            and flask_app.config.get(
+                'MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED',
+                False,
+            )
+        )
+        try:
+            result = MarketplaceCommercialService.poll_due_operations(
+                limit=limit,
+                allow_submission=allow_submission,
+            )
+        except Exception:
+            logger.exception('Durable Ozon commercial operation poll failed')
+            return {
+                'selected': 0,
+                'processed': 0,
+                'busy': 0,
+                'failed': 1,
+            }
+        if result['selected'] or result['failed']:
+            logger.info(
+                'Durable Ozon commercial poll: selected=%s processed=%s busy=%s failed=%s queued_submission=%s',
                 result['selected'],
                 result['processed'],
                 result['busy'],

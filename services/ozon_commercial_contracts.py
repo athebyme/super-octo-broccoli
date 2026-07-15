@@ -176,6 +176,86 @@ class OzonPriceContract(_Contract):
     MAX_BATCH = 100
 
     @classmethod
+    def response_money(
+        cls,
+        value: Any,
+        field_name: str,
+        *,
+        allow_zero: bool = False,
+    ) -> str:
+        try:
+            return cls.money(value, field_name, allow_zero=allow_zero)
+        except OzonCommercialPayloadError as exc:
+            raise OzonCommercialProtocolError(str(exc)) from None
+
+    @classmethod
+    def normalize_read_page(cls, response: Any) -> dict:
+        if not isinstance(response, dict) or not isinstance(response.get("items"), list):
+            raise OzonCommercialProtocolError("Ozon price read response has no items")
+        raw_items = response["items"]
+        if len(raw_items) > 1000:
+            raise OzonCommercialProtocolError("Ozon price read page is too large")
+        total = cls.integer(response.get("total"), "total", maximum=100_000_000)
+        cursor_raw = response.get("cursor")
+        cursor = "" if cursor_raw in (None, "") else cls.text(
+            cursor_raw, "cursor", maximum=2000
+        )
+        items = []
+        identities = set()
+        for index, raw in enumerate(raw_items):
+            if not isinstance(raw, dict) or not isinstance(raw.get("price"), dict):
+                raise OzonCommercialProtocolError(
+                    f"items[{index}] must contain price object"
+                )
+            identity = (
+                cls.response_offer_id(raw.get("offer_id"), f"items[{index}].offer_id"),
+                cls.response_provider_id(
+                    raw.get("product_id"), f"items[{index}].product_id"
+                ),
+            )
+            if identity in identities:
+                raise OzonCommercialProtocolError("Duplicate price read identity")
+            identities.add(identity)
+            price = raw["price"]
+            currency = price.get("currency_code")
+            if not isinstance(currency, str) or not currency.strip():
+                raise OzonCommercialProtocolError(
+                    f"items[{index}].price.currency_code must be non-empty"
+                )
+            currency = currency.strip().upper()
+            if len(currency) > 20 or not currency.isascii():
+                raise OzonCommercialProtocolError(
+                    f"items[{index}].price.currency_code is invalid"
+                )
+            normalized_price = {
+                "price": cls.response_money(
+                    price.get("price"), f"items[{index}].price.price"
+                ),
+                "currency_code": currency,
+            }
+            for field in ("old_price", "min_price", "net_price"):
+                if price.get(field) is not None:
+                    normalized_price[field] = cls.response_money(
+                        price[field],
+                        f"items[{index}].price.{field}",
+                        allow_zero=True,
+                    )
+            for field in (
+                "auto_action_enabled",
+                "auto_add_to_ozon_actions_list_enabled",
+            ):
+                if price.get(field) is not None:
+                    normalized_price[field] = cls.boolean(
+                        price[field], f"items[{index}].price.{field}"
+                    )
+            items.append({
+                "offer_id": identity[0],
+                "product_id": identity[1],
+                **normalized_price,
+            })
+        return {"items": items, "total": total, "cursor": cursor}
+
+    @classmethod
     def build_item(
         cls,
         *,
