@@ -454,6 +454,46 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - Mutating fetch requests должны передавать CSRF token из meta/header по существующему паттерну.
 - После заметного UI-изменения проверьте light/dark, desktop/mobile, empty/loading/error/disabled states и отсутствие horizontal overflow.
 
+### Общий UI-слой и инварианты
+
+- Токены-масштабы в `base.html`: радиусы `--r-xs/sm/md/pill` (карточки ≤ `--r-md` = 8px),
+  elevation `--shadow-1/2/3` (только оверлеи/hover, не плоские карточки), мотн
+  `--ease-out/-in/-in-out` + `--dur-1/2/3`, единая z-шкала оверлеев
+  `--z-dropdown/-sticky/-backdrop/-overlay/-toast/-cmdpal`. Chart-серии должны идти
+  через отдельную категорийную палитру (не через семантические status-токены);
+  токенизация графиков — открытый follow-up.
+- Все интерактивные `.sh-*` обязаны иметь `:focus-visible` (кольцо `--focus-ring`) и
+  `:active`. В `base.html` есть глобальный `@media (prefers-reduced-motion: reduce)` —
+  не добавляйте немаскируемую анимацию. Статусные компоненты (`.sh-alert`,
+  `.sh-confirm-icon`, `.sh-btn--primary/--danger`, пагинация, dropdown-danger) идут
+  через семантические токены и обязаны работать в обеих темах; не хардкодьте hex.
+- Новые примитивы в `static/sh-ui.css`: `.sh-skeleton`, `.sh-spinner`, `.sh-progress`,
+  `.sh-toggle`, `.sh-segmented`, `.sh-chip`, `.sh-avatar`, `.sh-stepper`, `.sh-icon-btn`,
+  `.sh-btn.is-loading`. Есть Jinja-макросы в `macros/components.html`
+  (`skeleton/spinner/progress/toggle/segmented/chip/avatar/stepper`). Инлайн-`#hex`
+  статусов в `style="..."`/`[#hex]` запрещён — используйте `var(--danger/-ok/-warn/-info[-bg/-border])`.
+- Иконки — единый реестр `templates/macros/icons.html`: `icon(name, size, stroke, cls)`
+  и `status_icon(type)`. Не плодите инлайн-`<svg>` в общих поверхностях и не используйте
+  emoji/unicode как иконки контролов. `btn/stat_card/empty_state/alert_box` принимают имя
+  иконки из реестра ИЛИ готовую `<svg>`-строку (обратная совместимость).
+- Уведомления — единая система: один Alpine-стор `$store.toasts` (тосты) и `$store.notif`
+  (unread/поллинг/центр/mute/относительное время) в `static/sh-ui.js`. НЕ создавайте
+  второй стор или контейнер тостов. Тосты рендерит `toast_container()` (theme-aware
+  `.sh-toast` с категорийным рейлом, action-ссылкой, progress, pause-on-hover); центр —
+  `partials/notification_center.html` (колокольчик+поповер). `toast_store_init()` —
+  no-op (устарел). Звук: `error`→нисходящая мелодия, mute в `sh-notif-muted`. Даты с
+  сервера naive-UTC — при парсе в JS добавляйте `Z`.
+- Оболочка: слим-топбар в `base.html` (видимый «Поиск ⌘K` → событие
+  `toggle-cmdpalette`, колокольчик-поповер, one-click тема, слот `{% block topbar_left %}`
+  для крошек `.sh-crumbs`). Сворачивание сайдбара персистится в `sh-sidebar`. Command
+  palette реально фильтрует (`shCmdPalette()`), навигация ↑↓/Enter.
+- Оверлеи: подключён `@alpinejs/focus`; modal/confirm/slideover/bottomsheet/cmdpal имеют
+  `x-trap.noscroll.inert` (focus-trap + scroll-lock + inert + возврат фокуса). Панели
+  оверлеев обязаны быть выше общего `.sh-backdrop` (`z-index:1`). Радиусы/бэкдропы/easing
+  сведены к токенам — не вводите разнобой.
+- Новые общие ассеты подключены в `base.html`: `static/sh-ui.css` и `static/sh-ui.js`
+  (последний — ДО Alpine core, чтобы `x-data`-фабрики и сторы были готовы вовремя).
+
 ## Coding conventions
 
 - Сначала прочитайте соседние route/service/model/tests и следуйте локальному паттерну.
