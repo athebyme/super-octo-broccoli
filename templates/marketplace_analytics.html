@@ -28,6 +28,7 @@
         <a href="{{ url_for('analytics_page') }}" class="sh-btn sh-btn--secondary sh-btn--sm">Аналитика WB</a>
         <span class="sh-btn sh-btn--primary sh-btn--sm" style="pointer-events:none">Аналитика Ozon</span>
         <a href="{{ url_for('marketplace_quality_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Качество Ozon</a>
+        <a href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы</a>
         <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:14px">Кабинет
           <select class="sh-input" style="min-width:220px" @change="switchAccount($event.target.value)">
             {% for account in ozon_accounts %}

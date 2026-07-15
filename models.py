@@ -6328,6 +6328,390 @@ class MarketplaceFinanceComponent(db.Model):
         }
 
 
+class MarketplaceInboxSync(db.Model):
+    """Durable account/kind cursor sweep for Ozon reviews or questions."""
+    __tablename__ = 'marketplace_inbox_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    source_kind = db.Column(db.String(20), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='running')
+    current_status = db.Column(db.String(20), nullable=False, default='NEW')
+    next_cursor = db.Column(db.String(200))
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    seen_count = db.Column(db.Integer, nullable=False, default=0)
+    created_count = db.Column(db.Integer, nullable=False, default=0)
+    updated_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_count = db.Column(db.Integer, nullable=False, default=0)
+    unmatched_count = db.Column(db.Integer, nullable=False, default=0)
+    ambiguous_count = db.Column(db.Integer, nullable=False, default=0)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-inbox-status-v1',
+    )
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_page_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "source_kind IN ('review','question')",
+            name='ck_marketplace_inbox_sync_kind',
+        ),
+        db.CheckConstraint(
+            "status IN ('running','completed','failed','cancelled')",
+            name='ck_marketplace_inbox_sync_status',
+        ),
+        db.CheckConstraint(
+            "current_status IN ('NEW','VIEWED','PROCESSED')",
+            name='ck_marketplace_inbox_sync_current_status',
+        ),
+        db.CheckConstraint(
+            'period_start <= period_end',
+            name='ck_marketplace_inbox_sync_period',
+        ),
+        db.CheckConstraint(
+            'page_count >= 0 AND seen_count >= 0 AND created_count >= 0 '
+            'AND updated_count >= 0 AND matched_count >= 0 '
+            'AND unmatched_count >= 0 AND ambiguous_count >= 0',
+            name='ck_marketplace_inbox_sync_counters',
+        ),
+        db.Index(
+            'uq_marketplace_inbox_running_kind',
+            'account_id',
+            'source_kind',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+        ),
+        db.Index(
+            'idx_marketplace_inbox_sync_scope',
+            'seller_id',
+            'account_id',
+            'source_kind',
+            'status',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'source_kind': self.source_kind,
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'status': self.status,
+            'current_status': self.current_status,
+            'page_count': self.page_count,
+            'seen_count': self.seen_count,
+            'created_count': self.created_count,
+            'updated_count': self.updated_count,
+            'matched_count': self.matched_count,
+            'unmatched_count': self.unmatched_count,
+            'ambiguous_count': self.ambiguous_count,
+            'contract_version': self.contract_version,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'last_page_at': self.last_page_at.isoformat() if self.last_page_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+
+class MarketplaceInboxItem(db.Model):
+    """PII-minimized customer review/question linked to an exact listing."""
+    __tablename__ = 'marketplace_inbox_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    last_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_inbox_syncs.id', ondelete='SET NULL'),
+        index=True,
+    )
+    source_kind = db.Column(db.String(20), nullable=False)
+    external_id = db.Column(db.String(200), nullable=False)
+    external_sku = db.Column(db.String(100), nullable=False)
+    match_status = db.Column(db.String(20), nullable=False)
+    text = db.Column(db.Text)
+    rating = db.Column(db.Integer)
+    provider_status = db.Column(db.String(20), nullable=False)
+    order_status = db.Column(db.String(100))
+    published_at = db.Column(db.DateTime, nullable=False)
+    is_rating_participant = db.Column(db.Boolean)
+    comments_count = db.Column(db.Integer, nullable=False, default=0)
+    photos_count = db.Column(db.Integer, nullable=False, default=0)
+    videos_count = db.Column(db.Integer, nullable=False, default=0)
+    answers_count = db.Column(db.Integer, nullable=False, default=0)
+    reply_eligible = db.Column(db.Boolean, nullable=False, default=False)
+    source_endpoint = db.Column(db.String(100), nullable=False)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship('MarketplaceListing')
+    last_sync = db.relationship('MarketplaceInboxSync')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'source_kind',
+            'external_id',
+            name='uq_marketplace_inbox_item_external',
+        ),
+        db.CheckConstraint(
+            "source_kind IN ('review','question')",
+            name='ck_marketplace_inbox_item_kind',
+        ),
+        db.CheckConstraint(
+            "provider_status IN ('NEW','VIEWED','PROCESSED')",
+            name='ck_marketplace_inbox_item_status',
+        ),
+        db.CheckConstraint(
+            "match_status IN ('matched','unmatched','ambiguous')",
+            name='ck_marketplace_inbox_item_match',
+        ),
+        db.CheckConstraint(
+            "(source_kind = 'review' AND rating BETWEEN 1 AND 5) OR "
+            "(source_kind = 'question' AND rating IS NULL)",
+            name='ck_marketplace_inbox_item_rating',
+        ),
+        db.CheckConstraint(
+            'comments_count >= 0 AND photos_count >= 0 AND videos_count >= 0 '
+            'AND answers_count >= 0',
+            name='ck_marketplace_inbox_item_counts',
+        ),
+        db.Index(
+            'idx_marketplace_inbox_item_scope',
+            'seller_id',
+            'account_id',
+            'source_kind',
+            'provider_status',
+            'published_at',
+        ),
+        db.Index(
+            'idx_marketplace_inbox_item_listing',
+            'seller_id',
+            'account_id',
+            'listing_id',
+            'published_at',
+        ),
+    )
+
+    def to_public_dict(self, *, include_draft: bool = True) -> dict:
+        listing = None
+        if self.listing is not None:
+            # Inbox needs only a compact display reference. Reusing the full
+            # listing serializer would expose unrelated commercial summaries
+            # and lazily load marketplace/account relationships per row.
+            listing = {
+                'id': self.listing.id,
+                'offer_id': self.listing.offer_id,
+                'title': self.listing.title,
+                'normalized_status': self.listing.normalized_status,
+                'is_available': bool(self.listing.is_available),
+            }
+        data = {
+            'id': self.id,
+            'account_id': self.account_id,
+            'listing_id': self.listing_id,
+            'source_kind': self.source_kind,
+            'external_id': self.external_id,
+            'external_sku': self.external_sku,
+            'match_status': self.match_status,
+            'listing': listing,
+            'text': self.text,
+            'rating': self.rating,
+            'provider_status': self.provider_status,
+            'order_status': self.order_status,
+            'published_at': self.published_at.isoformat() if self.published_at else None,
+            'is_rating_participant': self.is_rating_participant,
+            'comments_count': self.comments_count,
+            'photos_count': self.photos_count,
+            'videos_count': self.videos_count,
+            'answers_count': self.answers_count,
+            'reply_eligible': bool(self.reply_eligible),
+            'reply_required': self.provider_status != 'PROCESSED',
+            'source_endpoint': self.source_endpoint,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+        }
+        if include_draft:
+            draft = self.reply_drafts.filter_by(status='draft').order_by(
+                MarketplaceReplyDraft.id.desc()
+            ).first()
+            data['draft'] = draft.to_public_dict() if draft else None
+        return data
+
+
+class MarketplaceReplyDraft(db.Model):
+    """Local-only reply draft; creation never invokes a marketplace write."""
+    __tablename__ = 'marketplace_reply_drafts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    inbox_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_inbox_items.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        index=True,
+    )
+    status = db.Column(db.String(20), nullable=False, default='draft')
+    generation_mode = db.Column(db.String(20), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    facts_fingerprint = db.Column(db.String(64), nullable=False)
+    content_hash = db.Column(db.String(64), nullable=False)
+    model_name = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    inbox_item = db.relationship(
+        'MarketplaceInboxItem',
+        backref=db.backref(
+            'reply_drafts',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    listing = db.relationship('MarketplaceListing')
+    created_by_user = db.relationship('User')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('draft','superseded')",
+            name='ck_marketplace_reply_draft_status',
+        ),
+        db.CheckConstraint(
+            "generation_mode IN ('ai','template')",
+            name='ck_marketplace_reply_draft_mode',
+        ),
+        db.Index(
+            'uq_marketplace_reply_active_item',
+            'inbox_item_id',
+            unique=True,
+            sqlite_where=db.text("status = 'draft'"),
+        ),
+        db.Index(
+            'idx_marketplace_reply_draft_scope',
+            'seller_id',
+            'account_id',
+            'status',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'inbox_item_id': self.inbox_item_id,
+            'listing_id': self.listing_id,
+            'status': self.status,
+            'generation_mode': self.generation_mode,
+            'text': self.text,
+            'model_name': self.model_name,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class MarketplaceWarehouseSync(db.Model):
     """Audit row for one bounded, all-pages warehouse reconciliation."""
     __tablename__ = 'marketplace_warehouse_syncs'

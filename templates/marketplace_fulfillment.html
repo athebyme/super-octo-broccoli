@@ -35,6 +35,7 @@
         <a href="{{ url_for('marketplace_fulfillment.returns_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--sm {{ 'sh-btn--primary' if page_kind == 'returns' else 'sh-btn--secondary' }}">Возвраты</a>
         <a href="{{ url_for('marketplace_fulfillment.cancellations_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--sm {{ 'sh-btn--primary' if page_kind == 'cancellations' else 'sh-btn--secondary' }}">Отмены</a>
         <a href="{{ url_for('marketplace_finance.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Финансы</a>
+        <a href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы</a>
         <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:14px">Кабинет
           <select class="sh-input" style="min-width:220px" @change="switchAccount($event.target.value)">
             {% for account in ozon_accounts %}

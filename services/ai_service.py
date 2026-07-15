@@ -1547,6 +1547,10 @@ class AIConfig:
     proxy_enabled: bool = False
     # Для логирования
     seller_id: int = 0
+    # Privacy-sensitive tasks can suppress prompt/response/provider-body logs.
+    log_payloads: bool = True
+    # Physical provider attempts for one chat_completion call.
+    max_retries: int = 3
 
     @staticmethod
     def _central_provider_base_model(central: dict):
@@ -1862,7 +1866,10 @@ class AIClient:
             token = self._token_manager.get_access_token()
             if token:
                 auth_header = f'Bearer {token}'
-                logger.info(f"🔐 Auth header: Bearer {token[:20]}... (длина токена: {len(token)})")
+                if self.config.log_payloads:
+                    logger.info(
+                        f"🔐 Auth header configured (token length: {len(token)})"
+                    )
                 return auth_header
             return None
         else:
@@ -1913,7 +1920,13 @@ class AIClient:
             payload["response_format"] = response_format
 
         self.last_error = None
-        max_retries = 3
+        max_retries = self.config.max_retries
+        if (
+            not isinstance(max_retries, int)
+            or isinstance(max_retries, bool)
+            or not 1 <= max_retries <= 5
+        ):
+            max_retries = 3
         retryable_statuses = {429, 500, 502, 503, 504}
 
         # Получаем актуальный Authorization header
@@ -1932,7 +1945,10 @@ class AIClient:
                 else:
                     logger.info(f"🔄 AI retry {attempt}/{max_retries} к {self.config.provider.value}")
                 logger.info(f"📍 URL: {url}")
-                logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
+                if self.config.log_payloads:
+                    logger.debug(
+                        f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}"
+                    )
 
                 # Разделяем таймаут: connect быстро, read — по настройке.
                 # Tuple (connect_timeout, read_timeout) предотвращает зависание
@@ -1948,7 +1964,12 @@ class AIClient:
 
                 # Логируем ответ для отладки
                 if response.status_code != 200:
-                    logger.error(f"❌ AI HTTP {response.status_code}: {response.text[:500]}")
+                    if self.config.log_payloads:
+                        logger.error(
+                            f"❌ AI HTTP {response.status_code}: {response.text[:500]}"
+                        )
+                    else:
+                        logger.error(f"❌ AI HTTP {response.status_code}")
 
                 # Retryable HTTP errors
                 if response.status_code in retryable_statuses:
@@ -1989,7 +2010,10 @@ class AIClient:
                         f"AI вернул пустой ответ (модель: {self.config.model}, "
                         f"провайдер: {self.config.provider.value})"
                     )
-                    logger.error(f"❌ {self.last_error}: {data}")
+                    if self.config.log_payloads:
+                        logger.error(f"❌ {self.last_error}: {data}")
+                    else:
+                        logger.error(f"❌ {self.last_error}")
                     return None
 
                 # Если ответ обрезан по max_tokens — ретраим с увеличенным лимитом
@@ -2012,7 +2036,8 @@ class AIClient:
                     )
 
                 logger.info(f"✅ AI ответ получен ({len(content)} символов, finish_reason={finish_reason})")
-                logger.debug(f"Response: {content[:500]}...")
+                if self.config.log_payloads:
+                    logger.debug(f"Response: {content[:500]}...")
 
                 return content
 
@@ -2026,9 +2051,10 @@ class AIClient:
                 # Лучше быстро вернуть ошибку и перейти к следующему товару.
                 return None
             except requests.exceptions.ConnectionError as e:
+                detail = str(e)[:150] if self.config.log_payloads else type(e).__name__
                 self.last_error = (
                     f"Нет соединения с AI API ({self.config.provider.value}): "
-                    f"{str(e)[:150]} (попытка {attempt}/{max_retries})"
+                    f"{detail} (попытка {attempt}/{max_retries})"
                 )
                 logger.error(f"❌ {self.last_error}")
                 if attempt < max_retries:
@@ -2038,7 +2064,7 @@ class AIClient:
                 return None
             except requests.exceptions.HTTPError as e:
                 status = e.response.status_code
-                body = e.response.text[:300]
+                body = e.response.text[:300] if self.config.log_payloads else ""
                 if status in (401, 403):
                     # Для Cloud.ru пробуем сбросить токен и повторить (токен мог протухнуть)
                     if self._token_manager and attempt < max_retries:
@@ -2077,10 +2103,14 @@ class AIClient:
                 logger.error(f"❌ {self.last_error}")
                 return None
             except Exception as e:
-                self.last_error = f"Непредвиденная ошибка AI: {type(e).__name__}: {str(e)[:200]}"
+                detail = f": {str(e)[:200]}" if self.config.log_payloads else ""
+                self.last_error = (
+                    f"Непредвиденная ошибка AI: {type(e).__name__}{detail}"
+                )
                 logger.error(f"❌ {self.last_error}")
-                import traceback
-                logger.error(traceback.format_exc())
+                if self.config.log_payloads:
+                    import traceback
+                    logger.error(traceback.format_exc())
                 return None
 
         return None

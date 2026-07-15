@@ -208,6 +208,8 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "/v1/finance/accrual/by-day",
             "/v1/finance/accrual/types",
             "/v1/finance/accrual/postings",
+            "/v2/review/list",
+            "/v1/question/list",
         ):
             self.assertIn(required, paths)
         for deprecated in (
@@ -223,7 +225,7 @@ class OzonSellerAPIClientTest(unittest.TestCase):
         ):
             self.assertNotIn(deprecated, paths)
 
-    def test_fulfillment_and_finance_methods_are_read_only(self):
+    def test_fulfillment_finance_and_inbox_methods_are_read_only(self):
         endpoint_names = (
             "posting_fbs_list",
             "posting_fbo_list",
@@ -233,10 +235,27 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "finance_accrual_by_day",
             "finance_accrual_types",
             "finance_accrual_postings",
+            "review_list",
+            "question_list",
         )
         for endpoint_name in endpoint_names:
             with self.subTest(endpoint_name=endpoint_name):
                 self.assertEqual(OZON_ENDPOINTS[endpoint_name].retry_class, "read")
+
+    def test_inbox_methods_delegate_to_current_typed_read_endpoints(self):
+        review_payload = {"limit": 1, "filters": {"status": "NEW"}}
+        question_payload = {"limit": 1, "filter": {"status": "NEW"}}
+        client, session, _ = self._client([
+            FakeResponse(200, {"reviews": [], "has_next": False}),
+            FakeResponse(200, {"questions": [], "has_next": False}),
+        ])
+
+        self.assertEqual(client.get_reviews(review_payload)["reviews"], [])
+        self.assertEqual(client.get_questions(question_payload)["questions"], [])
+        self.assertTrue(session.calls[0][1].endswith("/v2/review/list"))
+        self.assertTrue(session.calls[1][1].endswith("/v1/question/list"))
+        self.assertEqual(session.calls[0][2]["json"], review_payload)
+        self.assertEqual(session.calls[1][2]["json"], question_payload)
 
 
 class OzonAdapterTest(unittest.TestCase):
@@ -262,6 +281,43 @@ class OzonAdapterTest(unittest.TestCase):
         self.assertNotIn("catalog_write", result.capabilities)
         self.assertEqual(result.roles, ("Finance", "Product"))
         self.assertEqual(result.expires_at.isoformat(), "2027-01-02T03:04:05")
+
+    def test_connection_maps_only_exact_inbox_read_role_methods(self):
+        class Client:
+            def __init__(self, credentials):
+                self.credentials = credentials
+
+            def get_roles(self):
+                return {
+                    "roles": [{
+                        "name": "Premium feedback",
+                        "methods": [
+                            "/v2/review/list",
+                            "/v1/question/list",
+                            "/v1/review/comment/create",
+                            "/v1/question/answer/create-extra",
+                        ],
+                    }],
+                }
+
+        adapter = OzonAdapter(client_factory=Client)
+        result = adapter.check_connection(MarketplaceCredentials(
+            external_account_id="42",
+            api_key="test-key",
+        ))
+
+        self.assertIn("reviews_read", result.capabilities)
+        self.assertIn("questions_read", result.capabilities)
+        self.assertNotIn("reviews_write", result.capabilities)
+        self.assertNotIn("questions_write", result.capabilities)
+        self.assertEqual(
+            OzonAdapter._role_capabilities({
+                "roles": [{
+                    "methods": [" /v2/review/list", "/v1/question/list "],
+                }],
+            }),
+            (),
+        )
 
     def test_registry_is_explicit_and_rejects_duplicates(self):
         adapter = OzonAdapter(client_factory=lambda credentials: None)

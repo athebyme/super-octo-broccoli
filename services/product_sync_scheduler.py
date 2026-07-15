@@ -393,6 +393,19 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    # Reviews and questions are capability-gated Premium APIs. This runner
+    # only selects account/kind pairs whose exact read method was confirmed by
+    # /v1/roles; reply drafts remain local and no provider write is registered.
+    scheduler.add_job(
+        func=lambda: sync_ozon_inbox_accounts(flask_app),
+        trigger=IntervalTrigger(minutes=15),
+        id='ozon_inbox_sync',
+        name='Sync account-scoped Ozon reviews and questions (read-only)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Первоначальная загрузка аналитики через 30 сек после старта (если данных нет)
     scheduler.add_job(
         func=lambda: initial_analytics_sync_if_empty(flask_app),
@@ -1441,6 +1454,108 @@ def sync_ozon_finance_accounts(flask_app, limit=2):
         if result['selected'] or result['failed']:
             logger.info(
                 'Ozon finance scheduler: selected=%s completed=%s running=%s failed=%s',
+                result['selected'],
+                result['completed'],
+                result['running'],
+                result['failed'],
+            )
+        return result
+
+
+def sync_ozon_inbox_accounts(flask_app, limit=2):
+    """Resume/start bounded capability-proven Ozon inbox read sweeps."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 10:
+        return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 1}
+    with flask_app.app_context():
+        from models import Marketplace, SellerMarketplaceAccount, db
+        from services.marketplace_inbox import MarketplaceInboxService
+
+        current_time = datetime.utcnow()
+        current_date = current_time.date()
+        try:
+            pruned = MarketplaceInboxService.prune_expired_items(
+                today=current_date,
+                limit=500,
+            )
+            if pruned:
+                logger.info('Ozon inbox retention removed %s expired rows', pruned)
+        except Exception as exc:
+            db.session.rollback()
+            logger.error(
+                'Ozon inbox retention cleanup failed: %s',
+                type(exc).__name__,
+            )
+        if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0}
+        period_start, period_end = MarketplaceInboxService._period(
+            today=current_date,
+        )
+        candidates = SellerMarketplaceAccount.query.join(Marketplace).filter(
+            Marketplace.code == 'ozon',
+            Marketplace.is_active.is_(True),
+            SellerMarketplaceAccount.is_active.is_(True),
+            SellerMarketplaceAccount.connection_status == 'connected',
+        ).order_by(
+            SellerMarketplaceAccount.is_default.desc(),
+            SellerMarketplaceAccount.id.asc(),
+        ).limit(50).all()
+        due = []
+        for account in candidates:
+            capabilities = set(account.capabilities)
+            for source_kind, required in (
+                ('review', 'reviews_read'),
+                ('question', 'questions_read'),
+            ):
+                if required not in capabilities:
+                    continue
+                running = MarketplaceInboxService._running_run(
+                    seller_id=account.seller_id,
+                    account_id=account.id,
+                    source_kind=source_kind,
+                    now=current_time,
+                )
+                fresh = None if running is not None else (
+                    MarketplaceInboxService._fresh_completed(
+                        seller_id=account.seller_id,
+                        account_id=account.id,
+                        source_kind=source_kind,
+                        period_start=period_start,
+                        period_end=period_end,
+                        now=current_time,
+                    )
+                )
+                if running is not None or fresh is None:
+                    due.append((account, source_kind))
+                if len(due) >= limit:
+                    break
+            if len(due) >= limit:
+                break
+
+        result = {'selected': len(due), 'completed': 0, 'running': 0, 'failed': 0}
+        for account, source_kind in due:
+            try:
+                run = MarketplaceInboxService.sync_kind(
+                    seller_id=account.seller_id,
+                    account_id=account.id,
+                    source_kind=source_kind,
+                    force=False,
+                    max_pages=3,
+                    now=current_time,
+                    today=current_date,
+                )
+                result['completed' if run.status == 'completed' else 'running'] += 1
+            except Exception as exc:
+                db.session.rollback()
+                result['failed'] += 1
+                logger.error(
+                    'Ozon inbox scheduler failed for account=%s kind=%s: %s',
+                    account.id,
+                    source_kind,
+                    type(exc).__name__,
+                )
+        if result['selected'] or result['failed']:
+            logger.info(
+                'Ozon inbox scheduler: selected=%s completed=%s running=%s failed=%s',
                 result['selected'],
                 result['completed'],
                 result['running'],

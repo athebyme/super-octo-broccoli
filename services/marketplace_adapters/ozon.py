@@ -32,6 +32,8 @@ class OzonAdapter(MarketplaceAdapter):
             MarketplaceCapability.ORDERS_READ,
             MarketplaceCapability.ANALYTICS_READ,
             MarketplaceCapability.FINANCE_READ,
+            MarketplaceCapability.REVIEWS_READ,
+            MarketplaceCapability.QUESTIONS_READ,
         )
     })
     endpoint_versions = {
@@ -55,11 +57,13 @@ class OzonAdapter(MarketplaceAdapter):
         try:
             response = self._client(credentials).get_roles()
             roles = self._role_names(response)
+            capabilities = [MarketplaceCapability.CONNECTION_CHECK.value]
+            capabilities.extend(self._role_capabilities(response))
             return ConnectionCheck(
                 ok=True,
                 status="connected",
                 external_account_id=credentials.external_account_id,
-                capabilities=(MarketplaceCapability.CONNECTION_CHECK.value,),
+                capabilities=tuple(sorted(set(capabilities))),
                 roles=roles,
                 expires_at=self._expires_at(response.get("expires_at")),
             )
@@ -111,6 +115,28 @@ class OzonAdapter(MarketplaceAdapter):
                 seen.add(key)
                 roles.append(name)
         return tuple(sorted(roles, key=str.casefold))
+
+    @staticmethod
+    def _role_capabilities(response: Dict[str, Any]) -> Tuple[str, ...]:
+        """Map only exact current role methods to premium inbox capabilities."""
+        raw_roles = response.get("roles")
+        if raw_roles is None:
+            raw_roles = response.get("result")
+        methods = set()
+        if isinstance(raw_roles, list):
+            for role in raw_roles[:200]:
+                role_methods = role.get("methods") if isinstance(role, dict) else None
+                if not isinstance(role_methods, list):
+                    continue
+                for method in role_methods[:2_000]:
+                    if isinstance(method, str):
+                        methods.add(method)
+        capabilities = []
+        if "/v2/review/list" in methods:
+            capabilities.append(MarketplaceCapability.REVIEWS_READ.value)
+        if "/v1/question/list" in methods:
+            capabilities.append(MarketplaceCapability.QUESTIONS_READ.value)
+        return tuple(capabilities)
 
     @staticmethod
     def _expires_at(value: Any) -> Optional[datetime]:
@@ -325,3 +351,17 @@ class OzonAdapter(MarketplaceAdapter):
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         return self._client(credentials).get_finance_accrual_postings(payload)
+
+    def read_reviews(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_reviews(payload)
+
+    def read_questions(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_questions(payload)

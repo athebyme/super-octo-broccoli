@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P9 implemented; P10 reviews/unified AI/image/content next
+Статус: P0–P9 и P10A implemented; P10B unified AI scope next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -193,9 +193,10 @@ unified chat
 
 ### 3.8 Отзывы и вопросы
 
-- Reviews API может зависеть от тарифа/подписки; отсутствие права — capability state, не auth failure всего кабинета.
-- С 17.04.2026 нельзя комментировать пустые отзывы без content; UI/agent preflight проверяет content type до write.
-- Generated reply является draft/proposal. Отправка ответа — отдельное подтверждаемое действие с audit trail.
+- Reviews/Questions API может требовать Premium Plus; отсутствие точного метода в `/v1/roles` — capability state, не auth failure всего кабинета.
+- Current review read использует `/v2/review/list` и новый status contract `NEW|VIEWED|PROCESSED`; questions read остаётся `/v1/question/list`. Оба endpoint зафиксированы per capability в manifest и имеют только read retry class.
+- С 17.04.2026 нельзя комментировать пустые отзывы без текста/фото/видео; preflight запрещает даже подготовку reply draft для такого review.
+- P10A сохраняет generated/template reply только локально. Provider write adapter, send route и кнопка отправки отсутствуют; будущая отправка будет отдельным подтверждаемым действием с audit trail.
 
 ## 4. Целевая архитектура
 
@@ -714,12 +715,26 @@ Definition of done: finance/order UI filters by exact marketplace/account and to
 
 ### P10 — reviews, unified AI, image lab and content
 
-- Ozon review/question capability detection and draft replies.
-- `entity_kind=marketplace_listing` with marketplace/account identity.
-- Deterministic intents accept explicit marketplace; ambiguity causes clarification.
-- Internal tools are adapter/capability-scoped and least privilege.
-- Image Lab uses listing media adapter and Ozon image constraints.
-- Content factory selection works over unified listings.
+- [x] P10A: exact-role Ozon review/question capability detection and read-only status/cursor sync.
+- [x] P10A: PII-minimized 90-day inbox, separate Ozon UI and local-only AI/template reply drafts.
+- [ ] P10B: `entity_kind=marketplace_listing` with marketplace/account identity.
+- [ ] P10B: deterministic intents accept explicit marketplace; ambiguity causes clarification.
+- [ ] P10B: internal tools are adapter/capability-scoped and least privilege.
+- [ ] P10C: Image Lab uses listing media adapter and Ozon image constraints.
+- [ ] P10C: Content factory selection works over unified listings.
+
+P10A реализован `MarketplaceInboxSync`, `MarketplaceInboxItem` и
+`MarketplaceReplyDraft`, строгим `ozon_feedback_contracts` и отдельным UI
+`/marketplaces/reviews`. Sweep проходит `NEW → VIEWED → PROCESSED`, commit-ится
+постранично и resume-ится по opaque cursor; account/kind допускается только при
+exact `/v1/roles` capability. Нормализатор не сохраняет author/links/raw body,
+customer text удаляется за пределами 90 дней, а SKU связывается только внутри
+точного кабинета. AI получает bounded listing facts и явно недоверенный customer
+text, делает один request и сохраняет только проверяемый локальный draft. UI до
+действия сообщает, что AI mode передаёт bounded text/facts настроенному
+провайдеру, тогда как template mode не вызывает AI.
+Review/question write endpoints намеренно отсутствуют; UI не имеет send button,
+поэтому этот этап физически не может ответить покупателю в Ozon.
 
 Definition of done: AI cannot cross accounts or invoke an unsupported/bypassed write.
 
@@ -775,6 +790,12 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
     finance snapshots, accrual dictionary/facts/items/components с partial
     unique running scope и запускается fail-fast после fulfillment migration в
     Docker/comprehensive/direct SQLite paths.
+15. `migrate_add_marketplace_inbox.py` additive/idempotent создаёт только
+    `marketplace_inbox_syncs`, `marketplace_inbox_items` и
+    `marketplace_reply_drafts`; он fail-fast подключён после finance migration
+    к Docker, comprehensive runner и direct SQLite startup. Rollback не удаляет
+    customer data, а runtime retention удаляет text старше 90 дней только после
+    completed sweep.
 
 ## 10. Security и safety invariants
 

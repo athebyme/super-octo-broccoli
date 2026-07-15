@@ -131,6 +131,12 @@ OZON_ENDPOINTS: Mapping[str, OzonEndpointSpec] = MappingProxyType({
     "finance_accrual_postings": OzonEndpointSpec(
         "/v1/finance/accrual/postings", "finance_read", "read"
     ),
+    "review_list": OzonEndpointSpec(
+        "/v2/review/list", "reviews_read", "read"
+    ),
+    "question_list": OzonEndpointSpec(
+        "/v1/question/list", "questions_read", "read"
+    ),
 })
 
 
@@ -445,6 +451,12 @@ class OzonSellerAPIClient:
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         return self.request("finance_accrual_postings", payload)
+
+    def get_reviews(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("review_list", payload)
+
+    def get_questions(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("question_list", payload)
 
     def get_product_list(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("product_list", payload)

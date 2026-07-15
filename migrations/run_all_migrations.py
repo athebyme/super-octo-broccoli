@@ -1230,6 +1230,10 @@ def main():
                 migrate as migrate_marketplace_finance,
             )
             migrate_marketplace_finance(db_path)
+            from migrate_add_marketplace_inbox import (
+                migrate as migrate_marketplace_inbox,
+            )
+            migrate_marketplace_inbox(db_path)
             from migrate_add_image_generation_lab import migrate as migrate_image_lab
             migrate_image_lab(db_path)
             from migrate_add_image_lab_reference_watermark import (

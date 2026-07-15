@@ -26,6 +26,7 @@ class MarketplaceCapability(str, Enum):
     FINANCE_READ = "finance_read"
     REVIEWS_READ = "reviews_read"
     REVIEWS_WRITE = "reviews_write"
+    QUESTIONS_READ = "questions_read"
 
 
 def _validate_credential_part(

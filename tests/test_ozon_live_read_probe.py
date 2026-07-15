@@ -17,6 +17,7 @@ from scripts.probe_ozon_read_contracts import (
     run_probe,
 )
 from services.ozon_api_client import OZON_ENDPOINTS
+from services.ozon_api_client import OzonAPIError
 
 
 class FakeReadClient:
@@ -44,6 +45,8 @@ class FakeReadClient:
                     "methods": [
                         "/v1/product/archive",
                         "/v1/product/import/prices",
+                        "/v2/review/list",
+                        "/v1/question/list",
                     ],
                 }],
             }
@@ -75,10 +78,16 @@ class OzonLiveReadProbeTest(unittest.TestCase):
         self.assertFalse(
             result["role_method_checks"]["/v2/products/stocks"]
         )
+        self.assertTrue(result["role_method_checks"]["/v2/review/list"])
+        self.assertTrue(result["role_method_checks"]["/v1/question/list"])
         for endpoint_name, _payload in client.calls:
             self.assertEqual(OZON_ENDPOINTS[endpoint_name].retry_class, "read")
         calls = dict(client.calls)
         self.assertEqual(calls["finance_accrual_types"], {})
+        self.assertEqual(calls["review_list"]["limit"], 1)
+        self.assertEqual(calls["review_list"]["filters"]["status"], "NEW")
+        self.assertEqual(calls["question_list"]["limit"], 1)
+        self.assertEqual(calls["question_list"]["filter"]["status"], "NEW")
         self.assertEqual(
             date.fromisoformat(calls["finance_accrual_by_day"]["date"]),
             date.today(),
@@ -110,6 +119,22 @@ class OzonLiveReadProbeTest(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True):
                 with self.assertRaises(ProbeConfigurationError):
                     load_credentials(path)
+
+    def test_provider_error_values_are_reduced_to_fixed_metadata(self):
+        class ErrorClient:
+            def request(self, _endpoint_name, _payload):
+                raise OzonAPIError(
+                    "PRIVATE_PROVIDER_ERROR_BODY",
+                    code="PRIVATE_DYNAMIC_ERROR_CODE",
+                    status_code=403,
+                    request_id="PRIVATE_PROVIDER_REQUEST_ID",
+                )
+
+        encoded = json.dumps(run_probe(ErrorClient()))
+        self.assertNotIn("PRIVATE_PROVIDER_ERROR_BODY", encoded)
+        self.assertNotIn("PRIVATE_DYNAMIC_ERROR_CODE", encoded)
+        self.assertNotIn("PRIVATE_PROVIDER_REQUEST_ID", encoded)
+        self.assertIn("provider_read_failed", encoded)
 
 
 if __name__ == "__main__":

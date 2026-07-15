@@ -27,6 +27,7 @@
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <a href="{{ url_for('marketplace_analytics_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Обзор Ozon</a>
         <a href="{{ url_for('marketplace_fulfillment.orders_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Заказы</a>
+        <a href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы</a>
         <span class="sh-btn sh-btn--primary sh-btn--sm" aria-current="page">Финансы</span>
         <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:14px">Кабинет
           <select class="sh-input" style="min-width:220px" @change="switchAccount($event.target.value)">

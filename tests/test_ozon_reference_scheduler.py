@@ -26,6 +26,7 @@ from services.product_sync_scheduler import (
     sync_ozon_analytics_accounts,
     sync_ozon_finance_accounts,
     sync_ozon_fulfillment_accounts,
+    sync_ozon_inbox_accounts,
 )
 
 
@@ -295,6 +296,50 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
             result = sync_ozon_finance_accounts(self.app)
         self.assertEqual(result["selected"], 0)
         sync.assert_not_called()
+
+    def test_inbox_scheduler_requires_capability_and_is_bounded_read_only(self):
+        with self.app.app_context():
+            account = db.session.get(SellerMarketplaceAccount, self.account_id)
+            account.capabilities_json = '["reviews_read","questions_read"]'
+            db.session.commit()
+        run = SimpleNamespace(status="completed")
+        with patch(
+            "services.marketplace_inbox.MarketplaceInboxService._running_run",
+            return_value=None,
+        ), patch(
+            "services.marketplace_inbox.MarketplaceInboxService._fresh_completed",
+            return_value=None,
+        ), patch(
+            "services.marketplace_inbox.MarketplaceInboxService.sync_kind",
+            return_value=run,
+        ) as sync:
+            result = sync_ozon_inbox_accounts(self.app, limit=1)
+
+        self.assertEqual(result["selected"], 1)
+        self.assertEqual(result["completed"], 1)
+        sync.assert_called_once()
+        kwargs = sync.call_args.kwargs
+        self.assertEqual(kwargs["seller_id"], self.seller_id)
+        self.assertEqual(kwargs["account_id"], self.account_id)
+        self.assertEqual(kwargs["source_kind"], "review")
+        self.assertFalse(kwargs["force"])
+        self.assertEqual(kwargs["max_pages"], 3)
+
+    def test_inbox_scheduler_skips_unproven_capability_and_dark_flag(self):
+        with patch(
+            "services.marketplace_inbox.MarketplaceInboxService.sync_kind",
+        ) as sync, patch(
+            "services.marketplace_inbox.MarketplaceInboxService.prune_expired_items",
+            return_value=0,
+        ) as prune:
+            no_capability = sync_ozon_inbox_accounts(self.app, limit=1)
+            self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+            disabled = sync_ozon_inbox_accounts(self.app, limit=1)
+
+        self.assertEqual(no_capability["selected"], 0)
+        self.assertEqual(disabled["selected"], 0)
+        sync.assert_not_called()
+        self.assertEqual(prune.call_count, 2)
 
 
 if __name__ == "__main__":

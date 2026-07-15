@@ -9,7 +9,7 @@ values, product identities, credentials, or raw provider errors.
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, timedelta
 import json
 import os
 from pathlib import Path
@@ -22,6 +22,10 @@ from services.ozon_api_client import (
     OZON_ENDPOINTS,
     OzonAPIError,
     OzonSellerAPIClient,
+)
+from services.ozon_feedback_contracts import (
+    build_question_list_request,
+    build_review_list_request,
 )
 
 
@@ -53,6 +57,8 @@ ROLE_METHOD_CHECKS = (
     "/v1/product/pictures/import",
     "/v1/product/import/prices",
     "/v2/products/stocks",
+    "/v2/review/list",
+    "/v1/question/list",
 )
 
 
@@ -189,6 +195,8 @@ def _role_method_checks(response: Any) -> Dict[str, bool]:
     """Reduce role values to a fixed boolean allowlist without echoing methods."""
     methods = set()
     roles = response.get("roles") if isinstance(response, dict) else None
+    if roles is None and isinstance(response, dict):
+        roles = response.get("result")
     if isinstance(roles, list):
         for role in roles:
             role_methods = role.get("methods") if isinstance(role, dict) else None
@@ -230,6 +238,34 @@ def _product_read_probes(identity: Mapping[str, Any]) -> Iterable[tuple]:
     return tuple(probes)
 
 
+def _inbox_read_probes(role_checks: Mapping[str, bool]) -> Iterable[tuple]:
+    """Probe Premium inbox endpoints only when the exact role method exists."""
+    today = date.today()
+    start = today - timedelta(days=89)
+    probes = []
+    if role_checks.get("/v2/review/list") is True:
+        probes.append((
+            "review_list",
+            build_review_list_request(
+                status="NEW",
+                date_from=start,
+                date_to=today,
+                limit=1,
+            ),
+        ))
+    if role_checks.get("/v1/question/list") is True:
+        probes.append((
+            "question_list",
+            build_question_list_request(
+                status="NEW",
+                date_from=start,
+                date_to=today,
+                limit=1,
+            ),
+        ))
+    return tuple(probes)
+
+
 def run_probe(client: OzonSellerAPIClient) -> Dict[str, Any]:
     results = []
     identity: Dict[str, Any] = {}
@@ -252,8 +288,8 @@ def run_probe(client: OzonSellerAPIClient) -> Dict[str, Any]:
                 "path": spec.path,
                 "ok": False,
                 "status_code": exc.status_code,
-                "error_code": exc.code,
-                "provider_request_id": exc.request_id,
+                "failure": "provider_read_failed",
+                "provider_request_id_present": bool(exc.request_id),
             })
             continue
         results.append({
@@ -264,6 +300,7 @@ def run_probe(client: OzonSellerAPIClient) -> Dict[str, Any]:
         })
         if endpoint_name == "roles":
             role_method_checks = _role_method_checks(response)
+            probes.extend(_inbox_read_probes(role_method_checks))
         if endpoint_name == "product_list":
             identity = _first_product_identity(response)
             probes.extend(_product_read_probes(identity))
