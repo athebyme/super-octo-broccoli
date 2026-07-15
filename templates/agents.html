@@ -238,7 +238,7 @@
                                                                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 9l2 2 4-4M8 15h8"/></svg>
                                                                     Аудит
                                                                 </button>
-                                                                <button type="button" class="agent-button" :class="artifact.entity_kind === 'product' ? 'is-primary' : ''" @click="queueArtifactAction(artifact, 'content')" :disabled="!artifactSelectedIds(artifact).length">
+                                                                <button type="button" class="agent-button" x-show="artifact.entity_kind !== 'marketplace_listing'" :class="artifact.entity_kind === 'product' ? 'is-primary' : ''" @click="queueArtifactAction(artifact, 'content')" :disabled="!artifactSelectedIds(artifact).length">
                                                                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.5-1 10-10a2.1 2.1 0 00-3-3l-10 10L4 20zM13.5 8.5l3 3"/></svg>
                                                                     Улучшить контент
                                                                 </button>
@@ -310,16 +310,20 @@
                     <strong>Контекст товаров</strong>
                     <button type="button" class="agent-icon-button" @click="scopeOpen = false" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
                 </div>
-                <label class="agent-radio-row">
+                <div class="agent-radio-row" x-show="marketplaceScope">
+                    <span><strong x-text="marketplaceScope ? `${marketplaceScope.ids.length} карточек ${marketplaceScope.marketplace_code.toUpperCase()}` : ''"></strong><small x-text="marketplaceScope ? `Точный кабинет #${marketplaceScope.account_id}; ID не смешиваются с WB` : ''"></small></span>
+                </div>
+                <label class="agent-radio-row" x-show="!marketplaceScope">
                     <input type="radio" value="all" x-model="scopeMode">
                     <span><strong>Весь каталог</strong><small>Помощник сам найдёт подходящие товары</small></span>
                 </label>
-                <label class="agent-radio-row">
+                <label class="agent-radio-row" x-show="!marketplaceScope">
                     <input type="radio" value="selected" x-model="scopeMode">
                     <span><strong>Выбранные товары</strong><small>Укажите внутренние ID через запятую</small></span>
                 </label>
-                <textarea x-show="scopeMode === 'selected'" x-model="productIdsInput" rows="2" placeholder="Например: 124, 381, 907"></textarea>
-                <button type="button" class="agent-button is-primary" @click="applyScope()">Применить</button>
+                <textarea x-show="!marketplaceScope && scopeMode === 'selected'" x-model="productIdsInput" rows="2" placeholder="Например: 124, 381, 907"></textarea>
+                <button type="button" class="agent-button is-primary" x-show="!marketplaceScope" @click="applyScope()">Применить</button>
+                <button type="button" class="agent-button" x-show="marketplaceScope" @click="resetScope(); scopeOpen = false">Сбросить выбор</button>
             </div>
 
             <div class="agent-composer" :class="focused ? 'is-focused' : ''">
@@ -329,9 +333,9 @@
                     @input="resizeComposer()"
                     @keydown.enter="handleEnter($event)"></textarea>
                 <div class="agent-composer-tools">
-                    <button type="button" class="agent-scope-button" @click="scopeOpen = !scopeOpen" :class="productIds.length ? 'has-selection' : ''">
+                    <button type="button" class="agent-scope-button" @click="scopeOpen = !scopeOpen" :class="scopeCount() ? 'has-selection' : ''">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 11-3-6.2M20 4v6h-6"/></svg>
-                        <span x-text="productIds.length ? `${productIds.length} товаров` : 'Весь каталог'"></span>
+                        <span x-text="scopeLabel()"></span>
                     </button>
                     <div class="agent-composer-right">
                         <span class="agent-char-count" x-show="draft.length > 3400" x-text="`${draft.length}/4000`"></span>
@@ -443,5 +447,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='agent-chat.js', v='20260713-4') }}"></script>
+<script src="{{ url_for('static', filename='agent-chat.js', v='20260715-1') }}"></script>
 {% endblock %}

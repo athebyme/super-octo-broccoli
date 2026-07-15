@@ -2677,7 +2677,7 @@
 
 {% if current_user.is_authenticated and current_user.seller and request.endpoint != 'agents_dashboard' and not request.path.startswith('/admin') %}
 {% include "partials/ai_chat_popup.html" %}
-<script src="{{ url_for('static', filename='ai-chat-popup.js', v='20260713-2') }}"></script>
+<script src="{{ url_for('static', filename='ai-chat-popup.js', v='20260715-1') }}"></script>
 {% endif %}
 
 {% block extra_scripts %}{% endblock %}

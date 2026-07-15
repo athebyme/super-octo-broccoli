@@ -736,9 +736,9 @@ Definition of done: finance/order UI filters by exact marketplace/account and to
 - [x] P10A: exact-role Ozon review/question capability detection and read-only status/cursor sync.
 - [x] P10A: PII-minimized 90-day inbox, separate Ozon UI and local-only AI/template reply drafts.
 - [x] P10B prerequisite: one canonical `ImportedProduct` for WB/Ozon content and AI cache, audited exact/manual listing links.
-- [ ] P10B: `entity_kind=marketplace_listing` with marketplace/account identity.
-- [ ] P10B: deterministic intents accept explicit marketplace; ambiguity causes clarification.
-- [ ] P10B: internal tools are adapter/capability-scoped and least privilege.
+- [x] P10B: `entity_kind=marketplace_listing` with marketplace/account identity.
+- [x] P10B: deterministic intents accept explicit marketplace; ambiguity causes clarification.
+- [x] P10B: internal tools are adapter/capability-scoped and least privilege.
 - [ ] P10C: Image Lab uses listing media adapter and Ozon image constraints.
 - [ ] P10C: Content factory selection works over unified listings.
 
@@ -754,6 +754,20 @@ text, делает один request и сохраняет только пров�
 провайдеру, тогда как template mode не вызывает AI.
 Review/question write endpoints намеренно отсутствуют; UI не имеет send button,
 поэтому этот этап физически не может ответить покупателю в Ozon.
+
+P10B реализован отдельным typed envelope: `marketplace_listing` всегда несёт
+exact integer listing IDs, `marketplace_code`, seller-owned `account_id` и
+`scope_mode=selected`. Harness не доверяет browser/sessionStorage и повторно
+ground-ит весь набор одним seller/account query; task хранит listing IDs в
+`marketplace_listing_ids`, оставляя `product_ids/imported_product_ids` пустыми.
+Internal brief повторно требует exact-set из assigned task и возвращает только
+bounded allowlisted локальные content/status/quality facts без credentials и
+raw provider payload. Детерминированный audit не вызывает LLM, insight получает
+одну карточку и делает не более одного model call; tool allowlist у обоих пуст.
+Старые WB content/write skills не принимают listing ID: явный marketplace write
+возвращает clarification до planner и будет вводиться только отдельным reviewed
+proposal contract. Quality UI открывает выбранный exact account scope в новом
+диалоге, popup карточки прикладывает тот же grounded envelope.
 
 Definition of done: AI cannot cross accounts or invoke an unsupported/bypassed write.
 

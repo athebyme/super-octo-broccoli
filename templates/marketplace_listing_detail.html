@@ -4,7 +4,10 @@
 {% block title %}{{ listing.title or listing.offer_id }} — Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6"
+     data-listing-id="{{ listing.id }}"
+     data-account-id="{{ listing.account_id }}"
+     data-marketplace-code="{{ listing.marketplace.code }}">
     <nav class="sh-breadcrumb" aria-label="Навигационная цепочка">
         <a href="{{ url_for('marketplace_listings.index') }}">Каталог маркетплейсов</a>
         <span aria-hidden="true"> / </span>

@@ -64,7 +64,7 @@
       <div class="sh-stat-card">
         <div class="sh-stat-label">Выбрано</div>
         <div class="sh-stat-value" x-text="selectedIds.length"></div>
-        <button x-show="selectedIds.length" @click="saveCollection()" class="sh-btn sh-btn--secondary sh-btn--sm" style="margin-top:8px">Сохранить коллекцию</button>
+        <button x-show="selectedIds.length" @click="saveCollection()" class="sh-btn sh-btn--secondary sh-btn--sm" style="margin-top:8px">Открыть выбранное в ИИ-помощнике</button>
       </div>
     </div>
 
@@ -222,7 +222,7 @@ function ozonQualityPage() {
     saveCollection() {
       const value = {entity_kind:'marketplace_listing', marketplace_code:'ozon', account_id:this.accountId, listing_ids:this.selectedIds};
       sessionStorage.setItem('seller_hub_marketplace_collection', JSON.stringify(value));
-      this.$store.toasts.success('Выбор сохранён с точным кабинетом и типом сущности');
+      window.location.href = '/agents?new=1';
     },
     async refreshAll() {
       this.refreshing = true; this.error = ''; let offset = 0; let loops = 0;

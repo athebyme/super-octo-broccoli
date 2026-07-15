@@ -27,7 +27,8 @@ from models import (
     Brand, BrandAlias, MarketplaceBrand, BrandCategoryLink,
     AgentChangeSnapshot, CardEditHistory, SystemSettings, AutoImportSettings,
     AgentTask, ProductDefaults, APILog, AgentReviewProposal,
-    Supplier, SellerSupplier,
+    Supplier, SellerSupplier, SellerMarketplaceAccount, MarketplaceListing,
+    MarketplaceQualityAssessment,
 )
 from services import agent_service
 from services.brand_reference_service import (
@@ -1922,6 +1923,246 @@ def _bounded_product_ids(value, limit: int = 200) -> list[int]:
     return result
 
 
+def _bounded_marketplace_listing_ids(value, limit: int = 200) -> list[int]:
+    """Validate listing IDs without legacy numeric-string coercion."""
+    if not isinstance(value, list) or not value:
+        raise ValueError('listing_ids array is required')
+    if len(value) > limit:
+        raise ValueError(f'Maximum {limit} listing_ids per request')
+    result = []
+    seen = set()
+    for index, raw in enumerate(value):
+        if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
+            raise ValueError(f'listing_ids[{index}] must be a positive integer')
+        if raw in seen:
+            raise ValueError(f'Duplicate listing_id: {raw}')
+        result.append(raw)
+        seen.add(raw)
+    return result
+
+
+def _marketplace_listing_task_scope(task: AgentTask, seller_id: int, data: dict):
+    """Require request scope to exactly match the assigned immutable task scope."""
+    marketplace_code = str(data.get('marketplace_code') or '').strip().lower()
+    if not re.fullmatch(r'[a-z][a-z0-9_-]{1,49}', marketplace_code):
+        return None, (jsonify({'error': 'marketplace_code is invalid'}), 400)
+    account_id = data.get('account_id')
+    if not isinstance(account_id, int) or isinstance(account_id, bool) or account_id <= 0:
+        return None, (jsonify({'error': 'account_id must be a positive integer'}), 400)
+    try:
+        listing_ids = _bounded_marketplace_listing_ids(data.get('listing_ids'))
+    except ValueError as exc:
+        return None, (jsonify({'error': str(exc)}), 400)
+
+    task_input = task.get_input()
+    trusted = task_input.get('entity_scope')
+    if not isinstance(trusted, dict):
+        trusted = {}
+    trusted_ids = trusted.get('ids')
+    task_listing_ids = task_input.get('marketplace_listing_ids')
+    task_products = task_input.get('product_ids') or []
+    task_imported = task_input.get('imported_product_ids') or []
+    exact = (
+        trusted.get('kind') == 'marketplace_listing'
+        and trusted.get('scope_mode') == 'selected'
+        and trusted.get('marketplace_code') == marketplace_code
+        and trusted.get('account_id') == account_id
+        and isinstance(trusted_ids, list)
+        and trusted_ids == listing_ids
+        and isinstance(task_listing_ids, list)
+        and task_listing_ids == listing_ids
+        and task_products == []
+        and task_imported == []
+    )
+    if not exact:
+        return None, (jsonify({
+            'error': 'Marketplace listing request is outside assigned task scope',
+        }), 403)
+    if int(task.seller_id) != int(seller_id):
+        return None, (jsonify({'error': 'Seller is outside assigned task scope'}), 403)
+    return {
+        'marketplace_code': marketplace_code,
+        'account_id': account_id,
+        'listing_ids': listing_ids,
+    }, None
+
+
+def _json_object(value) -> dict:
+    try:
+        parsed = json.loads(value or '{}') if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(value) -> list:
+    try:
+        parsed = json.loads(value or '[]') if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _marketplace_media_count(listing: MarketplaceListing) -> int:
+    media = _json_object(listing.media_json)
+    urls = set()
+    primary = media.get('primary_image')
+    if isinstance(primary, str) and primary:
+        urls.add(primary)
+    for key in ('images', 'images360'):
+        values = media.get(key)
+        if not isinstance(values, list):
+            continue
+        urls.update(
+            item for item in values[:100]
+            if isinstance(item, str) and item
+        )
+    return len(urls)
+
+
+def _safe_nonnegative_float(value) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if parsed != parsed or parsed in (float('inf'), float('-inf')):
+        return 0.0
+    return max(0.0, parsed)
+
+
+def _marketplace_listing_brief_item(
+    listing: MarketplaceListing,
+    assessment: MarketplaceQualityAssessment = None,
+) -> dict:
+    """Return a compact allowlisted fact pack, never raw provider payloads."""
+    attributes = _json_list(listing.attributes_json)
+    complex_attributes = _json_list(listing.complex_attributes_json)
+    barcodes = _json_list(listing.barcodes_json)
+    moderation_errors = _json_list(listing.moderation_errors_json)
+    dimensions = _json_object(listing.dimensions_json)
+    prices = _json_object(listing.price_summary_json)
+    media_count = _marketplace_media_count(listing)
+
+    issues = []
+
+    def add_issue(code, label, weight):
+        issues.append({'code': code, 'label': label, 'weight': weight})
+
+    if not (listing.title or '').strip():
+        add_issue('missing_title', 'Нет названия Ozon', 12)
+    if not (listing.description or '').strip():
+        add_issue('missing_description', 'Нет описания Ozon', 10)
+    elif len(listing.description.strip()) < 100:
+        add_issue('short_description', 'Короткое описание Ozon', 5)
+    if not attributes and not complex_attributes:
+        add_issue('missing_attributes', 'Нет снимка характеристик Ozon', 10)
+    if media_count == 0:
+        add_issue('missing_media', 'Нет изображений Ozon', 12)
+    elif media_count < 5:
+        add_issue('few_media', 'Мало изображений Ozon', 5)
+    if not barcodes:
+        add_issue('missing_barcodes', 'Нет штрихкода', 4)
+    if not prices.get('available'):
+        add_issue('missing_price_snapshot', 'Нет подтверждённого снимка цены', 8)
+    if moderation_errors:
+        add_issue('moderation_errors', 'Есть ошибки модерации Ozon', 20)
+    if listing.normalized_status != 'active':
+        add_issue('listing_not_active', 'Карточка Ozon не активна', 8)
+    if listing.is_archived or not listing.is_available:
+        add_issue('listing_unavailable', 'Карточка архивна или недоступна', 12)
+    if listing.canonical_link_status != 'linked':
+        add_issue('canonical_link_missing', 'Не связана с общей карточкой', 8)
+
+    quality = None
+    if assessment:
+        raw_reasons = _json_list(assessment.reasons_json)
+        reasons = []
+        for raw in raw_reasons[:20]:
+            if not isinstance(raw, dict):
+                continue
+            code = str(raw.get('code') or '')[:80]
+            label = html.unescape(str(raw.get('label') or code))[:200]
+            if not code:
+                continue
+            reasons.append({
+                'code': code,
+                'label': label,
+                'severity': str(raw.get('severity') or '')[:20],
+                'impact': _safe_nonnegative_float(raw.get('impact')),
+            })
+            if code not in {item['code'] for item in issues}:
+                add_issue(
+                    code,
+                    label,
+                    min(max(int(_safe_nonnegative_float(raw.get('impact')) or 1), 1), 25),
+                )
+        quality = {
+            'status': assessment.status,
+            'severity': assessment.severity,
+            'score': assessment.score,
+            'impact': assessment.impact,
+            'definition_version': assessment.definition_version,
+            'reasons': reasons,
+            'evaluated_at': (
+                assessment.evaluated_at.isoformat()
+                if assessment.evaluated_at else None
+            ),
+        }
+    else:
+        add_issue('quality_not_evaluated', 'Качество Ozon ещё не рассчитано', 3)
+
+    risk_score = sum(item['weight'] for item in issues)
+    return {
+        'id': listing.id,
+        'entity_kind': 'marketplace_listing',
+        'marketplace_code': (
+            listing.marketplace.code if listing.marketplace else None
+        ),
+        'account_id': listing.account_id,
+        'title': html.unescape(listing.title or '')[:180],
+        'description': html.unescape(listing.description or '')[:1200],
+        'offer_id': listing.offer_id[:200],
+        'external_product_id': listing.external_product_id[:100],
+        'primary_sku': (listing.primary_sku or '')[:100] or None,
+        'normalized_status': listing.normalized_status,
+        'visibility': (listing.visibility or '')[:100] or None,
+        'is_archived': bool(listing.is_archived),
+        'is_available': bool(listing.is_available),
+        'has_fbo_stocks': bool(listing.has_fbo_stocks),
+        'has_fbs_stocks': bool(listing.has_fbs_stocks),
+        'canonical_link': {
+            'status': listing.canonical_link_status,
+            'imported_product_id': listing.imported_product_id,
+            'source': (listing.link_source or '')[:40] or None,
+            'reuses_shared_content': listing.imported_product_id is not None,
+        },
+        'content_facts': {
+            'description_chars': len((listing.description or '').strip()),
+            'attribute_rows': len(attributes),
+            'complex_attribute_groups': len(complex_attributes),
+            'media_count': media_count,
+            'barcode_count': len(barcodes),
+            'dimensions_present': bool(dimensions),
+            'price_snapshot_available': bool(prices.get('available')),
+            'moderation_error_count': len(moderation_errors),
+        },
+        'quality': quality,
+        'risk_score': risk_score,
+        'issues': [
+            {'code': item['code'], 'label': item['label']}
+            for item in issues[:20]
+        ],
+        'issue_codes': [item['code'] for item in issues],
+        'issue_labels': [item['label'] for item in issues[:8]],
+        'url': f'/marketplaces/listings/{listing.id}',
+        'synced_at': (
+            listing.updated_at.isoformat() if listing.updated_at else None
+        ),
+    }
+
+
 def _empty_serialized(value) -> bool:
     return not str(value or '').strip() or str(value).strip() in {'{}', '[]', 'null'}
 
@@ -2097,6 +2338,116 @@ def internal_products_audit_batch(seller_id):
         }), 409
     result = _selected_batch_audit(products, entity_kind, focus_limit)
     return jsonify({'entity_kind': entity_kind, **result})
+
+
+@internal_api_bp.route(
+    '/sellers/<int:seller_id>/marketplace-listings/brief',
+    methods=['POST'],
+)
+@_authenticate_agent
+def internal_marketplace_listings_brief(seller_id):
+    """Read one exact seller/account listing selection from local snapshots.
+
+    The endpoint never decrypts marketplace credentials and never calls an
+    adapter.  It is capability-scoped to synced catalog facts and additionally
+    binds the body to the assigned task's trusted entity_scope.
+    """
+    task, error = _assigned_task_for_seller(seller_id)
+    if error:
+        return error
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON object is required'}), 400
+    trusted, error = _marketplace_listing_task_scope(task, seller_id, data)
+    if error:
+        return error
+    try:
+        focus_limit = data.get('focus_limit', 100)
+        if (
+            not isinstance(focus_limit, int)
+            or isinstance(focus_limit, bool)
+            or not 1 <= focus_limit <= 200
+        ):
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify({'error': 'focus_limit must be an integer from 1 to 200'}), 400
+
+    account = SellerMarketplaceAccount.query.join(
+        Marketplace,
+        SellerMarketplaceAccount.marketplace_id == Marketplace.id,
+    ).filter(
+        SellerMarketplaceAccount.id == trusted['account_id'],
+        SellerMarketplaceAccount.seller_id == seller_id,
+        SellerMarketplaceAccount.is_active.is_(True),
+        Marketplace.code == trusted['marketplace_code'],
+        Marketplace.is_active.is_(True),
+    ).first()
+    if not account:
+        return jsonify({'error': 'Marketplace account not found in seller scope'}), 404
+
+    listings = MarketplaceListing.query.filter(
+        MarketplaceListing.seller_id == seller_id,
+        MarketplaceListing.marketplace_id == account.marketplace_id,
+        MarketplaceListing.account_id == account.id,
+        MarketplaceListing.id.in_(trusted['listing_ids']),
+    ).all()
+    if len(listings) != len(trusted['listing_ids']):
+        return jsonify({
+            'error': 'Some listings are unavailable in seller/account scope',
+            'unavailable_count': len(trusted['listing_ids']) - len(listings),
+        }), 409
+    by_id = {listing.id: listing for listing in listings}
+    assessments = MarketplaceQualityAssessment.query.filter(
+        MarketplaceQualityAssessment.seller_id == seller_id,
+        MarketplaceQualityAssessment.account_id == account.id,
+        MarketplaceQualityAssessment.listing_id.in_(trusted['listing_ids']),
+    ).all()
+    quality_by_listing = {
+        assessment.listing_id: assessment for assessment in assessments
+    }
+    items = [
+        _marketplace_listing_brief_item(
+            by_id[listing_id], quality_by_listing.get(listing_id),
+        )
+        for listing_id in trusted['listing_ids']
+    ]
+
+    issue_counts = {}
+    issue_labels = {}
+    for item in items:
+        for issue in item['issues']:
+            code = issue['code']
+            label = issue['label']
+            issue_counts[code] = issue_counts.get(code, 0) + 1
+            issue_labels[code] = label
+    summary = [
+        {
+            'code': code,
+            'label': issue_labels.get(code, code),
+            'count': count,
+            'percent': round(count * 100 / len(items), 1),
+        }
+        for code, count in sorted(
+            issue_counts.items(), key=lambda pair: (-pair[1], pair[0]),
+        )
+    ]
+    ranked = sorted(
+        (item for item in items if item['issue_codes']),
+        key=lambda item: (-item['risk_score'], item['id']),
+    )
+    return jsonify({
+        'entity_kind': 'marketplace_listing',
+        'marketplace_code': trusted['marketplace_code'],
+        'account_id': account.id,
+        'account_label': account.label[:120],
+        'capability': 'local_catalog_snapshot_read',
+        'total': len(items),
+        'cards_with_issues': len(ranked),
+        'issue_summary': summary,
+        'products': ranked[:focus_limit],
+        'listings': items,
+        'truncated': len(ranked) > focus_limit,
+    })
 
 
 @internal_api_bp.route('/sellers/<int:seller_id>/suppliers/<int:supplier_id>/ready-candidates', methods=['GET'])

@@ -31,8 +31,11 @@ from models import (
     AgentTaskStep,
     AutoImportSettings,
     ImportedProduct,
+    Marketplace,
+    MarketplaceListing,
     Product,
     PricingSettings,
+    SellerMarketplaceAccount,
     ServiceAgent,
 )
 from services import agent_service
@@ -40,6 +43,7 @@ from services import agent_service
 
 MAX_MESSAGE_LENGTH = 4000
 MAX_PRODUCT_IDS = 500
+MAX_MARKETPLACE_LISTING_IDS = 200
 SEMANTIC_CONTEXT_MAX_CHARS = 2400
 SEMANTIC_CONTEXT_MAX_MESSAGES = 6
 HARNESS_PLAN_VERSION = 2
@@ -48,7 +52,8 @@ ACTIVE_TASK_STATUSES = {'queued', 'running'}
 PAGE_CONTEXT_ENTITY_KEYS = {
     'product_id', 'seller_id', 'supplier_id', 'item_id', 'nm_id',
     'subject_id', 'brand_id', 'marketplace_id', 'factory_id',
-    'account_id', 'category_id', 'task_id',
+    'account_id', 'category_id', 'task_id', 'listing_id',
+    'marketplace_code',
 }
 
 DIRECT_HELP_PATTERNS = (
@@ -161,6 +166,120 @@ def _normalize_product_ids(value) -> list[int]:
         if len(result) >= MAX_PRODUCT_IDS:
             break
     return result
+
+
+def _strict_positive_integer(value, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f'{field} must be a positive integer')
+    return value
+
+
+def _ground_marketplace_entity_scope(value, seller_id: int) -> dict:
+    """Turn an untrusted browser listing scope into a seller-owned DB scope.
+
+    A marketplace listing ID is never interchangeable with Product or
+    ImportedProduct IDs.  The account and marketplace identity are therefore
+    mandatory and every selected listing is resolved as one exact set before
+    it can be persisted in a chat task.
+    """
+    if not isinstance(value, dict):
+        raise ValueError('entity_scope must be an object')
+    allowed_keys = {
+        'kind', 'ids', 'listing_ids', 'marketplace_code', 'account_id',
+        'scope_mode',
+    }
+    unknown_keys = sorted(set(value) - allowed_keys)
+    if unknown_keys:
+        raise ValueError(
+            'entity_scope contains unsupported fields: ' + ', '.join(unknown_keys)
+        )
+    if value.get('kind') != 'marketplace_listing':
+        raise ValueError('entity_scope.kind must be marketplace_listing')
+
+    marketplace_code = str(value.get('marketplace_code') or '').strip().lower()
+    if not re.fullmatch(r'[a-z][a-z0-9_-]{1,49}', marketplace_code):
+        raise ValueError('entity_scope.marketplace_code is invalid')
+    account_id = _strict_positive_integer(
+        value.get('account_id'), 'entity_scope.account_id',
+    )
+    scope_mode = str(value.get('scope_mode') or 'selected').strip().lower()
+    if scope_mode not in {'selected', 'global'}:
+        raise ValueError('entity_scope.scope_mode must be selected or global')
+
+    raw_ids = value.get('ids')
+    if raw_ids is not None and value.get('listing_ids') is not None:
+        raise ValueError('Use only entity_scope.ids for marketplace listings')
+    if raw_ids is None:
+        raw_ids = value.get('listing_ids')
+    if not isinstance(raw_ids, list):
+        raise ValueError('entity_scope.ids must be an array')
+    if len(raw_ids) > MAX_MARKETPLACE_LISTING_IDS:
+        raise ValueError(
+            f'Maximum {MAX_MARKETPLACE_LISTING_IDS} marketplace listing IDs per request'
+        )
+    listing_ids = []
+    seen = set()
+    for index, raw in enumerate(raw_ids):
+        listing_id = _strict_positive_integer(
+            raw, f'entity_scope.ids[{index}]',
+        )
+        if listing_id in seen:
+            raise ValueError(f'Duplicate marketplace listing ID: {listing_id}')
+        listing_ids.append(listing_id)
+        seen.add(listing_id)
+    if scope_mode == 'selected' and not listing_ids:
+        raise ValueError('Selected marketplace scope requires at least one listing')
+    if scope_mode == 'global' and listing_ids:
+        raise ValueError('Global marketplace scope cannot contain listing IDs')
+
+    account = SellerMarketplaceAccount.query.join(
+        Marketplace,
+        SellerMarketplaceAccount.marketplace_id == Marketplace.id,
+    ).filter(
+        SellerMarketplaceAccount.id == account_id,
+        SellerMarketplaceAccount.seller_id == seller_id,
+        SellerMarketplaceAccount.is_active.is_(True),
+        Marketplace.code == marketplace_code,
+        Marketplace.is_active.is_(True),
+    ).first()
+    if not account:
+        raise ValueError('Marketplace account is unavailable in this seller scope')
+
+    if listing_ids:
+        listings = MarketplaceListing.query.filter(
+            MarketplaceListing.seller_id == seller_id,
+            MarketplaceListing.marketplace_id == account.marketplace_id,
+            MarketplaceListing.account_id == account.id,
+            MarketplaceListing.id.in_(listing_ids),
+        ).all()
+        if len(listings) != len(listing_ids):
+            raise ValueError(
+                'Some marketplace listings are unavailable in this seller/account scope'
+            )
+
+    return {
+        'kind': 'marketplace_listing',
+        'ids': listing_ids,
+        'marketplace_code': marketplace_code,
+        'account_id': account.id,
+        'scope_mode': scope_mode,
+    }
+
+
+def _scope_identity(scope: dict) -> tuple:
+    scope = scope if isinstance(scope, dict) else {}
+    raw_ids = scope.get('ids') if isinstance(scope.get('ids'), list) else []
+    ids = tuple(sorted(
+        value for value in raw_ids
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+    ))
+    return (
+        str(scope.get('kind') or ''),
+        ids,
+        str(scope.get('marketplace_code') or ''),
+        scope.get('account_id'),
+        str(scope.get('scope_mode') or ('selected' if ids else 'global')),
+    )
 
 
 def _normalize_page_context(value) -> dict:
@@ -379,6 +498,10 @@ def _page_entity_kind(page_context: dict) -> str:
         return 'product'
     if re.search(r'/products/\d+(?:/|$)', path):
         return 'unsupported'
+    if re.fullmatch(r'/marketplaces/listings/\d+', path):
+        # The URL identifies only a row number.  A usable marketplace scope
+        # still requires the separately grounded marketplace/account tuple.
+        return 'marketplace_listing'
     return 'imported_product'
 
 
@@ -387,8 +510,10 @@ def _resolve_entity_kind(value, page_context: dict = None) -> str:
     if value in (None, ''):
         return _page_entity_kind(page_context)
     normalized = str(value).strip().lower()
-    if normalized not in {'product', 'imported_product'}:
-        raise ValueError('entity_kind must be product or imported_product')
+    if normalized not in {'product', 'imported_product', 'marketplace_listing'}:
+        raise ValueError(
+            'entity_kind must be product, imported_product or marketplace_listing'
+        )
     return normalized
 
 
@@ -597,14 +722,19 @@ def _is_explicit_knowledge_query(text: str) -> bool:
 
 
 def build_plan(text: str, product_ids=None, page_context=None,
-               entity_kind=None) -> Optional[HarnessPlan]:
+               entity_kind=None, entity_scope=None) -> Optional[HarnessPlan]:
     """Build a conservative deterministic plan without spending LLM tokens."""
     normalized = text.strip().lower()
     if not normalized:
         return None
 
-    selected_ids = _normalize_product_ids(product_ids)
-    entity_kind = _resolve_entity_kind(entity_kind, page_context)
+    trusted_scope = entity_scope if isinstance(entity_scope, dict) else {}
+    if trusted_scope.get('kind') == 'marketplace_listing':
+        selected_ids = list(trusted_scope.get('ids') or [])
+        entity_kind = 'marketplace_listing'
+    else:
+        selected_ids = _normalize_product_ids(product_ids)
+        entity_kind = _resolve_entity_kind(entity_kind, page_context)
     named_scope = _extract_named_scope(normalized)
     if selected_ids and entity_kind == 'unsupported':
         return None
@@ -628,6 +758,7 @@ def build_plan(text: str, product_ids=None, page_context=None,
         'аудит', 'проверь выбран', 'проверить выбран', 'основные проблемы',
         'проблемы карточ', 'ошибки карточ',
     )):
+        marketplace_scope = entity_kind == 'marketplace_listing'
         return HarnessPlan(
             title=f'Аудит выбранных карточек ({len(selected_ids)})',
             summary=(
@@ -635,34 +766,66 @@ def build_plan(text: str, product_ids=None, page_context=None,
                 'правилам, без вызова LLM и без изменения данных.'
             ),
             steps=[{
-                'agent': 'batch-audit', 'task_type': 'audit_selection',
+                'agent': (
+                    'marketplace-listing-audit' if marketplace_scope
+                    else 'batch-audit'
+                ),
+                'task_type': (
+                    'audit_marketplace_listings' if marketplace_scope
+                    else 'audit_selection'
+                ),
                 'label': f'Проверка {len(selected_ids)} карточек',
                 'params': {'entity_kind': entity_kind, 'focus_limit': 100},
             }],
             execution_type='custom', pipeline=None,
             risk='read', confidence=0.99,
-            scope_label=f'{len(selected_ids)} выбранных карточек',
+            scope_label=(
+                f'{len(selected_ids)} карточек '
+                f'{trusted_scope.get("marketplace_code", "маркетплейса").upper()} · '
+                f'кабинет #{trusted_scope.get("account_id")}'
+                if marketplace_scope
+                else f'{len(selected_ids)} выбранных карточек'
+            ),
         )
     if selected_ids and _contains_any(normalized, (
         'что можешь сказать', 'что скажешь', 'проанализируй карточ',
         'оцени карточ', 'как тебе карточ',
     )):
+        marketplace_scope = entity_kind == 'marketplace_listing'
+        if marketplace_scope and len(selected_ids) != 1:
+            return None
         return HarnessPlan(
             title='Анализ выбранной карточки',
             summary='Проверить содержимое карточки и вернуть сильные стороны, проблемы и следующие действия.',
             steps=[{
-                'agent': 'card-insight', 'task_type': 'analyze_card',
+                'agent': (
+                    'marketplace-listing-insight' if marketplace_scope
+                    else 'card-insight'
+                ),
+                'task_type': (
+                    'analyze_marketplace_listing' if marketplace_scope
+                    else 'analyze_card'
+                ),
                 'label': 'Анализ карточки',
                 'params': {'entity_kind': entity_kind},
             }],
             execution_type='custom', pipeline=None,
             risk='read', confidence=0.99,
-            scope_label=f'Карточка #{selected_ids[0]} на текущей странице',
+            scope_label=(
+                f'{trusted_scope.get("marketplace_code", "marketplace").upper()} '
+                f'листинг #{selected_ids[0]} · кабинет #{trusted_scope.get("account_id")}'
+                if marketplace_scope
+                else f'Карточка #{selected_ids[0]} на текущей странице'
+            ),
         )
 
     content_fields = extract_explicit_content_fields(normalized)
-    if selected_ids and content_fields and not _is_global_no_write_request(normalized) and _contains_any(
+    if (
+        entity_kind != 'marketplace_listing'
+        and selected_ids and content_fields
+        and not _is_global_no_write_request(normalized) and _contains_any(
         normalized, ('улучш', 'перепиш', 'обнов', 'сделай', 'исправь', 'оптимиз'),
+        )
     ):
         fields_label = content_fields_label(content_fields)
         selection_label = (
@@ -704,7 +867,7 @@ def build_plan(text: str, product_ids=None, page_context=None,
 
     # Legacy catalog skills operate on ImportedProduct. Until a typed Product
     # implementation exists, never pass a main Product numeric ID to them.
-    if selected_ids and entity_kind == 'product':
+    if selected_ids and entity_kind in {'product', 'marketplace_listing'}:
         return None
 
     system_params = _extract_system_query(normalized)
@@ -987,10 +1150,20 @@ def _create_run_from_plan(conversation: AgentConversation, plan_message: AgentMe
         missing = ', '.join(state['unavailable'])
         raise RuntimeError(f'Исполнитель недоступен: {missing}')
 
+    entity_scope = metadata.get('entity_scope') or {
+        'kind': 'imported_product',
+        'ids': metadata.get('product_ids') or [],
+    }
+    is_marketplace_scope = entity_scope.get('kind') == 'marketplace_listing'
+    product_ids = [] if is_marketplace_scope else (metadata.get('product_ids') or [])
+    marketplace_listing_ids = (
+        list(entity_scope.get('ids') or []) if is_marketplace_scope else []
+    )
     input_data = {
         'seller_id': conversation.seller_id,
-        'product_ids': metadata.get('product_ids') or [],
-        'imported_product_ids': metadata.get('product_ids') or [],
+        'product_ids': product_ids,
+        'imported_product_ids': product_ids,
+        'marketplace_listing_ids': marketplace_listing_ids,
         'model_policy': metadata.get('model_policy') or get_model_policy(conversation.seller_id),
         'source': 'unified_chat',
         'conversation_id': conversation.id,
@@ -998,10 +1171,7 @@ def _create_run_from_plan(conversation: AgentConversation, plan_message: AgentMe
         'risk': metadata.get('risk', 'write'),
         'text': metadata.get('request_text', ''),
         'page_context': metadata.get('page_context') or {},
-        'entity_scope': metadata.get('entity_scope') or {
-            'kind': 'imported_product',
-            'ids': metadata.get('product_ids') or [],
-        },
+        'entity_scope': entity_scope,
         'planning_usage': metadata.get('planning_usage') or {},
     }
     if metadata.get('execution_type') == 'pipeline' and metadata.get('pipeline'):
@@ -1033,13 +1203,21 @@ def _create_run_from_plan(conversation: AgentConversation, plan_message: AgentMe
 def _create_planning_run(conversation: AgentConversation, text: str,
                          product_ids: list[int], page_context: dict = None,
                          entity_kind: str = None,
+                         entity_scope: dict = None,
                          current_message_id: str = None) -> AgentMessage:
     state = runtime_state()
     if not state['online']:
         raise RuntimeError('ИИ-помощник не подключён')
     model_policy = get_model_policy(conversation.seller_id)
-    resolved_kind = _resolve_entity_kind(entity_kind, page_context)
-    entity_scope = {'kind': resolved_kind, 'ids': product_ids}
+    if isinstance(entity_scope, dict) and entity_scope.get('kind') == 'marketplace_listing':
+        trusted_scope = dict(entity_scope)
+        resolved_kind = 'marketplace_listing'
+        product_ids = []
+        marketplace_listing_ids = list(trusted_scope.get('ids') or [])
+    else:
+        resolved_kind = _resolve_entity_kind(entity_kind, page_context)
+        trusted_scope = {'kind': resolved_kind, 'ids': product_ids}
+        marketplace_listing_ids = []
     task = agent_service.create_task(
         agent_id=state['orchestrator_id'], seller_id=conversation.seller_id,
         task_type='plan_request', title=f'Планирование: {text[:90]}',
@@ -1047,8 +1225,9 @@ def _create_planning_run(conversation: AgentConversation, text: str,
             'seller_id': conversation.seller_id,
             'text': text,
             'product_ids': product_ids,
+            'marketplace_listing_ids': marketplace_listing_ids,
             'page_context': page_context or {},
-            'entity_scope': entity_scope,
+            'entity_scope': trusted_scope,
             'dialog_context': _compact_dialog_context(
                 conversation, current_message_id=current_message_id,
             ),
@@ -1066,37 +1245,60 @@ def _create_planning_run(conversation: AgentConversation, text: str,
         metadata={
             'status': 'queued', 'phase': 'planning',
             'request_text': text, 'product_ids': product_ids,
+            'marketplace_listing_ids': marketplace_listing_ids,
             'page_context': page_context or {},
-            'entity_scope': entity_scope,
+            'entity_scope': trusted_scope,
             'model_policy': model_policy,
         },
     )
 
 
 def submit_turn(conversation: AgentConversation, text: str,
-                product_ids=None, page_context=None, entity_kind=None) -> dict:
+                product_ids=None, page_context=None, entity_kind=None,
+                entity_scope=None) -> dict:
     text = (text or '').strip()
     if not text:
         raise ValueError('Введите сообщение')
     if len(text) > MAX_MESSAGE_LENGTH:
         raise ValueError(f'Сообщение длиннее {MAX_MESSAGE_LENGTH} символов')
-    ids = _normalize_product_ids(product_ids)
     context = _normalize_page_context(page_context)
-    resolved_kind = _resolve_entity_kind(entity_kind, context)
+    if isinstance(entity_scope, dict) and entity_scope.get('kind') == 'marketplace_listing':
+        if product_ids not in (None, []):
+            raise ValueError(
+                'marketplace_listing scope cannot be sent through product_ids'
+            )
+        if entity_kind not in (None, '', 'marketplace_listing'):
+            raise ValueError('entity_kind does not match entity_scope.kind')
+        trusted_scope = _ground_marketplace_entity_scope(
+            entity_scope, conversation.seller_id,
+        )
+        ids = []
+        resolved_kind = 'marketplace_listing'
+        selected_scope_ids = trusted_scope['ids']
+    else:
+        ids = _normalize_product_ids(product_ids)
+        resolved_kind = _resolve_entity_kind(entity_kind, context)
+        if resolved_kind == 'marketplace_listing':
+            raise ValueError(
+                'marketplace_listing requires exact marketplace_code, account_id and ids'
+            )
+        trusted_scope = {'kind': resolved_kind, 'ids': ids}
+        selected_scope_ids = ids
 
-    if context and ids:
+    if context and selected_scope_ids:
         previous = AgentMessage.query.filter_by(
             conversation_id=conversation.id, role='user',
         ).order_by(AgentMessage.created_at.desc()).first()
         if previous:
             previous_metadata = previous.get_metadata()
-            previous_ids = _normalize_product_ids(previous_metadata.get('product_ids'))
             previous_context = previous_metadata.get('page_context') or {}
-            scope_changed = set(previous_ids) != set(ids) or (
-                (previous_metadata.get('entity_scope') or {}).get('kind', _page_entity_kind(previous_context))
-                != resolved_kind
-            )
-            if previous_context and previous_ids and scope_changed:
+            previous_scope = previous_metadata.get('entity_scope') or {
+                'kind': _page_entity_kind(previous_context),
+                'ids': _normalize_product_ids(previous_metadata.get('product_ids')),
+            }
+            previous_scope_ids = previous_scope.get('ids') or []
+            scope_changed = _scope_identity(previous_scope) != _scope_identity(trusted_scope)
+            if previous_context and previous_scope_ids and scope_changed:
                 raise RuntimeError(
                     'Открыта другая карточка. Для неё нужен отдельный диалог, '
                     'чтобы не смешивать контекст товаров.'
@@ -1114,9 +1316,18 @@ def submit_turn(conversation: AgentConversation, text: str,
         conversation, 'user', text,
         metadata={
             'product_ids': ids,
-            'scope_label': f'{len(ids)} товаров' if ids else 'Весь каталог',
+            'marketplace_listing_ids': (
+                selected_scope_ids if resolved_kind == 'marketplace_listing' else []
+            ),
+            'scope_label': (
+                f'{len(selected_scope_ids)} карточек '
+                f'{trusted_scope.get("marketplace_code", "").upper()} · '
+                f'кабинет #{trusted_scope.get("account_id")}'
+                if resolved_kind == 'marketplace_listing'
+                else (f'{len(ids)} товаров' if ids else 'Весь каталог')
+            ),
             'page_context': context,
-            'entity_scope': {'kind': resolved_kind, 'ids': ids},
+            'entity_scope': trusted_scope,
         },
     )
     if conversation.title == 'Новый диалог':
@@ -1136,7 +1347,33 @@ def submit_turn(conversation: AgentConversation, text: str,
 
     # Exact, safety-critical recipes win over the semantic planner. This keeps
     # named scopes and common audits deterministic and avoids one model call.
-    plan = build_plan(text, ids, context, entity_kind)
+    plan = build_plan(
+        text, ids, context, resolved_kind, entity_scope=trusted_scope,
+    )
+    marketplace_write_requested = bool(re.search(
+        r'\b(?:измени(?:ть)?|поменяй|обнови|установи|подними|снизь|обнули|'
+        r'опубликуй|создай|перепиши|улучши|исправь|оптимизируй)\b',
+        text.lower(),
+    ))
+    if (
+        plan is None
+        and resolved_kind == 'marketplace_listing'
+        and selected_scope_ids
+        and marketplace_write_requested
+    ):
+        assistant = _new_message(
+            conversation, 'assistant',
+            'Эта Ozon-карточка связана с общей внутренней карточкой, но старый '
+            'WB-редактор нельзя безопасно применять к ID листинга. Сейчас я могу '
+            'провести read-only аудит или анализ. Изменения Ozon будут доступны '
+            'только через отдельный marketplace proposal с ручным подтверждением.',
+            kind='clarification', metadata={
+                'reason': 'marketplace_listing_write_requires_proposal',
+                'entity_scope': trusted_scope,
+            },
+        )
+        db.session.commit()
+        return {'user_message': user_message, 'assistant_message': assistant, 'run': None}
     if plan is None and ids and resolved_kind == 'unsupported':
         assistant = _new_message(
             conversation, 'assistant',
@@ -1174,6 +1411,7 @@ def submit_turn(conversation: AgentConversation, text: str,
         try:
             planning_message = _create_planning_run(
                 conversation, text, ids, context, resolved_kind,
+                entity_scope=trusted_scope,
                 current_message_id=user_message.id,
             )
         except RuntimeError as exc:
@@ -1203,10 +1441,10 @@ def submit_turn(conversation: AgentConversation, text: str,
     metadata = plan.to_dict(ids, get_model_policy(conversation.seller_id))
     metadata['request_text'] = text
     metadata['page_context'] = context
-    metadata['entity_scope'] = {
-        'kind': resolved_kind,
-        'ids': ids,
-    }
+    metadata['entity_scope'] = trusted_scope
+    metadata['marketplace_listing_ids'] = (
+        selected_scope_ids if resolved_kind == 'marketplace_listing' else []
+    )
     plan_message = _new_message(
         conversation, 'assistant', plan.summary,
         kind='plan', metadata=metadata,
@@ -1479,6 +1717,7 @@ def sync_run_message(message: AgentMessage) -> bool:
                 'requires_approval': requires_approval,
                 'status': 'pending_approval' if requires_approval else 'ready',
                 'product_ids': metadata.get('product_ids') or [],
+                'marketplace_listing_ids': metadata.get('marketplace_listing_ids') or [],
                 'scope_label': result.get('scope_label') or 'Область определена из запроса',
                 'model_policy': metadata.get('model_policy') or {},
                 'request_text': metadata.get('request_text') or '',
