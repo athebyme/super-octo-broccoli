@@ -1604,60 +1604,86 @@
             .sh-toast-container { left: 16px; right: 16px; max-width: none; }
         }
         .sh-toast {
+            position: relative;
             pointer-events: auto;
             display: flex;
             align-items: flex-start;
             gap: 12px;
-            padding: 14px 16px;
-            background: var(--bg-sidebar);
-            border: 1px solid #2a2a2a;
-            border-radius: 10px;
-            color: #e8e8e8;
+            padding: 13px 14px 13px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--text-muted);
+            border-radius: var(--r-md);
+            color: var(--text);
             font-size: 13px;
             line-height: 1.5;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-            animation: sh-toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: var(--shadow-3);
+            overflow: hidden;
+            animation: sh-toast-in 0.3s var(--ease-out);
         }
-        .sh-toast.leaving { animation: sh-toast-out 0.2s ease-in forwards; }
+        .sh-toast.leaving { animation: sh-toast-out 0.2s var(--ease-in) forwards; }
+        .sh-toast--success { border-left-color: var(--ok); }
+        .sh-toast--error   { border-left-color: var(--danger); }
+        .sh-toast--warning { border-left-color: var(--warn); }
+        .sh-toast--info    { border-left-color: var(--info); }
+        .sh-toast--promo   { border-left-color: var(--accent); }
         .sh-toast-icon {
             width: 20px;
             height: 20px;
             flex-shrink: 0;
             margin-top: 1px;
         }
-        .sh-toast--success .sh-toast-icon { color: #4ade80; }
-        .sh-toast--error .sh-toast-icon   { color: #f87171; }
-        .sh-toast--warning .sh-toast-icon { color: #fbbf24; }
-        .sh-toast--info .sh-toast-icon    { color: #60a5fa; }
-        .sh-toast-content { flex: 1; }
+        .sh-toast--success .sh-toast-icon { color: var(--ok); }
+        .sh-toast--error   .sh-toast-icon { color: var(--danger); }
+        .sh-toast--warning .sh-toast-icon { color: var(--warn); }
+        .sh-toast--info    .sh-toast-icon { color: var(--info); }
+        .sh-toast--promo   .sh-toast-icon { color: var(--accent); }
+        .sh-toast-content { flex: 1; min-width: 0; }
         .sh-toast-title {
             font-weight: 600;
-            color: #fff;
+            color: var(--text);
             margin-bottom: 2px;
         }
-        .sh-toast-message { color: #a1a1a1; }
+        .sh-toast-message { color: var(--text-secondary); overflow-wrap: anywhere; }
+        .sh-toast-action {
+            display: inline-block;
+            margin-top: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            background: none; border: none; padding: 0;
+            cursor: pointer;
+            text-decoration: none;
+            font-family: var(--font-body);
+        }
+        .sh-toast-action:hover { text-decoration: underline; }
         .sh-toast-close {
             background: none;
             border: none;
-            color: #666;
+            color: var(--text-muted);
             cursor: pointer;
             padding: 2px;
-            transition: color 0.15s;
+            border-radius: var(--r-xs);
+            transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
             flex-shrink: 0;
         }
-        .sh-toast-close:hover { color: #ccc; }
+        .sh-toast-close:hover { color: var(--text); background: var(--bg-hover); }
         .sh-toast-progress {
             position: absolute;
             bottom: 0;
             left: 0;
+            width: 100%;
             height: 2px;
-            border-radius: 0 0 10px 10px;
-            transition: width linear;
+            transform-origin: left;
+            animation: sh-toast-progress var(--_toast-dur, 5s) linear forwards;
         }
-        .sh-toast--success .sh-toast-progress { background: #4ade80; }
-        .sh-toast--error .sh-toast-progress   { background: #f87171; }
-        .sh-toast--warning .sh-toast-progress { background: #fbbf24; }
-        .sh-toast--info .sh-toast-progress    { background: #60a5fa; }
+        .sh-toast:hover .sh-toast-progress { animation-play-state: paused; }
+        @keyframes sh-toast-progress { from { width: 100%; } to { width: 0%; } }
+        .sh-toast--success .sh-toast-progress { background: var(--ok); }
+        .sh-toast--error   .sh-toast-progress { background: var(--danger); }
+        .sh-toast--warning .sh-toast-progress { background: var(--warn); }
+        .sh-toast--info    .sh-toast-progress { background: var(--info); }
+        .sh-toast--promo   .sh-toast-progress { background: var(--accent); }
         @keyframes sh-toast-in {
             from { opacity: 0; transform: translateX(40px) scale(0.96); }
             to   { opacity: 1; transform: translateX(0) scale(1); }
@@ -2418,47 +2444,6 @@
         </main>
     </div>
 
-    <!-- Toast container -->
-    <div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none" style="max-width:380px" role="status" aria-live="polite" aria-label="Уведомления">
-        <template x-for="toast in $store.notif.toasts" :key="toast.id">
-            <div x-show="toast.visible"
-                x-transition:enter="transition ease-out duration-300"
-                x-transition:enter-start="opacity-0 translate-x-8"
-                x-transition:enter-end="opacity-100 translate-x-0"
-                x-transition:leave="transition ease-in duration-200"
-                x-transition:leave-start="opacity-100 translate-x-0"
-                x-transition:leave-end="opacity-0 translate-x-8"
-                class="pointer-events-auto bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden cursor-pointer"
-                @click="window.location.href = toast.link || '/notifications'">
-                <div class="flex items-start gap-3 p-4">
-                    <div class="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center"
-                        :class="{
-                            'bg-blue-100 text-blue-600': toast.category === 'info',
-                            'bg-amber-100 text-amber-600': toast.category === 'warning',
-                            'bg-green-100 text-green-600': toast.category === 'success',
-                            'bg-red-100 text-red-600': toast.category === 'error',
-                            'bg-purple-100 text-purple-600': toast.category === 'promo',
-                        }">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                            <path x-show="toast.category === 'success'" stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            <path x-show="toast.category === 'error'" stroke-linecap="round" stroke-linejoin="round" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            <path x-show="toast.category === 'warning'" stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/>
-                            <path x-show="toast.category === 'info' || toast.category === 'promo'" stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <p class="text-sm font-semibold text-gray-900 truncate" x-text="toast.title"></p>
-                        <p class="text-xs text-gray-500 mt-0.5 line-clamp-2" x-text="toast.message"></p>
-                    </div>
-                    <button @click.stop="$store.notif.dismissToast(toast.id)"
-                        class="flex-shrink-0 text-gray-400 hover:text-gray-600 p-0.5" aria-label="Закрыть">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </button>
-                </div>
-            </div>
-        </template>
-    </div>
-
     <!-- Notification sound (Web Audio API chime) -->
     <script>
     /* Переключение темы: атрибут на <html> + запоминание выбора */
@@ -2479,139 +2464,9 @@
         }
     })();
     </script>
-    <script>
-    window._notifChime = {
-        _ctx: null,
-        _getCtx() {
-            if (!this._ctx) {
-                this._ctx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (this._ctx.state === 'suspended') {
-                this._ctx.resume();
-            }
-            return this._ctx;
-        },
-        play(type) {
-            try {
-                const ctx = this._getCtx();
-                const now = ctx.currentTime;
-                const vol = 0.15;
+    
 
-                if (type === 'warning') {
-                    // Warning: два коротких тона пониже
-                    this._tone(ctx, now, 440, 0.12, vol);
-                    this._tone(ctx, now + 0.15, 392, 0.15, vol);
-                } else if (type === 'danger') {
-                    // Danger: тройной нисходящий
-                    this._tone(ctx, now, 523, 0.1, vol);
-                    this._tone(ctx, now + 0.12, 440, 0.1, vol);
-                    this._tone(ctx, now + 0.24, 349, 0.15, vol);
-                } else {
-                    // Default (info/success): мягкий восходящий chime
-                    this._tone(ctx, now, 587, 0.12, vol);         // D5
-                    this._tone(ctx, now + 0.12, 784, 0.12, vol);  // G5
-                    this._tone(ctx, now + 0.24, 880, 0.25, vol);  // A5
-                }
-            } catch(e) {}
-        },
-        _tone(ctx, when, freq, dur, vol) {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.value = freq;
-            // Мягкая атака и затухание
-            gain.gain.setValueAtTime(0, when);
-            gain.gain.linearRampToValueAtTime(vol, when + 0.015);
-            gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(when);
-            osc.stop(when + dur + 0.05);
-        }
-    };
-    </script>
 
-    <!-- Global notification store -->
-    <script>
-    document.addEventListener('alpine:init', () => {
-        Alpine.store('notif', {
-            unread: 0,
-            toasts: [],
-            _lastCheck: 0,
-            _toastId: 0,
-            _shownInitial: false,
-
-            init() {
-                // Remember that we already showed the initial toast this session
-                this._shownInitial = sessionStorage.getItem('_notif_initial_shown') === '1';
-                this.poll();
-                setInterval(() => this.poll(), 15000);
-            },
-
-            async poll() {
-                try {
-                    const r = await fetch('/api/notifications/unread-count');
-                    const d = await r.json();
-                    const prev = this.unread;
-                    this.unread = d.unread_count || 0;
-
-                    // First poll of session: show summary toast once, then remember
-                    if (this._lastCheck === 0 && this.unread > 0 && !this._shownInitial) {
-                        this._shownInitial = true;
-                        sessionStorage.setItem('_notif_initial_shown', '1');
-                        this.showToast('info',
-                            `У вас ${this.unread} ${this._pluralNotif(this.unread)}`,
-                            'Нажмите чтобы посмотреть',
-                            '/notifications');
-                    }
-                    // Subsequent polls: toast only for genuinely NEW notifications
-                    else if (this._lastCheck > 0 && this.unread > prev) {
-                        this.fetchLatestAndToast();
-                    }
-                    this._lastCheck = Date.now();
-                } catch(e) {}
-            },
-
-            _pluralNotif(n) {
-                const mod = n % 10;
-                const mod100 = n % 100;
-                if (mod === 1 && mod100 !== 11) return 'непрочитанное уведомление';
-                if (mod >= 2 && mod <= 4 && (mod100 < 12 || mod100 > 14)) return 'непрочитанных уведомления';
-                return 'непрочитанных уведомлений';
-            },
-
-            async fetchLatestAndToast() {
-                try {
-                    const r = await fetch('/api/notifications?unread=1&limit=1');
-                    const d = await r.json();
-                    if (d.items && d.items.length > 0) {
-                        const n = d.items[0];
-                        this.showToast(n.category, n.title, n.message, n.link);
-                    }
-                } catch(e) {}
-            },
-
-            showToast(category, title, message, link) {
-                const id = ++this._toastId;
-                this.toasts.push({id, category, title, message, link, visible: true});
-                // Play chime sound matching notification type
-                if (window._notifChime) window._notifChime.play(category);
-                // Auto-dismiss after 6s
-                setTimeout(() => this.dismissToast(id), 6000);
-                // Keep max 5 toasts
-                if (this.toasts.length > 5) this.toasts.splice(0, this.toasts.length - 5);
-            },
-
-            dismissToast(id) {
-                const t = this.toasts.find(t => t.id === id);
-                if (t) t.visible = false;
-                setTimeout(() => {
-                    this.toasts = this.toasts.filter(t => t.id !== id);
-                }, 300);
-            }
-        });
-    });
-    </script>
 
     {% else %}
     <!-- Non-authenticated -->
@@ -2701,8 +2556,7 @@
 </script>
 
 <!-- Toast notification system -->
-{% from "macros/overlays.html" import toast_container, toast_store_init %}
-{{ toast_store_init() }}
+{% from "macros/overlays.html" import toast_container %}
 {{ toast_container() }}
 
 <!-- Global Command Palette (Cmd+K / Ctrl+K) -->

@@ -117,76 +117,44 @@
 {# ─── Toast Container ─── #}
 {# Place once in base.html. Manages toast notifications via Alpine store. #}
 {% macro toast_container() %}
-<div x-data class="sh-toast-container">
+<div x-data class="sh-toast-container" role="region" aria-label="Уведомления" aria-live="polite">
     <template x-for="toast in $store.toasts.items" :key="toast.id">
         <div class="sh-toast" :class="'sh-toast--' + toast.type + (toast.leaving ? ' leaving' : '')"
-             style="position:relative;overflow:hidden"
+             role="status"
              @mouseenter="toast.paused = true"
              @mouseleave="toast.paused = false">
             <div class="sh-toast-icon">
-                <template x-if="toast.type === 'success'">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </template>
-                <template x-if="toast.type === 'error'">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </template>
-                <template x-if="toast.type === 'warning'">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                </template>
-                <template x-if="toast.type === 'info'">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </template>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px" aria-hidden="true">
+                    <path x-show="toast.type === 'success'" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    <path x-show="toast.type === 'error'" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    <path x-show="toast.type === 'warning'" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    <path x-show="toast.type === 'info'" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    <path x-show="toast.type === 'promo'" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/>
+                </svg>
             </div>
             <div class="sh-toast-content">
                 <template x-if="toast.title">
                     <div class="sh-toast-title" x-text="toast.title"></div>
                 </template>
                 <div class="sh-toast-message" x-text="toast.message"></div>
+                <template x-if="toast.link">
+                    <a class="sh-toast-action" :href="toast.link" x-text="toast.actionLabel || 'Открыть'"></a>
+                </template>
             </div>
             <button @click="$store.toasts.dismiss(toast.id)" class="sh-toast-close" aria-label="Закрыть">
-                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                {{ icon('close', size=14) }}
             </button>
+            <div class="sh-toast-progress" x-show="toast.duration > 0" :style="'--_toast-dur:' + toast.duration + 'ms'"></div>
         </div>
     </template>
 </div>
 {% endmacro %}
 
 
-{# ─── Toast Store Init ─── #}
-{# Place this script once (e.g. in base.html extra_scripts block) #}
-{% macro toast_store_init() %}
-<script>
-document.addEventListener('alpine:init', () => {
-    Alpine.store('toasts', {
-        items: [],
-        _counter: 0,
-        add(type, message, title, duration) {
-            duration = duration || 5000;
-            const id = ++this._counter;
-            const toast = { id, type, message, title: title || null, leaving: false, paused: false };
-            this.items = [...this.items, toast];
-            if (duration > 0) {
-                const self = this;
-                setTimeout(() => {
-                    const found = self.items.find(t => t.id === id);
-                    if (found && !found.paused) self.dismiss(id);
-                }, duration);
-            }
-            return id;
-        },
-        dismiss(id) {
-            this.items = this.items.map(t => t.id === id ? { ...t, leaving: true } : t);
-            const self = this;
-            setTimeout(() => { self.items = self.items.filter(t => t.id !== id); }, 200);
-        },
-        success(msg, title) { return this.add('success', msg, title); },
-        error(msg, title)   { return this.add('error', msg, title, 8000); },
-        warning(msg, title) { return this.add('warning', msg, title, 6000); },
-        info(msg, title)    { return this.add('info', msg, title); },
-    });
-});
-</script>
-{% endmacro %}
+{# ─── Toast Store Init (устарело) ─── #}
+{# Стор Alpine.store('toasts') теперь определён в static/sh-ui.js вместе со
+   стором уведомлений. Макрос сохранён как no-op для обратной совместимости. #}
+{% macro toast_store_init() %}{% endmacro %}
 
 
 {# ─── Tooltip ─── #}
