@@ -455,6 +455,74 @@ class MarketplacePublicationService:
         return account, resolved_adapter, resolved_credentials
 
     @classmethod
+    def get_account_quota_capacity(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        mode: str = "create",
+        adapter=None,
+        credentials: Optional[MarketplaceCredentials] = None,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        """Read one bounded product-operation quota for an owned account.
+
+        This is advisory queue capacity only. Every eventual write still runs
+        the operation-level quota preflight in ``_reserve_quota`` so a race can
+        defer/fail safely instead of oversubscribing the provider quota.
+        """
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        if mode not in {"create", "update"}:
+            raise MarketplacePublicationValidationError(
+                "Неизвестный режим квоты товарных операций"
+            )
+        _, resolved_adapter, resolved_credentials = (
+            cls._account_adapter_credentials(
+                seller_id=seller_id,
+                account_id=account_id,
+                adapter=adapter,
+                credentials=credentials,
+                now=now or datetime.utcnow(),
+            )
+        )
+        try:
+            quota = OzonProductImportContract.normalize_quota(
+                resolved_adapter.get_operation_limits(resolved_credentials),
+                mode=mode,
+            )
+        except OzonAPIError as exc:
+            raise MarketplacePublicationUpstreamError(
+                "Не удалось получить текущую квоту Ozon"
+            ) from exc
+        except (OzonProductImportProtocolError, MarketplaceAdapterError) as exc:
+            raise MarketplacePublicationUpstreamError(
+                "Ozon вернул неизвестный формат квоты товарных операций"
+            ) from exc
+        except Exception as exc:
+            raise MarketplacePublicationUpstreamError(
+                "Не удалось безопасно проверить квоту Ozon"
+            ) from exc
+
+        locally_reserved = db.session.query(
+            func.coalesce(func.sum(MarketplaceOperation.quota_reserved), 0)
+        ).filter(
+            MarketplaceOperation.seller_id == seller_id,
+            MarketplaceOperation.account_id == account_id,
+            MarketplaceOperation.status.in_(cls.ACTIVE_STATUSES),
+        ).scalar() or 0
+        locally_reserved = int(locally_reserved)
+        return {
+            "contract_version": quota["contract_version"],
+            "source": quota["source"],
+            "mode": mode,
+            "provider_remaining": quota["remaining"],
+            "local_reserved": locally_reserved,
+            "available": max(0, quota["remaining"] - locally_reserved),
+            "checked_at": (now or datetime.utcnow()).isoformat(),
+        }
+
+    @classmethod
     def _validate_author(
         cls,
         *,

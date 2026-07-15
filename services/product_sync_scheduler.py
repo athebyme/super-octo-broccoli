@@ -280,6 +280,16 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
     )
 
     scheduler.add_job(
+        func=lambda: reconcile_ozon_auto_publish_runs(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='reconcile_ozon_auto_publish_runs',
+        name='Reflect durable Ozon operations in account-scoped auto-publish runs',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    scheduler.add_job(
         func=lambda: poll_ozon_commercial_operations(flask_app),
         trigger=IntervalTrigger(minutes=1),
         id='poll_ozon_commercial_operations',
@@ -391,13 +401,13 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True
     )
 
-    # Авто-публикация товаров на WB (каждые 5 минут проверяет продавцов)
+    # Account-scoped WB/Ozon auto-publish (каждые 5 минут).
     from services.auto_publish_service import check_and_auto_publish_all_sellers
     scheduler.add_job(
         func=lambda: check_and_auto_publish_all_sellers(flask_app),
         trigger=IntervalTrigger(minutes=5),
         id='auto_publish_products',
-        name='Auto-publish validated products to WB',
+        name='Auto-publish marketplace product drafts',
         replace_existing=True
     )
 
@@ -1074,6 +1084,35 @@ def poll_ozon_marketplace_operations(flask_app, limit: int = 20):
                 result['busy'],
                 result['failed'],
                 allow_submission,
+            )
+        return result
+
+
+def reconcile_ozon_auto_publish_runs(flask_app, limit: int = 50):
+    """Update async auto-publish items from durable Ozon operation state."""
+    from services.marketplace_auto_publish import OzonAutoPublishService
+
+    with flask_app.app_context():
+        try:
+            result = OzonAutoPublishService.reconcile_waiting_runs(limit=limit)
+        except Exception as exc:
+            logger.error(
+                'Ozon auto-publish run reconciliation failed (%s)',
+                type(exc).__name__,
+            )
+            return {
+                'selected': 0,
+                'processed': 0,
+                'busy': 0,
+                'failed': 1,
+            }
+        if result['selected'] or result['failed']:
+            logger.info(
+                'Ozon auto-publish reconcile: selected=%s processed=%s busy=%s failed=%s',
+                result['selected'],
+                result['processed'],
+                result['busy'],
+                result['failed'],
             )
         return result
 

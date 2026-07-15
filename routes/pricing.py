@@ -8,10 +8,15 @@ import json
 import logging
 from datetime import datetime
 
-from flask import request, jsonify, flash, redirect, url_for, render_template
+from flask import (
+    current_app, request, jsonify, flash, redirect, url_for, render_template,
+)
 from flask_login import login_required, current_user
 
-from models import db, PricingSettings, ImportedProduct, Product
+from models import (
+    db, ImportedProduct, Marketplace, PricingSettings, Product,
+    SellerMarketplaceAccount,
+)
 from services.pricing_engine import (
     DEFAULT_PRICE_RANGES,
     calculate_price,
@@ -107,11 +112,26 @@ def register_pricing_routes(app):
         else:
             ranges = DEFAULT_PRICE_RANGES
 
+        marketplace_accounts = []
+        if current_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            marketplace_accounts = SellerMarketplaceAccount.query.join(
+                Marketplace
+            ).filter(
+                SellerMarketplaceAccount.seller_id == seller.id,
+                SellerMarketplaceAccount.is_active.is_(True),
+                Marketplace.code == 'ozon',
+                Marketplace.is_active.is_(True),
+            ).order_by(
+                SellerMarketplaceAccount.is_default.desc(),
+                SellerMarketplaceAccount.label.asc(),
+            ).all()
+
         return render_template(
             'pricing_settings.html',
             pricing=pricing,
             ranges=ranges,
             default_ranges=DEFAULT_PRICE_RANGES,
+            marketplace_accounts=marketplace_accounts,
         )
 
     @app.route('/api/pricing/sync-prices', methods=['POST'])

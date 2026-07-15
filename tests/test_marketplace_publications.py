@@ -671,6 +671,24 @@ class OzonProductImportContractTest(OzonPublicationFixture, unittest.TestCase):
 
 
 class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCase):
+    def test_account_quota_capacity_subtracts_local_active_reservations(self):
+        adapter = SyntheticPublicationAdapter()
+        operation = self.start(adapter, key="publication-key-quota-capacity")
+        self.assertEqual(operation.status, "submitted")
+        self.assertEqual(operation.quota_reserved, 1)
+
+        capacity = MarketplacePublicationService.get_account_quota_capacity(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            adapter=adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            now=datetime.utcnow(),
+        )
+
+        self.assertEqual(capacity["provider_remaining"], 96)
+        self.assertEqual(capacity["local_reserved"], 1)
+        self.assertEqual(capacity["available"], 95)
+
     def test_submit_poll_finalize_and_idempotent_retry(self):
         adapter = SyntheticPublicationAdapter()
         operation = self.start(adapter)

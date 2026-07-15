@@ -127,6 +127,9 @@ class ImportResult:
     errors: int = 0
     error_messages: list = field(default_factory=list)
     imported_product_ids: list = field(default_factory=list)
+    marketplace_drafts_created: int = 0
+    marketplace_drafts_existing: int = 0
+    marketplace_draft_errors: int = 0
 
 
 @dataclass
@@ -1635,7 +1638,7 @@ class SupplierService:
         """
         result = ImportResult(total_requested=len(supplier_product_ids))
 
-        seller = Seller.query.get(seller_id)
+        seller = db.session.get(Seller, seller_id)
         if not seller:
             result.success = False
             result.error_messages.append("Продавец не найден")
@@ -1670,6 +1673,10 @@ class SupplierService:
         for imp in existing_imports:
             existing_sp_ids.add(imp.supplier_product_id)
 
+        draft_source_ids = [
+            imp.id for imp in existing_imports if imp.id is not None
+        ]
+
         # Импортируем
         for sp in supplier_products:
             try:
@@ -1678,9 +1685,16 @@ class SupplierService:
                     continue
 
                 imported = _copy_to_imported_product(seller_id, sp)
-                db.session.add(imported)
+                # Per-item savepoint keeps one malformed supplier row from
+                # poisoning the whole exact seller import transaction. The
+                # flush is required before local marketplace drafts can use
+                # the durable ImportedProduct ID.
+                with db.session.begin_nested():
+                    db.session.add(imported)
+                    db.session.flush()
                 result.imported += 1
-                result.imported_product_ids.append(imported.id if imported.id else 0)
+                result.imported_product_ids.append(imported.id)
+                draft_source_ids.append(imported.id)
 
             except Exception as e:
                 result.errors += 1
@@ -1699,6 +1713,39 @@ class SupplierService:
                 conn.last_import_at = datetime.utcnow()
 
         db.session.commit()
+
+        # ImportedProduct остаётся WB-compatible source draft, а каждый
+        # включённый Ozon account получает отдельную локальную проекцию. Этот
+        # шаг не вызывает provider/LLM и не меняет результат supplier import.
+        if draft_source_ids:
+            try:
+                from services.marketplace_auto_publish import (
+                    MarketplaceDraftProvisioner,
+                )
+
+                provisioned = MarketplaceDraftProvisioner.provision_in_chunks(
+                    seller_id=seller_id,
+                    imported_product_ids=sorted(set(draft_source_ids)),
+                )
+                result.marketplace_drafts_created = provisioned["created"]
+                result.marketplace_drafts_existing = provisioned["existing"]
+                result.marketplace_draft_errors = provisioned["failed"]
+                if provisioned["failed"]:
+                    result.error_messages.append(
+                        "Не удалось подготовить часть Ozon-черновиков: "
+                        f"{provisioned['failed']}"
+                    )
+            except Exception as exc:
+                db.session.rollback()
+                result.marketplace_draft_errors = len(draft_source_ids)
+                result.error_messages.append(
+                    "Supplier import завершён, но Ozon-черновики требуют повторной подготовки"
+                )
+                logger.warning(
+                    "Не удалось provision Ozon drafts для seller %s (%s)",
+                    seller_id,
+                    type(exc).__name__,
+                )
 
         # Проверяем товары без фотографий и уведомляем продавца
         if result.imported > 0:

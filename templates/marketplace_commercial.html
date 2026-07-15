@@ -14,7 +14,7 @@
             <h1 class="text-2xl font-semibold" style="color:var(--text)">Цены, остатки и склады Ozon</h1>
             <p class="mt-1 text-sm" style="color:var(--text-secondary)">Каждый write проходит proposal, повторный live preflight, durable snapshot и read-after-write сверку.</p>
         </div>
-        <div class="flex flex-wrap gap-2"><a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Открыть каталог</a><a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.index') }}">Журнал операций</a></div>
+        <div class="flex flex-wrap gap-2"><a class="sh-btn sh-btn--secondary" href="{{ url_for('auto_import_pricing') }}">Формула WB</a><a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Открыть каталог</a><a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.index') }}">Журнал операций</a></div>
     </div>
 
     {% with messages = get_flashed_messages(with_categories=true) %}

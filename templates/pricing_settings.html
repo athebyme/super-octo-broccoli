@@ -12,6 +12,20 @@
         </div>
     </div>
 
+    <nav class="bg-white rounded-lg border border-gray-200 p-3 mb-6" aria-label="Маркетплейс и кабинет для цен">
+        <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-medium uppercase tracking-wide text-gray-400 mr-1">Цены</span>
+            <span class="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">Wildberries · формула</span>
+            {% for account in marketplace_accounts %}
+            <a href="{{ url_for('marketplace_commercial.index', account_id=account.id) }}"
+               class="px-3 py-2 rounded-md border border-gray-200 text-gray-600 text-sm hover:bg-gray-50">
+                Ozon · {{ account.label }}
+            </a>
+            {% endfor %}
+        </div>
+        <p class="mt-2 text-xs text-gray-400">Формула поставщика остаётся общей исходной калькуляцией. Ozon price/stock writes выполняются отдельно для выбранного кабинета через proposal и live drift check.</p>
+    </nav>
+
     <form method="POST" action="{{ url_for('auto_import_pricing') }}">
         <!-- Основные настройки -->
         <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">

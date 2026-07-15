@@ -7451,12 +7451,19 @@ class AutoPublishSettings(db.Model):
     __tablename__ = 'auto_publish_settings'
 
     id = db.Column(db.Integer, primary_key=True)
-    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id'),
+        nullable=True,
+        index=True,
+    )
 
     # Главный переключатель
     is_enabled = db.Column(db.Boolean, default=False, nullable=False)
 
-    # Целевой маркетплейс (пока только 'wb')
+    # WB использует legacy seller credential и account_id=NULL. Ozon всегда
+    # привязан к точному seller-owned operational account.
     marketplace_code = db.Column(db.String(50), default='wb', nullable=False)
 
     # Расписание
@@ -7500,7 +7507,37 @@ class AutoPublishSettings(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    seller = db.relationship('Seller', backref=db.backref('auto_publish_settings', uselist=False))
+    seller = db.relationship(
+        'Seller',
+        backref=db.backref('auto_publish_settings_rows', lazy='dynamic'),
+    )
+    account = db.relationship(
+        'SellerMarketplaceAccount',
+        backref=db.backref('auto_publish_settings', uselist=False),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            name='uq_auto_publish_settings_account',
+        ),
+        db.Index(
+            'uq_auto_publish_settings_wb_seller',
+            'seller_id',
+            unique=True,
+            sqlite_where=db.text(
+                "marketplace_code = 'wb' AND account_id IS NULL"
+            ),
+            postgresql_where=db.text(
+                "marketplace_code = 'wb' AND account_id IS NULL"
+            ),
+        ),
+        db.CheckConstraint(
+            "(marketplace_code = 'wb' AND account_id IS NULL) OR "
+            "(marketplace_code = 'ozon' AND account_id IS NOT NULL)",
+            name='ck_auto_publish_settings_scope',
+        ),
+    )
 
     def get_supplier_ids(self):
         if not self.supplier_ids_json:
@@ -7514,6 +7551,8 @@ class AutoPublishSettings(db.Model):
         return {
             'id': self.id,
             'seller_id': self.seller_id,
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
             'is_enabled': self.is_enabled,
             'marketplace_code': self.marketplace_code,
             'check_interval_minutes': self.check_interval_minutes,
@@ -7537,7 +7576,10 @@ class AutoPublishSettings(db.Model):
 
     def __repr__(self):
         state = 'paused' if self.is_paused else ('enabled' if self.is_enabled else 'disabled')
-        return f'<AutoPublishSettings seller={self.seller_id} {state}>'
+        return (
+            f'<AutoPublishSettings seller={self.seller_id} '
+            f'{self.marketplace_code}:{self.account_id or "legacy"} {state}>'
+        )
 
 
 class AutoPublishRun(db.Model):
@@ -7545,15 +7587,37 @@ class AutoPublishRun(db.Model):
     __tablename__ = 'auto_publish_runs'
     __table_args__ = (
         db.Index('idx_apr_seller_status', 'seller_id', 'status'),
+        db.Index('idx_apr_settings_status', 'settings_id', 'status'),
+        db.Index('idx_apr_account_status', 'account_id', 'status'),
         db.Index('idx_apr_created', 'created_at'),
+        db.CheckConstraint(
+            "(marketplace_code = 'wb' AND account_id IS NULL) OR "
+            "(marketplace_code = 'ozon' AND account_id IS NOT NULL)",
+            name='ck_auto_publish_run_scope',
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    settings_id = db.Column(
+        db.Integer,
+        db.ForeignKey('auto_publish_settings.id'),
+        nullable=False,
+        index=True,
+    )
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    marketplace_code = db.Column(db.String(50), nullable=False, default='wb')
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id'),
+        nullable=True,
+        index=True,
+    )
     run_uid = db.Column(db.String(36), unique=True, nullable=False, index=True)
 
     status = db.Column(db.String(20), nullable=False, default='pending')
-    # pending → running → completed | failed | cancelled | paused
+    # WB: pending → running → completed|failed|cancelled|paused.
+    # Ozon async: running → waiting|cancelling → completed|failed|cancelled|
+    # deferred|attention|paused.
     triggered_by = db.Column(db.String(20), default='scheduler')  # scheduler | manual
 
     started_at = db.Column(db.DateTime, nullable=True)
@@ -7566,18 +7630,34 @@ class AutoPublishRun(db.Model):
     total_published = db.Column(db.Integer, default=0)
     total_failed = db.Column(db.Integer, default=0)
     total_skipped = db.Column(db.Integer, default=0)
+    total_deferred = db.Column(db.Integer, default=0)
 
     error_summary = db.Column(db.Text, nullable=True)  # JSON
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     seller = db.relationship('Seller', backref=db.backref('auto_publish_runs', lazy='dynamic'))
+    settings = db.relationship(
+        'AutoPublishSettings',
+        backref=db.backref('runs', lazy='dynamic'),
+    )
+    account = db.relationship('SellerMarketplaceAccount')
     items = db.relationship('AutoPublishItem', backref='run', lazy='dynamic', cascade='all, delete-orphan')
 
     def to_dict(self, include_items=False):
+        try:
+            error_summary = (
+                json.loads(self.error_summary) if self.error_summary else None
+            )
+        except (json.JSONDecodeError, TypeError):
+            error_summary = {'legacy_error': 'Некорректный формат error_summary'}
         d = {
             'id': self.id,
+            'settings_id': self.settings_id,
             'seller_id': self.seller_id,
+            'marketplace_code': self.marketplace_code,
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
             'run_uid': self.run_uid,
             'status': self.status,
             'triggered_by': self.triggered_by,
@@ -7589,7 +7669,8 @@ class AutoPublishRun(db.Model):
             'total_published': self.total_published,
             'total_failed': self.total_failed,
             'total_skipped': self.total_skipped,
-            'error_summary': json.loads(self.error_summary) if self.error_summary else None,
+            'total_deferred': self.total_deferred,
+            'error_summary': error_summary,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
         if include_items:
@@ -7597,7 +7678,10 @@ class AutoPublishRun(db.Model):
         return d
 
     def __repr__(self):
-        return f'<AutoPublishRun #{self.id} seller={self.seller_id} {self.status}>'
+        return (
+            f'<AutoPublishRun #{self.id} seller={self.seller_id} '
+            f'{self.marketplace_code}:{self.account_id or "legacy"} {self.status}>'
+        )
 
 
 class AutoPublishItem(db.Model):
@@ -7606,21 +7690,68 @@ class AutoPublishItem(db.Model):
     __table_args__ = (
         db.Index('idx_api_run_status', 'run_id', 'status'),
         db.Index('idx_api_seller_status', 'seller_id', 'status'),
+        db.Index('idx_api_account_status', 'account_id', 'status'),
         db.Index('idx_api_retry', 'status', 'next_retry_at'),
+        db.Index(
+            'uq_api_operation',
+            'operation_id',
+            unique=True,
+            sqlite_where=db.text('operation_id IS NOT NULL'),
+        ),
+        db.Index(
+            'uq_api_account_idempotency',
+            'account_id',
+            'idempotency_key',
+            unique=True,
+            sqlite_where=db.text('idempotency_key IS NOT NULL'),
+        ),
+        db.CheckConstraint(
+            "(marketplace_code = 'wb' AND account_id IS NULL) OR "
+            "(marketplace_code = 'ozon' AND account_id IS NOT NULL)",
+            name='ck_auto_publish_item_scope',
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)
     run_id = db.Column(db.Integer, db.ForeignKey('auto_publish_runs.id'), nullable=False, index=True)
     imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=False, index=True)
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    marketplace_code = db.Column(db.String(50), nullable=False, default='wb')
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id'),
+        nullable=True,
+        index=True,
+    )
+    draft_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_drafts.id'),
+        nullable=True,
+        index=True,
+    )
+    operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id'),
+        nullable=True,
+        index=True,
+    )
+    draft_version = db.Column(db.Integer, nullable=True)
+    idempotency_key = db.Column(db.String(128), nullable=True)
 
     # Текущий шаг pipeline
     step = db.Column(db.String(30), default='queued')
-    # queued → validating → uploading_card → card_created
-    # → uploading_photos → photos_done → setting_price
-    # → verifying → completed | failed | skipped
+    # WB сохраняет legacy step pipeline. Ozon использует validating →
+    # ready_to_submit → submitting → awaiting_ozon|reconciling_uncertain →
+    # published|failed|needs_review|quota_deferred|cancelled_before_write.
 
-    status = db.Column(db.String(20), default='pending')  # pending | processing | completed | failed | skipped
+    status = db.Column(db.String(20), default='pending')
+    # pending | processing | completed | failed | skipped | deferred | uncertain
 
     # Результат
     wb_nm_id = db.Column(db.Integer, nullable=True)
@@ -7644,6 +7775,10 @@ class AutoPublishItem(db.Model):
 
     imported_product = db.relationship('ImportedProduct', backref=db.backref('auto_publish_items', lazy='dynamic'))
     product = db.relationship('Product', backref=db.backref('auto_publish_items', lazy='dynamic'))
+    account = db.relationship('SellerMarketplaceAccount')
+    draft = db.relationship('MarketplaceProductDraft')
+    operation = db.relationship('MarketplaceOperation')
+    listing = db.relationship('MarketplaceListing')
 
     def add_error(self, step, error_msg, retryable=False):
         try:
@@ -7671,6 +7806,24 @@ class AutoPublishItem(db.Model):
             'run_id': self.run_id,
             'imported_product_id': self.imported_product_id,
             'product_title': product_title,
+            'marketplace_code': self.marketplace_code,
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'draft_id': self.draft_id,
+            'draft_status': self.draft.status if self.draft else None,
+            'draft_validation_status': (
+                self.draft.validation_status if self.draft else None
+            ),
+            'draft_version': self.draft_version,
+            'operation_id': self.operation_id,
+            'operation_status': self.operation.status if self.operation else None,
+            'operation_kind': (
+                self.operation.operation_kind if self.operation else None
+            ),
+            'external_task_id': (
+                self.operation.external_task_id if self.operation else None
+            ),
+            'listing_id': self.listing_id,
             'step': self.step,
             'status': self.status,
             'wb_nm_id': self.wb_nm_id,

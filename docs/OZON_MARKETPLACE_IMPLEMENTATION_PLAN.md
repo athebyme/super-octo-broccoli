@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P6 implemented; P7 product UX/suppliers/auto-publish next
+Статус: P0–P7 implemented; P8 quality/analytics next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -601,11 +601,34 @@ Definition of done: no agent/direct path bypasses proposal and every stock write
 
 ### P7 — product UI, suppliers and auto-publish
 
-- Marketplace/account selector in product/catalog/pricing screens.
-- Supplier import creates separate drafts for each enabled target marketplace.
-- Auto-publish settings become unique per seller+account, not one seller row.
-- Ozon quota-aware queue, circuit breaker and deferred tail.
-- Status/error UI for moderation and import tasks.
+- [x] Marketplace/account selector in product/catalog/pricing screens.
+- [x] Supplier import creates separate drafts for each enabled target account.
+- [x] Auto-publish settings become unique per seller+account, not one seller row.
+- [x] Ozon quota-aware queue, circuit breaker and deferred tail.
+- [x] Status/error UI for validation, async import tasks and manual reconciliation.
+
+Реализовано в `feature/ozon-marketplace`: legacy WB settings/run/item history
+идемпотентно переносится в явный `marketplace_code=wb, account_id=NULL` scope,
+а каждый Ozon account получает отдельные settings, lock, daily counter, run и
+items. `ImportedProduct.import_status` остаётся WB projection и никогда не
+меняется Ozon-потоком. Supplier import без LLM/provider вызовов создаёт по одному
+локальному draft для каждого enabled Ozon target; ручная pause останавливает
+writes, но не подготовку локальных drafts.
+
+Новый Ozon side effect требует три независимых dark-by-default флага:
+`MARKETPLACE_OZON_ENABLED`, `MARKETPLACE_OZON_PUBLICATION_ENABLED` и
+`MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED`, а также явное включение конкретного
+account scope в UI. Перед очередью выполняется один advisory quota read, но
+каждая durable operation повторно делает собственный live quota preflight.
+Хвост сверх provider/daily capacity становится `deferred`, не success.
+
+Cancellation имеет атомарную durable submit boundary: cancel/pause/disable,
+зафиксированный первым, запрещает новый provider write; уже claimed operation
+остаётся в `cancelling` и проходит только честную reconciliation. После restart
+Ozon run не ретраит ambiguous write вслепую: operation находится по committed
+idempotency key, а item до write boundary безопасно откладывается. UI показывает
+account, draft, operation, task, deferred/uncertain/cancelling status и не
+сериализует внутренний idempotency key.
 
 Definition of done: WB and Ozon can run concurrently for one seller without shared locks/counters/IDs.
 
@@ -676,6 +699,11 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 10. `migrate_add_marketplace_product_updates.py` после P6 commercial migration
     расширяет operation/snapshot CHECK contracts для full update/rollback,
     сохраняя existing operations, snapshots и proposal foreign keys.
+11. `migrate_add_marketplace_auto_publish.py` rebuild-ит legacy seller-unique
+    auto-publish tables в account-scoped schema с сохранением WB history. Он
+    fail-fast подключён к Docker/comprehensive path и вызывается direct SQLite
+    startup, потому что простой `ALTER TABLE` не может снять старый
+    `UNIQUE(seller_id)`.
 
 ## 10. Security и safety invariants
 
@@ -691,6 +719,11 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 - Batch IDs — unique positive typed integers для local IDs; external opaque IDs — strict bounded strings.
 - No N+1: references, products, prices and stocks use bounded pages/batches.
 - Unsupported/deprecated endpoint fails closed; automatic downgrade запрещён.
+- WB auto-publish имеет `account_id=NULL`; Ozon settings/run/item всегда имеют
+  один exact seller-owned account. Их locks, counters и retries не смешиваются.
+- Ozon auto-publish никогда не меняет WB-shaped `ImportedProduct.import_status`.
+- Auto-publish cancellation не выдаёт уже claimed provider operation за
+  отменённую; reconciliation продолжается даже после выключения write flags.
 
 ## 11. Testing pyramid
 
@@ -733,13 +766,15 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 
 ## 12. Rollout
 
-1. `MARKETPLACE_OZON_ENABLED=0` и `MARKETPLACE_OZON_PUBLICATION_ENABLED=0`: schema/code dark launch.
+1. Все Ozon flags равны `0`: schema/code dark launch.
 2. Enable account UI for admins/internal seller only.
 3. Enable reference sync and catalog read-only.
 4. Enable draft validation for allowlisted categories.
 5. Enable one-off manual publication for allowlisted sellers.
 6. Enable prices/stocks proposals.
-7. Enable auto-publish only after quota/reconciliation SLOs hold.
+7. После quota/reconciliation SLO включить отдельный
+   `MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED=1`; manual publication flag сам по себе
+   не разрешает auto-publish.
 8. Expand analytics/orders/finance independently by capability flag.
 
 Publication rollback switch отдельный: его выключение останавливает новые writes и

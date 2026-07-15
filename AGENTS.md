@@ -30,6 +30,7 @@ Seller Hub автоматизирует работу продавца на ма�
 - `services/ozon_product_import.py`: whitelist-only контракт `/v3/product/import`, строгая нормализация task status и quota response.
 - `services/ozon_product_state.py`: exact full-state reconstruction из info/attributes/prices/pictures, canonical fingerprints и archive contract; raw provider body не сохраняется.
 - `services/marketplace_publications.py`, `routes/marketplace_operations.py`: durable seller-scoped Ozon create/full-update/rollback operations, snapshots, manual submit, polling/reconciliation и audit UI/API.
+- `services/marketplace_auto_publish.py`: deterministic multi-account draft provisioning и account-scoped Ozon auto-publish queue с quota allocation, atomic cancellation boundary, circuit breaker и durable operation reconciliation; этот поток не меняет WB-shaped `ImportedProduct.import_status`.
 - `services/marketplace_warehouses.py`: полные warehouse snapshots и точные FBS/rFBS observations по `listing + warehouse`; адреса и контакты не сохраняются.
 - `services/marketplace_commercial.py`, `routes/marketplace_commercial.py`: reviewed price/stock proposals, live drift preflight, single-attempt writes, reconciliation и conflict-aware rollback proposals.
 - `services/ozon_commercial_contracts.py`: ORM-free whitelist/exact-set контракты current price, warehouse и stock endpoint families.
@@ -52,7 +53,7 @@ Seller Hub автоматизирует работу продавца на ма�
 - Актуальный Ozon manifest использует description-category v1, product list/info v3, product attributes v4, pictures read v2/write v1, product import v3 + status v1, archive/unarchive v1, limits v4, prices read v5/update v1, aggregate stocks read v4, per-warehouse FBS read v2, per-warehouse FBO read v1, stocks update v2, warehouses v2 и finance feeds v1. Deprecated category/product endpoints, per-warehouse FBS v1, warehouse v1 и отключённые finance v3 запрещены. В `/v3/product/import` `offer_id` обязателен, а `images360` удалён 10.07.2026.
 - `services/ozon_commercial_contracts.py` является ORM-free fail-closed boundary для P6: price/stock builders принимают только whitelist-поля и exact identities, response обязан быть exact-set без чужих/повторных/пропущенных результатов, stock всегда содержит точный `warehouse_id`, а warehouse/FBS pages требуют корректную cursor pagination. Platform batch cap равен 100 даже там, где upstream допускает больше. Сам contract layer не даёт права на provider write; разрешённый side-effect path находится только в `MarketplaceCommercialService` после durable proposal, отдельного human approval и повторного live preflight.
 - `scripts/probe_ozon_read_contracts.py` не имеет write mode, загружает live credentials только из process env или owner-only файла и выводит только bounded shapes. Из `/v1/roles` он сохраняет только фиксированные boolean-проверки известных методов, не role names и не произвольные method values. Не расширяйте probe endpoint-ом, который не помечен `retry_class=read`.
-- Seller account/catalog/draft/commercial staging UI и live Ozon checks включаются через `MARKETPLACE_OZON_ENABLED=1`; новый product write требует также `MARKETPLACE_OZON_PUBLICATION_ENABLED=1`, а approve price/stock proposal — независимо `MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED=1`. Все flags default `0`. Выключение write flag запрещает только новый side effect и отправку queued rows; scheduler продолжает submitted/polling/uncertain reconciliation.
+- Seller account/catalog/draft/commercial staging UI и live Ozon checks включаются через `MARKETPLACE_OZON_ENABLED=1`; новый manual product write требует также `MARKETPLACE_OZON_PUBLICATION_ENABLED=1`, Ozon auto-publish дополнительно требует отдельный `MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED=1`, а approve price/stock proposal — независимо `MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED=1`. Все flags default `0` и явно передаются в web container через Compose. Выключение write flag запрещает только новый side effect и отправку queued rows; scheduler продолжает submitted/polling/uncertain reconciliation.
 - Ozon reference truth хранится отдельно от WB-shaped `MarketplaceCategory`: `MarketplaceTaxonomyCategory`, `MarketplaceProductType`, `MarketplaceAttributeDefinition` и `MarketplaceAttributeValue`. Идентичность типа всегда `description_category_id + type_id`; value ID никогда не переносится между attribute/type scopes.
 - Global Ozon taxonomy использует только явно настроенный `MarketplaceReferenceAccount`, никогда случайный seller key. Tree обновляется каждые 24 часа, stale enabled schemas bounded-пакетом каждые 6 часов; required dictionaries синхронизируются eager в общем dictionary budget. Все scope jobs используют non-blocking file claims.
 - Последний полный Ozon snapshot остаётся structured truth до hard TTL 48 часов. Empty/malformed/duplicate/partial/anomalously shrunk ответ не меняет reference rows. Dictionary checkpoint наблюдаемый и не является resume cursor: без staging retry обязан начать с нуля. Admin restriction может быть только exact subset fresh official dictionary; required attribute нельзя отключить.
@@ -67,6 +68,8 @@ Seller Hub автоматизирует работу продавца на ма�
 - Product rollback всегда является отдельным подтверждённым write. Для create он вызывает `/v1/product/archive` ровно для созданного `product_id`, только если full live state не дрейфовал; для update восстанавливает точный prior full payload тем же async import contract. Оба пути commit-ят отдельную operation до write, не ретраят ambiguous response и обновляют parent snapshot. Beta visibility не является archive и не используется.
 - `uncertain` можно вручную остановить только через audited `stop_reconciliation_release_local_quota`: outcome остаётся `uncertain`, write не повторяется, credentials продолжают блокироваться. Нельзя превращать эту кнопку в ручное неподтверждённое `succeeded`.
 - Изменение Client-Id/API key, connection recheck и disconnect используют тот же account lock. Credential mutation блокируется при любой active operation; disconnect отменяет только `queued` с `attempt_count=0`, но сохраняет ключ для submitted/polling/uncertain и любого write с ненулевой попыткой.
+- Legacy WB auto-publish является scope `marketplace_code=wb, account_id=NULL`. Ozon settings/run/item всегда привязаны к одному exact seller-owned account и имеют независимые lock, daily counter, retry history и circuit breaker. Supplier import создаёт локальный draft для каждого enabled Ozon target без LLM/provider вызова; pause блокирует provider writes, но не deterministic draft preparation.
+- Ozon auto-publish до каждого нового write атомарно claim-ит item только пока exact run остаётся `running`, а settings enabled и не paused. Cancel/pause/disable, зафиксированный первым, делает provider call невозможным; если submit boundary уже пересечена, run остаётся `cancelling` до operation reconciliation и не выдаётся за отменённый upstream write. После restart item без boundary откладывается, а committed idempotency связывается с durable operation до любого безопасного продолжения.
 - File claim координирует процессы только на общем host/filesystem. Текущий Compose имеет singleton scheduler и один web container; перед multi-host/web-replica rollout P11 обязан заменить claim распределённой блокировкой либо гарантировать shared lock filesystem.
 
 ### Единый AI-помощник
@@ -86,7 +89,7 @@ Seller Hub автоматизирует работу продавца на ма�
 - `agents/catalog/`: внутренние domain skills и pipeline catalog. Это не отдельные seller-facing агенты.
 - `static/agent-chat.*`, `static/ai-chat-popup.*`, `templates/agents.html`: основной чат и компактный popup.
 
-Основной поток: browser chat -> `routes/agents.py` -> `agent_harness` -> `AgentTask` -> poll единого orchestrator -> `UnifiedSellerAgent` -> internal skill -> tools -> authenticated internal API -> DB -> conversation polling -> UI. Точные полнофразные read-intents и safety-boundaries могут иметь deterministic fast-path, но regex/keyword никогда не является границей понимания: любой miss, опечатка, разговорная или составная фраза получает один bounded structured semantic plan или конкретный clarification. Planner видит текущий запрос, typed scope без списка ID, нормализованный page context, до 12 последних языковых/run-реплик общим объёмом до 6000 символов и bounded durable state последнего plan/run/clarification. UI явно передаёт `scope_mode=selected|global|page`; повторно присланные те же IDs считаются conversation scope, а planner возвращает `scope_mode=active|global`, чтобы опечатка вроде «весь коталог» не применила старую выборку. Global write не расширяется из старого scope без явного подтверждения. Read-only semantic plan стартует автоматически, write-plan требует подтверждения. Явные вопросы к инструкциям идут в `knowledge-query`: task-scoped internal retrieval выбирает только global + документы текущего seller, после чего bounded Flash синтезирует ответ с проверенными citations; при отсутствии результата или бюджета возвращаются детерминированные cited excerpts без догадок.
+Основной поток: browser chat -> `routes/agents.py` -> `agent_harness` -> `AgentTask` -> poll единого orchestrator -> `UnifiedSellerAgent` -> internal skill -> tools -> authenticated internal API -> DB -> conversation polling -> UI. Точные полнофразные read-intents и safety-boundaries могут иметь deterministic fast-path, но regex/keyword никогда не является границей понимания: любой miss, опечатка, разговорная или составная фраза получает один bounded structured semantic plan или конкретный clarification. Planner видит текущий запрос, typed scope без списка ID, нормализованный page context, до 12 последних языковых/run-реплик общим объёмом до 6000 символов и bounded durable state последнего plan/run/clarification. UI явно передаёт `scope_mode=selected|global|page`; повторно присланные те же IDs считаются conversation scope, а planner возвращает `scope_mode=active|global`, чтобы опечатка вроде «весь коталог» не применила старую выборку. Когда пользователь пишет точный seller-owned WB `nmID`/числовой артикул прямо в тексте без UI selection, harness делает только tenant-scoped exact grounding в `Product`/`ImportedProduct` и передаёт найденный внутренний ID semantic planner как `scope_origin=message_reference`; это не intent-классификация. Неизвестная, смешанная или неоднозначная явно помеченная ссылка возвращает clarification и никогда не превращается в global write. Global write не расширяется из старого scope без явного подтверждения. Read-only semantic plan стартует автоматически, write-plan требует подтверждения. Явные вопросы к инструкциям идут в `knowledge-query`: task-scoped internal retrieval выбирает только global + документы текущего seller, после чего bounded Flash синтезирует ответ с проверенными citations; при отсутствии результата или бюджета возвращаются детерминированные cited excerpts без догадок.
 
 Частые read-intents (цены, остатки, пропуски контента, import/publication status, supplier publication counts, WB catalog counts, API health, defaults, stop-words и pricing settings) обязаны сначала проходить строгий локальный parser и typed SQL/internal endpoint. Не используйте LLM как классификатор там, где intent и параметры можно строго проверить regex/enum; при любом miss, опечатке, лишнем модификаторе или составной цели fast-path обязан отказаться от решения и передать текст semantic planner. Generic count/list fast-path принимает только целую фразу без неизвестных модификаторов: «покажи просевшие карточки» нельзя молча превращать в выдачу всего каталога. Для deterministic catalog query допускается один короткий Flash-вызов только для формулировки ответа; в него передаются condition/count/has_results, но не карточки и не история диалога. Точные supplier counts возвращаются без polish-вызова.
 
@@ -105,7 +108,7 @@ Structured batch (brand/SEO) также является Python-owned write path
 (коды в `card_quality_scorer.ATTENTION_REASONS`), приоритет — `Product.quality_impact`.
 Кнопка «Исправить с ИИ» передаёт выбранные карточки в единый чат только через
 существующие endpoints (`POST /agents/api/conversations`, `.../messages` с
-`entity_kind='product'` + `product_ids`, лимит 50); write-путь остаётся
+`entity_kind='product'` + `product_ids` + `scope_mode='selected'`, лимит 50); write-путь остаётся
 план → подтверждение → proposal. Рантайм читает quality-данные через
 read-only internal endpoint `products/quality-brief` (agent-auth, до 50
 карточек, protected fields не возвращаются): детерминированный skill
@@ -141,12 +144,18 @@ collection (`selected_product_ids` + `entity_kind='product'`), tool
   lifecycle и аналитикой. Browser никогда не получает provider/GPU secrets.
   API берёт seller только из `current_user.seller`; experiment/product/artifact
   всегда выбираются составным `id + seller_id`.
-- Default `reference_guided` boundary: Gen-API/AITunnel получает локально
-  подготовленный 3:4 canvas с главным foreground; в `reference_set` остальные
-  выбранные байты идут отдельными identity references в порядке сохранённого
-  manifest. `packaging`/`detail` являются только evidence и не должны появляться
-  лишним объектом. `background_only` остаётся контрольным режимом и единственным
-  режимом GPU bridge. Bounded visual context выбирается между ImportedProduct и
+- Default `background_only` boundary: модель получает только описание пустой
+  сцены, после чего оригинальный RGB товара накладывается локально ровно один
+  раз. `reference_guided` передаёт Gen-API/AITunnel локально подготовленный 3:4
+  canvas с protection mask, а `native_scene` — байты исходного главного фото без
+  mask; в обоих edit-режимах provider output используется напрямую без второго
+  foreground-слоя, всегда имеет `identity_mode=generative_edit`,
+  `publishable=false` и требует human identity/duplicate review. В
+  `reference_set` остальные выбранные байты идут отдельными identity references
+  в порядке сохранённого manifest; `packaging`/`detail` являются только evidence
+  и не должны появляться лишним объектом. `native_scene` недоступен для
+  `collage`; `background_only` остаётся единственным режимом GPU bridge. Bounded
+  visual context выбирается между ImportedProduct и
   более полным `SupplierProduct.ai_parsed_data_json`, удаляет цены/ID/instructions,
   ограничен размером и сохраняется в prompt. Пользовательский additional prompt
   не может отменить identity/no-duplicate/no-generated-text правила.
@@ -157,21 +166,23 @@ collection (`selected_product_ids` + `entity_kind='product'`), tool
   товар и синтезирует скрытую геометрию, поэтому использует
   `identity_mode=generative_edit`, всегда имеет `publishable=false` и требует
   human identity/geometry review. Никогда не переносите в него гарантию
-  original RGB из `reference_guided` и не разрешайте auto-publish по rating.
+  original RGB из `background_only` и не разрешайте auto-publish по rating.
 - Gen-API `image_urls` имеет контракт `files_array`: локальные референсы Flux 2
   отправляются как повторяющиеся multipart-поля `image_urls[]`, не JSON data URI.
-  AITunnel `gpt-image-2` поддерживает `reference_guided` через
-  `/v1/images/edits`, `image[]`, protection mask и `input_fidelity=high`; для
+  AITunnel `gpt-image-2` поддерживает `reference_guided|native_scene` через
+  `/v1/images/edits`, `image[]` и `input_fidelity=high`; protection mask
+  передаётся только для `reference_guided`. Для
   вертикального запроса используется поддерживаемый provider size 1024×1536,
   после чего локальный финал нормализуется до 900×1200.
-- После provider response `services/infographic_quality.py` повторно локально
-  накладывает foreground: alpha берётся из rembg, RGB — строго из декодированного
-  оригинала, разрешены только resize/translate. Reference input и финал обязаны
-  совпасть по foreground hash и placement; mismatch блокирует job. AITunnel также
-  получает protection mask, но она не заменяет локальное восстановление RGB.
-  В `collage` каждый foreground имеет отдельный source hash/alpha metadata.
-  Финал всегда 900×1200; reference-guided scene остаётся `review_required` до
-  human/CV проверки лишних объектов и никогда автоматически не публикуется.
+- После provider response `services/infographic_quality.py` локально накладывает
+  foreground только для `background_only`: alpha берётся из rembg, RGB — строго
+  из декодированного оригинала, разрешены только resize/translate. Нельзя
+  одновременно передавать товар модели и затем добавлять тот же foreground в
+  финал: смещение provider output создаёт дубликат. В `collage` каждый foreground
+  имеет отдельный source hash/alpha metadata. Финал всегда 900×1200;
+  `reference_guided|native_scene|angle_synthesis` остаются `review_required` до
+  human/CV проверки identity, геометрии и лишних объектов и никогда
+  автоматически не публикуются.
 - Пользовательский текст передаётся модели только как layout intent для верхней
   safe-zone; точные UTF-8 glyphs рендерятся локально deterministic overlay и
   сохраняются в quality metadata. Seller-scoped PNG до 2 МБ нормализуется и
@@ -239,7 +250,7 @@ DISABLE_SECURE_COOKIE=1 PORT=5001 python seller_platform.py
 
 Откройте `http://localhost:5001/login`. `DISABLE_SECURE_COOKIE=1` допустим только для локального HTTP. Без `DATABASE_URL` основная база создаётся в `data/seller_platform.db`.
 
-Ozon account/catalog/draft/commercial UI остаётся выключенным по умолчанию. Для локальной проверки сначала задайте валидный Fernet `ENCRYPTION_KEY`, затем явно экспортируйте `MARKETPLACE_OZON_ENABLED=1`. Seller проверяет кабинет в `/marketplaces/accounts/`, запускает bounded read-only catalog sweep в `/marketplaces/listings`, готовит validated drafts в `/marketplaces/drafts/` и синхронизирует склады/создаёт read-only proposals в `/marketplaces/commercial/`. Draft validation не вызывает Ozon или LLM. Ручные create/full-update/product rollback независимо включаются `MARKETPLACE_OZON_PUBLICATION_ENABLED=1`, а approve price/stock proposal — `MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED=1`; операции и reconciliation видны в `/marketplaces/operations/`. Никогда не включайте write flags только ради unit tests: они используют synthetic credentials/adapters и не вызывают Ozon.
+Ozon account/catalog/draft/commercial UI остаётся выключенным по умолчанию. Для локальной проверки сначала задайте валидный Fernet `ENCRYPTION_KEY`, затем явно экспортируйте `MARKETPLACE_OZON_ENABLED=1`. Seller проверяет кабинет в `/marketplaces/accounts/`, запускает bounded read-only catalog sweep в `/marketplaces/listings`, готовит validated drafts в `/marketplaces/drafts/` и синхронизирует склады/создаёт read-only proposals в `/marketplaces/commercial/`. Draft validation не вызывает Ozon или LLM. Ручные create/full-update/product rollback независимо включаются `MARKETPLACE_OZON_PUBLICATION_ENABLED=1`; auto-publish требует ещё `MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED=1` и включения точного account scope на `/auto-publish`; approve price/stock proposal использует `MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED=1`. Операции и reconciliation видны в `/marketplaces/operations/`. Никогда не включайте write flags только ради unit tests: они используют synthetic credentials/adapters и не вызывают Ozon.
 
 Для точечной сверки live read-контрактов вне web runtime создайте `/tmp/ozon_live.env` с правами `0600` и только ключами `OZON_LIVE_CLIENT_ID`/`OZON_LIVE_API_KEY`, затем выполните `python scripts/probe_ozon_read_contracts.py`. Не кладите эти имена/значения в project `.env`: probe не загружает shell-файл и парсит только два exact key без eval. Скрипт не имеет write mode, перед каждым вызовом проверяет `OZON_ENDPOINTS[endpoint].retry_class == 'read'` и печатает только структуру ответа. Raw live body не сохраняйте в fixtures; переносите только synthetic/redacted форму контракта.
 
@@ -375,6 +386,7 @@ python migrations/migrate_add_ozon_references.py data/seller_platform.db
 python migrations/migrate_add_marketplace_listings.py data/seller_platform.db
 python migrations/migrate_add_marketplace_drafts.py data/seller_platform.db
 python migrations/migrate_add_marketplace_operations.py data/seller_platform.db
+python migrations/migrate_add_marketplace_auto_publish.py data/seller_platform.db
 python migrations/run_all_migrations.py data/seller_platform.db
 ```
 
@@ -386,6 +398,7 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - Подключайте новый script к `docker-entrypoint.sh` и, когда уместно, к comprehensive migration path.
 - Держите DDL и backfill повторно запускаемыми; проверяйте наличие table/column/index.
 - Backfill обязан явно заполнять Python-side default поля вроде `created_at`: таблица, созданная SQLAlchemy, может не иметь server default даже если новый migration DDL его объявляет.
+- Marketplace auto-publish снимает legacy physical `UNIQUE(seller_id)`, поэтому его schema нельзя обновлять набором `ADD COLUMN`. `migrate_add_marketplace_auto_publish.py` делает idempotent transactional rebuild, сохраняет WB rows как `account_id=NULL`, проверяет foreign keys и запускается fail-fast в Docker/comprehensive/direct SQLite startup paths.
 - Не удаляйте таблицы, volume или пользовательские данные без явного запроса и проверенного backup/restore plan.
 
 ## Safety-инварианты
@@ -401,6 +414,7 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - `MarketplaceListing`, catalog sync run и account всегда читаются/изменяются с тем же `seller_id`; фильтр по голому listing/account ID запрещён. Enrichment response не может добавить чужой `product_id` или конфликтующий `offer_id` в запрошенный page exact-set.
 - `MarketplaceProductDraft`, его `ImportedProduct`, account, marketplace и category mapping обязаны иметь один seller/marketplace scope. `corrected_by_user_id` берётся из authenticated user и повторно сверяется с `Seller.user_id`; body не может назначить автора исправления.
 - `MarketplaceOperation` и snapshot всегда выбираются с `operation.id + current_user.seller.id`; их account/draft/listing scope повторно сверяется. Public serializer не отдаёт `idempotency_key`, submitted state или credentials.
+- Auto-publish settings/run/item user routes всегда выбирают selector scope из query, затем exact `settings_id + seller_id + account_id`; body не может сменить marketplace/account. WB row обязан иметь `account_id=NULL`, Ozon row — seller-owned Ozon account. Публичный item serializer не отдаёт внутренний idempotency key.
 - Любой internal agent request обязан пройти agent authentication, task ownership и assignment-to-seller checks.
 - Запрос объекта выполняйте составным условием `id + seller_id`; проверка одного ID недостаточна.
 - Область сущности всегда типизирована: `/products/<id>` означает `Product`, а страницы импорта/поставщика — `ImportedProduct`; числовой ID без `entity_kind` неоднозначен.
@@ -422,8 +436,9 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - До изменения карточки сохраняйте `AgentChangeSnapshot` с previous/new values и task/agent identity.
 - Batch updates должны изолировать ошибки через transaction/savepoint и не оставлять session в failed state.
 - Write workflow должен иметь понятный rollback path. Rollback также tenant-scoped и идемпотентен.
+- Ozon auto-publish не имеет права менять `ImportedProduct.import_status`: это WB projection. Его side effect существует только как `MarketplaceOperation`/snapshot. Quota/daily tail получает `deferred`, ambiguous/claimed operation остаётся на reconciliation, а cancellation останавливает только ещё не claimed writes.
 - Для `ImportedProduct` используйте `AgentChangeSnapshot`; для основной `Product` — `CardEditHistory` с `user_comment=agent_task:<task_id>`. Локальный rollback `Product` применяет snapshot только если текущие changed fields точно равны `snapshot_after`; поздняя ручная правка даёт per-card `conflict` и не перезаписывается. Оба пути должны тестироваться полным циклом запись → откат.
-- `content-writer` меняет только локальную `Product` и создаёт проверяемый diff. Отправка в WB является отдельным подтверждаемым write-plan `wb-content-publisher`: он берёт точный latest completed diff тех же fields из того же seller-scoped conversation, повторно сверяет локальные значения и посылает один typed WB batch без LLM и регенерации. Перед network I/O history помечается `uncertain` и исключается из local rollback; timeout/неполное accounting не ретраится вслепую, confirmed success не откатывается только локально, а явный отказ WB оставляет локальный diff доступным для conflict-aware rollback.
+- `content-writer` меняет только локальную `Product` и создаёт проверяемый diff. Отправка в WB является отдельным подтверждаемым write-plan `wb-content-publisher`: он берёт точный latest completed diff тех же fields из того же seller-scoped conversation, повторно сверяет локальные значения и посылает один typed WB batch без LLM и регенерации. Перед network I/O history атомарно claim-ится условным `pending|failed -> uncertain` с task-specific marker, поэтому два worker не могут отправить один diff; строка сразу исключается из local rollback. Transport timeout/5xx после возможной отправки и неполное accounting не ретраятся вслепую, confirmed success не откатывается только локально, а явный отказ WB или доказанный pre-write GET/DNS failure оставляет локальный diff доступным для conflict-aware rollback.
 - Rollback task tree выполняйте только после остановки его активных задач, иначе поздний worker может повторно записать данные.
 - Не запускайте destructive workflow из неоднозначного текста: semantic planner возвращает clarification или план, а пользователь подтверждает write-plan до старта.
 
@@ -505,6 +520,15 @@ python migrations/run_all_migrations.py data/seller_platform.db
 - Выключение `MARKETPLACE_OZON_PUBLICATION_ENABLED` запрещает новый write и отправку безопасной queued operation, но не отменяет уже начатую сверку. Disconnect не может удалить ключ, нужный для reconciliation.
 - Create compensation архивирует exact product только при unchanged full-state. Update compensation создаёт второй explicit operation и восстанавливает prior full payload только при submitted-state drift gate. Media — replace-style часть полного payload: `primary_image + images <= 30`, optional `color_image`, `images360` запрещён; picture read errors или непредставимый старый state блокируют write.
 - Миграция `migrate_add_marketplace_product_updates.py` идемпотентно расширяет CHECK contracts после commercial migration, сохраняет operation/snapshot/proposal FK rows и подключена fail-fast в Docker entrypoint.
+
+### Marketplace-scoped auto-publish
+
+- `AutoPublishSettings` уникален по Ozon `account_id`; только WB имеет partial unique seller row с `account_id=NULL`. `AutoPublishRun.settings_id` обязателен, а run/item дублируют marketplace/account scope для fail-closed query и аудита. Не возвращайте seller-only queries в scheduler/routes/retry/restart recovery.
+- Draft provisioner принимает до 200 уникальных positive integer ImportedProduct IDs, до первого create проверяет exact seller set и создаёт одну локальную проекцию на каждый enabled active Ozon account. Он не вызывает adapter/LLM. Один failed draft не откатывает уже завершённый supplier import; ошибка остаётся bounded и повторно подхватывается очередью.
+- Ozon queue валидирует strict settings, source fact hash и deterministic draft schema до provider boundary. Advisory account quota вычитает local active reservations; фактическая publication повторно делает operation-level live quota check. Daily/provider хвост помечается `deferred`, не `completed`.
+- Item idempotency key и `submitting` claim commit-ятся атомарно только если exact run всё ещё `running|waiting`, settings enabled и не paused. Provider operation commit-ится до HTTP. При restart operation ищется по exact seller/account/draft/kind/key; отсутствие key означает доказанное prewrite состояние и безопасный defer, а не blind retry.
+- `cancelling` входит в reconciliation, но запрещает новые submit claims. Уже созданная/claimed operation продолжает read-only reflection; terminal `uncertain` переводит run в `attention`. Отдельные bounded scheduler jobs reconciles durable marketplace operations и отражают их в auto-publish items; выключенные flags не бросают attempted writes.
+- Retry/cooldown/exhaustion вычисляются только по последней account-scoped попытке товара, чтобы старая failure row не блокировала явный retry навсегда. Circuit breaker, lock, counter и notifications принадлежат одному settings/account scope и не влияют на WB или другой Ozon cabinet.
 
 ### Ozon commercial price/stock operations
 

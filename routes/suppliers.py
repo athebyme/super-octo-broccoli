@@ -10,14 +10,15 @@ from functools import wraps
 
 from flask import (
     Blueprint, render_template, redirect, url_for, flash,
-    request, abort, jsonify
+    request, abort, jsonify, current_app
 )
 from flask_login import login_required, current_user
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
     ImportedProduct, Seller, AIHistory, log_admin_action, Product,
-    BackgroundJob, Notification, AgentChangeSnapshot,
+    BackgroundJob, Notification, AgentChangeSnapshot, Marketplace,
+    SellerMarketplaceAccount,
 )
 from services.supplier_service import SupplierService
 
@@ -1803,11 +1804,22 @@ def register_supplier_routes(app):
         result = SupplierService.import_to_seller(seller.id, product_ids)
 
         if result.success:
+            marketplace_note = ''
+            if result.marketplace_drafts_created:
+                marketplace_note += (
+                    f', Ozon-черновиков: {result.marketplace_drafts_created}'
+                )
+            if result.marketplace_draft_errors:
+                marketplace_note += (
+                    f', Ozon требуют внимания: {result.marketplace_draft_errors}'
+                )
             flash(
                 f'Импортировано: {result.imported}, '
                 f'пропущено (дубли): {result.skipped}, '
-                f'ошибок: {result.errors}',
-                'success' if result.errors == 0 else 'warning'
+                f'ошибок: {result.errors}{marketplace_note}',
+                'success'
+                if result.errors == 0 and result.marketplace_draft_errors == 0
+                else 'warning'
             )
         else:
             flash(f'Ошибка импорта: {"; ".join(result.error_messages[:3])}', 'danger')
@@ -2006,6 +2018,20 @@ def register_supplier_routes(app):
             except Exception:
                 pass  # Таблица может не существовать
 
+        marketplace_accounts = []
+        if current_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            marketplace_accounts = SellerMarketplaceAccount.query.join(
+                Marketplace
+            ).filter(
+                SellerMarketplaceAccount.seller_id == seller.id,
+                SellerMarketplaceAccount.is_active.is_(True),
+                Marketplace.code == 'ozon',
+                Marketplace.is_active.is_(True),
+            ).order_by(
+                SellerMarketplaceAccount.is_default.desc(),
+                SellerMarketplaceAccount.label.asc(),
+            ).all()
+
         return render_template(
             'seller_my_products.html',
             pagination=pagination,
@@ -2030,6 +2056,7 @@ def register_supplier_routes(app):
             has_wb_key=seller.has_valid_api_key(),
             recent_imports=recent_imports,
             brand_category_map=brand_category_map,
+            marketplace_accounts=marketplace_accounts,
         )
 
     # -------------------------------------------------------------------

@@ -11,7 +11,11 @@
                 Единая read-only проекция WB и Ozon. Цены и остатки здесь не изменяются.
             </p>
         </div>
-        <a class="sh-btn sh-btn--secondary self-start" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
+        <div class="flex flex-wrap gap-2 self-start">
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('seller_my_products') }}">Подготовка WB</a>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index') }}">Черновики Ozon</a>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
+        </div>
     </div>
 
     {% with messages = get_flashed_messages(with_categories=true) %}

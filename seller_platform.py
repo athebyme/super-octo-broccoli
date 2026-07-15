@@ -98,6 +98,10 @@ app.config['MARKETPLACE_OZON_PUBLICATION_ENABLED'] = (
     os.environ.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', '').strip().lower()
     in ('1', 'true', 'yes', 'on')
 )
+app.config['MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED'] = (
+    os.environ.get('MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED', '').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
 app.config['MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED'] = (
     os.environ.get('MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED', '').strip().lower()
     in ('1', 'true', 'yes', 'on')
@@ -6368,6 +6372,21 @@ def _run_startup_migrations():
     from sqlalchemy import inspect as sa_inspect
 
     bind = db.engine
+    # Auto-publish used to have a physical UNIQUE(seller_id), so adding
+    # account_id columns cannot produce the new marketplace scope correctly.
+    # Rebuild it through the same idempotent migration used by Docker. This
+    # keeps direct ``python seller_platform.py`` and ``scripts/init_platform``
+    # compatible with existing local SQLite databases.
+    if bind.dialect.name == 'sqlite':
+        sqlite_path = bind.url.database
+        if sqlite_path and sqlite_path != ':memory:':
+            db.session.remove()
+            from migrations.migrate_add_marketplace_auto_publish import (
+                migrate as migrate_marketplace_auto_publish,
+            )
+            migrate_marketplace_auto_publish(sqlite_path)
+            bind.dispose()
+            bind = db.engine
     insp = sa_inspect(bind)
 
     migrations = [

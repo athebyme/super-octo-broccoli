@@ -82,7 +82,9 @@ class TestAutoPublishCandidates(unittest.TestCase):
     def _run(self):
         from models import AutoPublishRun
         run = AutoPublishRun(
+            settings_id=self.settings.id,
             seller_id=self.seller.id, run_uid='test-run',
+            marketplace_code='wb',
             status='running', started_at=datetime.utcnow(),
         )
         self.db.session.add(run)

@@ -27,6 +27,11 @@ services:
       # ЖЁСТКО ПРОПИСЫВАЕМ DATABASE_URL - НЕ полагаемся на .env
       - DATABASE_URL=sqlite:////app/data/seller_platform.db
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # Marketplace rollout flags are explicit and default dark.
+      - MARKETPLACE_OZON_ENABLED=${MARKETPLACE_OZON_ENABLED:-0}
+      - MARKETPLACE_OZON_PUBLICATION_ENABLED=${MARKETPLACE_OZON_PUBLICATION_ENABLED:-0}
+      - MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED=${MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED:-0}
+      - MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED=${MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED:-0}
       # Credentials для первого администратора (создается автоматически при первом запуске)
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
