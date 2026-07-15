@@ -1,0 +1,285 @@
+/* ============================================================
+   Seller Hub — sh-ui.css
+   Расширение дизайн-системы «Тёплая редакция»:
+   недостающие примитивы, центр уведомлений, слим-топбар.
+   Токены (--accent, --bg-*, --r-*, --shadow-*, --ease-*, --dur-*,
+   --z-*, статусы) определены в base.html <style> и глобальны.
+   Reduced-motion гасится глобальным guard'ом в base.html.
+   ============================================================ */
+
+/* ─────────────────────────────────────────────
+   Skeleton (shimmer-плейсхолдеры при загрузке)
+   ───────────────────────────────────────────── */
+.sh-skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-hover);
+    border-radius: var(--r-sm);
+}
+.sh-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
+    animation: sh-shimmer 1.4s ease-in-out infinite;
+}
+[data-theme="dark"] .sh-skeleton::after {
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+}
+@keyframes sh-shimmer { 100% { transform: translateX(100%); } }
+.sh-skeleton--text   { height: 12px; border-radius: var(--r-xs); margin: 7px 0; }
+.sh-skeleton--title  { height: 20px; width: 42%; border-radius: var(--r-xs); }
+.sh-skeleton--circle { border-radius: 50%; }
+.sh-skeleton--btn    { height: 34px; width: 96px; }
+.sh-skeleton--line-90 { width: 90%; }
+.sh-skeleton--line-70 { width: 70%; }
+.sh-skeleton--line-50 { width: 50%; }
+.sh-skeleton--line-30 { width: 30%; }
+
+/* ─────────────────────────────────────────────
+   Spinner (единый; sh-spin определён в base.html)
+   ───────────────────────────────────────────── */
+.sh-spinner {
+    display: inline-block;
+    width: 18px; height: 18px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: sh-spin 0.6s linear infinite;
+    vertical-align: middle;
+}
+.sh-spinner--sm { width: 14px; height: 14px; }
+.sh-spinner--lg { width: 28px; height: 28px; border-width: 3px; }
+.sh-spinner--on-accent { border-color: rgba(255,255,255,0.35); border-top-color: #fff; }
+
+/* ─────────────────────────────────────────────
+   Progress (линейный, determinate/indeterminate)
+   ───────────────────────────────────────────── */
+.sh-progress {
+    position: relative;
+    width: 100%;
+    height: 6px;
+    background: var(--bg-hover);
+    border-radius: var(--r-pill);
+    overflow: hidden;
+}
+.sh-progress-bar {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    border-radius: var(--r-pill);
+    transition: width var(--dur-3) var(--ease-out);
+}
+.sh-progress--ok     .sh-progress-bar { background: var(--ok); }
+.sh-progress--warn   .sh-progress-bar { background: var(--warn); }
+.sh-progress--danger .sh-progress-bar { background: var(--danger); }
+.sh-progress--indeterminate .sh-progress-bar {
+    width: 40%;
+    animation: sh-progress-slide 1.2s var(--ease-in-out) infinite;
+}
+@keyframes sh-progress-slide {
+    0%   { transform: translateX(-120%); }
+    100% { transform: translateX(320%); }
+}
+
+/* ─────────────────────────────────────────────
+   Toggle switch (поверх native checkbox)
+   Разметка: <label class="sh-toggle"><input type="checkbox">
+     <span class="sh-toggle-track"><span class="sh-toggle-thumb"></span></span>
+     <span class="sh-toggle-label">…</span></label>
+   ───────────────────────────────────────────── */
+.sh-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+}
+.sh-toggle input {
+    position: absolute;
+    opacity: 0;
+    width: 0; height: 0;
+}
+.sh-toggle-track {
+    position: relative;
+    width: 40px; height: 22px;
+    border-radius: var(--r-pill);
+    background: var(--border);
+    flex-shrink: 0;
+    transition: background-color var(--dur-2) var(--ease-out);
+}
+.sh-toggle-thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: var(--shadow-1);
+    transition: transform var(--dur-2) var(--ease-out);
+}
+.sh-toggle input:checked + .sh-toggle-track { background: var(--accent); }
+.sh-toggle input:checked + .sh-toggle-track .sh-toggle-thumb { transform: translateX(18px); }
+.sh-toggle input:focus-visible + .sh-toggle-track { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sh-toggle input:disabled + .sh-toggle-track { opacity: 0.5; }
+.sh-toggle input:disabled ~ .sh-toggle-label { opacity: 0.5; }
+.sh-toggle-label { font-size: 13px; color: var(--text); }
+
+/* ─────────────────────────────────────────────
+   Segmented control (pill-переключатель режимов)
+   ───────────────────────────────────────────── */
+.sh-segmented {
+    display: inline-flex;
+    padding: 3px;
+    gap: 2px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+}
+.sh-segmented-item {
+    appearance: none;
+    border: none;
+    background: transparent;
+    padding: 5px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-body);
+    color: var(--text-secondary);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color var(--dur-1) var(--ease-out),
+                color var(--dur-1) var(--ease-out),
+                box-shadow var(--dur-1) var(--ease-out);
+}
+.sh-segmented-item:hover { color: var(--text); }
+.sh-segmented-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.sh-segmented-item--active,
+.sh-segmented-item[aria-selected="true"] {
+    background: var(--bg-card);
+    color: var(--text);
+    box-shadow: var(--shadow-1);
+}
+
+/* ─────────────────────────────────────────────
+   Chip / tag (статичный, кликабельный, удаляемый)
+   ───────────────────────────────────────────── */
+.sh-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    white-space: nowrap;
+    transition: background-color var(--dur-1) var(--ease-out),
+                border-color var(--dur-1) var(--ease-out),
+                color var(--dur-1) var(--ease-out);
+}
+a.sh-chip, button.sh-chip, .sh-chip--clickable {
+    cursor: pointer;
+    text-decoration: none;
+    font-family: var(--font-body);
+}
+a.sh-chip:hover, button.sh-chip:hover, .sh-chip--clickable:hover {
+    border-color: var(--text-muted);
+    color: var(--text);
+}
+.sh-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sh-chip--active {
+    background: var(--accent-light);
+    border-color: var(--accent);
+    color: var(--accent-strong);
+}
+[data-theme="dark"] .sh-chip--active { color: var(--accent); }
+.sh-chip-remove {
+    display: inline-flex;
+    margin-right: -3px;
+    padding: 1px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.sh-chip-remove:hover { color: var(--danger); background: var(--danger-bg); }
+.sh-chip-remove:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.sh-chip-remove svg { width: 12px; height: 12px; display: block; }
+
+/* ─────────────────────────────────────────────
+   Avatar (инициалы или изображение)
+   ───────────────────────────────────────────── */
+.sh-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--accent-light);
+    color: var(--accent-strong);
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 1;
+    overflow: hidden;
+    flex-shrink: 0;
+    user-select: none;
+}
+[data-theme="dark"] .sh-avatar { color: var(--accent); }
+.sh-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.sh-avatar--sm { width: 28px; height: 28px; font-size: 11px; }
+.sh-avatar--lg { width: 48px; height: 48px; font-size: 16px; }
+.sh-avatar--square { border-radius: var(--r-sm); }
+
+/* ─────────────────────────────────────────────
+   Stepper (нумерованные шаги: done/current/upcoming)
+   ───────────────────────────────────────────── */
+.sh-stepper {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.sh-step { display: inline-flex; align-items: center; gap: 8px; }
+.sh-step-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 600;
+    border: 2px solid var(--border);
+    color: var(--text-muted);
+    background: var(--bg-card);
+    flex-shrink: 0;
+    transition: background-color var(--dur-2) var(--ease-out),
+                border-color var(--dur-2) var(--ease-out),
+                color var(--dur-2) var(--ease-out);
+}
+.sh-step-dot svg { width: 13px; height: 13px; }
+.sh-step-label { font-size: 13px; font-weight: 500; color: var(--text-muted); }
+.sh-step-line {
+    width: 32px; height: 2px;
+    background: var(--border);
+    margin: 0 8px;
+    border-radius: var(--r-pill);
+}
+.sh-step--current .sh-step-dot { border-color: var(--accent); color: var(--accent); }
+.sh-step--current .sh-step-label { color: var(--text); }
+.sh-step--done .sh-step-dot { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
+.sh-step--done .sh-step-label { color: var(--text-secondary); }
+.sh-step-line--done { background: var(--accent); }
+
+/* ─────────────────────────────────────────────
+   Reveal (мягкое появление; для «богатых» списков)
+   ───────────────────────────────────────────── */
+@keyframes sh-reveal-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.sh-reveal { animation: sh-reveal-up var(--dur-3) var(--ease-out) both; }
