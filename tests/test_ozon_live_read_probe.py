@@ -36,6 +36,16 @@ class FakeReadClient:
                     "last_id": "private-cursor",
                 }
             }
+        if endpoint_name == "roles":
+            return {
+                "roles": [{
+                    "name": "private-role",
+                    "methods": [
+                        "/v1/product/archive",
+                        "/v1/product/import/prices",
+                    ],
+                }],
+            }
         return {
             "secret_value": "must-not-escape",
             "items": [{"private": 123}],
@@ -58,6 +68,12 @@ class OzonLiveReadProbeTest(unittest.TestCase):
         result = run_probe(client)
         self.assertEqual(result["mode"], "read_only")
         self.assertEqual(result["write_endpoint_count"], 0)
+        self.assertTrue(
+            result["role_method_checks"]["/v1/product/archive"]
+        )
+        self.assertFalse(
+            result["role_method_checks"]["/v2/products/stocks"]
+        )
         for endpoint_name, _payload in client.calls:
             self.assertEqual(OZON_ENDPOINTS[endpoint_name].retry_class, "read")
         encoded = json.dumps(result)

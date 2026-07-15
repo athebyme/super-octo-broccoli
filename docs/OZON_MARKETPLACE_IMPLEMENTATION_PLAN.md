@@ -555,6 +555,9 @@ Definition of done: вручную подтверждённый новый offer
 Read-only staging discovery подготовлен отдельным
 `scripts/probe_ozon_read_contracts.py`: он проверяет current pictures v2 и
 catalog shapes без scalar data и технически не может вызвать manifest write.
+Проверка `/v1/roles` редуцируется к фиксированным boolean capabilities для
+archive/unarchive, pictures import, price import и stock update; произвольные
+названия ролей/методов наружу не выводятся.
 Это discovery-инструмент, а не реализация update/compensation и не основание
 обещать rollback без synthetic contract fixtures.
 
@@ -581,6 +584,10 @@ Aggregate price/stock reads уже входят в полный catalog page enr
 Manifest дополнен current per-warehouse FBS v2, FBO v1 и paginated warehouse
 v2 read paths для live shape verification; persistence warehouse mapping и
 proposal/apply side effects остаются незавершёнными пунктами P6.
+Добавлен ORM-free строгий contract layer для price/stock write envelopes,
+exact-set results и warehouse/FBS pages. Он intentionally не вызывается из UI
+или агента напрямую и сам по себе не включает side effects: durable proposal,
+human approval, свежий before-state и drift reconciliation ещё обязательны.
 
 - Ozon `/v5/product/info/prices`, `/v4/product/info/stocks`, `/v2/warehouse/list` reads.
 - Warehouse mapping and fulfillment-aware quantities.

@@ -44,6 +44,13 @@ BASE_READ_PROBES = (
     ),
     ("warehouses", {"cursor": "", "limit": 100}),
 )
+ROLE_METHOD_CHECKS = (
+    "/v1/product/archive",
+    "/v1/product/unarchive",
+    "/v1/product/pictures/import",
+    "/v1/product/import/prices",
+    "/v2/products/stocks",
+)
 
 
 class ProbeConfigurationError(RuntimeError):
@@ -175,6 +182,22 @@ def _first_product_identity(response: Any) -> Dict[str, Any]:
     }
 
 
+def _role_method_checks(response: Any) -> Dict[str, bool]:
+    """Reduce role values to a fixed boolean allowlist without echoing methods."""
+    methods = set()
+    roles = response.get("roles") if isinstance(response, dict) else None
+    if isinstance(roles, list):
+        for role in roles:
+            role_methods = role.get("methods") if isinstance(role, dict) else None
+            if not isinstance(role_methods, list):
+                continue
+            methods.update(
+                method for method in role_methods
+                if isinstance(method, str)
+            )
+    return {path: path in methods for path in ROLE_METHOD_CHECKS}
+
+
 def _product_read_probes(identity: Mapping[str, Any]) -> Iterable[tuple]:
     product_id = identity.get("product_id")
     if product_id is None:
@@ -207,6 +230,7 @@ def _product_read_probes(identity: Mapping[str, Any]) -> Iterable[tuple]:
 def run_probe(client: OzonSellerAPIClient) -> Dict[str, Any]:
     results = []
     identity: Dict[str, Any] = {}
+    role_method_checks = {path: False for path in ROLE_METHOD_CHECKS}
     probes = list(BASE_READ_PROBES)
     position = 0
     while position < len(probes):
@@ -235,6 +259,8 @@ def run_probe(client: OzonSellerAPIClient) -> Dict[str, Any]:
             "ok": True,
             "shape": response_shape(response),
         })
+        if endpoint_name == "roles":
+            role_method_checks = _role_method_checks(response)
         if endpoint_name == "product_list":
             identity = _first_product_identity(response)
             probes.extend(_product_read_probes(identity))
@@ -242,6 +268,7 @@ def run_probe(client: OzonSellerAPIClient) -> Dict[str, Any]:
         "mode": "read_only",
         "write_endpoint_count": 0,
         "product_sample_found": bool(identity.get("product_id")),
+        "role_method_checks": role_method_checks,
         "results": results,
     }
 
