@@ -7,6 +7,7 @@
     Usage:
         {% from "macros/overlays.html" import modal, confirm_modal, toast_container, tooltip, dropdown, slideover, command_palette, bottomsheet %}
 #}
+{% from "macros/icons.html" import icon, status_icon %}
 
 
 {# ─── Modal Dialog ─── #}
@@ -15,6 +16,7 @@
 <template x-teleport="body">
     <div x-show="{{ id }}" x-cloak class="sh-modal sh-modal--{{ size }} {% if danger %}sh-modal--danger{% endif %}"
          @keydown.escape.window="{{ id }} = false"
+         x-trap.noscroll.inert="{{ id }}"
          role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
         <!-- Backdrop -->
         <div class="sh-backdrop"
@@ -31,7 +33,7 @@
             <div class="sh-modal-header">
                 <h2 class="sh-modal-title" id="{{ id }}-title">{{ title }}</h2>
                 <button @click="{{ id }} = false" class="sh-modal-close" aria-label="Закрыть">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    {{ icon('close', size=18) }}
                 </button>
             </div>
             <div class="sh-modal-body">
@@ -49,6 +51,7 @@
 <template x-teleport="body">
     <div x-show="{{ id }}" x-cloak class="sh-modal sh-modal--{{ size }}"
          @keydown.escape.window="{{ id }} = false"
+         x-trap.noscroll.inert="{{ id }}"
          role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
         <div class="sh-backdrop"
              x-show="{{ id }}"
@@ -63,7 +66,7 @@
             <div class="sh-modal-header">
                 <h2 class="sh-modal-title" id="{{ id }}-title">{{ title }}</h2>
                 <button @click="{{ id }} = false" class="sh-modal-close" aria-label="Закрыть">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    {{ icon('close', size=18) }}
                 </button>
             </div>
             {{ caller() }}
@@ -79,6 +82,7 @@
 <template x-teleport="body">
     <div x-show="{{ id }}" x-cloak class="sh-modal sh-modal--sm"
          @keydown.escape.window="{{ id }} = false"
+         x-trap.noscroll.inert="{{ id }}"
          role="alertdialog" aria-modal="true" aria-labelledby="{{ id }}-title" aria-describedby="{{ id }}-desc">
         <div class="sh-backdrop"
              x-show="{{ id }}"
@@ -92,15 +96,7 @@
              @click.stop>
             <div class="sh-modal-body" style="text-align:center;padding-top:32px">
                 <div class="sh-confirm-icon sh-confirm-icon--{{ type }}" style="margin:0 auto 16px">
-                    {% if type == 'danger' %}
-                    <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                    {% elif type == 'warning' %}
-                    <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    {% elif type == 'info' %}
-                    <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    {% else %}
-                    <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    {% endif %}
+                    {{ icon('warning' if type in ['danger', 'warning'] else 'info-circle' if type == 'info' else 'check-circle', size=24, stroke=1.5) }}
                 </div>
                 <h2 class="sh-modal-title" id="{{ id }}-title" style="margin-bottom:8px">{{ title }}</h2>
                 <p id="{{ id }}-desc" style="color:var(--text-secondary);font-size:14px;margin:0">{{ message }}</p>
@@ -246,6 +242,7 @@ document.addEventListener('alpine:init', () => {
 <template x-teleport="body">
     <div x-show="{{ id }}" x-cloak class="sh-slideover {% if size %}sh-slideover--{{ size }}{% endif %}"
          @keydown.escape.window="{{ id }} = false"
+         x-trap.noscroll.inert="{{ id }}"
          role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
         <div class="sh-backdrop"
              x-show="{{ id }}"
@@ -260,7 +257,7 @@ document.addEventListener('alpine:init', () => {
             <div class="sh-slideover-header">
                 <h2 class="sh-slideover-title" id="{{ id }}-title">{{ title }}</h2>
                 <button @click="{{ id }} = false" class="sh-modal-close" aria-label="Закрыть">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    {{ icon('close', size=18) }}
                 </button>
             </div>
             <div class="sh-slideover-body">
@@ -276,6 +273,7 @@ document.addEventListener('alpine:init', () => {
 <template x-teleport="body">
     <div x-show="{{ id }}" x-cloak class="sh-slideover {% if size %}sh-slideover--{{ size }}{% endif %}"
          @keydown.escape.window="{{ id }} = false"
+         x-trap.noscroll.inert="{{ id }}"
          role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
         <div class="sh-backdrop"
              x-show="{{ id }}"
@@ -290,7 +288,7 @@ document.addEventListener('alpine:init', () => {
             <div class="sh-slideover-header">
                 <h2 class="sh-slideover-title" id="{{ id }}-title">{{ title }}</h2>
                 <button @click="{{ id }} = false" class="sh-modal-close" aria-label="Закрыть">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    {{ icon('close', size=18) }}
                 </button>
             </div>
             {{ caller() }}
@@ -306,6 +304,7 @@ document.addEventListener('alpine:init', () => {
 <template x-teleport="body">
     <div x-show="{{ id }}" x-cloak class="sh-cmdpal"
          @keydown.escape.window="{{ id }} = false"
+         x-trap.noscroll.inert="{{ id }}"
          role="dialog" aria-modal="true" aria-label="Поиск">
         <div class="sh-backdrop"
              x-show="{{ id }}"
@@ -314,18 +313,23 @@ document.addEventListener('alpine:init', () => {
              @click="{{ id }} = false"></div>
         <div class="sh-cmdpal-panel"
              x-show="{{ id }}"
+             x-data="shCmdPalette()"
              x-transition:enter="sh-modal-enter"
              x-transition:leave="sh-modal-leave"
+             @keydown.down.prevent="move(1)"
+             @keydown.up.prevent="move(-1)"
+             @keydown.enter.prevent="choose()"
              @click.stop>
             <div class="sh-cmdpal-input-wrap">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                {{ icon('search') }}
                 <input type="text" class="sh-cmdpal-input" placeholder="{{ placeholder }}"
-                       x-ref="cmdInput"
-                       x-init="$watch('{{ id }}', v => { if(v) $nextTick(() => $refs.cmdInput.focus()) })">
+                       x-ref="cmdInput" x-model="query" @input="filter()" aria-label="{{ placeholder }}"
+                       x-init="$watch('{{ id }}', v => { if(v) { query=''; $nextTick(() => { $refs.cmdInput.focus(); refresh(); }) } })">
                 <span class="sh-cmdpal-kbd">Esc</span>
             </div>
             <div class="sh-cmdpal-list">
                 {{ caller() }}
+                <div class="sh-cmdpal-empty" x-show="empty" x-cloak>Ничего не найдено</div>
             </div>
             <div class="sh-cmdpal-footer">
                 <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> навигация</span>
@@ -343,6 +347,7 @@ document.addEventListener('alpine:init', () => {
 <template x-teleport="body">
     <div x-show="{{ id }}" x-cloak class="sh-bottomsheet"
          @keydown.escape.window="{{ id }} = false"
+         x-trap.noscroll.inert="{{ id }}"
          role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
         <div class="sh-backdrop"
              x-show="{{ id }}"
@@ -358,7 +363,7 @@ document.addEventListener('alpine:init', () => {
             <div class="sh-bottomsheet-header">
                 <h2 class="sh-bottomsheet-title" id="{{ id }}-title">{{ title }}</h2>
                 <button @click="{{ id }} = false" class="sh-modal-close" aria-label="Закрыть">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    {{ icon('close', size=18) }}
                 </button>
             </div>
             <div class="sh-bottomsheet-body">

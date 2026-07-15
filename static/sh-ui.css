@@ -283,3 +283,13 @@ a.sh-chip:hover, button.sh-chip:hover, .sh-chip--clickable:hover {
     to   { opacity: 1; transform: translateY(0); }
 }
 .sh-reveal { animation: sh-reveal-up var(--dur-3) var(--ease-out) both; }
+
+/* ─────────────────────────────────────────────
+   Command palette: пустой результат
+   ───────────────────────────────────────────── */
+.sh-cmdpal-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}

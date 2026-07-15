@@ -6,6 +6,9 @@
     Usage:
         {% from "macros/components.html" import page_header, stat_card, stat_grid, badge, card, empty_state, alert_box, data_table %}
 #}
+{% from "macros/icons.html" import icon as sh_icon %}
+{# Принимает имя иконки из реестра ИЛИ готовую <svg>-строку (обратная совместимость) #}
+{% macro _ic(name) %}{% if name %}{% if '<' in name %}{{ name|safe }}{% else %}{{ sh_icon(name) }}{% endif %}{% endif %}{% endmacro %}
 
 
 {# ─── Page Header ─── #}
@@ -62,7 +65,7 @@
 {% if href %}<a href="{{ href }}" class="sh-stat-card sh-stat-card--{{ color }} sh-stat-card--link">{% else %}<div class="sh-stat-card sh-stat-card--{{ color }}">{% endif %}
     <div class="sh-stat-header">
         {% if icon %}
-        <div class="sh-stat-icon">{{ icon|safe }}</div>
+        <div class="sh-stat-icon">{{ _ic(icon) }}</div>
         {% endif %}
         <span class="sh-stat-label">{{ label }}</span>
         {% if trend is not none %}
@@ -129,12 +132,12 @@
 {% macro btn(text, href=None, variant='primary', size='md', icon=None, type='button', disabled=False, class='') %}
 {% if href %}
 <a href="{{ href }}" class="sh-btn sh-btn--{{ variant }} sh-btn--{{ size }} {{ class }} {% if disabled %}sh-btn--disabled{% endif %}">
-    {% if icon %}<span class="sh-btn-icon">{{ icon|safe }}</span>{% endif %}
+    {% if icon %}<span class="sh-btn-icon">{{ _ic(icon) }}</span>{% endif %}
     {{ text }}
 </a>
 {% else %}
 <button type="{{ type }}" class="sh-btn sh-btn--{{ variant }} sh-btn--{{ size }} {{ class }}" {% if disabled %}disabled{% endif %}>
-    {% if icon %}<span class="sh-btn-icon">{{ icon|safe }}</span>{% endif %}
+    {% if icon %}<span class="sh-btn-icon">{{ _ic(icon) }}</span>{% endif %}
     {{ text }}
 </button>
 {% endif %}
@@ -146,7 +149,7 @@
 {% macro empty_state(title, description=None, icon=None, action_text=None, action_href=None) %}
 <div class="sh-empty">
     {% if icon %}
-    <div class="sh-empty-icon">{{ icon|safe }}</div>
+    <div class="sh-empty-icon">{{ _ic(icon) }}</div>
     {% else %}
     <div class="sh-empty-icon">
         <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
@@ -169,7 +172,7 @@
 {% macro alert_box(message, type='info', icon=None, dismissible=False) %}
 <div class="sh-alert sh-alert--{{ type }}" {% if dismissible %}x-data="{ show: true }" x-show="show"{% endif %}>
     {% if icon %}
-    <div class="sh-alert-icon">{{ icon|safe }}</div>
+    <div class="sh-alert-icon">{{ _ic(icon) }}</div>
     {% endif %}
     <div class="sh-alert-content">{{ message }}</div>
     {% if dismissible %}
