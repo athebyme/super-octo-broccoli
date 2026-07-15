@@ -40,15 +40,15 @@
             </div>
             <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
                 <div class="text-sm" style="color:var(--text-secondary)">Отменено</div>
-                <div class="text-2xl font-bold mt-1" style="color:#ef4444" x-text="data.cancelCount?.toLocaleString('ru-RU') ?? '—'"></div>
+                <div class="text-2xl font-bold mt-1" style="color:var(--danger)" x-text="data.cancelCount?.toLocaleString('ru-RU') ?? '—'"></div>
             </div>
             <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
                 <div class="text-sm" style="color:var(--text-secondary)">Процент отмен</div>
-                <div class="text-2xl font-bold mt-1" :style="'color:' + (data.cancelRate > 10 ? '#ef4444' : data.cancelRate > 5 ? '#f59e0b' : '#16a34a')" x-text="(data.cancelRate ?? 0) + '%'"></div>
+                <div class="text-2xl font-bold mt-1" :style="'color:' + (data.cancelRate > 10 ? 'var(--danger)' : data.cancelRate > 5 ? 'var(--warn)' : 'var(--ok)')" x-text="(data.cancelRate ?? 0) + '%'"></div>
             </div>
             <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
                 <div class="text-sm" style="color:var(--text-secondary)">Потерянная выручка</div>
-                <div class="text-2xl font-bold mt-1" style="color:#ef4444" x-text="formatMoney(data.lostRevenue)"></div>
+                <div class="text-2xl font-bold mt-1" style="color:var(--danger)" x-text="formatMoney(data.lostRevenue)"></div>
             </div>
         </div>
 
@@ -58,7 +58,7 @@
                 <h2 class="text-lg font-semibold" style="color:var(--text)">Динамика заказов и отмен</h2>
                 <div class="flex gap-5 text-xs" style="color:var(--text-secondary)">
                     <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:var(--accent)"></span>Заказы</span>
-                    <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:#ef4444"></span>Отмены</span>
+                    <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:var(--danger)"></span>Отмены</span>
                 </div>
             </div>
 
@@ -85,7 +85,7 @@
                                         <span>Заказы</span><span class="font-semibold" x-text="d.orders"></span>
                                     </div>
                                     <div class="flex justify-between gap-4">
-                                        <span style="color:#f87171">Отмены</span><span class="font-semibold" style="color:#f87171" x-text="d.cancels"></span>
+                                        <span style="color:var(--danger)">Отмены</span><span class="font-semibold" style="color:var(--danger)" x-text="d.cancels"></span>
                                     </div>
                                     <div class="flex justify-between gap-4 mt-0.5 pt-0.5" style="border-top:1px solid rgba(255,255,255,0.15)">
                                         <span>Процент</span><span class="font-semibold" x-text="d.cancelRate + '%'"></span>
@@ -101,7 +101,7 @@
                                      :style="{background: 'var(--accent)', borderRadius: '3px 3px 0 0', height: Math.max(2, ((d.orders - d.cancels) / maxOrders) * 100) + '%'}"></div>
                                 <!-- Cancels bar (stacked on top of zero) -->
                                 <div class="w-full transition-all duration-300 group-hover:opacity-80"
-                                     :style="{background: '#ef4444', height: (d.cancels > 0 ? Math.max(2, (d.cancels / maxOrders) * 100) : 0) + '%'}"></div>
+                                     :style="{background: 'var(--danger)', height: (d.cancels > 0 ? Math.max(2, (d.cancels / maxOrders) * 100) : 0) + '%'}"></div>
                             </div>
                         </div>
                     </template>
@@ -134,7 +134,7 @@
                                 </div>
                             </div>
                             <div class="text-right ml-3 flex-shrink-0">
-                                <div class="text-sm font-semibold" :style="'color:' + (item.cancelRate > 20 ? '#ef4444' : item.cancelRate > 10 ? '#f59e0b' : '#16a34a')" x-text="item.cancelRate + '%'"></div>
+                                <div class="text-sm font-semibold" :style="'color:' + (item.cancelRate > 20 ? 'var(--danger)' : item.cancelRate > 10 ? 'var(--warn)' : 'var(--ok)')" x-text="item.cancelRate + '%'"></div>
                                 <div class="text-xs" style="color:var(--text-muted)" x-text="item.cancels + '/' + item.orders"></div>
                             </div>
                         </div>
@@ -153,7 +153,7 @@
                         <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
                             <div class="text-sm font-medium" style="color:var(--text)" x-text="item.region"></div>
                             <div class="text-right">
-                                <div class="text-sm font-semibold" :style="'color:' + (item.cancelRate > 20 ? '#ef4444' : item.cancelRate > 10 ? '#f59e0b' : '#16a34a')" x-text="item.cancelRate + '%'"></div>
+                                <div class="text-sm font-semibold" :style="'color:' + (item.cancelRate > 20 ? 'var(--danger)' : item.cancelRate > 10 ? 'var(--warn)' : 'var(--ok)')" x-text="item.cancelRate + '%'"></div>
                                 <div class="text-xs" style="color:var(--text-muted)" x-text="item.cancels + '/' + item.orders"></div>
                             </div>
                         </div>
@@ -169,7 +169,7 @@
                         <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
                             <div class="text-sm font-medium" style="color:var(--text)" x-text="item.warehouse"></div>
                             <div class="text-right">
-                                <div class="text-sm font-semibold" :style="'color:' + (item.cancelRate > 20 ? '#ef4444' : item.cancelRate > 10 ? '#f59e0b' : '#16a34a')" x-text="item.cancelRate + '%'"></div>
+                                <div class="text-sm font-semibold" :style="'color:' + (item.cancelRate > 20 ? 'var(--danger)' : item.cancelRate > 10 ? 'var(--warn)' : 'var(--ok)')" x-text="item.cancelRate + '%'"></div>
                                 <div class="text-xs" style="color:var(--text-muted)" x-text="item.cancels + '/' + item.orders"></div>
                             </div>
                         </div>
@@ -185,7 +185,7 @@
                         <div class="flex items-center justify-between p-3 rounded-lg" style="background:var(--bg);border:1px solid var(--border-light)">
                             <div class="text-sm font-medium" style="color:var(--text)" x-text="item.category"></div>
                             <div class="text-right">
-                                <div class="text-sm font-semibold" :style="'color:' + (item.cancelRate > 20 ? '#ef4444' : item.cancelRate > 10 ? '#f59e0b' : '#16a34a')" x-text="item.cancelRate + '%'"></div>
+                                <div class="text-sm font-semibold" :style="'color:' + (item.cancelRate > 20 ? 'var(--danger)' : item.cancelRate > 10 ? 'var(--warn)' : 'var(--ok)')" x-text="item.cancelRate + '%'"></div>
                                 <div class="text-xs" style="color:var(--text-muted)" x-text="item.cancels + '/' + item.orders"></div>
                             </div>
                         </div>

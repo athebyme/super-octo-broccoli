@@ -1,0 +1,104 @@
+{#
+    Центр уведомлений — колокольчик с поповером.
+    Данные и действия — в Alpine.store('notif') (static/sh-ui.js).
+    Монтируется в топбар (base.html). Требует авторизованного продавца.
+#}
+{% from "macros/icons.html" import icon %}
+<div class="sh-notif" x-data
+     @click.away="$store.notif.open && $store.notif.close()"
+     @keydown.escape="$store.notif.close()">
+
+    <button type="button" class="sh-icon-btn sh-notif-bell"
+            :class="{ 'sh-notif-bell--bump': $store.notif.bump }"
+            @click="$store.notif.toggle()"
+            :aria-expanded="$store.notif.open"
+            aria-haspopup="true"
+            aria-label="Уведомления">
+        {{ icon('bell', size=20) }}
+        <span class="sh-notif-badge" x-show="$store.notif.unread > 0" x-cloak
+              x-text="$store.notif.unread > 99 ? '99+' : $store.notif.unread"></span>
+    </button>
+
+    <div class="sh-notif-pop" x-show="$store.notif.open" x-cloak
+         x-transition:enter="transition ease-out duration-150"
+         x-transition:enter-start="opacity-0 -translate-y-1"
+         x-transition:enter-end="opacity-100 translate-y-0"
+         x-transition:leave="transition ease-in duration-100"
+         x-transition:leave-start="opacity-100 translate-y-0"
+         x-transition:leave-end="opacity-0 -translate-y-1"
+         role="dialog" aria-label="Уведомления">
+
+        <div class="sh-notif-head">
+            <span class="sh-notif-head-title">Уведомления</span>
+            <div class="sh-notif-head-actions">
+                <button type="button" class="sh-icon-btn sh-icon-btn--sm"
+                        @click="$store.notif.toggleMute()"
+                        :aria-pressed="$store.notif.muted"
+                        :title="$store.notif.muted ? 'Включить звук' : 'Выключить звук'"
+                        :aria-label="$store.notif.muted ? 'Включить звук' : 'Выключить звук'">
+                    <span x-show="!$store.notif.muted">{{ icon('volume', size=16) }}</span>
+                    <span x-show="$store.notif.muted" x-cloak>{{ icon('volume-x', size=16) }}</span>
+                </button>
+                <button type="button" class="sh-notif-link"
+                        x-show="$store.notif.unread > 0"
+                        @click="$store.notif.markAllRead()">Прочитать все</button>
+            </div>
+        </div>
+
+        <div class="sh-notif-list">
+            {# Skeleton при загрузке #}
+            <template x-if="$store.notif.loading">
+                <div>
+                    <template x-for="i in 4" :key="i">
+                        <div class="sh-notif-skel">
+                            <div class="sh-skeleton sh-skeleton--text sh-skeleton--line-50"></div>
+                            <div class="sh-skeleton sh-skeleton--text sh-skeleton--line-90"></div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+
+            {# Пусто #}
+            <template x-if="!$store.notif.loading && $store.notif.items.length === 0">
+                <div class="sh-notif-empty">
+                    {{ icon('bell', size=34, stroke=1.5) }}
+                    <div>Пока нет уведомлений</div>
+                </div>
+            </template>
+
+            {# Список #}
+            <template x-for="n in $store.notif.items" :key="n.id">
+                <div class="sh-notif-item"
+                     :class="{ 'is-unread': !n.is_read, ['sh-notif-item--' + n.category]: true }">
+                    <div class="sh-notif-item-rail"></div>
+                    <div class="sh-notif-item-body">
+                        <div class="sh-notif-item-title" x-text="n.title"></div>
+                        <div class="sh-notif-item-msg" x-text="n.message"></div>
+                        <div class="sh-notif-item-meta">
+                            <span x-text="$store.notif.relTime(n.created_at)"></span>
+                            <template x-if="n.link">
+                                <a :href="n.link" class="sh-notif-item-link"
+                                   @click="$store.notif.markRead(n.id)">Открыть</a>
+                            </template>
+                        </div>
+                    </div>
+                    <div class="sh-notif-item-actions">
+                        <button type="button" class="sh-icon-btn sh-icon-btn--sm"
+                                x-show="!n.is_read"
+                                @click="$store.notif.markRead(n.id)"
+                                title="Отметить прочитанным" aria-label="Отметить прочитанным">
+                            {{ icon('check', size=14) }}
+                        </button>
+                        <button type="button" class="sh-icon-btn sh-icon-btn--sm"
+                                @click="$store.notif.remove(n.id)"
+                                title="Удалить" aria-label="Удалить">
+                            {{ icon('close', size=14) }}
+                        </button>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <a href="{{ url_for('notifications_page') }}" class="sh-notif-foot">Показать все</a>
+    </div>
+</div>

@@ -6,6 +6,9 @@
     Usage:
         {% from "macros/components.html" import page_header, stat_card, stat_grid, badge, card, empty_state, alert_box, data_table %}
 #}
+{% from "macros/icons.html" import icon as sh_icon %}
+{# Принимает имя иконки из реестра ИЛИ готовую <svg>-строку (обратная совместимость) #}
+{% macro _ic(name) %}{% if name %}{% if '<' in name %}{{ name|safe }}{% else %}{{ sh_icon(name) }}{% endif %}{% endif %}{% endmacro %}
 
 
 {# ─── Page Header ─── #}
@@ -62,7 +65,7 @@
 {% if href %}<a href="{{ href }}" class="sh-stat-card sh-stat-card--{{ color }} sh-stat-card--link">{% else %}<div class="sh-stat-card sh-stat-card--{{ color }}">{% endif %}
     <div class="sh-stat-header">
         {% if icon %}
-        <div class="sh-stat-icon">{{ icon|safe }}</div>
+        <div class="sh-stat-icon">{{ _ic(icon) }}</div>
         {% endif %}
         <span class="sh-stat-label">{{ label }}</span>
         {% if trend is not none %}
@@ -129,12 +132,12 @@
 {% macro btn(text, href=None, variant='primary', size='md', icon=None, type='button', disabled=False, class='') %}
 {% if href %}
 <a href="{{ href }}" class="sh-btn sh-btn--{{ variant }} sh-btn--{{ size }} {{ class }} {% if disabled %}sh-btn--disabled{% endif %}">
-    {% if icon %}<span class="sh-btn-icon">{{ icon|safe }}</span>{% endif %}
+    {% if icon %}<span class="sh-btn-icon">{{ _ic(icon) }}</span>{% endif %}
     {{ text }}
 </a>
 {% else %}
 <button type="{{ type }}" class="sh-btn sh-btn--{{ variant }} sh-btn--{{ size }} {{ class }}" {% if disabled %}disabled{% endif %}>
-    {% if icon %}<span class="sh-btn-icon">{{ icon|safe }}</span>{% endif %}
+    {% if icon %}<span class="sh-btn-icon">{{ _ic(icon) }}</span>{% endif %}
     {{ text }}
 </button>
 {% endif %}
@@ -146,7 +149,7 @@
 {% macro empty_state(title, description=None, icon=None, action_text=None, action_href=None) %}
 <div class="sh-empty">
     {% if icon %}
-    <div class="sh-empty-icon">{{ icon|safe }}</div>
+    <div class="sh-empty-icon">{{ _ic(icon) }}</div>
     {% else %}
     <div class="sh-empty-icon">
         <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
@@ -169,7 +172,7 @@
 {% macro alert_box(message, type='info', icon=None, dismissible=False) %}
 <div class="sh-alert sh-alert--{{ type }}" {% if dismissible %}x-data="{ show: true }" x-show="show"{% endif %}>
     {% if icon %}
-    <div class="sh-alert-icon">{{ icon|safe }}</div>
+    <div class="sh-alert-icon">{{ _ic(icon) }}</div>
     {% endif %}
     <div class="sh-alert-content">{{ message }}</div>
     {% if dismissible %}
@@ -275,28 +278,109 @@
 {# WB productRating 0-10 (scale=10) или feedbackRating 0-5 (scale=5). #}
 {% if value is not none %}
   {% if scale == 10 %}
-    {% set color = 'text-green-700' if value >= 8 else 'text-orange-700' if value >= 6 else 'text-red-700' %}
+    {% set col = 'var(--ok)' if value >= 8 else 'var(--warn)' if value >= 6 else 'var(--danger)' %}
   {% else %}
-    {% set color = 'text-green-700' if value >= 4.5 else 'text-orange-700' if value >= 3.5 else 'text-red-700' %}
+    {% set col = 'var(--ok)' if value >= 4.5 else 'var(--warn)' if value >= 3.5 else 'var(--danger)' %}
   {% endif %}
-  <span class="inline-flex items-center gap-1 font-medium {{ color }}">
-    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>
-    {{ '%.1f'|format(value) }}<span class="text-gray-400 text-xs">/{{ scale }}</span>
+  <span class="inline-flex items-center gap-1 font-medium" style="color:{{ col }}">
+    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"></path></svg>
+    {{ '%.1f'|format(value) }}<span class="text-xs" style="color:var(--text-muted)">/{{ scale }}</span>
   </span>
-{% else %}<span class="text-gray-400">—</span>{% endif %}
+{% else %}<span style="color:var(--text-muted)">—</span>{% endif %}
 {% endmacro %}
 
 {% macro score_gauge(value, size=72) %}
 {# Quality Score 0-100 как кольцо conic-gradient с числом по центру. #}
 {% set v = value if value is not none else 0 %}
-{% set col = '#16a34a' if v >= 70 else '#d97706' if v >= 50 else '#dc2626' %}
-<div style="width:{{ size }}px;height:{{ size }}px;border-radius:50%;
-     background:conic-gradient({{ col }} {{ v }}%, #ece9e4 0);
+{% set col = 'var(--ok)' if v >= 70 else 'var(--warn)' if v >= 50 else 'var(--danger)' %}
+<div role="img" aria-label="Оценка качества {{ value|round|int if value is not none else 'нет данных' }}{% if value is not none %} из 100{% endif %}"
+     style="width:{{ size }}px;height:{{ size }}px;border-radius:50%;
+     background:conic-gradient({{ col }} {{ v }}%, var(--border) 0);
      display:flex;align-items:center;justify-content:center">
-  <div style="width:{{ size - 14 }}px;height:{{ size - 14 }}px;border-radius:50%;background:#fff;
+  <div style="width:{{ size - 14 }}px;height:{{ size - 14 }}px;border-radius:50%;background:var(--bg-card);
        display:flex;align-items:center;justify-content:center;
        font-family:var(--font-display);font-style:italic;font-size:{{ (size/3.2)|int }}px;color:{{ col }}">
     {{ value|round|int if value is not none else '—' }}
   </div>
+</div>
+{% endmacro %}
+
+
+{# ─── Skeleton (плейсхолдер при загрузке) ─── #}
+{% macro skeleton(lines=3, avatar=False) %}
+<div class="sh-skeleton-group" aria-hidden="true">
+    {% if avatar %}<div class="sh-skeleton sh-skeleton--circle" style="width:40px;height:40px;margin-bottom:12px"></div>{% endif %}
+    <div class="sh-skeleton sh-skeleton--title"></div>
+    {% for i in range(lines) %}
+    <div class="sh-skeleton sh-skeleton--text {{ 'sh-skeleton--line-70' if loop.last else '' }}"></div>
+    {% endfor %}
+</div>
+{% endmacro %}
+
+{# ─── Spinner ─── #}
+{% macro spinner(size='md', on_accent=False) %}
+<span class="sh-spinner sh-spinner--{{ size }}{% if on_accent %} sh-spinner--on-accent{% endif %}" role="status" aria-label="Загрузка"></span>
+{% endmacro %}
+
+{# ─── Progress (0..100) ─── #}
+{% macro progress(value=None, tone='') %}
+<div class="sh-progress {% if tone %}sh-progress--{{ tone }}{% endif %} {% if value is none %}sh-progress--indeterminate{% endif %}"
+     role="progressbar" {% if value is not none %}aria-valuenow="{{ value|round|int }}" aria-valuemin="0" aria-valuemax="100"{% endif %}>
+    <div class="sh-progress-bar" {% if value is not none %}style="width:{{ [[value, 0]|max, 100]|min }}%"{% endif %}></div>
+</div>
+{% endmacro %}
+
+{# ─── Toggle switch ─── #}
+{% macro toggle(name, label='', checked=False, value='1', disabled=False, id=None) %}
+<label class="sh-toggle">
+    <input type="checkbox" name="{{ name }}" value="{{ value }}"{% if id %} id="{{ id }}"{% endif %}
+           {% if checked %}checked{% endif %}{% if disabled %} disabled{% endif %}>
+    <span class="sh-toggle-track"><span class="sh-toggle-thumb"></span></span>
+    {% if label %}<span class="sh-toggle-label">{{ label }}</span>{% endif %}
+</label>
+{% endmacro %}
+
+{# ─── Segmented control ─── items: [{value,label}] ─── #}
+{% macro segmented(items, active=None, x_model=None) %}
+<div class="sh-segmented" role="tablist">
+    {% for it in items %}
+    <button type="button" role="tab"
+            class="sh-segmented-item{% if not x_model and active == it.value %} sh-segmented-item--active{% endif %}"
+            {% if x_model %}:aria-selected="{{ x_model }} === '{{ it.value }}'"
+            :class="{ 'sh-segmented-item--active': {{ x_model }} === '{{ it.value }}' }"
+            @click="{{ x_model }} = '{{ it.value }}'"
+            {% else %}aria-selected="{{ 'true' if active == it.value else 'false' }}"{% endif %}>
+        {{ it.label }}
+    </button>
+    {% endfor %}
+</div>
+{% endmacro %}
+
+{# ─── Chip / tag ─── #}
+{% macro chip(text, tone='', href=None, active=False, on_remove=None) %}
+{% if href %}<a href="{{ href }}" class="sh-chip{% if active %} sh-chip--active{% endif %}">{% else %}<span class="sh-chip{% if active %} sh-chip--active{% endif %}{% if on_remove %} sh-chip--clickable{% endif %}">{% endif %}
+    {{ text }}
+    {% if on_remove %}<button type="button" class="sh-chip-remove" aria-label="Удалить" @click="{{ on_remove }}"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg></button>{% endif %}
+{% if href %}</a>{% else %}</span>{% endif %}
+{% endmacro %}
+
+{# ─── Avatar (инициалы или изображение) ─── #}
+{% macro avatar(name='', src=None, size='', square=False) %}
+<span class="sh-avatar{% if size %} sh-avatar--{{ size }}{% endif %}{% if square %} sh-avatar--square{% endif %}" aria-hidden="true">
+    {% if src %}<img src="{{ src }}" alt="">{% else %}{{ (name[:1] if name else '?')|upper }}{% endif %}
+</span>
+{% endmacro %}
+
+{# ─── Stepper ─── steps: [{label}] ; current = index (0-based) ─── #}
+{% macro stepper(steps, current=0) %}
+<div class="sh-stepper" role="list">
+    {% for s in steps %}
+    {% set state = 'done' if loop.index0 < current else ('current' if loop.index0 == current else 'upcoming') %}
+    <div class="sh-step sh-step--{{ state }}" role="listitem" {% if state == 'current' %}aria-current="step"{% endif %}>
+        <span class="sh-step-dot">{% if state == 'done' %}<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>{% else %}{{ loop.index }}{% endif %}</span>
+        <span class="sh-step-label">{{ s.label }}</span>
+    </div>
+    {% if not loop.last %}<span class="sh-step-line {{ 'sh-step-line--done' if loop.index0 < current else '' }}"></span>{% endif %}
+    {% endfor %}
 </div>
 {% endmacro %}

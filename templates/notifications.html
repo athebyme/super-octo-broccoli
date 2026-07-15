@@ -57,19 +57,12 @@
                             <a :href="notif.link || '#'" class="flex items-start gap-4 p-4" @click="markRead(notif)">
                                 <!-- Icon -->
                                 <div class="flex-shrink-0">
-                                    <div class="w-10 h-10 rounded-xl flex items-center justify-center"
-                                        :class="{
-                                            'bg-gradient-to-br from-blue-400 to-blue-600': notif.category === 'info',
-                                            'bg-gradient-to-br from-amber-400 to-orange-500': notif.category === 'warning',
-                                            'bg-gradient-to-br from-green-400 to-emerald-500': notif.category === 'success',
-                                            'bg-gradient-to-br from-red-400 to-rose-500': notif.category === 'error',
-                                            'bg-gradient-to-br from-purple-400 to-indigo-500': notif.category === 'promo',
-                                        }">
-                                        <svg x-show="notif.category === 'info'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        <svg x-show="notif.category === 'warning'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
-                                        <svg x-show="notif.category === 'success'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        <svg x-show="notif.category === 'error'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        <svg x-show="notif.category === 'promo'" class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>
+                                    <div class="sh-notif-cat" :class="'sh-notif-cat--' + notif.category">
+                                        <svg x-show="notif.category === 'info'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        <svg x-show="notif.category === 'warning'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+                                        <svg x-show="notif.category === 'success'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        <svg x-show="notif.category === 'error'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        <svg x-show="notif.category === 'promo'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>
                                     </div>
                                 </div>
 
@@ -85,9 +78,8 @@
 
                                 <!-- Actions -->
                                 <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" @click.prevent.stop>
-                                    <button @click="toggleRead(notif)" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" :title="notif.is_read ? 'Как непрочитанное' : 'Прочитать'" :aria-label="notif.is_read ? 'Пометить как непрочитанное' : 'Пометить как прочитанное'">
-                                        <svg x-show="!notif.is_read" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                                        <svg x-show="notif.is_read" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                                    <button x-show="!notif.is_read" @click="markRead(notif)" class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Прочитать" aria-label="Пометить как прочитанное">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                                     </button>
                                     <button @click="deleteNotif(notif)" class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Удалить" aria-label="Удалить уведомление">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -102,23 +94,10 @@
 
         <!-- Empty State -->
         <div x-show="!loading && notifications.length === 0" x-transition class="text-center py-16">
-            <div class="inline-block mb-6">
-                <svg width="200" height="180" viewBox="0 0 200 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="100" cy="85" r="70" fill="#EEF2FF"/>
-                    <circle cx="100" cy="85" r="55" fill="#E0E7FF"/>
-                    <path d="M100 30C82 30 68 44 68 62V90C68 90 60 98 58 102C56 106 58 110 62 110H138C142 110 144 106 142 102C140 98 132 90 132 90V62C132 44 118 30 100 30Z" fill="#818CF8" stroke="#6366F1" stroke-width="2"/>
-                    <path d="M78 55C78 55 82 40 100 35" stroke="#C7D2FE" stroke-width="3" stroke-linecap="round"/>
-                    <circle cx="100" cy="118" r="8" fill="#6366F1"/>
-                    <path d="M90 110C90 110 92 126 100 126C108 126 110 110 110 110" stroke="#6366F1" stroke-width="2" fill="none"/>
-                    <circle cx="48" cy="45" r="4" fill="#C7D2FE" opacity="0.8"><animate attributeName="cy" values="45;40;45" dur="3s" repeatCount="indefinite"/></circle>
-                    <circle cx="155" cy="55" r="3" fill="#A5B4FC" opacity="0.7"><animate attributeName="cy" values="55;48;55" dur="2.5s" repeatCount="indefinite"/></circle>
-                    <text x="130" y="42" font-size="14" font-weight="bold" fill="#A5B4FC" opacity="0.7">z</text>
-                    <text x="140" y="32" font-size="11" font-weight="bold" fill="#C7D2FE" opacity="0.5">z</text>
-                    <text x="148" y="24" font-size="9" font-weight="bold" fill="#E0E7FF" opacity="0.4">z</text>
-                    <ellipse cx="100" cy="150" rx="50" ry="6" fill="#E0E7FF" opacity="0.5"/>
-                </svg>
+            <div style="width:88px;height:88px;margin:0 auto 20px;border-radius:50%;background:var(--accent-light);color:var(--accent);display:flex;align-items:center;justify-content:center" aria-hidden="true">
+                <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
             </div>
-            <h3 class="text-lg font-semibold text-gray-900 mb-2">Нет уведомлений</h3>
+            <h3 class="text-lg font-semibold mb-2" style="color:var(--text)">Нет уведомлений</h3>
             <p class="text-sm text-gray-500 max-w-sm mx-auto">
                 Когда появятся новые заказы, изменения цен или системные события — вы увидите их здесь.
             </p>
@@ -135,6 +114,7 @@ function notificationsPage() {
 
         filterOptions: [
             { label: 'Все', value: 'all' },
+            { label: 'Ошибки', value: 'error' },
             { label: 'Важные', value: 'important' },
             { label: 'Успешные', value: 'success' },
             { label: 'Система', value: 'system' },
@@ -155,8 +135,9 @@ function notificationsPage() {
                 { label: 'Ранее', items: [] },
             ];
 
+            const asUtc = (iso) => new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
             for (const n of this.notifications) {
-                const d = new Date(n.created_at);
+                const d = asUtc(n.created_at);
                 if (d >= today) groups[0].items.push(n);
                 else if (d >= yesterday) groups[1].items.push(n);
                 else groups[2].items.push(n);
@@ -174,6 +155,7 @@ function notificationsPage() {
             this.loading = true;
             try {
                 let url = '/api/notifications?limit=100';
+                if (this.activeFilter === 'error') url += '&category=error';
                 if (this.activeFilter === 'important') url += '&category=warning';
                 if (this.activeFilter === 'success') url += '&category=success';
                 if (this.activeFilter === 'system') url += '&category=info';
@@ -195,7 +177,7 @@ function notificationsPage() {
 
         formatTime(iso) {
             if (!iso) return '';
-            const d = new Date(iso);
+            const d = new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             if (d >= today) return d.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});

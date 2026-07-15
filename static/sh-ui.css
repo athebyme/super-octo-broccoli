@@ -1,0 +1,531 @@
+/* ============================================================
+   Seller Hub — sh-ui.css
+   Расширение дизайн-системы «Тёплая редакция»:
+   недостающие примитивы, центр уведомлений, слим-топбар.
+   Токены (--accent, --bg-*, --r-*, --shadow-*, --ease-*, --dur-*,
+   --z-*, статусы) определены в base.html <style> и глобальны.
+   Reduced-motion гасится глобальным guard'ом в base.html.
+   ============================================================ */
+
+/* ─────────────────────────────────────────────
+   Skeleton (shimmer-плейсхолдеры при загрузке)
+   ───────────────────────────────────────────── */
+.sh-skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-hover);
+    border-radius: var(--r-sm);
+}
+.sh-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent);
+    animation: sh-shimmer 1.4s ease-in-out infinite;
+}
+[data-theme="dark"] .sh-skeleton::after {
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+}
+@keyframes sh-shimmer { 100% { transform: translateX(100%); } }
+.sh-skeleton--text   { height: 12px; border-radius: var(--r-xs); margin: 7px 0; }
+.sh-skeleton--title  { height: 20px; width: 42%; border-radius: var(--r-xs); }
+.sh-skeleton--circle { border-radius: 50%; }
+.sh-skeleton--btn    { height: 34px; width: 96px; }
+.sh-skeleton--line-90 { width: 90%; }
+.sh-skeleton--line-70 { width: 70%; }
+.sh-skeleton--line-50 { width: 50%; }
+.sh-skeleton--line-30 { width: 30%; }
+
+/* ─────────────────────────────────────────────
+   Spinner (единый; sh-spin определён в base.html)
+   ───────────────────────────────────────────── */
+.sh-spinner {
+    display: inline-block;
+    width: 18px; height: 18px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: sh-spin 0.6s linear infinite;
+    vertical-align: middle;
+}
+.sh-spinner--sm { width: 14px; height: 14px; }
+.sh-spinner--lg { width: 28px; height: 28px; border-width: 3px; }
+.sh-spinner--on-accent { border-color: rgba(255,255,255,0.35); border-top-color: #fff; }
+
+/* ─────────────────────────────────────────────
+   Progress (линейный, determinate/indeterminate)
+   ───────────────────────────────────────────── */
+.sh-progress {
+    position: relative;
+    width: 100%;
+    height: 6px;
+    background: var(--bg-hover);
+    border-radius: var(--r-pill);
+    overflow: hidden;
+}
+.sh-progress-bar {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    border-radius: var(--r-pill);
+    transition: width var(--dur-3) var(--ease-out);
+}
+.sh-progress--ok     .sh-progress-bar { background: var(--ok); }
+.sh-progress--warn   .sh-progress-bar { background: var(--warn); }
+.sh-progress--danger .sh-progress-bar { background: var(--danger); }
+.sh-progress--indeterminate .sh-progress-bar {
+    width: 40%;
+    animation: sh-progress-slide 1.2s var(--ease-in-out) infinite;
+}
+@keyframes sh-progress-slide {
+    0%   { transform: translateX(-120%); }
+    100% { transform: translateX(320%); }
+}
+
+/* ─────────────────────────────────────────────
+   Toggle switch (поверх native checkbox)
+   Разметка: <label class="sh-toggle"><input type="checkbox">
+     <span class="sh-toggle-track"><span class="sh-toggle-thumb"></span></span>
+     <span class="sh-toggle-label">…</span></label>
+   ───────────────────────────────────────────── */
+.sh-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+}
+.sh-toggle input {
+    position: absolute;
+    opacity: 0;
+    width: 0; height: 0;
+}
+.sh-toggle-track {
+    position: relative;
+    width: 40px; height: 22px;
+    border-radius: var(--r-pill);
+    background: var(--border);
+    flex-shrink: 0;
+    transition: background-color var(--dur-2) var(--ease-out);
+}
+.sh-toggle-thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: var(--shadow-1);
+    transition: transform var(--dur-2) var(--ease-out);
+}
+.sh-toggle input:checked + .sh-toggle-track { background: var(--accent); }
+.sh-toggle input:checked + .sh-toggle-track .sh-toggle-thumb { transform: translateX(18px); }
+.sh-toggle input:focus-visible + .sh-toggle-track { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sh-toggle input:disabled + .sh-toggle-track { opacity: 0.5; }
+.sh-toggle input:disabled ~ .sh-toggle-label { opacity: 0.5; }
+.sh-toggle-label { font-size: 13px; color: var(--text); }
+
+/* ─────────────────────────────────────────────
+   Segmented control (pill-переключатель режимов)
+   ───────────────────────────────────────────── */
+.sh-segmented {
+    display: inline-flex;
+    padding: 3px;
+    gap: 2px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+}
+.sh-segmented-item {
+    appearance: none;
+    border: none;
+    background: transparent;
+    padding: 5px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-body);
+    color: var(--text-secondary);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color var(--dur-1) var(--ease-out),
+                color var(--dur-1) var(--ease-out),
+                box-shadow var(--dur-1) var(--ease-out);
+}
+.sh-segmented-item:hover { color: var(--text); }
+.sh-segmented-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.sh-segmented-item--active,
+.sh-segmented-item[aria-selected="true"] {
+    background: var(--bg-card);
+    color: var(--text);
+    box-shadow: var(--shadow-1);
+}
+
+/* ─────────────────────────────────────────────
+   Chip / tag (статичный, кликабельный, удаляемый)
+   ───────────────────────────────────────────── */
+.sh-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    white-space: nowrap;
+    transition: background-color var(--dur-1) var(--ease-out),
+                border-color var(--dur-1) var(--ease-out),
+                color var(--dur-1) var(--ease-out);
+}
+a.sh-chip, button.sh-chip, .sh-chip--clickable {
+    cursor: pointer;
+    text-decoration: none;
+    font-family: var(--font-body);
+}
+a.sh-chip:hover, button.sh-chip:hover, .sh-chip--clickable:hover {
+    border-color: var(--text-muted);
+    color: var(--text);
+}
+.sh-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sh-chip--active {
+    background: var(--accent-light);
+    border-color: var(--accent);
+    color: var(--accent-strong);
+}
+[data-theme="dark"] .sh-chip--active { color: var(--accent); }
+.sh-chip-remove {
+    display: inline-flex;
+    margin-right: -3px;
+    padding: 1px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.sh-chip-remove:hover { color: var(--danger); background: var(--danger-bg); }
+.sh-chip-remove:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.sh-chip-remove svg { width: 12px; height: 12px; display: block; }
+
+/* ─────────────────────────────────────────────
+   Avatar (инициалы или изображение)
+   ───────────────────────────────────────────── */
+.sh-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--accent-light);
+    color: var(--accent-strong);
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 1;
+    overflow: hidden;
+    flex-shrink: 0;
+    user-select: none;
+}
+[data-theme="dark"] .sh-avatar { color: var(--accent); }
+.sh-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.sh-avatar--sm { width: 28px; height: 28px; font-size: 11px; }
+.sh-avatar--lg { width: 48px; height: 48px; font-size: 16px; }
+.sh-avatar--square { border-radius: var(--r-sm); }
+
+/* ─────────────────────────────────────────────
+   Stepper (нумерованные шаги: done/current/upcoming)
+   ───────────────────────────────────────────── */
+.sh-stepper {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.sh-step { display: inline-flex; align-items: center; gap: 8px; }
+.sh-step-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 600;
+    border: 2px solid var(--border);
+    color: var(--text-muted);
+    background: var(--bg-card);
+    flex-shrink: 0;
+    transition: background-color var(--dur-2) var(--ease-out),
+                border-color var(--dur-2) var(--ease-out),
+                color var(--dur-2) var(--ease-out);
+}
+.sh-step-dot svg { width: 13px; height: 13px; }
+.sh-step-label { font-size: 13px; font-weight: 500; color: var(--text-muted); }
+.sh-step-line {
+    width: 32px; height: 2px;
+    background: var(--border);
+    margin: 0 8px;
+    border-radius: var(--r-pill);
+}
+.sh-step--current .sh-step-dot { border-color: var(--accent); color: var(--accent); }
+.sh-step--current .sh-step-label { color: var(--text); }
+.sh-step--done .sh-step-dot { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
+.sh-step--done .sh-step-label { color: var(--text-secondary); }
+.sh-step-line--done { background: var(--accent); }
+
+/* ─────────────────────────────────────────────
+   Reveal (мягкое появление; для «богатых» списков)
+   ───────────────────────────────────────────── */
+@keyframes sh-reveal-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.sh-reveal { animation: sh-reveal-up var(--dur-3) var(--ease-out) both; }
+
+/* ─────────────────────────────────────────────
+   Command palette: пустой результат
+   ───────────────────────────────────────────── */
+.sh-cmdpal-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+/* ─────────────────────────────────────────────
+   Icon button (общая иконочная кнопка — топбар, поповеры)
+   ───────────────────────────────────────────── */
+.sh-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px; height: 34px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.sh-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+.sh-icon-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sh-icon-btn--sm { width: 28px; height: 28px; }
+
+/* ─────────────────────────────────────────────
+   Notification center (поповер из колокольчика)
+   ───────────────────────────────────────────── */
+.sh-notif { position: relative; }
+.sh-notif-badge {
+    position: absolute;
+    top: 2px; right: 2px;
+    min-width: 16px; height: 16px;
+    padding: 0 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text-on-accent);
+    background: var(--accent);
+    border: 2px solid var(--bg-card);
+    border-radius: var(--r-pill);
+    pointer-events: none;
+}
+.sh-notif-bell--bump { animation: sh-notif-bump 0.65s var(--ease-out); }
+@keyframes sh-notif-bump {
+    0%, 100% { transform: rotate(0); }
+    25% { transform: rotate(-12deg); }
+    55% { transform: rotate(9deg); }
+    80% { transform: rotate(-4deg); }
+}
+.sh-notif-pop {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 360px;
+    max-width: calc(100vw - 24px);
+    max-height: min(70vh, 540px);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-3);
+    z-index: var(--z-dropdown);
+    overflow: hidden;
+}
+.sh-notif-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 11px 12px 11px 16px;
+    border-bottom: 1px solid var(--border-light);
+}
+.sh-notif-head-title { font-weight: 600; font-size: 14px; color: var(--text); }
+.sh-notif-head-actions { display: flex; align-items: center; gap: 2px; }
+.sh-notif-link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font-body);
+    cursor: pointer;
+    padding: 5px 8px;
+    border-radius: var(--r-xs);
+    white-space: nowrap;
+}
+.sh-notif-link:hover { background: var(--bg-hover); }
+.sh-notif-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.sh-notif-list { overflow-y: auto; flex: 1; overscroll-behavior: contain; }
+.sh-notif-item {
+    position: relative;
+    display: flex;
+    gap: 10px;
+    padding: 12px 12px 12px 18px;
+    border-bottom: 1px solid var(--border-light);
+    transition: background-color var(--dur-1) var(--ease-out);
+}
+.sh-notif-item:last-child { border-bottom: none; }
+.sh-notif-item.is-unread { background: var(--accent-light); }
+[data-theme="dark"] .sh-notif-item.is-unread { background: var(--bg-hover); }
+.sh-notif-item-rail {
+    position: absolute;
+    left: 8px; top: 12px; bottom: 12px;
+    width: 3px;
+    border-radius: var(--r-pill);
+    background: var(--text-muted);
+}
+.sh-notif-item--success .sh-notif-item-rail { background: var(--ok); }
+.sh-notif-item--error   .sh-notif-item-rail { background: var(--danger); }
+.sh-notif-item--warning .sh-notif-item-rail { background: var(--warn); }
+.sh-notif-item--info    .sh-notif-item-rail { background: var(--info); }
+.sh-notif-item--promo   .sh-notif-item-rail { background: var(--accent); }
+.sh-notif-item-body { flex: 1; min-width: 0; }
+.sh-notif-item-title { font-weight: 600; font-size: 13px; color: var(--text); margin-bottom: 2px; }
+.sh-notif-item-msg { font-size: 12.5px; color: var(--text-secondary); line-height: 1.45; overflow-wrap: anywhere; }
+.sh-notif-item-meta { display: flex; align-items: center; gap: 10px; margin-top: 5px; font-size: 11px; color: var(--text-muted); }
+.sh-notif-item-link { color: var(--accent); font-weight: 600; text-decoration: none; }
+.sh-notif-item-link:hover { text-decoration: underline; }
+.sh-notif-item-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity var(--dur-1) var(--ease-out);
+}
+.sh-notif-item:hover .sh-notif-item-actions,
+.sh-notif-item:focus-within .sh-notif-item-actions { opacity: 1; }
+@media (hover: none) { .sh-notif-item-actions { opacity: 1; } }
+.sh-notif-empty { padding: 44px 20px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.sh-notif-empty svg { width: 34px; height: 34px; margin: 0 auto 10px; opacity: 0.55; display: block; }
+.sh-notif-foot {
+    display: block;
+    text-align: center;
+    padding: 11px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    text-decoration: none;
+    border-top: 1px solid var(--border-light);
+}
+.sh-notif-foot:hover { background: var(--bg-hover); }
+.sh-notif-skel { padding: 12px 16px; border-bottom: 1px solid var(--border-light); }
+@media (max-width: 480px) {
+    .sh-notif-pop { position: fixed; top: 58px; right: 12px; left: 12px; width: auto; max-width: none; }
+}
+/* Колокольчик/тема на тёмном мобильном хедере */
+.mobile-header .sh-icon-btn { color: #b4b4b4; }
+.mobile-header .sh-icon-btn:hover { color: #fff; background: #1f1f1f; }
+.mobile-header .sh-notif-badge { border-color: var(--bg-sidebar); }
+.mobile-header-actions { display: flex; align-items: center; gap: 2px; }
+
+/* ─────────────────────────────────────────────
+   Слим-топбар (десктоп)
+   ───────────────────────────────────────────── */
+.sh-topbar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    height: 56px;
+    padding: 0 20px 0 24px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+}
+@media (min-width: 1024px) { .sh-topbar { display: flex; } }
+.sh-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.sh-topbar-right { display: flex; align-items: center; gap: 4px; }
+.sh-topbar-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    min-width: 220px;
+    padding: 0 8px 0 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-muted);
+    font-size: 13px;
+    font-family: var(--font-body);
+    cursor: pointer;
+    transition: border-color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+.sh-topbar-search:hover { border-color: var(--text-muted); }
+.sh-topbar-search:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.sh-topbar-search svg { width: 15px; height: 15px; flex-shrink: 0; }
+.sh-topbar-search-label { flex: 1; text-align: left; }
+.sh-topbar-kbd {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 6px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xs);
+    color: var(--text-muted);
+}
+.sh-topbar-divider { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+/* Хлебные крошки в топбаре */
+.sh-crumbs { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sh-crumbs a { color: var(--text-secondary); text-decoration: none; white-space: nowrap; }
+.sh-crumbs a:hover { color: var(--text); }
+.sh-crumbs-sep { color: var(--text-muted); }
+.sh-crumbs-current { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ─────────────────────────────────────────────
+   Категорийная иконка уведомления (страница /notifications)
+   Токен-фон вместо gradient, который глушится override → серый
+   ───────────────────────────────────────────── */
+.sh-notif-cat {
+    width: 40px; height: 40px;
+    border-radius: var(--r-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: var(--bg-hover);
+    color: var(--text-muted);
+}
+.sh-notif-cat--info    { background: var(--info-bg);   color: var(--info); }
+.sh-notif-cat--success { background: var(--ok-bg);     color: var(--ok); }
+.sh-notif-cat--warning { background: var(--warn-bg);   color: var(--warn); }
+.sh-notif-cat--error   { background: var(--danger-bg); color: var(--danger); }
+.sh-notif-cat--promo   { background: var(--accent-light); color: var(--accent); }
+[data-theme="dark"] .sh-notif-cat--promo { color: var(--accent); }

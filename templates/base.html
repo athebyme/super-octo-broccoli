@@ -38,6 +38,8 @@
         }
     </script>
     <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/focus@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="{{ url_for('static', filename='sh-ui.js', v='20260715-1') }}"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
@@ -86,6 +88,20 @@
             --font-body: 'Inter', -apple-system, sans-serif;
             --sidebar-w: 260px;
             --sidebar-collapsed: 72px;
+            /* Радиусы (карточки ≤8px) */
+            --r-xs: 4px;  --r-sm: 6px;  --r-md: 8px;  --r-pill: 999px;
+            /* Elevation — мягкая, тёплая, деликатная (только оверлеи/hover) */
+            --shadow-1: 0 1px 2px rgba(40,30,24,0.05), 0 1px 1px rgba(40,30,24,0.03);
+            --shadow-2: 0 4px 12px rgba(40,30,24,0.07), 0 2px 4px rgba(40,30,24,0.04);
+            --shadow-3: 0 14px 36px rgba(40,30,24,0.12), 0 4px 10px rgba(40,30,24,0.06);
+            /* Мотн: единая фирменная кривая + тайминги */
+            --ease-out: cubic-bezier(.16,1,.3,1);
+            --ease-in: cubic-bezier(.4,0,1,1);
+            --ease-in-out: cubic-bezier(.4,0,.2,1);
+            --dur-1: 120ms;  --dur-2: 200ms;  --dur-3: 320ms;
+            /* Единая z-шкала для оверлеев */
+            --z-dropdown: 1000;  --z-sticky: 1010;  --z-backdrop: 1040;
+            --z-overlay: 1050;   --z-toast: 1080;    --z-cmdpal: 1090;
         }
 
         [data-theme="dark"] {
@@ -110,6 +126,10 @@
             --warn: #d9a94e;       --warn-bg: #2b2312;    --warn-border: #4a3d1f;
             --danger: #e0796c;     --danger-bg: #321b17;  --danger-border: #55302a;
             --info: #82aecf;       --info-bg: #16222b;    --info-border: #2b4356;
+            /* Тени в тёмной теме — глубже и нейтральнее */
+            --shadow-1: 0 1px 2px rgba(0,0,0,0.34);
+            --shadow-2: 0 4px 14px rgba(0,0,0,0.42);
+            --shadow-3: 0 16px 40px rgba(0,0,0,0.58);
         }
 
         body {
@@ -120,6 +140,26 @@
             font-size: 14px;
             line-height: 1.5;
             -webkit-font-smoothing: antialiased;
+        }
+
+        /* ── Доступность: клавиатурный фокус + reduced-motion ── */
+        .sh-dropdown-item:focus-visible,
+        .sh-cmdpal-item:focus-visible,
+        .sh-modal-close:focus-visible,
+        .sh-toast-close:focus-visible,
+        .sh-alert-close:focus-visible,
+        a.sh-badge:focus-visible {
+            outline: 2px solid var(--focus-ring);
+            outline-offset: -2px;
+            border-radius: var(--r-xs);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
         }
 
         /* Sidebar */
@@ -919,10 +959,18 @@
             text-decoration: none;
             color: inherit;
             cursor: pointer;
+            transition: border-color var(--dur-1) var(--ease-out),
+                        background-color var(--dur-1) var(--ease-out),
+                        box-shadow var(--dur-2) var(--ease-out),
+                        transform var(--dur-2) var(--ease-out);
         }
         .sh-stat-card--link:hover {
-            border-color: var(--text-muted);
+            border-color: var(--accent-light);
+            background: var(--bg-hover);
+            box-shadow: var(--shadow-2);
+            transform: translateY(-1px);
         }
+        .sh-stat-card--link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
         .sh-stat-header {
             display: flex;
             align-items: center;
@@ -978,6 +1026,18 @@
             margin-bottom: 16px;
         }
         .sh-card--flush { padding: 0; }
+        .sh-card--interactive {
+            transition: border-color var(--dur-1) var(--ease-out),
+                        box-shadow var(--dur-2) var(--ease-out),
+                        transform var(--dur-2) var(--ease-out);
+            cursor: pointer;
+        }
+        .sh-card--interactive:hover {
+            border-color: var(--accent-light);
+            box-shadow: var(--shadow-2);
+            transform: translateY(-1px);
+        }
+        .sh-card--interactive:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
         .sh-card-header {
             display: flex;
             align-items: center;
@@ -1054,13 +1114,19 @@
             gap: 6px;
             font-family: var(--font-body);
             font-weight: 500;
-            border-radius: 6px;
+            border-radius: var(--r-sm);
             border: 1px solid transparent;
             cursor: pointer;
             text-decoration: none;
-            transition: all 0.15s;
+            transition: background-color var(--dur-1) var(--ease-out),
+                        border-color var(--dur-1) var(--ease-out),
+                        color var(--dur-1) var(--ease-out),
+                        box-shadow var(--dur-1) var(--ease-out),
+                        transform var(--dur-1) var(--ease-out);
             white-space: nowrap;
         }
+        .sh-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+        .sh-btn:active { transform: translateY(1px); }
         .sh-btn--sm { font-size: 13px; padding: 6px 12px; }
         .sh-btn--md { font-size: 13px; padding: 8px 16px; }
         .sh-btn--lg { font-size: 14px; padding: 10px 20px; }
@@ -1069,10 +1135,11 @@
 
         .sh-btn--primary {
             background: var(--text);
-            color: #fff;
+            color: var(--bg-card);
             border-color: var(--text);
         }
-        .sh-btn--primary:hover { background: #333; }
+        .sh-btn--primary:hover { background: #333; border-color: #333; }
+        [data-theme="dark"] .sh-btn--primary:hover { background: #cfcac3; border-color: #cfcac3; }
         .sh-btn--secondary {
             background: var(--bg-card);
             color: var(--text);
@@ -1091,11 +1158,11 @@
         }
         .sh-btn--accent:hover { background: var(--accent-dark, #a34a2f); }
         .sh-btn--danger {
-            background: #dc2626;
-            color: #fff;
-            border-color: #dc2626;
+            background: var(--danger);
+            color: var(--text-on-accent);
+            border-color: var(--danger);
         }
-        .sh-btn--danger:hover { background: #b91c1c; }
+        .sh-btn--danger:hover { filter: brightness(1.08); }
         /* On dark backgrounds */
         .sh-btn--white {
             background: #fff;
@@ -1113,6 +1180,27 @@
             opacity: 0.5;
             pointer-events: none;
         }
+        /* Загрузка внутри кнопки: спрятать лейбл, показать спиннер */
+        @keyframes sh-spin { to { transform: rotate(360deg); } }
+        .sh-btn.is-loading {
+            position: relative;
+            color: transparent !important;
+            pointer-events: none;
+        }
+        .sh-btn.is-loading::after {
+            content: "";
+            position: absolute;
+            width: 15px; height: 15px;
+            top: calc(50% - 8px); left: calc(50% - 8px);
+            border: 2px solid var(--text-on-accent);
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: sh-spin 0.6s linear infinite;
+            opacity: 0.9;
+        }
+        .sh-btn--secondary.is-loading::after,
+        .sh-btn--ghost.is-loading::after,
+        .sh-btn--white.is-loading::after { border-color: var(--text); border-right-color: transparent; }
 
         /* ── Empty State ── */
         .sh-empty {
@@ -1152,10 +1240,10 @@
             margin-bottom: 16px;
             border: 1px solid;
         }
-        .sh-alert--info { background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
-        .sh-alert--success { background: #f0faf0; color: #166534; border-color: #bbf7d0; }
-        .sh-alert--warning { background: #fffbeb; color: #92400e; border-color: #fde68a; }
-        .sh-alert--error { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+        .sh-alert--info { background: var(--info-bg); color: var(--info); border-color: var(--info-border); }
+        .sh-alert--success { background: var(--ok-bg); color: var(--ok); border-color: var(--ok-border); }
+        .sh-alert--warning { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
+        .sh-alert--error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger-border); }
         .sh-alert-icon { flex-shrink: 0; padding-top: 1px; }
         .sh-alert-icon svg { width: 18px; height: 18px; }
         .sh-alert-content { flex: 1; line-height: 1.5; }
@@ -1242,9 +1330,10 @@
             gap: 6px;
         }
         .sh-tab:hover { color: var(--text); }
+        .sh-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -3px; border-radius: var(--r-xs); }
         .sh-tab--active {
             color: var(--text);
-            border-bottom-color: var(--text);
+            border-bottom-color: var(--accent);
         }
         .sh-tab-count {
             font-size: 11px;
@@ -1254,8 +1343,8 @@
             font-weight: 600;
         }
         .sh-tab--active .sh-tab-count {
-            background: var(--text);
-            color: #fff;
+            background: var(--accent);
+            color: var(--text-on-accent);
         }
 
         /* ── Filter Bar ── */
@@ -1310,12 +1399,14 @@
             font-weight: 500;
             transition: all 0.15s;
         }
-        .sh-pagination-btn:hover { background: var(--bg); }
+        .sh-pagination-btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+        .sh-pagination-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
         .sh-pagination-btn--active {
-            background: var(--text);
-            color: #fff;
-            border-color: var(--text);
+            background: var(--accent);
+            color: var(--text-on-accent);
+            border-color: var(--accent);
         }
+        .sh-pagination-btn--active:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
         .sh-pagination-ellipsis {
             min-width: 32px;
             text-align: center;
@@ -1339,9 +1430,18 @@
             border-radius: 8px;
             text-decoration: none;
             color: inherit;
-            transition: border-color 0.15s;
+            transition: border-color var(--dur-1) var(--ease-out),
+                        background-color var(--dur-1) var(--ease-out),
+                        box-shadow var(--dur-2) var(--ease-out),
+                        transform var(--dur-2) var(--ease-out);
         }
-        .sh-quick-card:hover { border-color: var(--text-muted); }
+        .sh-quick-card:hover {
+            border-color: var(--accent-light);
+            background: var(--bg-hover);
+            box-shadow: var(--shadow-2);
+            transform: translateY(-1px);
+        }
+        .sh-quick-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
         .sh-quick-card-icon {
             width: 40px; height: 40px;
             border-radius: 8px;
@@ -1386,7 +1486,7 @@
         .sh-backdrop {
             position: fixed;
             inset: 0;
-            z-index: 100;
+            z-index: 0;
             background: rgba(10, 10, 10, 0.55);
             backdrop-filter: blur(6px);
             -webkit-backdrop-filter: blur(6px);
@@ -1396,7 +1496,7 @@
         .sh-modal {
             position: fixed;
             inset: 0;
-            z-index: 101;
+            z-index: var(--z-overlay);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1404,11 +1504,13 @@
         }
         .sh-modal-panel {
             position: relative;
+            z-index: 1;
             width: 100%;
             background: var(--bg-card);
             border: 1px solid var(--border);
-            border-radius: 12px;
+            border-radius: var(--r-md);
             overflow: hidden;
+            box-shadow: var(--shadow-3);
         }
         .sh-modal--sm .sh-modal-panel { max-width: 400px; }
         .sh-modal--md .sh-modal-panel { max-width: 520px; }
@@ -1491,7 +1593,7 @@
             position: fixed;
             top: 16px;
             right: 16px;
-            z-index: 200;
+            z-index: var(--z-toast);
             display: flex;
             flex-direction: column;
             gap: 8px;
@@ -1502,60 +1604,86 @@
             .sh-toast-container { left: 16px; right: 16px; max-width: none; }
         }
         .sh-toast {
+            position: relative;
             pointer-events: auto;
             display: flex;
             align-items: flex-start;
             gap: 12px;
-            padding: 14px 16px;
-            background: var(--bg-sidebar);
-            border: 1px solid #2a2a2a;
-            border-radius: 10px;
-            color: #e8e8e8;
+            padding: 13px 14px 13px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--text-muted);
+            border-radius: var(--r-md);
+            color: var(--text);
             font-size: 13px;
             line-height: 1.5;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-            animation: sh-toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: var(--shadow-3);
+            overflow: hidden;
+            animation: sh-toast-in 0.3s var(--ease-out);
         }
-        .sh-toast.leaving { animation: sh-toast-out 0.2s ease-in forwards; }
+        .sh-toast.leaving { animation: sh-toast-out 0.2s var(--ease-in) forwards; }
+        .sh-toast--success { border-left-color: var(--ok); }
+        .sh-toast--error   { border-left-color: var(--danger); }
+        .sh-toast--warning { border-left-color: var(--warn); }
+        .sh-toast--info    { border-left-color: var(--info); }
+        .sh-toast--promo   { border-left-color: var(--accent); }
         .sh-toast-icon {
             width: 20px;
             height: 20px;
             flex-shrink: 0;
             margin-top: 1px;
         }
-        .sh-toast--success .sh-toast-icon { color: #4ade80; }
-        .sh-toast--error .sh-toast-icon   { color: #f87171; }
-        .sh-toast--warning .sh-toast-icon { color: #fbbf24; }
-        .sh-toast--info .sh-toast-icon    { color: #60a5fa; }
-        .sh-toast-content { flex: 1; }
+        .sh-toast--success .sh-toast-icon { color: var(--ok); }
+        .sh-toast--error   .sh-toast-icon { color: var(--danger); }
+        .sh-toast--warning .sh-toast-icon { color: var(--warn); }
+        .sh-toast--info    .sh-toast-icon { color: var(--info); }
+        .sh-toast--promo   .sh-toast-icon { color: var(--accent); }
+        .sh-toast-content { flex: 1; min-width: 0; }
         .sh-toast-title {
             font-weight: 600;
-            color: #fff;
+            color: var(--text);
             margin-bottom: 2px;
         }
-        .sh-toast-message { color: #a1a1a1; }
+        .sh-toast-message { color: var(--text-secondary); overflow-wrap: anywhere; }
+        .sh-toast-action {
+            display: inline-block;
+            margin-top: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            background: none; border: none; padding: 0;
+            cursor: pointer;
+            text-decoration: none;
+            font-family: var(--font-body);
+        }
+        .sh-toast-action:hover { text-decoration: underline; }
         .sh-toast-close {
             background: none;
             border: none;
-            color: #666;
+            color: var(--text-muted);
             cursor: pointer;
             padding: 2px;
-            transition: color 0.15s;
+            border-radius: var(--r-xs);
+            transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
             flex-shrink: 0;
         }
-        .sh-toast-close:hover { color: #ccc; }
+        .sh-toast-close:hover { color: var(--text); background: var(--bg-hover); }
         .sh-toast-progress {
             position: absolute;
             bottom: 0;
             left: 0;
+            width: 100%;
             height: 2px;
-            border-radius: 0 0 10px 10px;
-            transition: width linear;
+            transform-origin: left;
+            animation: sh-toast-progress var(--_toast-dur, 5s) linear forwards;
         }
-        .sh-toast--success .sh-toast-progress { background: #4ade80; }
-        .sh-toast--error .sh-toast-progress   { background: #f87171; }
-        .sh-toast--warning .sh-toast-progress { background: #fbbf24; }
-        .sh-toast--info .sh-toast-progress    { background: #60a5fa; }
+        .sh-toast:hover .sh-toast-progress { animation-play-state: paused; }
+        @keyframes sh-toast-progress { from { width: 100%; } to { width: 0%; } }
+        .sh-toast--success .sh-toast-progress { background: var(--ok); }
+        .sh-toast--error   .sh-toast-progress { background: var(--danger); }
+        .sh-toast--warning .sh-toast-progress { background: var(--warn); }
+        .sh-toast--info    .sh-toast-progress { background: var(--info); }
+        .sh-toast--promo   .sh-toast-progress { background: var(--accent); }
         @keyframes sh-toast-in {
             from { opacity: 0; transform: translateX(40px) scale(0.96); }
             to   { opacity: 1; transform: translateX(0) scale(1); }
@@ -1572,17 +1700,17 @@
         }
         .sh-tooltip {
             position: absolute;
-            z-index: 150;
+            z-index: var(--z-toast);
             padding: 6px 10px;
             background: var(--bg-sidebar);
             color: #e0e0e0;
             font-size: 12px;
             font-weight: 500;
             line-height: 1.4;
-            border-radius: 6px;
+            border-radius: var(--r-sm);
             white-space: nowrap;
             pointer-events: none;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+            box-shadow: var(--shadow-2);
         }
         .sh-tooltip::after {
             content: '';
@@ -1608,13 +1736,13 @@
         }
         .sh-dropdown-menu {
             position: absolute;
-            z-index: 110;
+            z-index: var(--z-dropdown);
             min-width: 180px;
             padding: 4px;
             background: var(--bg-card);
             border: 1px solid var(--border);
-            border-radius: 8px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+            border-radius: var(--r-md);
+            box-shadow: var(--shadow-2);
         }
         .sh-dropdown-menu--right { right: 0; }
         .sh-dropdown-menu--left  { left: 0; }
@@ -1637,15 +1765,15 @@
             transition: background 0.1s;
         }
         .sh-dropdown-item:hover { background: var(--bg); }
-        .sh-dropdown-item--danger { color: #dc2626; }
-        .sh-dropdown-item--danger:hover { background: #fef2f2; }
+        .sh-dropdown-item--danger { color: var(--danger); }
+        .sh-dropdown-item--danger:hover { background: var(--danger-bg); }
         .sh-dropdown-item svg {
             width: 16px;
             height: 16px;
             flex-shrink: 0;
             color: var(--text-muted);
         }
-        .sh-dropdown-item--danger svg { color: #dc2626; }
+        .sh-dropdown-item--danger svg { color: var(--danger); }
         .sh-dropdown-divider {
             height: 1px;
             background: var(--border-light);
@@ -1664,18 +1792,21 @@
         .sh-slideover-backdrop {
             position: fixed;
             inset: 0;
-            z-index: 100;
-            background: rgba(0, 0, 0, 0.45);
+            z-index: 0;
+            background: rgba(10, 10, 10, 0.55);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
         }
         .sh-slideover {
             position: fixed;
             inset: 0;
-            z-index: 101;
+            z-index: var(--z-overlay);
             display: flex;
             justify-content: flex-end;
         }
         .sh-slideover-panel {
             position: relative;
+            z-index: 1;
             width: 100%;
             max-width: 480px;
             height: 100%;
@@ -1684,6 +1815,7 @@
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            box-shadow: var(--shadow-3);
         }
         .sh-slideover--lg .sh-slideover-panel { max-width: 640px; }
         .sh-slideover--xl .sh-slideover-panel { max-width: 800px; }
@@ -1728,7 +1860,7 @@
         .sh-cmdpal {
             position: fixed;
             inset: 0;
-            z-index: 200;
+            z-index: var(--z-cmdpal);
             display: flex;
             align-items: flex-start;
             justify-content: center;
@@ -1736,13 +1868,15 @@
         }
         @media (max-width: 639px) { .sh-cmdpal { padding: 24px 16px; } }
         .sh-cmdpal-panel {
+            position: relative;
+            z-index: 1;
             width: 100%;
             max-width: 560px;
             background: var(--bg-card);
             border: 1px solid var(--border);
-            border-radius: 12px;
+            border-radius: var(--r-md);
             overflow: hidden;
-            box-shadow: 0 16px 64px rgba(0,0,0,0.2);
+            box-shadow: var(--shadow-3);
         }
         .sh-cmdpal-input-wrap {
             display: flex;
@@ -1844,11 +1978,13 @@
         .sh-bottomsheet {
             position: fixed;
             inset: 0;
-            z-index: 101;
+            z-index: var(--z-overlay);
             display: flex;
             align-items: flex-end;
         }
         .sh-bottomsheet-panel {
+            position: relative;
+            z-index: 1;
             width: 100%;
             max-height: 85vh;
             background: var(--bg-card);
@@ -1857,6 +1993,7 @@
             overflow: hidden;
             display: flex;
             flex-direction: column;
+            box-shadow: var(--shadow-3);
         }
         .sh-bottomsheet-handle {
             display: flex;
@@ -1909,19 +2046,21 @@
             justify-content: center;
             margin-bottom: 16px;
         }
-        .sh-confirm-icon--danger { background: #fef2f2; color: #dc2626; }
-        .sh-confirm-icon--warning { background: #fffbeb; color: #d97706; }
-        .sh-confirm-icon--info { background: #eff6ff; color: #2563eb; }
-        .sh-confirm-icon--success { background: #f0fdf4; color: #16a34a; }
+        .sh-confirm-icon--danger { background: var(--danger-bg); color: var(--danger); }
+        .sh-confirm-icon--warning { background: var(--warn-bg); color: var(--warn); }
+        .sh-confirm-icon--info { background: var(--info-bg); color: var(--info); }
+        .sh-confirm-icon--success { background: var(--ok-bg); color: var(--ok); }
     </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='sh-ui.css', v='20260715-1') }}">
     {% if current_user.is_authenticated and current_user.seller %}
     <link rel="stylesheet" href="{{ url_for('static', filename='ai-chat-popup.css', v='20260713-3') }}">
     {% endif %}
     {% block extra_head %}{% endblock %}
 </head>
 
-<body x-data="{ sidebarOpen: true, mobileMenuOpen: false }" @keydown.escape="mobileMenuOpen = false">
+<body x-data="{ sidebarOpen: (() => { try { return localStorage.getItem('sh-sidebar') !== 'closed'; } catch(e){ return true; } })(), mobileMenuOpen: false }" x-init="$watch('sidebarOpen', v => { try { localStorage.setItem('sh-sidebar', v ? 'open' : 'closed'); } catch(e){} })" @keydown.escape="mobileMenuOpen = false">
     {% if current_user.is_authenticated %}
+    {% from "macros/icons.html" import icon %}
 
     <!-- Skip to content -->
     <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-[100] focus:px-4 focus:py-2 focus:bg-white focus:text-[var(--text)] focus:rounded-lg focus:shadow-lg focus:text-sm focus:font-medium">
@@ -1936,7 +2075,13 @@
             </svg>
         </button>
         <span>Seller Hub</span>
-        <div style="width:36px"></div>
+        <div class="mobile-header-actions">
+            {% include "partials/notification_center.html" %}
+            <button type="button" class="sh-icon-btn" @click="window.toggleTheme()" aria-label="Сменить тему">
+                <span class="theme-when-light">{{ icon('moon', size=18) }}</span>
+                <span class="theme-when-dark">{{ icon('sun', size=18) }}</span>
+            </button>
+        </div>
     </div>
 
     <!-- Mobile overlay -->
@@ -2260,23 +2405,6 @@
 
         </nav>
 
-        <!-- Notifications bell (always visible) -->
-        <div class="sidebar-section" style="padding: 4px 8px; margin-bottom: 4px;">
-            <a href="{{ url_for('notifications_page') }}"
-               class="sidebar-link {% if request.endpoint == 'notifications_page' %}active{% endif %}"
-               :class="{ 'notif-bell-active': $store.notif.unread > 0 }"
-               style="position:relative">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-                </svg>
-                <span x-show="sidebarOpen" x-cloak>Уведомления</span>
-                <span x-show="$store.notif.unread > 0"
-                      x-text="$store.notif.unread > 99 ? '99+' : $store.notif.unread"
-                      class="notif-badge absolute inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
-                      :style="sidebarOpen ? 'right: 8px; top: 50%; transform: translateY(-50%)' : 'top: 2px; right: 2px'"
-                      x-cloak></span>
-            </a>
-        </div>
 
         <!-- User -->
         <div class="sidebar-footer">
@@ -2322,6 +2450,28 @@
     <!-- Main -->
     <div class="main-content" :style="sidebarOpen ? 'margin-left: var(--sidebar-w)' : 'margin-left: var(--sidebar-collapsed)'">
 
+        <!-- Topbar (десктоп) -->
+        <header class="sh-topbar" role="banner">
+            <div class="sh-topbar-left">
+                {% block topbar_left %}{% endblock %}
+            </div>
+            <div class="sh-topbar-right">
+                <button type="button" class="sh-topbar-search"
+                        @click="window.dispatchEvent(new CustomEvent('toggle-cmdpalette'))"
+                        aria-label="Поиск по разделам">
+                    {{ icon('search', size=15) }}
+                    <span class="sh-topbar-search-label">Поиск…</span>
+                    <span class="sh-topbar-kbd">⌘K</span>
+                </button>
+                <div class="sh-topbar-divider"></div>
+                {% include "partials/notification_center.html" %}
+                <button type="button" class="sh-icon-btn" @click="window.toggleTheme()" aria-label="Сменить тему" title="Сменить тему">
+                    <span class="theme-when-light">{{ icon('moon', size=18) }}</span>
+                    <span class="theme-when-dark">{{ icon('sun', size=18) }}</span>
+                </button>
+            </div>
+        </header>
+
         <!-- Flash -->
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
@@ -2344,47 +2494,6 @@
         </main>
     </div>
 
-    <!-- Toast container -->
-    <div id="toast-container" class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none" style="max-width:380px" role="status" aria-live="polite" aria-label="Уведомления">
-        <template x-for="toast in $store.notif.toasts" :key="toast.id">
-            <div x-show="toast.visible"
-                x-transition:enter="transition ease-out duration-300"
-                x-transition:enter-start="opacity-0 translate-x-8"
-                x-transition:enter-end="opacity-100 translate-x-0"
-                x-transition:leave="transition ease-in duration-200"
-                x-transition:leave-start="opacity-100 translate-x-0"
-                x-transition:leave-end="opacity-0 translate-x-8"
-                class="pointer-events-auto bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden cursor-pointer"
-                @click="window.location.href = toast.link || '/notifications'">
-                <div class="flex items-start gap-3 p-4">
-                    <div class="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center"
-                        :class="{
-                            'bg-blue-100 text-blue-600': toast.category === 'info',
-                            'bg-amber-100 text-amber-600': toast.category === 'warning',
-                            'bg-green-100 text-green-600': toast.category === 'success',
-                            'bg-red-100 text-red-600': toast.category === 'error',
-                            'bg-purple-100 text-purple-600': toast.category === 'promo',
-                        }">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                            <path x-show="toast.category === 'success'" stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            <path x-show="toast.category === 'error'" stroke-linecap="round" stroke-linejoin="round" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            <path x-show="toast.category === 'warning'" stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/>
-                            <path x-show="toast.category === 'info' || toast.category === 'promo'" stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <p class="text-sm font-semibold text-gray-900 truncate" x-text="toast.title"></p>
-                        <p class="text-xs text-gray-500 mt-0.5 line-clamp-2" x-text="toast.message"></p>
-                    </div>
-                    <button @click.stop="$store.notif.dismissToast(toast.id)"
-                        class="flex-shrink-0 text-gray-400 hover:text-gray-600 p-0.5" aria-label="Закрыть">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </button>
-                </div>
-            </div>
-        </template>
-    </div>
-
     <!-- Notification sound (Web Audio API chime) -->
     <script>
     /* Переключение темы: атрибут на <html> + запоминание выбора */
@@ -2405,139 +2514,9 @@
         }
     })();
     </script>
-    <script>
-    window._notifChime = {
-        _ctx: null,
-        _getCtx() {
-            if (!this._ctx) {
-                this._ctx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (this._ctx.state === 'suspended') {
-                this._ctx.resume();
-            }
-            return this._ctx;
-        },
-        play(type) {
-            try {
-                const ctx = this._getCtx();
-                const now = ctx.currentTime;
-                const vol = 0.15;
+    
 
-                if (type === 'warning') {
-                    // Warning: два коротких тона пониже
-                    this._tone(ctx, now, 440, 0.12, vol);
-                    this._tone(ctx, now + 0.15, 392, 0.15, vol);
-                } else if (type === 'danger') {
-                    // Danger: тройной нисходящий
-                    this._tone(ctx, now, 523, 0.1, vol);
-                    this._tone(ctx, now + 0.12, 440, 0.1, vol);
-                    this._tone(ctx, now + 0.24, 349, 0.15, vol);
-                } else {
-                    // Default (info/success): мягкий восходящий chime
-                    this._tone(ctx, now, 587, 0.12, vol);         // D5
-                    this._tone(ctx, now + 0.12, 784, 0.12, vol);  // G5
-                    this._tone(ctx, now + 0.24, 880, 0.25, vol);  // A5
-                }
-            } catch(e) {}
-        },
-        _tone(ctx, when, freq, dur, vol) {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.value = freq;
-            // Мягкая атака и затухание
-            gain.gain.setValueAtTime(0, when);
-            gain.gain.linearRampToValueAtTime(vol, when + 0.015);
-            gain.gain.exponentialRampToValueAtTime(0.001, when + dur);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(when);
-            osc.stop(when + dur + 0.05);
-        }
-    };
-    </script>
 
-    <!-- Global notification store -->
-    <script>
-    document.addEventListener('alpine:init', () => {
-        Alpine.store('notif', {
-            unread: 0,
-            toasts: [],
-            _lastCheck: 0,
-            _toastId: 0,
-            _shownInitial: false,
-
-            init() {
-                // Remember that we already showed the initial toast this session
-                this._shownInitial = sessionStorage.getItem('_notif_initial_shown') === '1';
-                this.poll();
-                setInterval(() => this.poll(), 15000);
-            },
-
-            async poll() {
-                try {
-                    const r = await fetch('/api/notifications/unread-count');
-                    const d = await r.json();
-                    const prev = this.unread;
-                    this.unread = d.unread_count || 0;
-
-                    // First poll of session: show summary toast once, then remember
-                    if (this._lastCheck === 0 && this.unread > 0 && !this._shownInitial) {
-                        this._shownInitial = true;
-                        sessionStorage.setItem('_notif_initial_shown', '1');
-                        this.showToast('info',
-                            `У вас ${this.unread} ${this._pluralNotif(this.unread)}`,
-                            'Нажмите чтобы посмотреть',
-                            '/notifications');
-                    }
-                    // Subsequent polls: toast only for genuinely NEW notifications
-                    else if (this._lastCheck > 0 && this.unread > prev) {
-                        this.fetchLatestAndToast();
-                    }
-                    this._lastCheck = Date.now();
-                } catch(e) {}
-            },
-
-            _pluralNotif(n) {
-                const mod = n % 10;
-                const mod100 = n % 100;
-                if (mod === 1 && mod100 !== 11) return 'непрочитанное уведомление';
-                if (mod >= 2 && mod <= 4 && (mod100 < 12 || mod100 > 14)) return 'непрочитанных уведомления';
-                return 'непрочитанных уведомлений';
-            },
-
-            async fetchLatestAndToast() {
-                try {
-                    const r = await fetch('/api/notifications?unread=1&limit=1');
-                    const d = await r.json();
-                    if (d.items && d.items.length > 0) {
-                        const n = d.items[0];
-                        this.showToast(n.category, n.title, n.message, n.link);
-                    }
-                } catch(e) {}
-            },
-
-            showToast(category, title, message, link) {
-                const id = ++this._toastId;
-                this.toasts.push({id, category, title, message, link, visible: true});
-                // Play chime sound matching notification type
-                if (window._notifChime) window._notifChime.play(category);
-                // Auto-dismiss after 6s
-                setTimeout(() => this.dismissToast(id), 6000);
-                // Keep max 5 toasts
-                if (this.toasts.length > 5) this.toasts.splice(0, this.toasts.length - 5);
-            },
-
-            dismissToast(id) {
-                const t = this.toasts.find(t => t.id === id);
-                if (t) t.visible = false;
-                setTimeout(() => {
-                    this.toasts = this.toasts.filter(t => t.id !== id);
-                }, 300);
-            }
-        });
-    });
-    </script>
 
     {% else %}
     <!-- Non-authenticated -->
@@ -2627,8 +2606,7 @@
 </script>
 
 <!-- Toast notification system -->
-{% from "macros/overlays.html" import toast_container, toast_store_init %}
-{{ toast_store_init() }}
+{% from "macros/overlays.html" import toast_container %}
 {{ toast_container() }}
 
 <!-- Global Command Palette (Cmd+K / Ctrl+K) -->
