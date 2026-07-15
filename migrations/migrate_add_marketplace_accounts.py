@@ -15,6 +15,7 @@ OZON_ENDPOINT_VERSIONS = {
     "product_list": "/v3/product/list",
     "product_info_list": "/v3/product/info/list",
     "product_attributes": "/v4/product/info/attributes",
+    "product_pictures_info": "/v2/product/pictures/info",
     "description_category_tree": "/v1/description-category/tree",
     "description_category_attributes": "/v1/description-category/attribute",
     "description_category_attribute_values": (
@@ -28,6 +29,12 @@ OZON_ENDPOINT_VERSIONS = {
     "product_prices": "/v5/product/info/prices",
     "product_prices_update": "/v1/product/import/prices",
     "product_stocks": "/v4/product/info/stocks",
+    "product_stocks_by_warehouse_fbs": (
+        "/v2/product/info/stocks-by-warehouse/fbs"
+    ),
+    "product_stocks_by_warehouse_fbo": (
+        "/v1/product/info/stocks-by-warehouse/fbo"
+    ),
     "product_stocks_update": "/v2/products/stocks",
     "warehouses": "/v2/warehouse/list",
     "finance_accrual_by_day": "/v1/finance/accrual/by-day",

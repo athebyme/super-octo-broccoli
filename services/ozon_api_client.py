@@ -49,6 +49,9 @@ OZON_ENDPOINTS: Mapping[str, OzonEndpointSpec] = MappingProxyType({
     "product_attributes": OzonEndpointSpec(
         "/v4/product/info/attributes", "catalog_read", "read"
     ),
+    "product_pictures_info": OzonEndpointSpec(
+        "/v2/product/pictures/info", "catalog_read", "read"
+    ),
     "description_category_tree": OzonEndpointSpec(
         "/v1/description-category/tree", "reference_categories", "read"
     ),
@@ -79,6 +82,12 @@ OZON_ENDPOINTS: Mapping[str, OzonEndpointSpec] = MappingProxyType({
     ),
     "product_stocks": OzonEndpointSpec(
         "/v4/product/info/stocks", "stocks_read", "read"
+    ),
+    "product_stocks_by_warehouse_fbs": OzonEndpointSpec(
+        "/v2/product/info/stocks-by-warehouse/fbs", "stocks_read", "read"
+    ),
+    "product_stocks_by_warehouse_fbo": OzonEndpointSpec(
+        "/v1/product/info/stocks-by-warehouse/fbo", "stocks_read", "read"
     ),
     "product_stocks_update": OzonEndpointSpec(
         "/v2/products/stocks", "stocks_write", "write"
@@ -380,6 +389,9 @@ class OzonSellerAPIClient:
     def get_product_attributes(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("product_attributes", payload)
 
+    def get_product_pictures(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("product_pictures_info", payload)
+
     def get_roles(self) -> Dict[str, Any]:
         return self.request("roles", {})
 
@@ -427,6 +439,18 @@ class OzonSellerAPIClient:
 
     def get_stocks(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("product_stocks", payload)
+
+    def get_stocks_by_warehouse_fbs(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.request("product_stocks_by_warehouse_fbs", payload)
+
+    def get_stocks_by_warehouse_fbo(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.request("product_stocks_by_warehouse_fbo", payload)
 
     def update_stocks(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("product_stocks_update", payload)

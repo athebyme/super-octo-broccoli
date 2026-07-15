@@ -552,6 +552,12 @@ Definition of done: вручную подтверждённый новый offer
 
 ### P5b — update, media lifecycle and compensation
 
+Read-only staging discovery подготовлен отдельным
+`scripts/probe_ozon_read_contracts.py`: он проверяет current pictures v2 и
+catalog shapes без scalar data и технически не может вызвать manifest write.
+Это discovery-инструмент, а не реализация update/compensation и не основание
+обещать rollback без synthetic contract fixtures.
+
 - Separate full-state update operation for an existing offer; create path never mutates it implicitly.
 - Media ordering/primary-image/picture workflow probes and contract fixtures beyond basic import URLs.
 - Live post-write comparison strong enough to distinguish our ambiguous write from an external concurrent change.
@@ -570,6 +576,11 @@ validated workflow, а каждая обещанная compensation подтве
 контрактом и synthetic contract fixtures.
 
 ### P6 — price, stock and warehouses
+
+Aggregate price/stock reads уже входят в полный catalog page enrichment.
+Manifest дополнен current per-warehouse FBS v2, FBO v1 и paginated warehouse
+v2 read paths для live shape verification; persistence warehouse mapping и
+proposal/apply side effects остаются незавершёнными пунктами P6.
 
 - Ozon `/v5/product/info/prices`, `/v4/product/info/stocks`, `/v2/warehouse/list` reads.
 - Warehouse mapping and fulfillment-aware quantities.

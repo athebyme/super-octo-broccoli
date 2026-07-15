@@ -169,6 +169,13 @@ class OzonAdapter(MarketplaceAdapter):
     ) -> Dict[str, Any]:
         return self._client(credentials).get_product_attributes(payload)
 
+    def get_product_pictures(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_product_pictures(payload)
+
     def submit_products(
         self,
         credentials: MarketplaceCredentials,
@@ -204,6 +211,20 @@ class OzonAdapter(MarketplaceAdapter):
     ) -> Dict[str, Any]:
         return self._client(credentials).get_stocks(payload)
 
+    def read_stocks_by_warehouse_fbs(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_stocks_by_warehouse_fbs(payload)
+
+    def read_stocks_by_warehouse_fbo(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_stocks_by_warehouse_fbo(payload)
+
     def update_stocks(
         self,
         credentials: MarketplaceCredentials,
@@ -214,5 +235,6 @@ class OzonAdapter(MarketplaceAdapter):
     def read_warehouses(
         self,
         credentials: MarketplaceCredentials,
+        payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return self._client(credentials).get_warehouses()
+        return self._client(credentials).get_warehouses(payload)

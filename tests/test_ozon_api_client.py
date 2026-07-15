@@ -165,9 +165,12 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "/v3/product/list",
             "/v3/product/info/list",
             "/v4/product/info/attributes",
+            "/v2/product/pictures/info",
             "/v3/product/import",
             "/v5/product/info/prices",
             "/v4/product/info/stocks",
+            "/v2/product/info/stocks-by-warehouse/fbs",
+            "/v1/product/info/stocks-by-warehouse/fbo",
             "/v2/warehouse/list",
             "/v1/finance/accrual/by-day",
         ):
@@ -176,6 +179,7 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "/v2/category/tree",
             "/v3/category/attribute",
             "/v1/warehouse/list",
+            "/v1/product/info/stocks-by-warehouse/fbs",
             "/v3/finance/transaction/list",
             "/v3/finance/transaction/totals",
         ):
