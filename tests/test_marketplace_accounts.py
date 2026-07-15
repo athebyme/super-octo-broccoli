@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Encrypted seller marketplace accounts and tenant-scoped routes."""
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import json
@@ -13,7 +14,10 @@ from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect
 
 from models import (
+    ImportedProduct,
     Marketplace,
+    MarketplaceCanonicalContentProposal,
+    MarketplaceListing,
     MarketplaceOperation,
     Seller,
     SellerMarketplaceAccount,
@@ -274,6 +278,73 @@ class MarketplaceAccountsTest(unittest.TestCase):
             )
             self.assertEqual(operation.quota_reserved, 0)
             self.assertIsNotNone(operation.completed_at)
+
+    def test_pending_canonical_diff_blocks_identity_edit_and_conflicts_on_disconnect(self):
+        with self.app.app_context():
+            account = self._save()
+            product = ImportedProduct(
+                seller_id=self.seller1_id,
+                external_id="account-lifecycle-source",
+                external_vendor_code="account-lifecycle-offer",
+                source_type="synthetic",
+                title="Canonical title",
+            )
+            db.session.add(product)
+            db.session.flush()
+            listing = MarketplaceListing(
+                seller_id=self.seller1_id,
+                marketplace_id=account.marketplace_id,
+                account_id=account.id,
+                imported_product_id=product.id,
+                offer_id="account-lifecycle-offer",
+                external_product_id="801001",
+                title="Ozon title",
+                normalized_status="active",
+                link_status="linked",
+                sync_fingerprint="e" * 64,
+            )
+            db.session.add(listing)
+            db.session.flush()
+            proposal = MarketplaceCanonicalContentProposal(
+                seller_id=self.seller1_id,
+                marketplace_id=account.marketplace_id,
+                account_id=account.id,
+                listing_id=listing.id,
+                imported_product_id=product.id,
+                created_by_user_id=db.session.get(
+                    Seller,
+                    self.seller1_id,
+                ).user_id,
+                status="pending_review",
+                fields_json='["title"]',
+                baseline_state_json='{"title":"Canonical title"}',
+                proposed_state_json='{"title":"Ozon title"}',
+                baseline_fingerprint="f" * 64,
+                source_fingerprint="1" * 64,
+                source_observed_at=datetime.utcnow(),
+            )
+            db.session.add(proposal)
+            db.session.commit()
+
+            with self.assertRaises(MarketplaceAccountConflict):
+                MarketplaceAccountService.save_ozon_account(
+                    seller_id=self.seller1_id,
+                    account_id=account.id,
+                    external_account_id="different-client-id",
+                    label=account.label,
+                    api_key=None,
+                )
+
+            MarketplaceAccountService.disconnect(
+                seller_id=self.seller1_id,
+                account_id=account.id,
+            )
+            db.session.refresh(proposal)
+            self.assertEqual(proposal.status, "conflict")
+            self.assertEqual(
+                proposal.error_code,
+                "account_disconnected_before_review",
+            )
 
     def test_disconnect_preserves_credentials_needed_for_reconciliation(self):
         for status, attempt_count in (

@@ -5004,6 +5004,211 @@ class MarketplaceListingLinkEvent(db.Model):
         }
 
 
+class MarketplaceCanonicalContentProposal(db.Model):
+    """Reviewed Ozon observation -> canonical common-content mutation.
+
+    Marketplace-specific IDs, dictionaries, commercial fields and media are
+    intentionally absent.  The exact before/after state also provides the
+    conflict-aware local rollback contract.
+    """
+    __tablename__ = 'marketplace_canonical_content_proposals'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    imported_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('imported_products.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    snapshot_id = db.Column(
+        db.Integer,
+        db.ForeignKey('agent_change_snapshots.id', ondelete='SET NULL'),
+        nullable=True,
+        unique=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    reviewed_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    rolled_back_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+
+    status = db.Column(
+        db.String(30),
+        nullable=False,
+        default='pending_review',
+    )
+    fields_json = db.Column(db.Text, nullable=False)
+    baseline_state_json = db.Column(db.Text, nullable=False)
+    proposed_state_json = db.Column(db.Text, nullable=False)
+    baseline_fingerprint = db.Column(db.String(64), nullable=False)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-canonical-common-content-v1',
+    )
+    source_observed_at = db.Column(db.DateTime, nullable=False)
+    review_note = db.Column(db.String(1000))
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    version = db.Column(db.Integer, nullable=False, default=1)
+    reviewed_at = db.Column(db.DateTime)
+    applied_at = db.Column(db.DateTime)
+    rolled_back_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship('MarketplaceListing')
+    imported_product = db.relationship('ImportedProduct')
+    snapshot = db.relationship('AgentChangeSnapshot')
+    created_by = db.relationship('User', foreign_keys=[created_by_user_id])
+    reviewed_by = db.relationship('User', foreign_keys=[reviewed_by_user_id])
+    rolled_back_by = db.relationship(
+        'User',
+        foreign_keys=[rolled_back_by_user_id],
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('pending_review','applied','rejected','conflict','rolled_back')",
+            name='ck_marketplace_canonical_content_status',
+        ),
+        db.CheckConstraint(
+            'version >= 1',
+            name='ck_marketplace_canonical_content_version',
+        ),
+        db.Index(
+            'idx_marketplace_canonical_content_scope',
+            'seller_id',
+            'account_id',
+            'listing_id',
+            'created_at',
+        ),
+        db.Index(
+            'uq_marketplace_canonical_content_pending',
+            'seller_id',
+            'listing_id',
+            unique=True,
+            sqlite_where=db.text("status = 'pending_review'"),
+            postgresql_where=db.text("status = 'pending_review'"),
+        ),
+    )
+    __mapper_args__ = {'version_id_col': version}
+
+    @staticmethod
+    def _json_object(raw_value: Optional[str]) -> dict:
+        try:
+            value = json.loads(raw_value or '{}')
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _json_fields(raw_value: Optional[str]) -> list:
+        try:
+            value = json.loads(raw_value or '[]')
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return [item for item in value if item in ('title', 'description')]
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        fields = self._json_fields(self.fields_json)
+        baseline = self._json_object(self.baseline_state_json)
+        proposed = self._json_object(self.proposed_state_json)
+
+        def preview(value):
+            if value is None:
+                return None
+            text = str(value)
+            return text if len(text) <= 500 else text[:497] + '...'
+
+        data = {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'listing_id': self.listing_id,
+            'imported_product_id': self.imported_product_id,
+            'snapshot_id': self.snapshot_id,
+            'status': self.status,
+            'fields': fields,
+            'changes': [
+                {
+                    'field': field,
+                    'before': preview(baseline.get(field)),
+                    'after': preview(proposed.get(field)),
+                }
+                for field in fields
+            ],
+            'contract_version': self.contract_version,
+            'source_observed_at': (
+                self.source_observed_at.isoformat()
+                if self.source_observed_at else None
+            ),
+            'review_note': self.review_note,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'version': self.version,
+            'reviewed_at': (
+                self.reviewed_at.isoformat() if self.reviewed_at else None
+            ),
+            'applied_at': self.applied_at.isoformat() if self.applied_at else None,
+            'rolled_back_at': (
+                self.rolled_back_at.isoformat() if self.rolled_back_at else None
+            ),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data['baseline_state'] = baseline
+            data['proposed_state'] = proposed
+        return data
+
+
 class MarketplaceQualityAssessment(db.Model):
     """Current marketplace-scoped quality projection for one listing.
 

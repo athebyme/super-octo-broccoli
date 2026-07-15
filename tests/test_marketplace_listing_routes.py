@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Unified listing HTTP APIs preserve seller/account and feature boundaries."""
 
+from datetime import datetime
+from pathlib import Path
+import re
 from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
@@ -12,6 +15,7 @@ from flask_wtf.csrf import CSRFProtect
 from models import (
     ImportedProduct,
     Marketplace,
+    MarketplaceCanonicalContentProposal,
     MarketplaceListing,
     Seller,
     SellerMarketplaceAccount,
@@ -37,6 +41,7 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         LoginManager(self.app)
         CSRFProtect(self.app)
         register_marketplace_listing_routes(self.app)
+        self._register_template_stubs()
         self.client = self.app.test_client()
         with self.app.app_context():
             db.create_all()
@@ -129,9 +134,13 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
 
     @staticmethod
     def _user(seller_id=None):
-        seller = SimpleNamespace(id=seller_id) if seller_id else None
+        seller = (
+            SimpleNamespace(id=seller_id, company_name="Synthetic seller")
+            if seller_id else None
+        )
         return SimpleNamespace(
             id=seller_id or 10,
+            username="synthetic-user",
             seller=seller,
             is_authenticated=True,
             is_active=True,
@@ -144,6 +153,49 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
             patch("routes.marketplace_listings.current_user", user),
             patch("flask_login.utils._get_user", return_value=user),
         )
+
+    def _register_template_stubs(self):
+        root = Path(__file__).resolve().parents[1]
+        endpoint_names = set()
+        for relative_path in (
+            "templates/base.html",
+            "templates/marketplace_listing_detail.html",
+        ):
+            endpoint_names.update(re.findall(
+                r"url_for\(['\"]([^'\"]+)",
+                (root / relative_path).read_text(encoding="utf-8"),
+            ))
+
+        def stub():
+            return ""
+
+        for index, endpoint in enumerate(sorted(endpoint_names)):
+            if endpoint not in self.app.view_functions:
+                self.app.add_url_rule(
+                    f"/__template_stub/{index}",
+                    endpoint=endpoint,
+                    view_func=stub,
+                )
+
+    def _link_fresh(self, *, foreign=False):
+        seller_id = self.seller2_id if foreign else self.seller1_id
+        listing_id = self.foreign_id if foreign else self.own_id
+        source_id = self.foreign_source_id if foreign else self.own_source_id
+        listing = MarketplaceListing.query.filter_by(
+            id=listing_id,
+            seller_id=seller_id,
+        ).one()
+        listing.imported_product_id = source_id
+        listing.link_status = "linked"
+        listing.title = "Foreign Ozon title" if foreign else "Own Ozon title"
+        listing.description = (
+            "Foreign Ozon description"
+            if foreign else "Own Ozon description"
+        )
+        listing.info_synced_at = datetime.utcnow()
+        listing.attributes_synced_at = datetime.utcnow()
+        db.session.commit()
+        return listing
 
     def test_list_and_detail_are_tenant_scoped(self):
         user_patch, login_patch = self._auth(self.seller1_id)
@@ -288,3 +340,232 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
                 data={"max_pages": "1"},
             )
         self.assertEqual(response.status_code, 400)
+
+    def test_reviewed_ozon_content_route_is_local_strict_and_reversible(self):
+        with self.app.app_context():
+            self._link_fresh()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            created = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/canonical-content-proposals",
+                json={"fields": ["title", "description"]},
+            )
+            proposal_data = created.get_json()["proposal"]
+            loose = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{proposal_data['id']}/apply",
+                json={
+                    "expected_version": str(proposal_data["version"]),
+                    "confirm_apply": True,
+                },
+            )
+            unconfirmed = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{proposal_data['id']}/apply",
+                json={
+                    "expected_version": proposal_data["version"],
+                    "confirm_apply": False,
+                },
+            )
+            applied = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{proposal_data['id']}/apply",
+                json={
+                    "expected_version": proposal_data["version"],
+                    "confirm_apply": True,
+                },
+            )
+            applied_data = applied.get_json()["proposal"]
+            rolled_back = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{proposal_data['id']}/rollback",
+                json={
+                    "expected_version": applied_data["version"],
+                    "confirm_rollback": True,
+                },
+            )
+
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(loose.status_code, 400)
+        self.assertEqual(unconfirmed.status_code, 400)
+        self.assertEqual(applied.status_code, 200)
+        self.assertEqual(rolled_back.status_code, 200)
+        self.assertEqual(
+            rolled_back.get_json()["proposal"]["status"],
+            "rolled_back",
+        )
+        with self.app.app_context():
+            source = db.session.get(ImportedProduct, self.own_source_id)
+            self.assertEqual(source.title, "Own internal product")
+
+    def test_reverse_content_routes_do_not_cross_tenant_or_feature_flag(self):
+        with self.app.app_context():
+            self._link_fresh(foreign=True)
+            foreign_proposal = MarketplaceCanonicalContentProposal(
+                seller_id=self.seller2_id,
+                marketplace_id=Marketplace.query.filter_by(code="ozon").one().id,
+                account_id=self.account2_id,
+                listing_id=self.foreign_id,
+                imported_product_id=self.foreign_source_id,
+                created_by_user_id=User.query.join(Seller).filter(
+                    Seller.id == self.seller2_id
+                ).one().id,
+                status="pending_review",
+                fields_json='["title"]',
+                baseline_state_json='{"title":"Foreign internal product"}',
+                proposed_state_json='{"title":"Foreign Ozon title"}',
+                baseline_fingerprint="c" * 64,
+                source_fingerprint="d" * 64,
+                source_observed_at=datetime.utcnow(),
+            )
+            db.session.add(foreign_proposal)
+            db.session.commit()
+            foreign_proposal_id = foreign_proposal.id
+
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            denied = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{foreign_proposal_id}/apply",
+                json={"expected_version": 1, "confirm_apply": True},
+            )
+        self.assertEqual(denied.status_code, 404)
+
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        with self.app.app_context():
+            self._link_fresh()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch, patch(
+            "routes.marketplace_listings."
+            "MarketplaceCanonicalContentService.create_proposal"
+        ) as create:
+            disabled = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/canonical-content-proposals",
+                json={"fields": ["title"]},
+            )
+        self.assertEqual(disabled.status_code, 404)
+        create.assert_not_called()
+
+    def test_applied_reverse_history_remains_visible_after_disconnect_and_unlink(self):
+        with self.app.app_context():
+            self._link_fresh()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            created = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/canonical-content-proposals",
+                json={"fields": ["title"]},
+            ).get_json()["proposal"]
+            applied = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{created['id']}/apply",
+                json={
+                    "expected_version": created["version"],
+                    "confirm_apply": True,
+                },
+            )
+        self.assertEqual(applied.status_code, 200)
+
+        with self.app.app_context():
+            account = db.session.get(
+                SellerMarketplaceAccount,
+                self.account1_id,
+            )
+            account.is_active = False
+            account.connection_status = "disconnected"
+            listing = db.session.get(MarketplaceListing, self.own_id)
+            listing.imported_product_id = None
+            listing.link_status = "unlinked"
+            db.session.commit()
+
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            detail = self.client.get(
+                f"/marketplaces/listings/{self.own_id}",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(detail.status_code, 200)
+        payload = detail.get_json()
+        self.assertEqual(
+            payload["canonical_content"]["blocked_reasons"],
+            ["canonical_link_unavailable"],
+        )
+        self.assertEqual(
+            [item["id"] for item in payload["canonical_content_proposals"]],
+            [created["id"]],
+        )
+
+    def test_reverse_diff_review_ui_renders_with_pending_proposal(self):
+        with self.app.app_context():
+            self._link_fresh()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            created = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/canonical-content-proposals",
+                json={"fields": ["title", "description"]},
+            )
+            rendered = self.client.get(
+                f"/marketplaces/listings/{self.own_id}",
+                headers={"Accept": "text/html"},
+            )
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(rendered.status_code, 200)
+        html = rendered.get_data(as_text=True)
+        self.assertIn("Ozon → общая карточка", html)
+        self.assertIn("Применить к master", html)
+        self.assertIn("Категории, характеристики, ID справочников", html)
+        self.assertNotIn("synthetic-key", html)
+
+    def test_feature_disable_blocks_new_apply_but_keeps_reject_and_rollback(self):
+        with self.app.app_context():
+            self._link_fresh()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            pending = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/canonical-content-proposals",
+                json={"fields": ["title"]},
+            ).get_json()["proposal"]
+            self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+            blocked_apply = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{pending['id']}/apply",
+                json={
+                    "expected_version": pending["version"],
+                    "confirm_apply": True,
+                },
+            )
+            rejected = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{pending['id']}/reject",
+                json={"expected_version": pending["version"]},
+            )
+
+            self.app.config["MARKETPLACE_OZON_ENABLED"] = True
+            second = self.client.post(
+                f"/marketplaces/listings/{self.own_id}/canonical-content-proposals",
+                json={"fields": ["title"]},
+            ).get_json()["proposal"]
+            applied = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{second['id']}/apply",
+                json={
+                    "expected_version": second["version"],
+                    "confirm_apply": True,
+                },
+            ).get_json()["proposal"]
+            self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+            rolled_back = self.client.post(
+                "/marketplaces/listings/canonical-content-proposals/"
+                f"{second['id']}/rollback",
+                json={
+                    "expected_version": applied["version"],
+                    "confirm_rollback": True,
+                },
+            )
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = True
+        self.assertEqual(blocked_apply.status_code, 404)
+        self.assertEqual(rejected.status_code, 200)
+        self.assertEqual(rolled_back.status_code, 200)
+        self.assertEqual(
+            rolled_back.get_json()["proposal"]["status"],
+            "rolled_back",
+        )

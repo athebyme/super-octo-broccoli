@@ -740,7 +740,7 @@ Definition of done: finance/order UI filters by exact marketplace/account and to
 - [x] P10B: deterministic intents accept explicit marketplace; ambiguity causes clarification.
 - [x] P10B: internal tools are adapter/capability-scoped and least privilege.
 - [x] P10B: one-click canonical/WB → local Ozon draft preparation with immediate deterministic validation and exact mapping/reference readiness UI.
-- [ ] P10C: reviewed Ozon → canonical common-fact diff; automatic dictionary/category round-trip remains prohibited.
+- [x] P10C: reviewed Ozon → canonical common-fact diff; automatic dictionary/category round-trip remains prohibited.
 - [x] P10C: Image Lab uses listing media adapter and Ozon image constraints.
 - [x] P10C: Content factory selection works over unified listings.
 
@@ -767,8 +767,9 @@ bounded allowlisted локальные content/status/quality facts без crede
 raw provider payload. Детерминированный audit не вызывает LLM, insight получает
 одну карточку и делает не более одного model call; tool allowlist у обоих пуст.
 Старые WB content/write skills не принимают listing ID: явный marketplace write
-возвращает clarification до planner и будет вводиться только отдельным reviewed
-proposal contract. Quality UI открывает выбранный exact account scope в новом
+в чате возвращает clarification до planner. Реализованный reverse write живёт
+в отдельном reviewed proposal contract на detail-странице. Quality UI открывает
+выбранный exact account scope в новом
 диалоге, popup карточки прикладывает тот же grounded envelope.
 
 Из seller catalog и WB-preview доступна кнопка «Подготовить Ozon». Она выбирает
@@ -781,8 +782,8 @@ bounded `mapping_readiness`: свежесть canonical fact hash, связь с
 валидный draft отображается stale, если после проверки устарел source/schema,
 dictionary или account. Provider publication остаётся отдельной кнопкой только
 для повторно проверенного `ready / valid` draft. Обратный механический перенос
-запрещён: Ozon IDs не имеют общего пространства с WB, поэтому будущий reverse
-workflow строит reviewed diff только marketplace-neutral фактов.
+запрещён: Ozon IDs не имеют общего пространства с WB; reverse workflow ниже
+работает только с marketplace-neutral текстовыми фактами.
 
 Category mapping для уже опубликованной/подтверждённо связанной WB-карточки
 использует не её отображаемое название, а exact
@@ -803,6 +804,30 @@ response. `ImportedProduct` остаётся master; для связанного
 осознанную Ozon-проекцию и не перетирает master автоматически. Marketplace-
 specific price, stock, category IDs, media CDN URLs и characteristic IDs в этот
 diff намеренно не входят.
+
+P10C reverse content реализован как durable
+`MarketplaceCanonicalContentProposal`. Detail Ozon-листинга показывает
+сравнение `title/description` с общей `ImportedProduct`, но создаёт proposal
+только при полном fresh `info + attributes` observation не старше 48 часов.
+Сохранённый diff содержит exact seller/account/listing/product scope, contract
+version и отдельные canonical/source fingerprints. Apply требует явного
+подтверждения и optimistic version, повторно ground-ит scope и обе стороны,
+атомарно обновляет только exact baseline, создаёт `AgentChangeSnapshot` и меняет
+только canonical master. Он не вызывает
+provider adapter, не публикует WB/Ozon и не меняет их listing projections.
+Reject не меняет карточку; rollback восстанавливает exact baseline, только если
+текущее значение всё ещё равно applied/baseline state. Более новый human/agent
+edit сохраняет видимый conflict и блокирует автоматический откат. Brand без
+exact semantic mapping, category/type, attribute/dictionary value IDs,
+price/stock, media, dimensions, barcodes и fulfillment исключены из модели,
+service contract, UI и тестов.
+
+Create/apply/reject сериализованы тем же non-blocking account operation lock, что
+credential edit и disconnect. Смена Client-Id/API key блокируется при pending
+reverse proposal; disconnect переводит такой proposal в conflict. Уже applied
+history не удаляется: она остаётся видимой даже при inactive account/unlinked
+listing, а local rollback не требует provider credentials. General feature
+flag блокирует новый create/apply, но не reject/rollback уже созданного diff.
 
 P10C Image Lab использует отдельный `MarketplaceListingMediaService`: browser
 передаёт полный typed Ozon target, а сервис повторно проверяет seller, account,
@@ -888,6 +913,10 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
     получают только bootstrap metadata без копирования контента. Найденный
     duplicate account/canonical pair блокирует startup до ручной проверки и
     никогда не исправляется удалением либо произвольным выбором строки.
+17. `migrate_add_marketplace_canonical_content.py` additive/idempotent создаёт
+    reviewed reverse proposals и partial unique pending scope после canonical
+    product-link prerequisites. Он не backfill-ит и не меняет карточки, а
+    fail-fast запускается в Docker, comprehensive runner и direct SQLite path.
 
 ## 10. Security и safety invariants
 
@@ -897,6 +926,9 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 - Credentials расшифровываются только в момент создания adapter client, не сериализуются и не попадают в logs/exceptions.
 - Global reference credentials и seller operational credentials разделены.
 - Price/stock agent write — proposal only.
+- Ozon → canonical content write — только reviewed `title/description` proposal
+  по fresh exact listing snapshot; provider/reference/commercial поля исключены,
+  а WB/Ozon publication остаётся отдельным действием.
 - Product/content write требует fresh schema, exact category/type and full payload validation.
 - Перед side effect сохраняется durable operation/snapshot; после ambiguous result выполняется reconciliation.
 - LLM не получает credentials, raw IDs вне typed scope, prices/stocks write tools или unbounded dictionaries.
@@ -1005,6 +1037,7 @@ Initial targets:
 10. A write attempt is committed before adapter call and an ambiguous result is never auto-retried.
 11. Create rollback uses exact `/v1/product/archive` with full-state drift gate; beta visibility is not treated as archive.
 12. Account credentials/identity cannot change while an operation is active or needs reconciliation.
+13. Ozon and WB reference IDs never round-trip; reverse synchronization is a reviewed canonical common-content diff only.
 
 ## 15. Questions resolved by implementation probes, not guesses
 

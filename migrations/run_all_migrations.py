@@ -1202,6 +1202,10 @@ def main():
                 migrate as migrate_marketplace_product_links,
             )
             migrate_marketplace_product_links(db_path)
+            from migrate_add_marketplace_canonical_content import (
+                migrate as migrate_marketplace_canonical_content,
+            )
+            migrate_marketplace_canonical_content(db_path)
             from migrate_add_marketplace_drafts import (
                 migrate as migrate_marketplace_drafts,
             )

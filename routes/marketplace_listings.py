@@ -24,6 +24,11 @@ from services.marketplace_product_links import (
     MarketplaceProductLinkError,
     MarketplaceProductLinkService,
 )
+from services.marketplace_canonical_content import (
+    MarketplaceCanonicalContentError,
+    MarketplaceCanonicalContentNotFound,
+    MarketplaceCanonicalContentService,
+)
 from services.marketplace_warehouses import MarketplaceWarehouseService
 
 
@@ -101,7 +106,11 @@ def _payload_boolean(data: Dict[str, Any], field_name: str, default: bool) -> bo
 
 
 def _error_response(error: Exception, status_code: int = 400):
-    if isinstance(error, (MarketplaceListingError, MarketplaceProductLinkError)):
+    if isinstance(error, (
+        MarketplaceListingError,
+        MarketplaceProductLinkError,
+        MarketplaceCanonicalContentError,
+    )):
         status_code = error.status_code
         code = error.code
     else:
@@ -217,6 +226,56 @@ def detail(listing_id: int):
         )
     except (MarketplaceListingError, MarketplaceProductLinkError) as exc:
         return _error_response(exc)
+    canonical_content = None
+    canonical_content_proposals = []
+    if (
+        listing.marketplace
+        and listing.marketplace.code == "ozon"
+        and current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+    ):
+        try:
+            canonical_content_proposals = (
+                MarketplaceCanonicalContentService.list_for_listing(
+                    seller_id=seller_id,
+                    listing_id=listing.id,
+                )
+            )
+        except MarketplaceCanonicalContentError as exc:
+            canonical_content = {
+                "proposal_allowed": False,
+                "blocked_reasons": [exc.code],
+                "error": str(exc),
+                "fields": [],
+                "differing_fields": [],
+                "excluded_scopes": [],
+            }
+        if listing.canonical_link_status == "linked":
+            try:
+                canonical_content = MarketplaceCanonicalContentService.comparison(
+                    seller_id=seller_id,
+                    listing_id=listing.id,
+                )
+            except MarketplaceCanonicalContentError as exc:
+                canonical_content = {
+                    "proposal_allowed": False,
+                    "blocked_reasons": [exc.code],
+                    "error": str(exc),
+                    "fields": [],
+                    "differing_fields": [],
+                    "excluded_scopes": [],
+                }
+        elif canonical_content_proposals and canonical_content is None:
+            canonical_content = {
+                "proposal_allowed": False,
+                "blocked_reasons": ["canonical_link_unavailable"],
+                "error": (
+                    "Связь с общей карточкой сейчас отсутствует; новые diff "
+                    "недоступны, но существующие proposal и rollback сохранены"
+                ),
+                "fields": [],
+                "differing_fields": [],
+                "excluded_scopes": [],
+            }
     if _wants_json():
         warehouse_stocks = (
             MarketplaceWarehouseService.list_listing_stocks(
@@ -231,6 +290,11 @@ def detail(listing_id: int):
             "listing": listing.to_public_dict(detail=True),
             "warehouse_stocks": [row.to_public_dict() for row in warehouse_stocks],
             "product_link": product_link,
+            "canonical_content": canonical_content,
+            "canonical_content_proposals": [
+                proposal.to_public_dict()
+                for proposal in canonical_content_proposals
+            ],
         })
     warehouse_stocks = []
     proposals = []
@@ -256,6 +320,12 @@ def detail(listing_id: int):
         link_search=request.args.get("link_search", ""),
         warehouse_stocks=warehouse_stocks,
         commercial_proposals=proposals,
+        canonical_content=canonical_content,
+        canonical_content_proposals=canonical_content_proposals,
+        canonical_content_proposal_data=[
+            proposal.to_public_dict()
+            for proposal in canonical_content_proposals
+        ],
         commercial_feature_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
         ),
@@ -273,6 +343,35 @@ def _link_write_payload(data: Dict[str, Any], allowed: set) -> None:
     unknown = set(data) - allowed - {"csrf_token"}
     if unknown:
         raise ValueError("Неизвестные поля: " + ", ".join(sorted(unknown)))
+
+
+def _canonical_feature() -> None:
+    if not current_app.config.get("MARKETPLACE_OZON_ENABLED", False):
+        raise MarketplaceCanonicalContentNotFound(
+            "Ozon-интеграция выключена",
+            code="ozon_feature_disabled",
+        )
+
+
+def _canonical_failure(
+    error: Exception,
+    *,
+    listing_id: Optional[int] = None,
+):
+    db.session.rollback()
+    if _wants_json():
+        return _error_response(error)
+    target_listing_id = (
+        getattr(error, "listing_id", None)
+        or listing_id
+    )
+    flash(str(error), "error")
+    if target_listing_id:
+        return redirect(url_for(
+            "marketplace_listings.detail",
+            listing_id=target_listing_id,
+        ))
+    return redirect(url_for("marketplace_listings.index"))
 
 
 @marketplace_listings_bp.route("/<int:listing_id>/link", methods=["POST"])
@@ -376,6 +475,167 @@ def reconcile_product_link(listing_id: int):
     else:
         flash("Точного совпадения не найдено; выберите карточку вручную", "info")
     return redirect(url_for("marketplace_listings.detail", listing_id=listing.id))
+
+
+@marketplace_listings_bp.route(
+    "/<int:listing_id>/canonical-content-proposals",
+    methods=["POST"],
+)
+@login_required
+def create_canonical_content_proposal(listing_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    data = _payload()
+    try:
+        _canonical_feature()
+        _link_write_payload(data, {"fields"})
+        fields = data.get("fields")
+        if not request.is_json and fields not in (None, ""):
+            raise ValueError("fields можно передать только JSON array")
+        proposal = MarketplaceCanonicalContentService.create_proposal(
+            seller_id=seller_id,
+            listing_id=listing_id,
+            created_by_user_id=getattr(current_user, "id", None),
+            fields=fields if request.is_json else None,
+        )
+    except (MarketplaceCanonicalContentError, ValueError) as exc:
+        return _canonical_failure(exc, listing_id=listing_id)
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "proposal": proposal.to_public_dict(detail=True),
+        }), 201
+    flash(
+        "Ozon → общая карточка diff сохранён; до подтверждения ничего не изменено",
+        "success",
+    )
+    return redirect(url_for(
+        "marketplace_listings.detail",
+        listing_id=proposal.listing_id,
+    ))
+
+
+@marketplace_listings_bp.route(
+    "/canonical-content-proposals/<int:proposal_id>/apply",
+    methods=["POST"],
+)
+@login_required
+def apply_canonical_content_proposal(proposal_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    data = _payload()
+    try:
+        _canonical_feature()
+        _link_write_payload(
+            data,
+            {"expected_version", "confirm_apply", "note"},
+        )
+        if not _payload_boolean(data, "confirm_apply", False):
+            raise ValueError("Apply требует confirm_apply=true")
+        proposal = MarketplaceCanonicalContentService.apply_proposal(
+            seller_id=seller_id,
+            proposal_id=proposal_id,
+            expected_version=_payload_integer(
+                data,
+                "expected_version",
+                None,
+            ),
+            reviewed_by_user_id=getattr(current_user, "id", None),
+            note=data.get("note") or None,
+        )
+    except (MarketplaceCanonicalContentError, ValueError) as exc:
+        return _canonical_failure(exc)
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "proposal": proposal.to_public_dict(detail=True),
+        })
+    flash(
+        "Общая карточка обновлена локально. WB и Ozon не публиковались; "
+        "их проекции теперь требуют отдельной проверки.",
+        "success",
+    )
+    return redirect(url_for(
+        "marketplace_listings.detail",
+        listing_id=proposal.listing_id,
+    ))
+
+
+@marketplace_listings_bp.route(
+    "/canonical-content-proposals/<int:proposal_id>/reject",
+    methods=["POST"],
+)
+@login_required
+def reject_canonical_content_proposal(proposal_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    data = _payload()
+    try:
+        _link_write_payload(data, {"expected_version", "note"})
+        proposal = MarketplaceCanonicalContentService.reject_proposal(
+            seller_id=seller_id,
+            proposal_id=proposal_id,
+            expected_version=_payload_integer(
+                data,
+                "expected_version",
+                None,
+            ),
+            reviewed_by_user_id=getattr(current_user, "id", None),
+            note=data.get("note") or None,
+        )
+    except (MarketplaceCanonicalContentError, ValueError) as exc:
+        return _canonical_failure(exc)
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "proposal": proposal.to_public_dict(detail=True),
+        })
+    flash("Content proposal отклонён без изменения карточки", "success")
+    return redirect(url_for(
+        "marketplace_listings.detail",
+        listing_id=proposal.listing_id,
+    ))
+
+
+@marketplace_listings_bp.route(
+    "/canonical-content-proposals/<int:proposal_id>/rollback",
+    methods=["POST"],
+)
+@login_required
+def rollback_canonical_content_proposal(proposal_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    data = _payload()
+    try:
+        _link_write_payload(data, {"expected_version", "confirm_rollback"})
+        if not _payload_boolean(data, "confirm_rollback", False):
+            raise ValueError("Rollback требует confirm_rollback=true")
+        proposal = MarketplaceCanonicalContentService.rollback_proposal(
+            seller_id=seller_id,
+            proposal_id=proposal_id,
+            expected_version=_payload_integer(
+                data,
+                "expected_version",
+                None,
+            ),
+            rolled_back_by_user_id=getattr(current_user, "id", None),
+        )
+    except (MarketplaceCanonicalContentError, ValueError) as exc:
+        return _canonical_failure(exc)
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            "proposal": proposal.to_public_dict(detail=True),
+        })
+    flash("Локальный common-content diff откачен", "success")
+    return redirect(url_for(
+        "marketplace_listings.detail",
+        listing_id=proposal.listing_id,
+    ))
 
 
 @marketplace_listings_bp.route("/accounts/<int:account_id>/sync", methods=["POST"])

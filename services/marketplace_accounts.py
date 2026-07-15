@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 from models import (
     Marketplace,
+    MarketplaceCanonicalContentProposal,
     MarketplaceCommercialProposal,
     MarketplaceCredentialEncryptionError,
     MarketplaceOperation,
@@ -243,7 +244,18 @@ class MarketplaceAccountService:
                     "uncertain",
                 )),
             ).first()
-            if blocking is not None or pending_commercial is not None:
+            pending_canonical_content = (
+                MarketplaceCanonicalContentProposal.query.filter_by(
+                    seller_id=seller_id,
+                    account_id=account.id,
+                    status="pending_review",
+                ).first()
+            )
+            if (
+                blocking is not None
+                or pending_commercial is not None
+                or pending_canonical_content is not None
+            ):
                 raise MarketplaceAccountConflict(
                     "Client-Id и API key нельзя менять при активном Ozon proposal/write"
                 )
@@ -627,6 +639,20 @@ class MarketplaceAccountService:
                 proposal.error_code = "account_disconnected_before_submission"
                 proposal.error_message = (
                     "Proposal отменён до Ozon write при отключении кабинета"
+                )
+
+            canonical_content_proposals = (
+                MarketplaceCanonicalContentProposal.query.filter_by(
+                    seller_id=seller_id,
+                    account_id=account.id,
+                    status="pending_review",
+                ).all()
+            )
+            for proposal in canonical_content_proposals:
+                proposal.status = "conflict"
+                proposal.error_code = "account_disconnected_before_review"
+                proposal.error_message = (
+                    "Кабинет отключён до review; создайте новый diff после подключения"
                 )
 
             return cls._disconnect_owned_account(account)

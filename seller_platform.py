@@ -6417,6 +6417,10 @@ def _run_startup_migrations():
                 migrate as migrate_marketplace_product_links,
             )
             migrate_marketplace_product_links(sqlite_path)
+            from migrations.migrate_add_marketplace_canonical_content import (
+                migrate as migrate_marketplace_canonical_content,
+            )
+            migrate_marketplace_canonical_content(sqlite_path)
             from migrations.migrate_add_image_lab_marketplace_target import (
                 migrate as migrate_image_lab_marketplace_target,
             )
