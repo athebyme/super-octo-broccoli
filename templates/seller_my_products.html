@@ -675,9 +675,9 @@
                         {% elif p.import_status == 'validated' %}
                         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Готов</span>
                         {% elif p.import_status == 'failed' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fef2f2;color:#991b1b" title="{{ p.import_error or '' }}">Ошибка</span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--danger-bg);color:var(--danger)" title="{{ p.import_error or '' }}">Ошибка</span>
                         {% else %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:#fffbeb;color:#92400e">Ожидает</span>
+                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--warn-bg);color:var(--warn)">Ожидает</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-center whitespace-nowrap">

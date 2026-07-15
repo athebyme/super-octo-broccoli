@@ -150,14 +150,14 @@
                         <div>
                             <div class="flex items-center gap-2 mb-2 flex-wrap">
                                 <span class="text-xs px-2 py-0.5 rounded-full"
-                                      :style="testSource === 'ai' ? 'background:#dbeafe;color:#2563eb' : 'background:var(--accent-light);color:var(--accent)'"
+                                      :style="testSource === 'ai' ? 'background:var(--info-bg);color:var(--info)' : 'background:var(--accent-light);color:var(--accent)'"
                                       x-text="testSource === 'ai' ? 'AI' : 'Шаблон'"></span>
                                 <template x-if="testSelectedProduct && testSource === 'ai'">
-                                    <span class="text-xs px-2 py-0.5 rounded-full" style="background:#dcfce7;color:#16a34a">С данными карточки</span>
+                                    <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--ok-bg);color:var(--ok)">С данными карточки</span>
                                 </template>
                             </div>
                             <template x-if="testAiError">
-                                <p class="text-xs mb-2 p-2 rounded" style="background:#fef2f2;color:#dc2626" x-text="testAiError"></p>
+                                <p class="text-xs mb-2 p-2 rounded" style="background:var(--danger-bg);color:var(--danger)" x-text="testAiError"></p>
                             </template>
                             <p class="text-sm leading-relaxed" style="color:var(--text)" x-text="testResult"></p>
                         </div>
@@ -249,11 +249,11 @@
         </div>
         <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
             <div class="text-sm" style="color:var(--text-secondary)">Без ответа (отзывы)</div>
-            <div class="text-2xl font-bold mt-1" style="color:#ef4444" x-text="stats.feedbacks_unanswered ?? '—'"></div>
+            <div class="text-2xl font-bold mt-1" style="color:var(--danger)" x-text="stats.feedbacks_unanswered ?? '—'"></div>
         </div>
         <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
             <div class="text-sm" style="color:var(--text-secondary)">Без ответа (вопросы)</div>
-            <div class="text-2xl font-bold mt-1" style="color:#f59e0b" x-text="stats.questions_unanswered ?? '—'"></div>
+            <div class="text-2xl font-bold mt-1" style="color:var(--warn)" x-text="stats.questions_unanswered ?? '—'"></div>
         </div>
         <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
             <div class="text-sm" style="color:var(--text-secondary)">Всего отзывов</div>
@@ -283,13 +283,13 @@
             <button @click="bulkGenerateAll()"
                     :disabled="bulkGenerating"
                     class="px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors mr-2"
-                    style="background:#22c55e">
+                    style="background:var(--ok)">
                 Ответить на все (<span x-text="items.filter(i => !i.answer).length"></span>)
             </button>
         </template>
         <template x-if="bulkMode && !bulkGenerating && !bulkSending">
             <div class="flex gap-2 mr-2">
-                <button @click="bulkSendAll()" class="px-3 py-1.5 rounded-lg text-xs font-medium text-white" style="background:#22c55e">
+                <button @click="bulkSendAll()" class="px-3 py-1.5 rounded-lg text-xs font-medium text-white" style="background:var(--ok)">
                     Отправить все ответы (<span x-text="items.filter(i => !i.answer && i._draft && i._draft.length >= 2).length"></span>)
                 </button>
                 <button @click="bulkCancel()" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="color:var(--text-secondary);border:1px solid var(--border)">
@@ -341,7 +341,7 @@
                         </div>
                     </div>
                     <template x-if="item.answer">
-                        <span class="text-xs px-2 py-1 rounded-full flex-shrink-0" style="background:#dcfce7;color:#16a34a">Отвечен</span>
+                        <span class="text-xs px-2 py-1 rounded-full flex-shrink-0" style="background:var(--ok-bg);color:var(--ok)">Отвечен</span>
                     </template>
                 </div>
 
@@ -349,10 +349,10 @@
                 <div class="mb-3" style="color:var(--text)">
                     <p x-show="item.text" x-text="item.text" class="text-sm leading-relaxed"></p>
                     <template x-if="item.pros">
-                        <p class="text-sm mt-2"><span class="font-medium" style="color:#16a34a">Достоинства:</span> <span x-text="item.pros"></span></p>
+                        <p class="text-sm mt-2"><span class="font-medium" style="color:var(--ok)">Достоинства:</span> <span x-text="item.pros"></span></p>
                     </template>
                     <template x-if="item.cons">
-                        <p class="text-sm mt-1"><span class="font-medium" style="color:#ef4444">Недостатки:</span> <span x-text="item.cons"></span></p>
+                        <p class="text-sm mt-1"><span class="font-medium" style="color:var(--danger)">Недостатки:</span> <span x-text="item.cons"></span></p>
                     </template>
                 </div>
 
@@ -389,7 +389,7 @@
                                     <button @click="sendReply(idx)"
                                             :disabled="item._sending || !item._draft || item._draft.length < 2"
                                             class="px-4 py-1.5 rounded-lg text-sm font-medium text-white transition-colors"
-                                            :style="item._sending ? 'background:#22c55e;opacity:0.6' : 'background:#22c55e'">
+                                            :style="item._sending ? 'background:var(--ok);opacity:0.6' : 'background:var(--ok)'">
                                         <span x-show="!item._sending">Отправить ответ</span>
                                         <span x-show="item._sending">Отправка...</span>
                                     </button>

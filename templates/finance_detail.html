@@ -29,19 +29,19 @@
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
             <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
                 <div class="text-sm" style="color:var(--text-secondary)">К выплате</div>
-                <div class="text-2xl font-bold mt-1" :style="'color:' + ((data.totals?.total_for_pay || 0) >= 0 ? '#16a34a' : '#ef4444')" x-text="formatMoney(data.totals?.total_for_pay)"></div>
+                <div class="text-2xl font-bold mt-1" :style="'color:' + ((data.totals?.total_for_pay || 0) >= 0 ? 'var(--ok)' : 'var(--danger)')" x-text="formatMoney(data.totals?.total_for_pay)"></div>
             </div>
             <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
                 <div class="text-sm" style="color:var(--text-secondary)">Комиссия WB</div>
-                <div class="text-2xl font-bold mt-1" style="color:#ef4444" x-text="formatMoney(Math.abs(data.totals?.total_commission || 0))"></div>
+                <div class="text-2xl font-bold mt-1" style="color:var(--danger)" x-text="formatMoney(Math.abs(data.totals?.total_commission || 0))"></div>
             </div>
             <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
                 <div class="text-sm" style="color:var(--text-secondary)">Логистика</div>
-                <div class="text-2xl font-bold mt-1" style="color:#f59e0b" x-text="formatMoney(Math.abs(data.totals?.total_logistics || 0))"></div>
+                <div class="text-2xl font-bold mt-1" style="color:var(--warn)" x-text="formatMoney(Math.abs(data.totals?.total_logistics || 0))"></div>
             </div>
             <div class="rounded-xl p-4" style="background:var(--bg-card);border:1px solid var(--border)">
                 <div class="text-sm" style="color:var(--text-secondary)">Хранение + штрафы</div>
-                <div class="text-2xl font-bold mt-1" style="color:#ef4444" x-text="formatMoney(Math.abs(data.totals?.total_storage || 0) + Math.abs(data.totals?.total_penalties || 0))"></div>
+                <div class="text-2xl font-bold mt-1" style="color:var(--danger)" x-text="formatMoney(Math.abs(data.totals?.total_storage || 0) + Math.abs(data.totals?.total_penalties || 0))"></div>
             </div>
         </div>
 
@@ -59,8 +59,8 @@
                         </svg>
                     </div>
                     <div class="space-y-2 text-sm">
-                        <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm" style="background:#ef4444"></span><span style="color:var(--text-secondary)">Комиссия</span><span class="font-medium" style="color:var(--text)" x-text="(data.expense_pct?.commission||0)+'%'"></span></div>
-                        <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm" style="background:#f59e0b"></span><span style="color:var(--text-secondary)">Логистика</span><span class="font-medium" style="color:var(--text)" x-text="(data.expense_pct?.logistics||0)+'%'"></span></div>
+                        <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm" style="background:var(--danger)"></span><span style="color:var(--text-secondary)">Комиссия</span><span class="font-medium" style="color:var(--text)" x-text="(data.expense_pct?.commission||0)+'%'"></span></div>
+                        <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm" style="background:var(--warn)"></span><span style="color:var(--text-secondary)">Логистика</span><span class="font-medium" style="color:var(--text)" x-text="(data.expense_pct?.logistics||0)+'%'"></span></div>
                         <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm" style="background:#8b5cf6"></span><span style="color:var(--text-secondary)">Хранение</span><span class="font-medium" style="color:var(--text)" x-text="(data.expense_pct?.storage||0)+'%'"></span></div>
                         <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-sm" style="background:#64748b"></span><span style="color:var(--text-secondary)">Штрафы</span><span class="font-medium" style="color:var(--text)" x-text="(data.expense_pct?.penalties||0)+'%'"></span></div>
                     </div>
@@ -70,13 +70,13 @@
                 <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Сводка</h2>
                 <div class="space-y-3 text-sm">
                     <div class="flex justify-between"><span style="color:var(--text-secondary)">Продажи</span><span class="font-medium" style="color:var(--text)" x-text="formatMoney(data.totals?.total_sales)"></span></div>
-                    <div class="flex justify-between"><span style="color:var(--text-secondary)">Возвраты</span><span class="font-medium" style="color:#ef4444" x-text="formatMoney(data.totals?.total_returns)"></span></div>
-                    <div class="flex justify-between"><span style="color:var(--text-secondary)">Логистика</span><span class="font-medium" style="color:#f59e0b" x-text="formatMoney(data.totals?.total_logistics)"></span></div>
+                    <div class="flex justify-between"><span style="color:var(--text-secondary)">Возвраты</span><span class="font-medium" style="color:var(--danger)" x-text="formatMoney(data.totals?.total_returns)"></span></div>
+                    <div class="flex justify-between"><span style="color:var(--text-secondary)">Логистика</span><span class="font-medium" style="color:var(--warn)" x-text="formatMoney(data.totals?.total_logistics)"></span></div>
                     <div class="flex justify-between"><span style="color:var(--text-secondary)">Хранение</span><span class="font-medium" style="color:#8b5cf6" x-text="formatMoney(data.totals?.total_storage)"></span></div>
-                    <div class="flex justify-between"><span style="color:var(--text-secondary)">Штрафы + удержания</span><span class="font-medium" style="color:#ef4444" x-text="formatMoney((data.totals?.total_penalties||0) + (data.totals?.total_deductions||0))"></span></div>
-                    <div class="flex justify-between pt-2" style="border-top:1px solid var(--border)"><span class="font-semibold" style="color:var(--text)">К выплате (ppvz)</span><span class="font-bold text-lg" :style="'color:'+((data.totals?.total_for_pay||0)>=0?'#16a34a':'#ef4444')" x-text="formatMoney(data.totals?.total_for_pay)"></span></div>
-                    <div class="flex justify-between"><span style="color:var(--text-muted)" class="text-xs">Расчётная прибыль</span><span class="font-medium text-xs" :style="'color:'+(((data.totals?.total_sales||0)-(data.totals?.total_returns||0)-(data.totals?.total_logistics||0)-(data.totals?.total_storage||0)-(data.totals?.total_penalties||0)-(data.totals?.total_deductions||0))>=0?'#16a34a':'#ef4444')" x-text="formatMoney((data.totals?.total_sales||0)-(data.totals?.total_returns||0)-(data.totals?.total_logistics||0)-(data.totals?.total_storage||0)-(data.totals?.total_penalties||0)-(data.totals?.total_deductions||0))"></span></div>
-                    <div x-show="data.unprofitable_count > 0" class="flex justify-between"><span style="color:#ef4444">Убыточных товаров</span><span class="font-bold" style="color:#ef4444" x-text="data.unprofitable_count"></span></div>
+                    <div class="flex justify-between"><span style="color:var(--text-secondary)">Штрафы + удержания</span><span class="font-medium" style="color:var(--danger)" x-text="formatMoney((data.totals?.total_penalties||0) + (data.totals?.total_deductions||0))"></span></div>
+                    <div class="flex justify-between pt-2" style="border-top:1px solid var(--border)"><span class="font-semibold" style="color:var(--text)">К выплате (ppvz)</span><span class="font-bold text-lg" :style="'color:'+((data.totals?.total_for_pay||0)>=0?'var(--ok)':'var(--danger)')" x-text="formatMoney(data.totals?.total_for_pay)"></span></div>
+                    <div class="flex justify-between"><span style="color:var(--text-muted)" class="text-xs">Расчётная прибыль</span><span class="font-medium text-xs" :style="'color:'+(((data.totals?.total_sales||0)-(data.totals?.total_returns||0)-(data.totals?.total_logistics||0)-(data.totals?.total_storage||0)-(data.totals?.total_penalties||0)-(data.totals?.total_deductions||0))>=0?'var(--ok)':'var(--danger)')" x-text="formatMoney((data.totals?.total_sales||0)-(data.totals?.total_returns||0)-(data.totals?.total_logistics||0)-(data.totals?.total_storage||0)-(data.totals?.total_penalties||0)-(data.totals?.total_deductions||0))"></span></div>
+                    <div x-show="data.unprofitable_count > 0" class="flex justify-between"><span style="color:var(--danger)">Убыточных товаров</span><span class="font-bold" style="color:var(--danger)" x-text="data.unprofitable_count"></span></div>
                 </div>
             </div>
         </div>
@@ -99,10 +99,10 @@
                             <tr style="border-bottom:1px solid var(--border-light)">
                                 <td class="py-2 px-2" style="color:var(--text)" x-text="fmtDate(w.date_from) + ' — ' + fmtDate(w.date_to)"></td>
                                 <td class="py-2 px-2 text-right" style="color:var(--text)" x-text="formatMoney(w.retail_amount)"></td>
-                                <td class="py-2 px-2 text-right" style="color:#ef4444" x-text="formatMoney(w.returns_amount)"></td>
-                                <td class="py-2 px-2 text-right" style="color:#ef4444" x-text="formatMoney(w.commission)"></td>
-                                <td class="py-2 px-2 text-right" style="color:#f59e0b" x-text="formatMoney(w.logistics)"></td>
-                                <td class="py-2 px-2 text-right font-medium" :style="'color:'+(w.for_pay>=0?'#16a34a':'#ef4444')" x-text="formatMoney(w.for_pay)"></td>
+                                <td class="py-2 px-2 text-right" style="color:var(--danger)" x-text="formatMoney(w.returns_amount)"></td>
+                                <td class="py-2 px-2 text-right" style="color:var(--danger)" x-text="formatMoney(w.commission)"></td>
+                                <td class="py-2 px-2 text-right" style="color:var(--warn)" x-text="formatMoney(w.logistics)"></td>
+                                <td class="py-2 px-2 text-right font-medium" :style="'color:'+(w.for_pay>=0?'var(--ok)':'var(--danger)')" x-text="formatMoney(w.for_pay)"></td>
                             </tr>
                         </template>
                     </tbody>
@@ -133,11 +133,11 @@
                                 <td class="py-2 px-1 max-w-[150px] truncate" style="color:var(--text)" x-text="p.subject_name||'—'"></td>
                                 <td class="py-2 px-1 text-right" style="color:var(--text)" x-text="p.sales_count"></td>
                                 <td class="py-2 px-1 text-right" style="color:var(--text)" x-text="fmtS(p.retail_amount)"></td>
-                                <td class="py-2 px-1 text-right" style="color:#ef4444" x-text="fmtS(p.commission)"></td>
-                                <td class="py-2 px-1 text-right" style="color:#f59e0b" x-text="fmtS(p.logistics)"></td>
+                                <td class="py-2 px-1 text-right" style="color:var(--danger)" x-text="fmtS(p.commission)"></td>
+                                <td class="py-2 px-1 text-right" style="color:var(--warn)" x-text="fmtS(p.logistics)"></td>
                                 <td class="py-2 px-1 text-right" style="color:#8b5cf6" x-text="fmtS(p.storage)"></td>
-                                <td class="py-2 px-1 text-right font-medium" :style="'color:'+(p.ppvz_for_pay>=0?'#16a34a':'#ef4444')" x-text="fmtS(p.ppvz_for_pay)"></td>
-                                <td class="py-2 px-1 text-right" :style="'color:'+(p.margin>=0?'#16a34a':'#ef4444')" x-text="p.margin+'%'"></td>
+                                <td class="py-2 px-1 text-right font-medium" :style="'color:'+(p.ppvz_for_pay>=0?'var(--ok)':'var(--danger)')" x-text="fmtS(p.ppvz_for_pay)"></td>
+                                <td class="py-2 px-1 text-right" :style="'color:'+(p.margin>=0?'var(--ok)':'var(--danger)')" x-text="p.margin+'%'"></td>
                             </tr>
                         </template>
                     </tbody>

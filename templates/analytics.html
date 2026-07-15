@@ -49,9 +49,9 @@
 
     <!-- Error message -->
     <template x-if="error && !hasData">
-        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:24px;margin-bottom:32px">
-            <p style="color:#b91c1c" x-text="error"></p>
-            <button @click="loadData()" style="margin-top:12px;font-size:14px;color:#dc2626;text-decoration:underline">Попробовать снова</button>
+        <div style="background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:12px;padding:24px;margin-bottom:32px">
+            <p style="color:var(--danger)" x-text="error"></p>
+            <button @click="loadData()" style="margin-top:12px;font-size:14px;color:var(--danger);text-decoration:underline">Попробовать снова</button>
         </div>
     </template>
 
@@ -167,7 +167,7 @@
                 <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.8);border-radius:inherit">
                     <div style="text-align:center">
                         <template x-if="dailyError">
-                            <p style="font-size:14px;color:#ef4444;margin-bottom:12px" x-text="dailyError"></p>
+                            <p style="font-size:14px;color:var(--danger);margin-bottom:12px" x-text="dailyError"></p>
                         </template>
                         <button @click="loadDailyData()" class="sh-btn sh-btn--primary sh-btn--sm">
                             <span x-text="dailyError ? 'Попробовать снова' : 'Загрузить данные по дням'"></span>
@@ -201,21 +201,21 @@
                 </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
-                        <span style="width:12px;height:12px;border-radius:50%;background:#3b82f6"></span>
+                        <span style="width:12px;height:12px;border-radius:50%;background:var(--info)"></span>
                         <span style="color:var(--text-secondary)">В корзину</span>
                     </span>
                     <span style="font-weight:500;color:var(--text)" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></span>
                 </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
-                        <span style="width:12px;height:12px;border-radius:50%;background:#10b981"></span>
+                        <span style="width:12px;height:12px;border-radius:50%;background:var(--ok)"></span>
                         <span style="color:var(--text-secondary)">Заказы</span>
                     </span>
                     <span style="font-weight:500;color:var(--text)" x-text="kpi.orders.toLocaleString('ru-RU')"></span>
                 </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
-                        <span style="width:12px;height:12px;border-radius:50%;background:#f59e0b"></span>
+                        <span style="width:12px;height:12px;border-radius:50%;background:var(--warn)"></span>
                         <span style="color:var(--text-secondary)">Выкупы</span>
                     </span>
                     <span style="font-weight:500;color:var(--text)" x-text="kpi.buyouts.toLocaleString('ru-RU')"></span>
