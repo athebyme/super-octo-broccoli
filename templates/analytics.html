@@ -156,8 +156,8 @@
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
                 <h2 style="font-family:var(--font-display);font-style:italic;font-size:1.25rem;color:var(--text)">Динамика продаж</h2>
                 <div style="display:flex;align-items:center;gap:16px;font-size:12px;color:var(--text-secondary)">
-                    <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:50%;background:#6366f1"></span> Заказы (руб)</span>
-                    <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:50%;background:#34d399"></span> Заказы (шт)</span>
+                    <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:50%;background:var(--chart-1)"></span> Заказы (руб)</span>
+                    <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:50%;background:var(--chart-3)"></span> Заказы (шт)</span>
                 </div>
             </div>
             <div style="height:288px">
@@ -194,28 +194,28 @@
             <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px">
                 <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
-                        <span style="width:12px;height:12px;border-radius:50%;background:#6366f1"></span>
+                        <span style="width:12px;height:12px;border-radius:50%;background:var(--chart-1)"></span>
                         <span style="color:var(--text-secondary)">Просмотры</span>
                     </span>
                     <span style="font-weight:500;color:var(--text)" x-text="kpi.openCardCount.toLocaleString('ru-RU')"></span>
                 </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
-                        <span style="width:12px;height:12px;border-radius:50%;background:var(--info)"></span>
+                        <span style="width:12px;height:12px;border-radius:50%;background:var(--chart-2)"></span>
                         <span style="color:var(--text-secondary)">В корзину</span>
                     </span>
                     <span style="font-weight:500;color:var(--text)" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></span>
                 </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
-                        <span style="width:12px;height:12px;border-radius:50%;background:var(--ok)"></span>
+                        <span style="width:12px;height:12px;border-radius:50%;background:var(--chart-3)"></span>
                         <span style="color:var(--text-secondary)">Заказы</span>
                     </span>
                     <span style="font-weight:500;color:var(--text)" x-text="kpi.orders.toLocaleString('ru-RU')"></span>
                 </div>
                 <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
-                        <span style="width:12px;height:12px;border-radius:50%;background:var(--warn)"></span>
+                        <span style="width:12px;height:12px;border-radius:50%;background:var(--chart-4)"></span>
                         <span style="color:var(--text-secondary)">Выкупы</span>
                     </span>
                     <span style="font-weight:500;color:var(--text)" x-text="kpi.buyouts.toLocaleString('ru-RU')"></span>
@@ -495,20 +495,28 @@ function analyticsPage() {
                 }
             });
 
-            // Generate sparkline data from daily data or random placeholder
+            // Данные спарклайнов из daily; при отсутствии — пусто (честно, без плейсхолдеров)
             const daily = this.dailyData;
-            const revData = daily.length ? daily.map(d => d.orderSum) : Array.from({ length: 7 }, () => Math.random() * 40 + 60);
-            const ordData = daily.length ? daily.map(d => d.orderCount) : Array.from({ length: 7 }, () => Math.random() * 40 + 60);
-            const avgData = daily.length ? daily.map(d => d.orderCount ? d.orderSum / d.orderCount : 0) : Array.from({ length: 7 }, () => Math.random() * 40 + 60);
-            const buyData = daily.length ? daily.map(d => d.buyoutCount) : Array.from({ length: 7 }, () => Math.random() * 40 + 60);
+            const revData = daily.map(d => d.orderSum);
+            const ordData = daily.map(d => d.orderCount);
+            const avgData = daily.map(d => d.orderCount ? d.orderSum / d.orderCount : 0);
+            const buyData = daily.map(d => d.buyoutCount);
 
             // Destroy existing charts
             Object.values(this.sparkCharts).forEach(c => c && c.destroy());
 
-            if (this.$refs.sparkRevenue) this.sparkCharts.revenue = new Chart(this.$refs.sparkRevenue, sparkOpts('#6366f1', revData));
-            if (this.$refs.sparkOrders) this.sparkCharts.orders = new Chart(this.$refs.sparkOrders, sparkOpts('#3b82f6', ordData));
-            if (this.$refs.sparkAvgCheck) this.sparkCharts.avgCheck = new Chart(this.$refs.sparkAvgCheck, sparkOpts('#10b981', avgData));
-            if (this.$refs.sparkBuyouts) this.sparkCharts.buyouts = new Chart(this.$refs.sparkBuyouts, sparkOpts('#f59e0b', buyData));
+            const P = window.shChart;
+            const regSpark = (ref, data, i) => {
+                if (!ref) return null;
+                return P.register(new Chart(ref, sparkOpts(P.color(i), data)), (c, p) => {
+                    c.data.datasets[0].borderColor = p.color(i);
+                    c.data.datasets[0].backgroundColor = p.fade(p.color(i), 0.13);
+                });
+            };
+            this.sparkCharts.revenue = regSpark(this.$refs.sparkRevenue, revData, 1);
+            this.sparkCharts.orders = regSpark(this.$refs.sparkOrders, ordData, 2);
+            this.sparkCharts.avgCheck = regSpark(this.$refs.sparkAvgCheck, avgData, 3);
+            this.sparkCharts.buyouts = regSpark(this.$refs.sparkBuyouts, buyData, 4);
         },
 
         initSalesChart() {
@@ -520,7 +528,9 @@ function analyticsPage() {
                 return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
             });
 
-            this.salesChart = new Chart(this.$refs.salesChart, {
+            const P = window.shChart;
+            const tipBg = P._read('--bg-sidebar', '#0a0a0a');
+            this.salesChart = P.register(new Chart(this.$refs.salesChart, {
                 type: 'line',
                 data: {
                     labels,
@@ -528,18 +538,18 @@ function analyticsPage() {
                         {
                             label: 'Заказы (руб)',
                             data: this.dailyData.map(d => d.orderSum),
-                            borderColor: '#6366f1',
-                            backgroundColor: 'rgba(99,102,241,0.08)',
+                            borderColor: P.color(1),
+                            backgroundColor: P.fade(P.color(1), 0.08),
                             fill: true, tension: 0.4, borderWidth: 2,
-                            pointBackgroundColor: '#6366f1', pointRadius: 3, pointHoverRadius: 6,
+                            pointBackgroundColor: P.color(1), pointRadius: 3, pointHoverRadius: 6,
                         },
                         {
                             label: 'Заказы (шт)',
                             data: this.dailyData.map(d => d.orderCount),
-                            borderColor: '#34d399',
-                            backgroundColor: 'rgba(52,211,153,0.08)',
+                            borderColor: P.color(3),
+                            backgroundColor: P.fade(P.color(3), 0.08),
                             fill: true, tension: 0.4, borderWidth: 2,
-                            pointBackgroundColor: '#34d399', pointRadius: 3, pointHoverRadius: 6,
+                            pointBackgroundColor: P.color(3), pointRadius: 3, pointHoverRadius: 6,
                             yAxisID: 'y1',
                         },
                     ]
@@ -547,13 +557,18 @@ function analyticsPage() {
                 options: {
                     responsive: true, maintainAspectRatio: false,
                     interaction: { mode: 'index', intersect: false },
-                    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e1b4b', titleColor: '#e0e7ff', bodyColor: '#c7d2fe', cornerRadius: 12, padding: 12 } },
+                    plugins: { legend: { display: false }, tooltip: { backgroundColor: tipBg, titleColor: '#ffffff', bodyColor: 'rgba(255,255,255,0.85)', cornerRadius: 8, padding: 12 } },
                     scales: {
-                        x: { grid: { display: false }, ticks: { color: '#9ca3af' } },
-                        y: { grid: { color: '#f3f4f6' }, ticks: { color: '#9ca3af', callback: v => (v/1000) + 'k' } },
-                        y1: { position: 'right', grid: { display: false }, ticks: { color: '#9ca3af' } },
+                        x: { grid: { display: false }, ticks: { color: P.textMuted() } },
+                        y: { grid: { color: P.grid() }, ticks: { color: P.textMuted(), callback: v => (v/1000) + 'k' } },
+                        y1: { position: 'right', grid: { display: false }, ticks: { color: P.textMuted() } },
                     }
                 }
+            }), (c, p) => {
+                c.data.datasets[0].borderColor = p.color(1); c.data.datasets[0].backgroundColor = p.fade(p.color(1), 0.08); c.data.datasets[0].pointBackgroundColor = p.color(1);
+                c.data.datasets[1].borderColor = p.color(3); c.data.datasets[1].backgroundColor = p.fade(p.color(3), 0.08); c.data.datasets[1].pointBackgroundColor = p.color(3);
+                c.options.plugins.tooltip.backgroundColor = p._read('--bg-sidebar', '#0a0a0a');
+                c.options.scales.x.ticks.color = p.textMuted(); c.options.scales.y.ticks.color = p.textMuted(); c.options.scales.y.grid.color = p.grid(); c.options.scales.y1.ticks.color = p.textMuted();
             });
         },
 
@@ -561,7 +576,8 @@ function analyticsPage() {
             if (!this.$refs.funnelDonut) return;
             if (this.funnelChart) this.funnelChart.destroy();
 
-            this.funnelChart = new Chart(this.$refs.funnelDonut, {
+            const P = window.shChart;
+            this.funnelChart = P.register(new Chart(this.$refs.funnelDonut, {
                 type: 'doughnut',
                 data: {
                     labels: ['Просмотры', 'Корзина', 'Заказы', 'Выкупы'],
@@ -572,7 +588,7 @@ function analyticsPage() {
                             this.kpi.orders,
                             this.kpi.buyouts,
                         ],
-                        backgroundColor: ['#6366f1', '#3b82f6', '#10b981', '#f59e0b'],
+                        backgroundColor: [P.color(1), P.color(2), P.color(3), P.color(4)],
                         borderWidth: 0,
                         hoverOffset: 8,
                     }]
@@ -582,9 +598,12 @@ function analyticsPage() {
                     cutout: '70%',
                     plugins: {
                         legend: { display: false },
-                        tooltip: { backgroundColor: '#1e1b4b', cornerRadius: 12, padding: 12 },
+                        tooltip: { backgroundColor: P._read('--bg-sidebar', '#0a0a0a'), cornerRadius: 8, padding: 12 },
                     }
                 }
+            }), (c, p) => {
+                c.data.datasets[0].backgroundColor = [p.color(1), p.color(2), p.color(3), p.color(4)];
+                c.options.plugins.tooltip.backgroundColor = p._read('--bg-sidebar', '#0a0a0a');
             });
         },
     };

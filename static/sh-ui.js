@@ -120,6 +120,53 @@
     };
     window._notifChime = chime;
 
+    /* ─────────────────────────────────────────────
+       shChart — токен-палитра для Chart.js/inline-SVG,
+       перекраска графиков при смене темы (sh-theme-change)
+       ───────────────────────────────────────────── */
+    window.shChart = {
+        _read(name, fallback) {
+            try {
+                const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+                return v || fallback;
+            } catch (e) { return fallback; }
+        },
+        palette() {
+            const out = [];
+            for (let i = 1; i <= 6; i++) out.push(this._read('--chart-' + i, '#888888'));
+            return out;
+        },
+        color(i) { return this.palette()[(((i - 1) % 6) + 6) % 6]; },
+        text()      { return this._read('--text', '#1a1a1a'); },
+        textMuted() { return this._read('--text-muted', '#9a9a9a'); },
+        grid()      { return this._read('--border-light', '#eeeeee'); },
+        surface()   { return this._read('--bg-card', '#ffffff'); },
+        border()    { return this._read('--border', '#e8e5e1'); },
+        fade(hex, alpha) {
+            const a = alpha == null ? 0.1 : alpha;
+            hex = (hex || '').trim().replace('#', '');
+            if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+            const n = parseInt(hex, 16);
+            if (isNaN(n) || hex.length !== 6) return 'rgba(136,136,136,' + a + ')';
+            return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+        },
+        _charts: [],
+        register(chart, recolor) {
+            if (!chart || typeof recolor !== 'function') return chart;
+            try { recolor(chart, this); if (chart.update) chart.update('none'); } catch (e) {}
+            this._charts.push({ chart, recolor });
+            return chart;
+        },
+        onThemeChange() {
+            const self = this;
+            this._charts = this._charts.filter(c => c.chart && (c.chart.ctx || c.chart.canvas));
+            this._charts.forEach(function (c) {
+                try { c.recolor(c.chart, self); if (c.chart.update) c.chart.update('none'); } catch (e) {}
+            });
+        }
+    };
+    window.addEventListener('sh-theme-change', function () { window.shChart.onThemeChange(); });
+
     function plural(n, forms) {
         const m10 = n % 10, m100 = n % 100;
         if (m10 === 1 && m100 !== 11) return forms[0];

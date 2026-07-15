@@ -102,6 +102,9 @@
             /* Единая z-шкала для оверлеев */
             --z-dropdown: 1000;  --z-sticky: 1010;  --z-backdrop: 1040;
             --z-overlay: 1050;   --z-toast: 1080;    --z-cmdpal: 1090;
+            /* Категорийная палитра графиков (dataviz-validated, фикс-порядок) */
+            --chart-1: #c0532f;  --chart-2: #1f6aa5;  --chart-3: #2f8f57;
+            --chart-4: #b0771c;  --chart-5: #7a4fb0;  --chart-6: #b83f5f;
         }
 
         [data-theme="dark"] {
@@ -130,6 +133,9 @@
             --shadow-1: 0 1px 2px rgba(0,0,0,0.34);
             --shadow-2: 0 4px 14px rgba(0,0,0,0.42);
             --shadow-3: 0 16px 40px rgba(0,0,0,0.58);
+            /* Палитра графиков (dataviz-validated для тёмной поверхности) */
+            --chart-1: #d06f48;  --chart-2: #4890cc;  --chart-3: #46a86c;
+            --chart-4: #b57e26;  --chart-5: #9d6dd0;  --chart-6: #d66080;
         }
 
         body {
@@ -2464,6 +2470,7 @@
         var next = current === 'dark' ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', next);
         try { localStorage.setItem('sh-theme', next); } catch (e) {}
+        try { window.dispatchEvent(new CustomEvent('sh-theme-change', { detail: { theme: next } })); } catch (e) {}
     };
     /* Пока пользователь не выбрал тему сам — следуем за системной */
     (function () {
