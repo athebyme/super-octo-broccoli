@@ -7,6 +7,11 @@ logger = logging.getLogger(__name__)
 
 FEEDBACKS_API_URL = "https://feedbacks-api.wildberries.ru"
 
+
+class FeedbackServiceError(RuntimeError):
+    """Public-safe WB feedback API failure without credentials or raw bodies."""
+
+
 class FeedbackService:
     """Service for interacting with WB Feedbacks & Questions API."""
 
@@ -34,26 +39,62 @@ class FeedbackService:
         self._rate_limit()
         url = f"{FEEDBACKS_API_URL}{path}"
         resp = self.session.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        self._raise_for_status(resp)
+        return self._decode_json(resp, allow_empty=False)
 
     def _post(self, path, json_data=None):
         """Make POST request with rate limiting."""
         self._rate_limit()
         url = f"{FEEDBACKS_API_URL}{path}"
         resp = self.session.post(url, json=json_data, timeout=30)
-        if resp.status_code == 204:
-            return {'success': True}
-        resp.raise_for_status()
-        return resp.json()
+        self._raise_for_status(resp)
+        return self._decode_json(resp, allow_empty=True)
 
     def _patch(self, path, json_data=None):
         """Make PATCH request with rate limiting."""
         self._rate_limit()
         url = f"{FEEDBACKS_API_URL}{path}"
         resp = self.session.patch(url, json=json_data, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        self._raise_for_status(resp)
+        return self._decode_json(resp, allow_empty=True)
+
+    @staticmethod
+    def _raise_for_status(resp):
+        try:
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            detail = ''
+            try:
+                payload = resp.json()
+                if isinstance(payload, dict):
+                    detail = str(
+                        payload.get('detail')
+                        or payload.get('title')
+                        or payload.get('message')
+                        or ''
+                    ).strip()
+            except (TypeError, ValueError):
+                pass
+            suffix = f': {detail[:300]}' if detail else ''
+            raise FeedbackServiceError(
+                f'WB отклонил запрос (HTTP {resp.status_code}){suffix}'
+            ) from exc
+
+    @staticmethod
+    def _decode_json(resp, *, allow_empty):
+        # Answer endpoints legitimately return 204 No Content (and may return
+        # another empty 2xx). Such a response means the WB write succeeded.
+        content = getattr(resp, 'content', b'') or b''
+        if resp.status_code == 204 or not content.strip():
+            if allow_empty:
+                return {'success': True}
+            raise FeedbackServiceError('WB вернул пустой ответ на запрос данных')
+        try:
+            return resp.json()
+        except (TypeError, ValueError) as exc:
+            raise FeedbackServiceError(
+                f'WB вернул ответ неизвестного формата (HTTP {resp.status_code})'
+            ) from exc
 
     # --- Feedbacks ---
 

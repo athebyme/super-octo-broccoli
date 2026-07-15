@@ -7,6 +7,7 @@ Prefix: /internal/v1/
 
 Blueprint исключён из CSRF-защиты (агенты аутентифицируются через X-Agent-Key).
 """
+import hashlib
 import json
 import html
 import logging
@@ -15,7 +16,7 @@ from difflib import SequenceMatcher
 from functools import wraps
 from datetime import datetime, timedelta, timezone
 
-from flask import request, jsonify, abort, Blueprint
+from flask import request, jsonify, abort, Blueprint, current_app
 from sqlalchemy import func
 from sqlalchemy.orm import load_only
 from werkzeug.security import check_password_hash
@@ -27,6 +28,7 @@ from models import (
     Brand, BrandAlias, MarketplaceBrand, BrandCategoryLink,
     AgentChangeSnapshot, CardEditHistory, SystemSettings, AutoImportSettings,
     AgentTask, ProductDefaults, APILog, AgentReviewProposal,
+    ImageGenerationExperiment,
     Supplier, SellerSupplier,
 )
 from services import agent_service
@@ -36,6 +38,14 @@ from services.brand_reference_service import (
     resolve_exact_brand_categories,
 )
 from services.agent_knowledge import search_knowledge
+from agents.image_chat_contract import (
+    CHAT_IMAGE_BACKEND,
+    CHAT_IMAGE_COST_RUB,
+    CHAT_IMAGE_COST_USD,
+    CHAT_IMAGE_MODEL,
+    CHAT_IMAGE_RESOLUTION,
+    CHAT_IMAGE_STRATEGY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +100,28 @@ def _assigned_task_for_seller(seller_id: int = None):
         return None, (jsonify({'error': 'Assigned task is not active'}), 403)
     if seller_id is not None and int(task.seller_id) != int(seller_id):
         return None, (jsonify({'error': 'Seller is outside assigned task scope'}), 403)
+    return task, None
+
+
+def _assigned_image_generation_task(seller_id: int):
+    """Require an approved write task whose typed plan contains the image skill."""
+    task, error = _assigned_task_for_seller(seller_id)
+    if error:
+        return None, error
+    task_input = task.get_input()
+    steps = task_input.get('steps') if isinstance(task_input, dict) else None
+    authorized = (
+        task_input.get('risk') == 'write'
+        and isinstance(steps, list)
+        and any(
+            isinstance(step, dict) and step.get('agent') == 'image-generator'
+            for step in steps
+        )
+    )
+    if not authorized:
+        return None, (jsonify({
+            'error': 'Assigned task is not approved for paid image generation',
+        }), 403)
     return task, None
 
 
@@ -1161,6 +1193,89 @@ def internal_batch_update_products(seller_id):
     })
 
 
+@internal_api_bp.route(
+    '/sellers/<int:seller_id>/products/content-proposals/publish-batch',
+    methods=['POST'],
+)
+@_authenticate_agent
+def internal_publish_product_content_proposals(seller_id):
+    """Publish exact pending content diffs approved in this chat plan."""
+    task, error = _assigned_task_for_seller(seller_id)
+    if error:
+        return error
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != {'product_ids', 'fields'}:
+        return jsonify({'error': 'product_ids and fields are required'}), 400
+
+    raw_ids = data.get('product_ids')
+    if not isinstance(raw_ids, list) or not 1 <= len(raw_ids) <= 100:
+        return jsonify({'error': 'product_ids must contain 1..100 integers'}), 400
+    product_ids = []
+    seen = set()
+    for index, product_id in enumerate(raw_ids):
+        if (
+            not isinstance(product_id, int) or isinstance(product_id, bool)
+            or product_id <= 0
+        ):
+            return jsonify({
+                'error': f'product_ids[{index}] must be a positive integer',
+            }), 400
+        if product_id in seen:
+            return jsonify({'error': f'Duplicate product_id: {product_id}'}), 400
+        seen.add(product_id)
+        product_ids.append(product_id)
+
+    raw_fields = data.get('fields')
+    if (
+        not isinstance(raw_fields, list) or not raw_fields
+        or len(raw_fields) > 2
+        or any(field not in {'title', 'description'} for field in raw_fields)
+        or len(set(raw_fields)) != len(raw_fields)
+    ):
+        return jsonify({
+            'error': 'fields must be a unique title/description array',
+        }), 400
+    fields = [field for field in ('title', 'description') if field in raw_fields]
+
+    task_input = task.get_input()
+    task_scope = task_input.get('entity_scope') or {}
+    if (
+        task_scope.get('kind') != 'product'
+        or task_scope.get('ids') != product_ids
+        or task_input.get('product_ids') != product_ids
+    ):
+        return jsonify({'error': 'Request is outside the approved typed scope'}), 403
+    publisher_steps = [
+        step for step in (task_input.get('steps') or [])
+        if isinstance(step, dict) and step.get('agent') == 'wb-content-publisher'
+    ]
+    if len(publisher_steps) != 1:
+        return jsonify({'error': 'Approved WB publish step is missing'}), 403
+    approved_fields = (publisher_steps[0].get('params') or {}).get('fields')
+    approved_fields = [
+        field for field in ('title', 'description')
+        if isinstance(approved_fields, list) and field in approved_fields
+    ]
+    if approved_fields != fields:
+        return jsonify({'error': 'Fields differ from the approved plan'}), 403
+
+    from services.agent_wb_content import publish_confirmed_content_proposals
+    try:
+        result = publish_confirmed_content_proposals(
+            task, seller_id, product_ids, fields,
+        )
+    except LookupError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 409
+    return jsonify({
+        **result,
+        'ok': not result.get('failed'),
+        'processed': len(product_ids),
+        'fields': fields,
+    })
+
+
 @internal_api_bp.route('/sellers/<int:seller_id>/imported-products', methods=['GET'])
 @_authenticate_agent
 def internal_list_imported_products(seller_id):
@@ -2065,6 +2180,357 @@ def internal_products_content_brief(seller_id):
     })
 
 
+def _resolve_agent_image_source(seller_id: int, entity_kind: str, entity_id: int):
+    """Resolve a typed chat card to the ImportedProduct owned by Image Lab."""
+    from services import image_lab_service as image_lab
+
+    if entity_kind == 'imported_product':
+        source = ImportedProduct.query.filter_by(
+            id=entity_id, seller_id=seller_id,
+        ).first()
+        requested = source
+    elif entity_kind == 'product':
+        requested = Product.query.filter_by(
+            id=entity_id, seller_id=seller_id,
+        ).first()
+        if not requested:
+            return None, None
+        candidates = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller_id,
+            db.or_(
+                ImportedProduct.product_id == requested.id,
+                ImportedProduct.wb_nm_id == requested.nm_id,
+            ),
+        ).all()
+        candidates.sort(key=lambda item: (
+            item.product_id == requested.id,
+            image_lab.photo_count(item.photo_urls) > 0,
+            item.updated_at or datetime.min,
+            item.id,
+        ), reverse=True)
+        source = candidates[0] if candidates else None
+    else:
+        return None, None
+    if not source:
+        return requested, None
+    return requested, source
+
+
+def _agent_image_source_photo_data(
+    seller_id: int,
+    requested,
+    source: ImportedProduct,
+):
+    """Return available photo count and an optional exact WB-media backfill.
+
+    Image Lab historically stores sources on ImportedProduct. Published Product
+    cards can still be used when their exact linked import row has lost or never
+    received ``photo_urls``: integer WB photo slots are expanded to public CDN
+    URLs without fuzzy product matching. The caller decides whether to persist
+    the returned backfill.
+    """
+    from services import image_lab_service as image_lab
+
+    stored_count = image_lab.photo_count(source.photo_urls)
+    if stored_count > 0:
+        return stored_count, None
+
+    product = requested if isinstance(requested, Product) else None
+    if product is None and source.product_id:
+        product = Product.query.filter_by(
+            id=source.product_id, seller_id=seller_id,
+        ).first()
+    if product is None and source.wb_nm_id:
+        product = Product.query.filter_by(
+            nm_id=source.wb_nm_id, seller_id=seller_id,
+        ).first()
+    if product is None or not product.photos_json:
+        return 0, None
+
+    try:
+        raw_photos = json.loads(product.photos_json)
+    except (TypeError, ValueError):
+        return 0, None
+    if not isinstance(raw_photos, list):
+        return 0, None
+
+    from services.wb_media import normalize_photo_urls
+
+    urls = normalize_photo_urls(product.nm_id, raw_photos[:10], 'big')
+    urls = [
+        url for url in urls
+        if isinstance(url, str)
+        and re.match(r'^https?://', url.strip(), flags=re.IGNORECASE)
+    ][:10]
+    return len(urls), urls or None
+
+
+def _agent_image_experiment_payload(experiment: ImageGenerationExperiment) -> dict:
+    """Small browser-safe projection; full provider prompt stays in Image Lab."""
+    from services import image_lab_service as image_lab
+
+    data = image_lab.experiment_dict(experiment)
+    quality = data.get('quality') if isinstance(data.get('quality'), dict) else {}
+    experiment_id = int(experiment.id)
+    product_id = int(experiment.imported_product_id or 0)
+    return {
+        'id': experiment_id,
+        'product_id': product_id,
+        'product_title': str(data.get('product_title') or '')[:180],
+        'backend': experiment.backend,
+        'model': experiment.model,
+        'generation_strategy': experiment.generation_strategy,
+        'status': experiment.status,
+        'error': str(experiment.error or '')[:500],
+        'latency_s': experiment.latency_s,
+        'estimated_cost_rub': float(experiment.estimated_cost_rub or 0),
+        'quality_status': str(quality.get('status') or ''),
+        'publishable': bool(quality.get('publishable')),
+        'has_final': bool(data.get('has_final')),
+        'image_url': f'/image-lab/api/experiments/{experiment_id}/image/final',
+        'source_url': f'/image-lab/api/experiments/{experiment_id}/image/source',
+        'lab_url': f'/image-lab?product_id={product_id}#experiment-{experiment_id}',
+    }
+
+
+@internal_api_bp.route(
+    '/sellers/<int:seller_id>/image-generation/brief', methods=['POST'],
+)
+@_authenticate_agent
+def internal_image_generation_brief(seller_id):
+    """Return one bounded visual fact pack before the Gemini prompt call."""
+    _, error = _assigned_image_generation_task(seller_id)
+    if error:
+        return error
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON object is required'}), 400
+    unknown = set(data) - {'entity_kind', 'product_id'}
+    if unknown:
+        return jsonify({'error': f'Unknown fields: {", ".join(sorted(unknown))}'}), 400
+    entity_kind = str(data.get('entity_kind') or '').strip().lower()
+    product_id = data.get('product_id')
+    if entity_kind not in {'product', 'imported_product'}:
+        return jsonify({'error': 'entity_kind must be product or imported_product'}), 400
+    if isinstance(product_id, bool) or not isinstance(product_id, int) or product_id <= 0:
+        return jsonify({'error': 'product_id must be a positive integer'}), 400
+
+    requested, source = _resolve_agent_image_source(
+        seller_id, entity_kind, product_id,
+    )
+    if requested is None:
+        return jsonify({'error': 'Product not found'}), 404
+    if source is None:
+        return jsonify({
+            'error': (
+                'Для карточки не найден связанный исходник Фотостудии с фотографией'
+            ),
+        }), 409
+
+    from services import image_lab_service as image_lab
+
+    source_photo_count, _ = _agent_image_source_photo_data(
+        seller_id, requested, source,
+    )
+    if source_photo_count <= 0:
+        return jsonify({
+            'error': 'У карточки нет доступного исходного фото',
+        }), 409
+    provider_balance = (
+        None
+        if current_app.config.get('TESTING')
+        else image_lab.openrouter_balance_usd()
+    )
+    if (
+        provider_balance is not None
+        and provider_balance + 1e-9 < CHAT_IMAGE_COST_USD
+    ):
+        return jsonify({
+            'error': (
+                'Недостаточно средств OpenRouter для генерации: '
+                f'доступно ${provider_balance:.2f}, требуется примерно '
+                f'${CHAT_IMAGE_COST_USD:.2f}'
+            ),
+        }), 409
+
+    return jsonify({
+        'entity_kind': entity_kind,
+        'requested_product_id': product_id,
+        'source_product_id': source.id,
+        'title': str(source.title or getattr(requested, 'title', '') or '')[:180],
+        'photo_count': source_photo_count,
+        'visual_context': image_lab.build_product_visual_context(source),
+        'generation': {
+            'backend': CHAT_IMAGE_BACKEND,
+            'model': CHAT_IMAGE_MODEL,
+            'strategy': CHAT_IMAGE_STRATEGY,
+            'resolution': CHAT_IMAGE_RESOLUTION,
+            'estimated_cost_usd': CHAT_IMAGE_COST_USD,
+            'estimated_cost_rub': CHAT_IMAGE_COST_RUB,
+            'publishable': False,
+            'review_required': True,
+        },
+    })
+
+
+@internal_api_bp.route(
+    '/sellers/<int:seller_id>/image-generation/experiments', methods=['POST'],
+)
+@_authenticate_agent
+def internal_create_image_generation_experiment(seller_id):
+    """Create exactly one paid native-scene experiment after plan approval."""
+    task, error = _assigned_image_generation_task(seller_id)
+    if error:
+        return error
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON object is required'}), 400
+    allowed = {
+        'entity_kind', 'product_id', 'photo_index', 'scene_prompt', 'prompt_model',
+    }
+    unknown = set(data) - allowed
+    if unknown:
+        return jsonify({'error': f'Unknown fields: {", ".join(sorted(unknown))}'}), 400
+    entity_kind = str(data.get('entity_kind') or '').strip().lower()
+    product_id = data.get('product_id')
+    photo_index = data.get('photo_index', 0)
+    scene_prompt = ' '.join(str(data.get('scene_prompt') or '').split()).strip()
+    prompt_model = str(data.get('prompt_model') or '').strip()[:120]
+    if entity_kind not in {'product', 'imported_product'}:
+        return jsonify({'error': 'entity_kind must be product or imported_product'}), 400
+    if isinstance(product_id, bool) or not isinstance(product_id, int) or product_id <= 0:
+        return jsonify({'error': 'product_id must be a positive integer'}), 400
+    if isinstance(photo_index, bool) or not isinstance(photo_index, int) or not 0 <= photo_index <= 9:
+        return jsonify({'error': 'photo_index must be an integer from 0 to 9'}), 400
+    if not 20 <= len(scene_prompt) <= 800:
+        return jsonify({'error': 'scene_prompt must contain 20..800 characters'}), 400
+    normalized_model = prompt_model.casefold()
+    if 'gemini' not in normalized_model or 'flash' not in normalized_model:
+        return jsonify({'error': 'A Gemini Flash prompt_model is required'}), 400
+
+    requested, source = _resolve_agent_image_source(
+        seller_id, entity_kind, product_id,
+    )
+    if requested is None:
+        return jsonify({'error': 'Product not found'}), 404
+    if source is None:
+        return jsonify({'error': 'Image Lab source is unavailable'}), 409
+
+    from services import image_lab_service as image_lab
+
+    source_photo_count, source_photo_backfill = _agent_image_source_photo_data(
+        seller_id, requested, source,
+    )
+    if photo_index >= source_photo_count:
+        return jsonify({'error': 'Selected source photo is unavailable'}), 409
+
+    signature = hashlib.sha256(json.dumps({
+        'seller_id': seller_id,
+        'source_product_id': source.id,
+        'photo_index': photo_index,
+        'scene_prompt': scene_prompt,
+        'prompt_model': prompt_model,
+    }, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+    checkpoint = task.get_checkpoint()
+    previous = checkpoint.get('image_generation') if isinstance(checkpoint, dict) else None
+    if isinstance(previous, dict) and previous.get('experiment_id'):
+        experiment = ImageGenerationExperiment.query.filter_by(
+            id=previous.get('experiment_id'), seller_id=seller_id,
+        ).first()
+        if experiment:
+            # Re-offering a queued job is safe: Image Lab claims queued -> running
+            # atomically. This also closes a crash window between checkpointing
+            # and submitting work to the bounded inline executor.
+            if experiment.status == 'queued':
+                image_lab.launch_experiments(
+                    current_app._get_current_object(), [experiment.id],
+                )
+            return jsonify({
+                'experiment': _agent_image_experiment_payload(experiment),
+                'idempotent_replay': True,
+                'request_signature_matched': previous.get('signature') == signature,
+            })
+        return jsonify({
+            'error': 'Paid generation checkpoint exists but its experiment is unavailable',
+        }), 409
+
+    try:
+        if source_photo_backfill:
+            # This exact Product -> ImportedProduct media repair is committed in
+            # the same transaction as the paid experiment and task checkpoint.
+            source.photo_urls = json.dumps(
+                source_photo_backfill, ensure_ascii=False,
+            )
+        experiments = image_lab.create_experiments(
+            seller_id=seller_id,
+            product_id=source.id,
+            scene_key='luxury',
+            custom_scene=scene_prompt,
+            targets=[{'backend': CHAT_IMAGE_BACKEND, 'model': CHAT_IMAGE_MODEL}],
+            photo_indices=[photo_index],
+            generation_mode='single',
+            generation_strategy=CHAT_IMAGE_STRATEGY,
+            primary_photo_index=photo_index,
+            photo_roles=[{'index': photo_index, 'role': 'angle'}],
+            include_product_context=True,
+            watermark=None,
+            overlay=None,
+            additional_prompt='',
+            requested_views=None,
+            commit=False,
+        )
+        experiment = experiments[0]
+        checkpoint = task.get_checkpoint()
+        if not isinstance(checkpoint, dict):
+            checkpoint = {}
+        checkpoint['image_generation'] = {
+            'signature': signature,
+            'experiment_id': experiment.id,
+        }
+        task.checkpoint_json = json.dumps(checkpoint, ensure_ascii=False)
+        db.session.commit()
+        image_lab.launch_experiments(
+            current_app._get_current_object(), [experiment.id],
+        )
+        return jsonify({
+            'experiment': _agent_image_experiment_payload(experiment),
+            'idempotent_replay': False,
+        }), 202
+    except image_lab.ImageLabError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+
+
+@internal_api_bp.route(
+    '/sellers/<int:seller_id>/image-generation/experiments/<int:experiment_id>',
+    methods=['GET'],
+)
+@_authenticate_agent
+def internal_get_image_generation_experiment(seller_id, experiment_id):
+    """Poll one seller-owned experiment while the approved chat task is active."""
+    task, error = _assigned_image_generation_task(seller_id)
+    if error:
+        return error
+    checkpoint = task.get_checkpoint()
+    authorized = (
+        checkpoint.get('image_generation')
+        if isinstance(checkpoint, dict) else None
+    )
+    if (
+        not isinstance(authorized, dict)
+        or authorized.get('experiment_id') != experiment_id
+    ):
+        return jsonify({
+            'error': 'Experiment is outside the assigned task scope',
+        }), 403
+    experiment = ImageGenerationExperiment.query.filter_by(
+        id=experiment_id, seller_id=seller_id,
+    ).first()
+    if not experiment:
+        return jsonify({'error': 'Experiment not found'}), 404
+    return jsonify({'experiment': _agent_image_experiment_payload(experiment)})
+
+
 @internal_api_bp.route('/sellers/<int:seller_id>/products/audit-batch', methods=['POST'])
 @_authenticate_agent
 def internal_products_audit_batch(seller_id):
@@ -2768,6 +3234,45 @@ def _missing_wb_category_characteristics(subject_id):
     }
 
 
+def _ensure_wb_characteristic_references(subject_ids, marketplace=None):
+    """Best-effort bounded refresh before an AI reference read.
+
+    The endpoint still serializes the local fail-closed reference status when
+    WB is unavailable. This helper only removes the avoidable case where the AI
+    sees stale data even though the platform has a configured central WB key.
+    """
+    marketplace = marketplace or Marketplace.query.filter_by(code='wb').first()
+    if not marketplace:
+        return None
+    api_key = marketplace.api_key
+    if not api_key:
+        return None
+    from services.marketplace_service import MarketplaceService
+    from services.wb_api_client import WildberriesAPIClient
+    client = WildberriesAPIClient(api_key=api_key)
+    try:
+        result = MarketplaceService.ensure_wb_references_current(
+            list(subject_ids), client=client,
+        )
+        if not result.get('success'):
+            logger.warning(
+                'WB reference preflight failed for subjects=%s: %s',
+                list(subject_ids)[:20],
+                result.get('error') or result.get('errors'),
+            )
+        return result
+    except Exception:
+        logger.exception(
+            'WB reference preflight crashed for subjects=%s',
+            list(subject_ids)[:20],
+        )
+        return None
+    finally:
+        close = getattr(client, 'close', None)
+        if callable(close):
+            close()
+
+
 def _serialize_wb_category_characteristics(
     marketplace, category, charcs, constraint_cache,
 ):
@@ -2965,6 +3470,7 @@ def internal_get_category_characteristics(subject_id):
         required_only: если true — вернуть только обязательные (default: false)
     """
     marketplace = Marketplace.query.filter_by(code='wb').first()
+    _ensure_wb_characteristic_references([subject_id], marketplace)
     category = None
     if marketplace:
         category = MarketplaceCategory.query.filter_by(
@@ -2998,6 +3504,7 @@ def internal_get_category_characteristics_batch():
         return jsonify({'error': str(exc)}), 400
 
     marketplace = Marketplace.query.filter_by(code='wb').first()
+    _ensure_wb_characteristic_references(subject_ids, marketplace)
     categories = []
     if marketplace:
         categories = MarketplaceCategory.query.filter(
@@ -3010,6 +3517,119 @@ def internal_get_category_characteristics_batch():
         _missing_wb_category_characteristics(subject_id)
         for subject_id in subject_ids
     ]
+    return jsonify({'results': results, 'count': len(results)})
+
+
+@internal_api_bp.route('/categories/characteristic-values/search-batch', methods=['POST'])
+@_authenticate_agent
+def internal_search_characteristic_values_batch():
+    """Search canonical values in up to 50 effective WB allowlists."""
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            raise ValueError('JSON body must be an object')
+        queries = data.get('queries')
+        if not isinstance(queries, list) or not 1 <= len(queries) <= 50:
+            raise ValueError('queries must contain 1..50 objects')
+        limit = data.get('limit', 20)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ValueError('limit must be an integer from 1 to 50')
+        prepared = []
+        seen = set()
+        for index, item in enumerate(queries):
+            if not isinstance(item, dict) or set(item) != {'subject_id', 'charc_id', 'query'}:
+                raise ValueError(
+                    f'queries[{index}] must contain subject_id, charc_id and query only'
+                )
+            subject_id = item['subject_id']
+            charc_id = item['charc_id']
+            query = item['query']
+            if (
+                isinstance(subject_id, bool) or not isinstance(subject_id, int)
+                or subject_id <= 0
+                or isinstance(charc_id, bool) or not isinstance(charc_id, int)
+                or charc_id <= 0
+            ):
+                raise ValueError(
+                    f'queries[{index}] IDs must be positive integers'
+                )
+            if not isinstance(query, str) or not query.strip() or len(query.strip()) > 120:
+                raise ValueError(f'queries[{index}].query must contain 1..120 characters')
+            key = (subject_id, charc_id, query.strip().casefold())
+            if key in seen:
+                raise ValueError(f'queries[{index}] duplicates an earlier query')
+            seen.add(key)
+            prepared.append({
+                'subject_id': subject_id,
+                'charc_id': charc_id,
+                'query': query.strip(),
+            })
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    subject_ids = sorted({item['subject_id'] for item in prepared})
+    marketplace = Marketplace.query.filter_by(code='wb').first()
+    _ensure_wb_characteristic_references(subject_ids, marketplace)
+    categories = MarketplaceCategory.query.filter(
+        MarketplaceCategory.marketplace_id == (marketplace.id if marketplace else -1),
+        MarketplaceCategory.subject_id.in_(subject_ids),
+    ).all()
+    categories_by_subject = {category.subject_id: category for category in categories}
+    category_ids = [category.id for category in categories]
+    charc_ids = sorted({item['charc_id'] for item in prepared})
+    charcs = MarketplaceCategoryCharacteristic.query.filter(
+        MarketplaceCategoryCharacteristic.marketplace_id == (
+            marketplace.id if marketplace else -1
+        ),
+        MarketplaceCategoryCharacteristic.category_id.in_(category_ids or [-1]),
+        MarketplaceCategoryCharacteristic.charc_id.in_(charc_ids),
+        MarketplaceCategoryCharacteristic.is_available.is_(True),
+        db.or_(
+            MarketplaceCategoryCharacteristic.is_enabled.is_(True),
+            MarketplaceCategoryCharacteristic.required.is_(True),
+        ),
+    ).all()
+    charcs_by_key = {
+        (charc.category.subject_id, int(charc.charc_id)): charc for charc in charcs
+    }
+    validation_cache = {}
+    if marketplace and charcs:
+        from services.marketplace_validator import (
+            prime_wb_characteristic_directory_cache,
+        )
+        prime_wb_characteristic_directory_cache(
+            marketplace, charcs, validation_cache,
+        )
+
+    results = []
+    for item in prepared:
+        category = categories_by_subject.get(item['subject_id'])
+        charc = charcs_by_key.get((item['subject_id'], item['charc_id']))
+        status = (
+            _wb_category_characteristics_status(category, marketplace)
+            if category and marketplace else
+            _missing_wb_category_characteristics(item['subject_id'])['reference_status']
+        )
+        base = {**item, 'reference_status': status}
+        if not status.get('usable') or not charc:
+            results.append({
+                **base,
+                'usable': False,
+                'constrained': True,
+                'values': [],
+                'count': 0,
+                'issue': {
+                    'code': 'characteristic_unavailable',
+                    'message': 'Характеристика отсутствует или справочник устарел',
+                },
+            })
+            continue
+        from services.marketplace_validator import search_wb_characteristic_values
+        result = search_wb_characteristic_values(
+            marketplace, charc, item['query'],
+            validation_cache=validation_cache, limit=limit,
+        )
+        results.append({**base, 'name': charc.name, **result})
     return jsonify({'results': results, 'count': len(results)})
 
 

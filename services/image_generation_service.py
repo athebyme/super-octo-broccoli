@@ -1,20 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Image Generation Service - Генерация изображений для инфографики WB
+Image Generation Service - Генерация изображений для инфографики WB.
 
-Поддерживаемые провайдеры:
-- FluxAPI.ai (простой API, trial credits)
-- Tensor.art (дешёвый, $0.003/credit)
-- Together AI Flux (быстрый, платный)
-- OpenAI DALL-E 3 (лучшее качество, дорогой)
-- Replicate Flux/SDXL (требует оплату)
-
-Для работы нужны API ключи:
-- FluxAPI: https://fluxapi.ai/ (есть trial)
-- Tensor.art: https://tams.tensor.art/
-- Together AI: https://api.together.xyz/settings/api-keys
-- OpenAI: https://platform.openai.com/api-keys
-- Replicate: https://replicate.com/account/api-tokens
+Новые seller-facing запуски Фотостудии используют dedicated image API
+OpenRouter. Остальные реализации сохранены для совместимости с историческими
+экспериментами и отдельными legacy call sites; доступность новых целей задаёт
+``services.image_lab_service``.
 """
 
 import json
@@ -69,11 +60,11 @@ class ImageProvider(Enum):
 PROVIDER_CONFIG = {
     ImageProvider.OPENROUTER: {
         "name": "OpenRouter",
-        "description": "Единый API к DALL-E 3, Imagen и др. Использует ваш AI ключ поставщика",
-        "api_url": "https://openrouter.ai/api/v1/images/generations",
-        "price_per_image": "$0.04-0.08",
-        "max_size": "1024x1792",
-        "supports_reference": False,
+        "description": "Dedicated image API: Gemini image и Grok Imagine",
+        "api_url": "https://openrouter.ai/api/v1/images",
+        "price_per_image": "$0.034-0.10",
+        "max_size": "2K",
+        "supports_reference": True,
         "recommended": True
     },
     ImageProvider.FLUXAPI: {
@@ -205,7 +196,8 @@ class ImageGenerationConfig:
     api_key: str
     # OpenRouter specific
     openrouter_api_key: str = ""
-    openrouter_model: str = "openai/dall-e-3"  # или google/imagen-3
+    openrouter_model: str = "google/gemini-3.1-flash-lite-image"
+    openrouter_resolution: str = "1K"
     # OpenAI specific
     openai_model: str = "dall-e-3"
     openai_quality: str = "standard"  # standard или hd
@@ -343,8 +335,27 @@ class ImageGenerationConfig:
     def from_env(cls, provider):
         """Конфиг из переменных окружения — для one-off скриптов (пилот).
 
-        GEN_API_KEY / AITUNNEL_API_KEY. Возвращает None, если ключа нет.
+        OPENROUTER_API_KEY / GEN_API_KEY / AITUNNEL_API_KEY. Возвращает None,
+        если ключа нет. Российские backend'ы сохранены только для уже созданных
+        экспериментов; новые запуски выбирает Image Lab policy.
         """
+        if provider == ImageProvider.OPENROUTER:
+            key = os.environ.get('OPENROUTER_API_KEY', '')
+            if not key:
+                return None
+            return cls(
+                provider=provider,
+                api_key=key,
+                openrouter_api_key=key,
+                openrouter_model=(
+                    os.environ.get('OPENROUTER_IMAGE_MODEL')
+                    or 'google/gemini-3.1-flash-lite-image'
+                ),
+                openrouter_resolution=(
+                    os.environ.get('OPENROUTER_IMAGE_RESOLUTION') or '1K'
+                ),
+                proxy_enabled=bool(_get_proxy_config()),
+            )
         if provider == ImageProvider.GEN_API:
             key = os.environ.get('GEN_API_KEY', '')
             if not key:
@@ -391,6 +402,7 @@ class ImageGenerator(ABC):
         additional_source_images: Optional[List[bytes]] = None,
         mask_bytes: Optional[bytes] = None,
         input_fidelity: Optional[str] = None,
+        quality: Optional[str] = None,
         width: int = 900,
         height: int = 1200,
     ) -> Tuple[bool, Optional[bytes], str]:
@@ -503,20 +515,134 @@ No text overlays, no watermarks, no logos.
 
 
 class OpenRouterImageGenerator(ImageGenerator):
-    """
-    Генератор изображений через OpenRouter API.
+    """OpenRouter dedicated image API with native image references."""
 
-    Поддерживает модели:
-    - openai/dall-e-3 (лучшее качество, понимает русский)
-    - google/imagen-3 (если доступен)
-
-    API совместим с OpenAI формат /images/generations.
-    """
+    MODEL_MAX_REFERENCES = {
+        "google/gemini-3.1-flash-lite-image": 14,
+        "google/gemini-3.1-flash-image": 14,
+        "x-ai/grok-imagine-image-quality": 3,
+    }
 
     def __init__(self, config: ImageGenerationConfig):
         self.config = config
-        self.api_url = "https://openrouter.ai/api/v1/images/generations"
+        self.api_url = "https://openrouter.ai/api/v1/images"
         self.proxies = _get_proxy_config() if config.proxy_enabled else None
+
+    @staticmethod
+    def _data_url(image_bytes: bytes) -> str:
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            mime = "image/png"
+        elif image_bytes.startswith(b"\xff\xd8\xff"):
+            mime = "image/jpeg"
+        elif image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+            mime = "image/webp"
+        else:
+            mime = "image/png"
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+
+    @staticmethod
+    def _error_message(response) -> str:
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict) and error.get("message"):
+                return str(error["message"])[:500]
+            if isinstance(error, str) and error:
+                return error[:500]
+            if payload.get("message"):
+                return str(payload["message"])[:500]
+        return f"HTTP {response.status_code}"
+
+    def _headers(self) -> Dict[str, str]:
+        api_key = self.config.openrouter_api_key or self.config.api_key
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://seller-platform.tech",
+            "X-Title": "Seller Platform",
+        }
+
+    def _request(
+        self,
+        *,
+        prompt: str,
+        reference_urls: Optional[List[str]] = None,
+        width: int,
+        height: int,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        model = self.config.openrouter_model
+        references = list(reference_urls or [])
+        max_references = self.MODEL_MAX_REFERENCES.get(model, 1)
+        if len(references) > max_references:
+            return False, None, (
+                f"OpenRouter: {model} принимает не более {max_references} "
+                "фото-референсов"
+            )
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+            "resolution": self.config.openrouter_resolution,
+            "aspect_ratio": "3:4",
+        }
+        if references:
+            payload["input_references"] = [
+                {"type": "image_url", "image_url": {"url": url}}
+                for url in references
+            ]
+        try:
+            logger.info(
+                "OpenRouter image request model=%s resolution=%s refs=%s proxy=%s",
+                model,
+                self.config.openrouter_resolution,
+                len(references),
+                bool(self.proxies),
+            )
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                headers=self._headers(),
+                timeout=self.config.timeout,
+                proxies=self.proxies,
+            )
+            if not 200 <= response.status_code < 300:
+                error = self._error_message(response)
+                logger.error("OpenRouter image HTTP %s: %s", response.status_code, error)
+                prefix = "NSFW: " if is_censorship_refusal(error) else ""
+                return False, None, f"{prefix}OpenRouter: {error}"
+            try:
+                data = response.json()
+            except (TypeError, ValueError):
+                return False, None, "OpenRouter: некорректный JSON в ответе"
+            rows = data.get("data") if isinstance(data, dict) else None
+            image_data = rows[0] if isinstance(rows, list) and rows else None
+            if not isinstance(image_data, dict):
+                return False, None, "OpenRouter: пустой ответ"
+            encoded = image_data.get("b64_json")
+            if isinstance(encoded, str) and encoded:
+                try:
+                    image_bytes = base64.b64decode(encoded, validate=True)
+                except (ValueError, TypeError):
+                    return False, None, "OpenRouter: битый base64 в ответе"
+            elif isinstance(image_data.get("url"), str):
+                downloaded = requests.get(
+                    image_data["url"], timeout=60, proxies=self.proxies,
+                )
+                if downloaded.status_code != 200:
+                    return False, None, "OpenRouter: не удалось скачать результат"
+                image_bytes = downloaded.content
+            else:
+                return False, None, "OpenRouter: в ответе нет изображения"
+            return True, fit_image_to_size(image_bytes, width, height), ""
+        except requests.exceptions.Timeout:
+            return False, None, f"OpenRouter: таймаут ({self.config.timeout}с)"
+        except requests.RequestException as exc:
+            logger.error("OpenRouter image transport error: %s", exc.__class__.__name__)
+            return False, None, "OpenRouter: ошибка соединения"
 
     def generate(
         self,
@@ -525,104 +651,46 @@ class OpenRouterImageGenerator(ImageGenerator):
         height: int = 1200,
         reference_image_url: Optional[str] = None
     ) -> Tuple[bool, Optional[bytes], str]:
-        """Генерирует изображение через OpenRouter"""
+        references = [reference_image_url] if reference_image_url else []
+        return self._request(
+            prompt=prompt,
+            reference_urls=references,
+            width=width,
+            height=height,
+        )
 
-        api_key = self.config.openrouter_api_key or self.config.api_key
-        model = self.config.openrouter_model or "openai/dall-e-3"
-
-        # DALL-E 3 через OpenRouter поддерживает стандартные размеры
-        if width > height:
-            size = "1792x1024"
-        elif height > width:
-            size = "1024x1792"
-        else:
-            size = "1024x1024"
-
-        enhanced_prompt = self._enhance_prompt(prompt)
-
-        payload = {
-            "model": model,
-            "prompt": enhanced_prompt,
-            "n": 1,
-            "size": size,
-            "quality": "standard",
-            "response_format": "b64_json"
-        }
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://seller-platform.tech",
-            "X-Title": "Seller Platform"
-        }
-
-        proxy_info = f" via proxy {list(self.proxies.values())[0]}" if self.proxies else ""
-        try:
-            logger.info(f"OpenRouter image gen ({model}){proxy_info}: {prompt[:100]}...")
-
-            response = requests.post(
-                self.api_url,
-                json=payload,
-                headers=headers,
-                timeout=self.config.timeout,
-                proxies=self.proxies
-            )
-
-            if response.status_code != 200:
-                error_data = response.json() if response.text else {}
-                error_msg = error_data.get('error', {}).get('message', response.text[:300])
-                logger.error(f"OpenRouter image error: {response.status_code} - {error_msg}")
-                return False, None, f"OpenRouter: {error_msg}"
-
-            data = response.json()
-
-            if 'data' in data and len(data['data']) > 0:
-                image_data = data['data'][0]
-
-                if 'b64_json' in image_data:
-                    image_bytes = base64.b64decode(image_data['b64_json'])
-                elif 'url' in image_data:
-                    img_response = requests.get(image_data['url'], timeout=60, proxies=self.proxies)
-                    if img_response.status_code == 200:
-                        image_bytes = img_response.content
-                    else:
-                        return False, None, "Не удалось скачать изображение"
-                else:
-                    return False, None, "Неожиданный формат ответа"
-
-                # Resize к нужным размерам WB (3:4)
-                if size != f"{width}x{height}":
-                    image_bytes = self._resize_image(image_bytes, width, height)
-
-                logger.info(f"OpenRouter image created ({len(image_bytes)} bytes)")
-                return True, image_bytes, ""
-
-            return False, None, "Пустой ответ от OpenRouter"
-
-        except requests.exceptions.Timeout:
-            return False, None, f"Таймаут ({self.config.timeout}с)"
-        except Exception as e:
-            logger.error(f"OpenRouter image error: {e}")
-            return False, None, str(e)
-
-    def _enhance_prompt(self, prompt: str) -> str:
-        return f"""{prompt}
-
-Professional product infographic slide for e-commerce marketplace Wildberries.
-Clean modern design, high quality, commercial photography style.
-Vertical 3:4 aspect ratio (portrait orientation).
-No text overlays, no watermarks, no logos."""
-
-    def _resize_image(self, image_bytes: bytes, width: int, height: int) -> bytes:
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-            img = img.resize((width, height), Image.Resampling.LANCZOS)
-            output = io.BytesIO()
-            img.save(output, format='PNG', quality=95)
-            return output.getvalue()
-        except Exception as e:
-            logger.warning(f"Resize error: {e}, returning original")
-            return image_bytes
+    def edit(
+        self,
+        prompt: str,
+        source_image_url: Optional[str] = None,
+        source_image_bytes: Optional[bytes] = None,
+        additional_source_images: Optional[List[bytes]] = None,
+        mask_bytes: Optional[bytes] = None,
+        input_fidelity: Optional[str] = None,
+        quality: Optional[str] = None,
+        width: int = 900,
+        height: int = 1200,
+    ) -> Tuple[bool, Optional[bytes], str]:
+        del input_fidelity, quality
+        if mask_bytes:
+            return False, None, "OpenRouter: protection mask не поддерживается"
+        if not source_image_bytes and not source_image_url:
+            return False, None, "OpenRouter: не передано исходное изображение"
+        references: List[str] = []
+        if source_image_bytes:
+            references.append(self._data_url(source_image_bytes))
+        elif source_image_url:
+            references.append(source_image_url)
+        for item in additional_source_images or []:
+            if not isinstance(item, bytes) or not item:
+                return False, None, "OpenRouter: некорректный дополнительный референс"
+            references.append(self._data_url(item))
+        return self._request(
+            prompt=prompt,
+            reference_urls=references,
+            width=width,
+            height=height,
+        )
 
 
 class FluxAPIImageGenerator(ImageGenerator):
@@ -1400,6 +1468,7 @@ class GenApiImageGenerator(ImageGenerator):
         additional_source_images: Optional[List[bytes]] = None,
         mask_bytes: Optional[bytes] = None,
         input_fidelity: Optional[str] = None,
+        quality: Optional[str] = None,
         width: int = 900,
         height: int = 1200,
     ) -> Tuple[bool, Optional[bytes], str]:
@@ -1573,6 +1642,7 @@ class AITunnelImageGenerator(ImageGenerator):
         additional_source_images: Optional[List[bytes]] = None,
         mask_bytes: Optional[bytes] = None,
         input_fidelity: Optional[str] = None,
+        quality: Optional[str] = None,
         width: int = 900,
         height: int = 1200,
     ) -> Tuple[bool, Optional[bytes], str]:
@@ -1617,6 +1687,11 @@ class AITunnelImageGenerator(ImageGenerator):
             }
             if input_fidelity in ("high", "low") and self.config.aitunnel_edit_model.startswith("gpt-image"):
                 request_data["input_fidelity"] = input_fidelity
+            if (
+                quality in ("low", "medium", "high", "auto")
+                and self.config.aitunnel_edit_model.startswith("gpt-image")
+            ):
+                request_data["quality"] = quality
             response = requests.post(
                 f"{self.BASE_URL}/images/edits",
                 files=files,
@@ -1704,6 +1779,7 @@ class ImageGenerationService:
         additional_source_images: Optional[List[bytes]] = None,
         mask_bytes: Optional[bytes] = None,
         input_fidelity: Optional[str] = None,
+        quality: Optional[str] = None,
         width: Optional[int] = None,
         height: Optional[int] = None,
     ) -> Tuple[bool, Optional[bytes], str]:
@@ -1715,6 +1791,7 @@ class ImageGenerationService:
             additional_source_images=additional_source_images,
             mask_bytes=mask_bytes,
             input_fidelity=input_fidelity,
+            quality=quality,
             width=width or self.config.default_width,
             height=height or self.config.default_height,
         )

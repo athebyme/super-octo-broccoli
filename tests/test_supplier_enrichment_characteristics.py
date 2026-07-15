@@ -14,6 +14,7 @@ from models import (
     Marketplace,
     MarketplaceCategory,
     MarketplaceCategoryCharacteristic,
+    MarketplaceDirectory,
     db,
 )
 from services.supplier_enrichment import EnrichmentService
@@ -91,6 +92,17 @@ class SupplierEnrichmentCharacteristicsTestCase(unittest.TestCase):
                 is_available=True,
             ),
         ])
+        db.session.add(MarketplaceDirectory(
+            marketplace_id=marketplace.id,
+            directory_type='kinds',
+            data_json=json.dumps(
+                ['Женский', 'Мужской'], ensure_ascii=False,
+            ),
+            synced_at=datetime.utcnow(),
+            sync_status='success',
+            items_count=2,
+            version=1,
+        ))
         db.session.commit()
 
     @staticmethod

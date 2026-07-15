@@ -491,6 +491,41 @@ def create_platform_tools(platform_client) -> ToolRegistry:
             platform_client.get_category_characteristics(int(subject_id), False),
     )
 
+    registry.register(
+        name='search_characteristic_values',
+        description=(
+            'Пакетно найти канонические значения в эффективных словарях '
+            'характеристик WB. Используй только когда constraint.truncated=true '
+            'и нужного значения нет в показанной выборке. Возвращай в карточку '
+            'только точную строку из values; free_text не требует поиска.'
+        ),
+        parameters={
+            'properties': {
+                'queries': {
+                    'type': 'array',
+                    'minItems': 1,
+                    'maxItems': 50,
+                    'items': {
+                        'type': 'object',
+                        'additionalProperties': False,
+                        'properties': {
+                            'subject_id': {'type': 'integer'},
+                            'charc_id': {'type': 'integer'},
+                            'query': {'type': 'string', 'maxLength': 120},
+                        },
+                        'required': ['subject_id', 'charc_id', 'query'],
+                    },
+                },
+                'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50},
+            },
+            'required': ['queries'],
+        },
+        handler=lambda queries, limit=20:
+            platform_client.search_characteristic_values_batch(
+                queries, limit,
+            ),
+    )
+
     # ── Справочники WB (цвета, страны, сезоны) ─────────────────
 
     registry.register(

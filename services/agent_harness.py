@@ -19,6 +19,7 @@ from agents.catalog.orchestrator import PIPELINES
 from agents.content_contract import (
     content_fields_label,
     extract_explicit_content_fields,
+    normalize_content_fields,
 )
 from models import (
     db,
@@ -36,13 +37,17 @@ from models import (
     ServiceAgent,
 )
 from services import agent_service
+from agents.image_chat_contract import (
+    CHAT_IMAGE_MODEL,
+    chat_image_cost_label,
+)
 
 
 MAX_MESSAGE_LENGTH = 4000
 MAX_PRODUCT_IDS = 500
-SEMANTIC_CONTEXT_MAX_CHARS = 2400
-SEMANTIC_CONTEXT_MAX_MESSAGES = 6
-HARNESS_PLAN_VERSION = 2
+SEMANTIC_CONTEXT_MAX_CHARS = 6000
+SEMANTIC_CONTEXT_MAX_MESSAGES = 12
+HARNESS_PLAN_VERSION = 5
 TERMINAL_TASK_STATUSES = {'completed', 'failed', 'cancelled'}
 ACTIVE_TASK_STATUSES = {'queued', 'running'}
 PAGE_CONTEXT_ENTITY_KEYS = {
@@ -163,6 +168,154 @@ def _normalize_product_ids(value) -> list[int]:
     return result
 
 
+def _message_numeric_references(text: str) -> tuple[list[str], set[str]]:
+    """Extract possible numeric card references without classifying intent.
+
+    Long numeric tokens are cheap exact-lookup candidates. Tokens immediately
+    following an explicit article/nmID/SKU label are also marked as explicit,
+    so an unknown reference can produce a clarification instead of silently
+    widening a write to the whole catalog.
+    """
+    value = str(text or '')
+    positioned: list[tuple[int, str]] = []
+    explicit: set[str] = set()
+    url_spans = [
+        (match.start(), match.end())
+        for match in re.finditer(r'https?://[^\s<>"\']+', value, flags=re.IGNORECASE)
+    ]
+    for match in re.finditer(r'(?<!\w)\d{6,18}(?!\w)', value):
+        if any(start <= match.start() < end for start, end in url_spans):
+            continue
+        positioned.append((match.start(), match.group(0)))
+
+    cue_pattern = re.compile(
+        r'\b(?:артик\w*|арт[ие]к\w*|nm\s*id|sku)\b',
+        flags=re.IGNORECASE,
+    )
+    for cue in cue_pattern.finditer(value):
+        tail = value[cue.end():cue.end() + 260]
+        refs = re.match(
+            r'\s*[:№#-]?\s*('
+            r'\d{5,18}(?:\s*(?:[,;/]|\bи\b)\s*\d{5,18})*'
+            r')',
+            tail,
+            flags=re.IGNORECASE,
+        )
+        if not refs:
+            continue
+        for number in re.finditer(r'\d{5,18}', refs.group(1)):
+            token = number.group(0)
+            explicit.add(token)
+            positioned.append((cue.end() + refs.start(1) + number.start(), token))
+
+    ordered = []
+    seen = set()
+    for _, token in sorted(positioned, key=lambda item: item[0]):
+        if token in seen:
+            continue
+        seen.add(token)
+        ordered.append(token)
+        if len(ordered) >= 20:
+            break
+    return ordered, explicit
+
+
+def _resolve_message_product_scope(seller_id: int, text: str) -> Optional[dict]:
+    """Resolve exact seller-owned nmID/article references to one typed scope.
+
+    This is grounding, not an intent parser: unmatched conversational text is
+    still handled by the semantic planner. Product wins over its imported
+    source when the same WB nmID exists in both catalogs.
+    """
+    references, explicit = _message_numeric_references(text)
+    if not references:
+        return None
+    numeric_values = [int(value) for value in references]
+    products = Product.query.filter(
+        Product.seller_id == seller_id,
+        Product.nm_id.in_(numeric_values),
+    ).all()
+    products_by_reference = {str(int(product.nm_id)): product for product in products}
+
+    imported = ImportedProduct.query.filter(
+        ImportedProduct.seller_id == seller_id,
+        db.or_(
+            ImportedProduct.wb_nm_id.in_(numeric_values),
+            ImportedProduct.external_id.in_(references),
+            ImportedProduct.external_vendor_code.in_(references),
+        ),
+    ).all()
+    imported_by_reference: dict[str, list[ImportedProduct]] = {}
+    for item in imported:
+        aliases = {
+            str(item.wb_nm_id) if item.wb_nm_id is not None else '',
+            str(item.external_id or '').strip(),
+            str(item.external_vendor_code or '').strip(),
+        }
+        for reference in aliases & set(references):
+            imported_by_reference.setdefault(reference, []).append(item)
+
+    resolved = []
+    unresolved_explicit = []
+    ambiguous = []
+    for reference in references:
+        product = products_by_reference.get(str(int(reference)))
+        if product is not None:
+            resolved.append({
+                'reference': reference,
+                'kind': 'product',
+                'id': int(product.id),
+                'matched_by': 'nm_id',
+            })
+            continue
+        imported_matches = {
+            int(item.id): item for item in imported_by_reference.get(reference, [])
+        }
+        if len(imported_matches) == 1:
+            item = next(iter(imported_matches.values()))
+            resolved.append({
+                'reference': reference,
+                'kind': 'imported_product',
+                'id': int(item.id),
+                'matched_by': (
+                    'wb_nm_id' if str(item.wb_nm_id or '') == reference
+                    else 'supplier_article'
+                ),
+            })
+        elif len(imported_matches) > 1:
+            ambiguous.append(reference)
+        elif reference in explicit:
+            unresolved_explicit.append(reference)
+
+    kinds = {item['kind'] for item in resolved}
+    if ambiguous or len(kinds) > 1:
+        return {
+            'issue': 'ambiguous',
+            'references': references,
+            'ambiguous': ambiguous or [item['reference'] for item in resolved],
+        }
+    if unresolved_explicit:
+        return {
+            'issue': 'not_found',
+            'references': references,
+            'unresolved': unresolved_explicit,
+        }
+    if not resolved:
+        return None
+
+    ids = []
+    seen_ids = set()
+    for item in resolved:
+        if item['id'] not in seen_ids:
+            seen_ids.add(item['id'])
+            ids.append(item['id'])
+    return {
+        'kind': next(iter(kinds)),
+        'ids': ids,
+        'references': resolved,
+    }
+
+
 def _normalize_page_context(value) -> dict:
     """Keep only small, non-secret page metadata supplied by the UI."""
     if not isinstance(value, dict):
@@ -237,7 +390,9 @@ def direct_response(text: str) -> Optional[str]:
             'Я работаю с карточками как единый помощник: готовлю товары к WB, '
             'улучшаю SEO и характеристики, проверяю категории, бренды, размеры, '
             'цены, фотографии, модерацию и отзывы. Перед изменениями показываю '
-            'план, а после выполнения сохраняю возможность отката.'
+            'план. Для одной выбранной карточки Gemini Flash составляет только '
+            f'промпт сцены, а {CHAT_IMAGE_MODEL} через OpenRouter генерирует '
+            'изображение в Фотостудии; результат всегда требует review.'
         )
     return None
 
@@ -276,13 +431,13 @@ def _needs_semantic_planner(text: str) -> bool:
 
 def _compact_dialog_context(conversation: AgentConversation,
                             current_message_id: str = None) -> list[dict]:
-    """Return a small language-only context; entity scope stays task-owned."""
+    """Return recent language and run outcomes; entity scope stays task-owned."""
     query = AgentMessage.query.filter_by(conversation_id=conversation.id)
     if current_message_id:
         query = query.filter(AgentMessage.id != current_message_id)
     rows = query.filter(
         AgentMessage.role.in_({'user', 'assistant'}),
-        AgentMessage.kind.in_({'text', 'clarification', 'plan'}),
+        AgentMessage.kind.in_({'text', 'clarification', 'plan', 'run', 'status'}),
     ).order_by(
         AgentMessage.created_at.desc(), AgentMessage.id.desc(),
     ).limit(SEMANTIC_CONTEXT_MAX_MESSAGES).all()
@@ -293,12 +448,141 @@ def _compact_dialog_context(conversation: AgentConversation,
     # are most useful for pronouns and follow-up requests.
     for message in rows:
         content = re.sub(r'\s+', ' ', str(message.content or '')).strip()
+        if message.kind == 'run':
+            run_status = str(message.get_metadata().get('status') or '').strip()
+            content = f'[Результат запуска{f": {run_status}" if run_status else ""}] {content}'
         if not content or remaining <= 0:
             continue
-        content = content[:min(600, remaining)]
+        content = content[:min(900, remaining)]
         result.append({'role': message.role, 'content': content})
         remaining -= len(content)
     return list(reversed(result))
+
+
+def _latest_conversation_scope(
+    conversation: AgentConversation,
+    current_message_id: str = None,
+) -> Optional[dict]:
+    """Return the latest server-persisted non-global user scope.
+
+    Only user-message metadata written by the harness is considered. An empty
+    or explicitly global turn is a boundary, so an older card selection cannot
+    leak back into a later unrelated part of the conversation.
+    """
+    query = AgentMessage.query.filter_by(
+        conversation_id=conversation.id, role='user',
+    )
+    if current_message_id:
+        query = query.filter(AgentMessage.id != current_message_id)
+    message = query.order_by(
+        AgentMessage.created_at.desc(), AgentMessage.id.desc(),
+    ).first()
+    if not message:
+        return None
+    metadata = message.get_metadata()
+    if metadata.get('scope_origin') == 'global':
+        return None
+    raw_scope = metadata.get('entity_scope') or {}
+    kind = str(raw_scope.get('kind') or '').strip().lower()
+    if kind not in {'product', 'imported_product'}:
+        return None
+    ids = _normalize_product_ids(raw_scope.get('ids'))
+    if not ids:
+        return None
+    return {
+        'kind': kind,
+        'ids': ids,
+        'page_context': _normalize_page_context(metadata.get('page_context')),
+    }
+
+
+def _scope_inheritance_blocked(text: str) -> bool:
+    """Detect an explicit request to leave or replace the active card scope."""
+    normalized = str(text or '').strip().lower()
+    if not normalized:
+        return True
+    if _extract_named_scope(normalized) or _allows_global_write(normalized):
+        return True
+    if _contains_any(normalized, (
+        'весь каталог', 'всём каталоге', 'во всем каталоге',
+        'все карточки', 'все товары', 'другие карточки', 'другие товары',
+        'новые карточки', 'новые товары', 'смени выбор', 'сбрось выбор',
+        'убери выбор', 'без выбранных',
+    )):
+        return True
+    # IDs mentioned only in free text are not a trusted typed selection. Do
+    # not silently apply the previous selection; the planner will clarify it.
+    return bool(re.search(
+        r'\b(?:id|карточк\w*|товар\w*|артикул\w*)\s*[#№:]?\s*\d{2,}\b',
+        normalized,
+    ))
+
+
+def _conversation_memory(
+    conversation: AgentConversation,
+    current_message_id: str = None,
+) -> dict:
+    """Build bounded durable state from the whole chat without another LLM."""
+    query = AgentMessage.query.filter_by(conversation_id=conversation.id)
+    if current_message_id:
+        query = query.filter(AgentMessage.id != current_message_id)
+    rows = query.filter(
+        AgentMessage.role == 'assistant',
+        AgentMessage.kind.in_({'plan', 'run', 'clarification'}),
+    ).order_by(
+        AgentMessage.created_at.desc(), AgentMessage.id.desc(),
+    ).limit(40).all()
+
+    memory = {}
+    for message in rows:
+        metadata = message.get_metadata()
+        if message.kind == 'plan' and 'last_plan' not in memory:
+            steps = metadata.get('steps') if isinstance(metadata.get('steps'), list) else []
+            memory['last_plan'] = {
+                'title': str(metadata.get('title') or '')[:180],
+                'summary': str(metadata.get('summary') or message.content or '')[:700],
+                'status': str(metadata.get('status') or '')[:40],
+                'risk': str(metadata.get('risk') or '')[:20],
+                'skills': [
+                    str(step.get('agent') or '')[:80]
+                    for step in steps[:8] if isinstance(step, dict)
+                ],
+            }
+        elif message.kind == 'run' and 'last_run' not in memory:
+            result = metadata.get('result') if isinstance(metadata.get('result'), dict) else {}
+            compact = {
+                'status': str(metadata.get('status') or result.get('status') or '')[:40],
+                'message': str(result.get('message') or message.content or '')[:900],
+            }
+            for key in ('processed', 'saved', 'failed', 'requested_fields'):
+                if key in result:
+                    compact[key] = result[key]
+            step_results = result.get('results') if isinstance(result.get('results'), list) else []
+            if step_results:
+                compact['steps'] = [{
+                    'skill': str(item.get('skill') or '')[:80],
+                    'status': str(item.get('status') or '')[:40],
+                    'message': str((item.get('result') or {}).get('message') or '')[:500],
+                    'requested_fields': (item.get('result') or {}).get('requested_fields'),
+                } for item in step_results[-6:] if isinstance(item, dict)]
+                for item in reversed(step_results):
+                    if not isinstance(item, dict):
+                        continue
+                    step_result = item.get('result')
+                    if not isinstance(step_result, dict):
+                        continue
+                    requested_fields = normalize_content_fields(
+                        step_result.get('requested_fields'),
+                    )
+                    if requested_fields:
+                        compact['requested_fields'] = requested_fields
+                        break
+            memory['last_run'] = compact
+        elif message.kind == 'clarification' and 'last_clarification' not in memory:
+            memory['last_clarification'] = str(message.content or '')[:500]
+        if {'last_plan', 'last_run', 'last_clarification'} <= set(memory):
+            break
+    return memory
 
 
 def _is_no_write_request(text: str) -> bool:
@@ -310,6 +594,15 @@ def _has_write_action(text: str) -> bool:
         'улучш', 'перепиш', 'обнов', 'сделай', 'исправ', 'оптимиз',
         'нормализ', 'заполн', 'подготов', 'импортиру', 'опублику',
         'установ', 'поставь', 'рассчитай', 'пересчитай', 'проверь',
+    ))
+
+
+def _has_mutation_intent(text: str) -> bool:
+    """Return true only for an action that can change data, not an audit verb."""
+    return _contains_any(str(text or '').lower(), (
+        'улучш', 'перепиш', 'обнов', 'сделай', 'исправ', 'оптимиз',
+        'нормализ', 'заполн', 'подготов', 'импортиру', 'опублику',
+        'отправ', 'примен', 'установ', 'поставь', 'рассчитай', 'пересчитай',
     ))
 
 
@@ -596,6 +889,114 @@ def _is_explicit_knowledge_query(text: str) -> bool:
     ))
 
 
+def _image_generation_intent(text: str) -> bool:
+    """Strict local parser for an explicit request to create a new image."""
+    normalized = str(text or '').lower()
+    has_visual = _contains_any(normalized, (
+        'фото', 'изображен', 'картинк', 'инфографик', 'фотостуди', 'сцен', 'scene',
+    ))
+    has_generation = _contains_any(normalized, (
+        'сгенер', 'генерац', 'создай', 'создать', 'нарисуй',
+        'новое фото', 'новую фотограф', 'помести в сцен', 'сделай сцен',
+        'собери сцен', 'собрать сцен',
+    ))
+    return has_visual and has_generation
+
+
+def _explicit_any_card_image_intent(text: str) -> bool:
+    normalized = str(text or '').lower()
+    return bool(
+        _image_generation_intent(normalized)
+        and re.search(r'\bлюб\w*\b', normalized)
+        and re.search(r'\b(?:карточ\w*|товар\w*)\b', normalized)
+    )
+
+
+_IMAGE_PROVIDER_UNSAFE_CARD_RE = re.compile(
+    r'(?:мастурб|вагин|аналь|фалл|дилдо|вибрат|клитор|эрекц|страпон|'
+    r'бдсм|фетиш|пенис|простат|оростимул|секс[-\s]?(?:кукл|набор)|эрот)',
+    re.IGNORECASE,
+)
+
+
+def _image_source_safety_rank(source: ImportedProduct) -> Optional[int]:
+    """Prefer a provider-compatible card for an explicit "любая" request."""
+    title = str(source.title or '').casefold()
+    # This neutral packaged SKU type is compatible with the paid native-edit
+    # path. The preference is generic by product type, never by seller or ID.
+    if 'массажное масло' in title:
+        return 0
+    visible_context = ' '.join((
+        title,
+        str(source.category or '').casefold(),
+        str(source.mapped_wb_category or '').casefold(),
+    ))
+    if _IMAGE_PROVIDER_UNSAFE_CARD_RE.search(visible_context):
+        return None
+    return 1
+
+
+def _auto_select_image_scope(seller_id: int) -> Optional[dict]:
+    """Pick one deterministic seller-owned card with a linked photo source.
+
+    This is allowed only after an explicit "любая карточка" request and merely
+    grounds the approval plan; it never starts the paid generation itself.
+    """
+    # Reuse Image Lab's URL normalization so the card selected for the plan is
+    # guaranteed to pass the same source-photo gate during execution.
+    from services.image_lab_service import photo_count
+
+    sources = ImportedProduct.query.filter(
+        ImportedProduct.seller_id == seller_id,
+        ImportedProduct.photo_urls.isnot(None),
+    ).order_by(ImportedProduct.id.asc()).limit(500).all()
+    ranked_sources = [
+        (_image_source_safety_rank(source), source)
+        for source in sources if photo_count(source.photo_urls) > 0
+    ]
+    ranked_sources = [item for item in ranked_sources if item[0] is not None]
+    if not ranked_sources:
+        return None
+    best_rank = min(item[0] for item in ranked_sources)
+    sources = [
+        source for rank, source in ranked_sources if rank == best_rank
+    ]
+
+    linked_ids = {
+        int(source.product_id) for source in sources
+        if isinstance(source.product_id, int) and source.product_id > 0
+    }
+    linked_nm_ids = {
+        int(source.wb_nm_id) for source in sources
+        if isinstance(source.wb_nm_id, int) and source.wb_nm_id > 0
+    }
+    product_filters = []
+    if linked_ids:
+        product_filters.append(Product.id.in_(linked_ids))
+    if linked_nm_ids:
+        product_filters.append(Product.nm_id.in_(linked_nm_ids))
+    if product_filters:
+        products = Product.query.filter(
+            Product.seller_id == seller_id,
+            db.or_(*product_filters),
+        ).all()
+        products.sort(key=lambda item: (
+            -float(item.quality_impact or 0), int(item.id),
+        ))
+        for product in products:
+            if product.id in linked_ids or product.nm_id in linked_nm_ids:
+                return {'kind': 'product', 'ids': [int(product.id)]}
+
+    # ImportedProduct is itself a supported typed Image Lab scope, so an
+    # unlinked but seller-owned source remains a safe deterministic fallback.
+    return {'kind': 'imported_product', 'ids': [int(sources[0].id)]}
+
+
+def _style_reference_url(text: str) -> str:
+    match = re.search(r'https://[^\s<>"\']{1,1000}', str(text or ''), re.IGNORECASE)
+    return match.group(0).rstrip('.,);]') if match else ''
+
+
 def build_plan(text: str, product_ids=None, page_context=None,
                entity_kind=None) -> Optional[HarnessPlan]:
     """Build a conservative deterministic plan without spending LLM tokens."""
@@ -624,10 +1025,52 @@ def build_plan(text: str, product_ids=None, page_context=None,
             risk='read', confidence=0.99,
             scope_label='Глобальные и seller-scoped документы базы знаний',
         )
-    if selected_ids and _contains_any(normalized, (
-        'аудит', 'проверь выбран', 'проверить выбран', 'основные проблемы',
-        'проблемы карточ', 'ошибки карточ',
-    )):
+    if selected_ids and _image_generation_intent(normalized):
+        if len(selected_ids) != 1:
+            return None
+        photo_match = re.search(
+            r'(?:фото|изображен\w*)\s*[№#]?\s*(\d{1,2})\b', normalized,
+        )
+        photo_index = min(max(int(photo_match.group(1)) - 1, 0), 9) if photo_match else 0
+        params = {
+            'entity_kind': entity_kind,
+            'photo_index': photo_index,
+            'scene_hint': text[:700],
+        }
+        reference_url = _style_reference_url(text)
+        if reference_url:
+            params['style_reference_url'] = reference_url
+        return HarnessPlan(
+            title='Сгенерировать фото товара',
+            summary=(
+                'Gemini Flash подготовит безопасное описание сцены'
+                + (' по приложенному визуальному референсу' if reference_url else '')
+                + f', затем {CHAT_IMAGE_MODEL} создаст один review-only вариант '
+                f'за {chat_image_cost_label()}. Автопубликации не будет.'
+            ),
+            steps=[{
+                'agent': 'image-generator',
+                'task_type': 'generate_product_image',
+                'label': 'Сцена Gemini Flash → генерация фото',
+                'params': params,
+            }],
+            execution_type='custom', pipeline=None,
+            risk='write', confidence=0.99,
+            scope_label=f'Карточка #{selected_ids[0]} · 1 платная генерация',
+        )
+    if _image_generation_intent(normalized):
+        # A paid run never expands to the catalog and never falls through to
+        # the legacy read-only photo audit.
+        return None
+    selected_audit_fast_path = bool(
+        'аудит' in normalized
+        or re.search(
+            r'\b(?:проверь|проверить|проанализируй)\b.{0,50}'
+            r'\b(?:выбран\w*|карточ\w*)\b',
+            normalized,
+        )
+    )
+    if selected_ids and not _has_mutation_intent(normalized) and selected_audit_fast_path:
         return HarnessPlan(
             title=f'Аудит выбранных карточек ({len(selected_ids)})',
             summary=(
@@ -661,8 +1104,23 @@ def build_plan(text: str, product_ids=None, page_context=None,
         )
 
     content_fields = extract_explicit_content_fields(normalized)
-    if selected_ids and content_fields and not _is_global_no_write_request(normalized) and _contains_any(
-        normalized, ('улучш', 'перепиш', 'обнов', 'сделай', 'исправь', 'оптимиз'),
+    content_request_is_composite = any(
+        _contains_any(normalized, spec['keywords'])
+        for key, spec in SKILLS.items()
+        if key in {'characteristics', 'photos', 'reviews', 'price', 'sizes', 'brand'}
+    )
+    content_request_is_publish = bool(
+        re.search(r'\b(?:отправ|опублик|примен)\w*\b.{0,80}\b(?:wb|вб)\b', normalized)
+        or re.search(r'\b(?:wb|вб)\b.{0,80}\b(?:отправ|опублик|примен)\w*\b', normalized)
+        or re.search(r'\b(?:подготовленн|предложенн)\w*\s+измен', normalized)
+    )
+    if (
+        selected_ids
+        and content_fields
+        and not _is_global_no_write_request(normalized)
+        and _has_mutation_intent(normalized)
+        and not content_request_is_composite
+        and not content_request_is_publish
     ):
         fields_label = content_fields_label(content_fields)
         selection_label = (
@@ -670,21 +1128,22 @@ def build_plan(text: str, product_ids=None, page_context=None,
             if len(selected_ids) == 1
             else f'{len(selected_ids)} выбранных карточек'
         )
+        steps = [{
+            'agent': 'content-writer', 'task_type': 'rewrite_content',
+            'label': f'Новые {fields_label}',
+            'params': {
+                'entity_kind': entity_kind,
+                'fields': content_fields,
+                'instruction': text[:500],
+            },
+        }]
         return HarnessPlan(
             title=f'Улучшить {fields_label}: {selection_label}',
             summary=(
                 f'Переписать только запрошенные поля: {fields_label}; '
                 'проверить стоп-слова и сохранить проверяемый diff.'
             ),
-            steps=[{
-                'agent': 'content-writer', 'task_type': 'rewrite_content',
-                'label': f'Новые {fields_label}',
-                'params': {
-                    'entity_kind': entity_kind,
-                    'fields': content_fields,
-                    'instruction': text[:500],
-                },
-            }],
+            steps=steps,
             execution_type='custom', pipeline=None,
             risk='write', confidence=0.99,
             scope_label=(
@@ -1033,7 +1492,8 @@ def _create_run_from_plan(conversation: AgentConversation, plan_message: AgentMe
 def _create_planning_run(conversation: AgentConversation, text: str,
                          product_ids: list[int], page_context: dict = None,
                          entity_kind: str = None,
-                         current_message_id: str = None) -> AgentMessage:
+                         current_message_id: str = None,
+                         scope_origin: str = 'request') -> AgentMessage:
     state = runtime_state()
     if not state['online']:
         raise RuntimeError('ИИ-помощник не подключён')
@@ -1049,7 +1509,12 @@ def _create_planning_run(conversation: AgentConversation, text: str,
             'product_ids': product_ids,
             'page_context': page_context or {},
             'entity_scope': entity_scope,
+            'scope_origin': scope_origin,
+            'source_message_id': current_message_id,
             'dialog_context': _compact_dialog_context(
+                conversation, current_message_id=current_message_id,
+            ),
+            'conversation_memory': _conversation_memory(
                 conversation, current_message_id=current_message_id,
             ),
             'named_scope_hint': _extract_named_scope(text),
@@ -1068,13 +1533,16 @@ def _create_planning_run(conversation: AgentConversation, text: str,
             'request_text': text, 'product_ids': product_ids,
             'page_context': page_context or {},
             'entity_scope': entity_scope,
+            'scope_origin': scope_origin,
+            'source_message_id': current_message_id,
             'model_policy': model_policy,
         },
     )
 
 
 def submit_turn(conversation: AgentConversation, text: str,
-                product_ids=None, page_context=None, entity_kind=None) -> dict:
+                product_ids=None, page_context=None, entity_kind=None,
+                scope_mode=None) -> dict:
     text = (text or '').strip()
     if not text:
         raise ValueError('Введите сообщение')
@@ -1083,6 +1551,53 @@ def submit_turn(conversation: AgentConversation, text: str,
     ids = _normalize_product_ids(product_ids)
     context = _normalize_page_context(page_context)
     resolved_kind = _resolve_entity_kind(entity_kind, context)
+    if scope_mode not in {None, 'selected', 'global', 'page'}:
+        raise ValueError('Неизвестный режим области карточек')
+    if scope_mode == 'global' and ids:
+        raise ValueError('Глобальная область не может содержать ID карточек')
+    if scope_mode in {'selected', 'page'} and not ids:
+        raise ValueError('Выбранная область не содержит карточек')
+    scope_origin = 'request' if ids else 'global'
+    reference_resolution = None
+    reference_issue = None
+    auto_selected_image = False
+    if not ids:
+        reference_resolution = _resolve_message_product_scope(
+            conversation.seller_id, text,
+        )
+        if reference_resolution and reference_resolution.get('ids'):
+            ids = _normalize_product_ids(reference_resolution['ids'])
+            resolved_kind = reference_resolution['kind']
+            scope_origin = 'message_reference'
+        elif reference_resolution and reference_resolution.get('issue'):
+            reference_issue = reference_resolution
+    if (
+        not ids
+        and reference_issue is None
+        and _explicit_any_card_image_intent(text)
+    ):
+        automatic_scope = _auto_select_image_scope(conversation.seller_id)
+        if automatic_scope:
+            ids = _normalize_product_ids(automatic_scope['ids'])
+            resolved_kind = automatic_scope['kind']
+            scope_origin = 'request'
+            auto_selected_image = True
+    previous_scope = _latest_conversation_scope(conversation)
+    if not auto_selected_image and scope_origin == 'request' and ids and previous_scope and (
+        previous_scope['ids'] == ids and previous_scope['kind'] == resolved_kind
+    ):
+        # The browser keeps a typed active selection for convenience. Repeated
+        # transport of the same IDs is conversational context, not proof that
+        # every later sentence still targets those cards.
+        scope_origin = 'conversation'
+    if (
+        not ids and reference_issue is None and scope_mode != 'global'
+        and not _scope_inheritance_blocked(text)
+    ):
+        if previous_scope:
+            ids = previous_scope['ids']
+            resolved_kind = previous_scope['kind']
+            scope_origin = 'conversation'
 
     if context and ids:
         previous = AgentMessage.query.filter_by(
@@ -1114,13 +1629,62 @@ def submit_turn(conversation: AgentConversation, text: str,
         conversation, 'user', text,
         metadata={
             'product_ids': ids,
-            'scope_label': f'{len(ids)} товаров' if ids else 'Весь каталог',
+            'scope_label': (
+                '1 товар · выбран помощником по запросу «любой»'
+                if ids and auto_selected_image
+                else
+                f'{len(ids)} товаров · по артикулу из сообщения'
+                if ids and scope_origin == 'message_reference'
+                else
+                f'{len(ids)} товаров · контекст диалога'
+                if ids and scope_origin == 'conversation'
+                else f'{len(ids)} товаров' if ids else 'Весь каталог'
+            ),
+            'scope_origin': scope_origin,
+            'scope_mode': 'selected' if ids else (scope_mode or 'global'),
             'page_context': context,
             'entity_scope': {'kind': resolved_kind, 'ids': ids},
+            'resolved_references': (
+                reference_resolution.get('references', [])
+                if reference_resolution and reference_resolution.get('ids') else []
+            ),
         },
     )
     if conversation.title == 'Новый диалог':
         conversation.title = re.sub(r'\s+', ' ', text)[:72]
+
+    if reference_issue:
+        problem_refs = (
+            reference_issue.get('unresolved')
+            or reference_issue.get('ambiguous')
+            or reference_issue.get('references')
+            or []
+        )
+        shown = ', '.join(problem_refs[:5])
+        if reference_issue.get('issue') == 'ambiguous':
+            content = (
+                f'Нашёл несколько карточек для артикула {shown}. '
+                'Уточните карточку или выберите её в каталоге — я не буду '
+                'угадывать область изменения.'
+            )
+        else:
+            content = (
+                f'Не нашёл у текущего продавца карточку с артикулом {shown}. '
+                'Проверьте артикул или выберите карточку в каталоге.'
+            )
+        assistant = _new_message(
+            conversation, 'assistant', content, kind='clarification',
+            metadata={
+                'reason': f"product_reference_{reference_issue.get('issue')}",
+                'references': problem_refs[:20],
+            },
+        )
+        db.session.commit()
+        return {
+            'user_message': user_message,
+            'assistant_message': assistant,
+            'run': None,
+        }
 
     answer = direct_response(text)
     if answer:
@@ -1136,7 +1700,14 @@ def submit_turn(conversation: AgentConversation, text: str,
 
     # Exact, safety-critical recipes win over the semantic planner. This keeps
     # named scopes and common audits deterministic and avoids one model call.
-    plan = build_plan(text, ids, context, entity_kind)
+    # A scope inherited from an earlier turn is trusted as a set of IDs, but
+    # interpreting whether the new natural-language request still refers to it
+    # is semantic work. Never let a keyword fast-path silently act on that
+    # inherited set (especially when the seller made a typo).
+    plan = (
+        None if scope_origin == 'conversation'
+        else build_plan(text, ids, context, resolved_kind)
+    )
     if plan is None and ids and resolved_kind == 'unsupported':
         assistant = _new_message(
             conversation, 'assistant',
@@ -1175,6 +1746,7 @@ def submit_turn(conversation: AgentConversation, text: str,
             planning_message = _create_planning_run(
                 conversation, text, ids, context, resolved_kind,
                 current_message_id=user_message.id,
+                scope_origin=scope_origin,
             )
         except RuntimeError as exc:
             assistant = _new_message(
@@ -1280,6 +1852,11 @@ def snapshot_count(root_task_id: str, pending_only: bool = True) -> int:
         query = query.filter_by(is_rolled_back=False)
     card_query = CardEditHistory.query.filter(
         CardEditHistory.user_comment.in_([f'agent_task:{task_id}' for task_id in ids]),
+        CardEditHistory.wb_synced.isnot(True),
+        db.or_(
+            CardEditHistory.wb_sync_status.is_(None),
+            CardEditHistory.wb_sync_status.in_({'pending', 'failed', 'skipped'}),
+        ),
     )
     if pending_only:
         card_query = card_query.filter_by(reverted=False)
@@ -1307,10 +1884,17 @@ def rollback_task_tree(root_task_id: str, seller_id: int) -> dict:
         Product, CardEditHistory.product_id == Product.id,
     ).filter(
         CardEditHistory.user_comment.in_([f'agent_task:{task_id}' for task_id in ids]),
-        CardEditHistory.reverted.is_(False), Product.seller_id == seller_id,
+        CardEditHistory.reverted.is_(False),
+        CardEditHistory.wb_synced.isnot(True),
+        db.or_(
+            CardEditHistory.wb_sync_status.is_(None),
+            CardEditHistory.wb_sync_status.in_({'pending', 'failed', 'skipped'}),
+        ),
+        Product.seller_id == seller_id,
     ).order_by(CardEditHistory.created_at.desc(), CardEditHistory.id.desc()).all()
 
     restored_products = set()
+    card_conflicts = []
     now = datetime.utcnow()
     try:
         for snapshot in snapshots:
@@ -1325,6 +1909,28 @@ def rollback_task_tree(root_task_id: str, seller_id: int) -> dict:
             restored_products.add(('imported_product', product.id))
         for history in card_snapshots:
             product = history.product
+            changed_fields = [
+                field for field in (history.changed_fields or [])
+                if isinstance(field, str)
+                and field in (history.snapshot_after or {})
+                and hasattr(product, field)
+            ]
+            conflicting_fields = [
+                field for field in changed_fields
+                if getattr(product, field) != history.snapshot_after[field]
+            ]
+            if conflicting_fields:
+                history.wb_sync_status = 'conflict'
+                history.wb_error_message = (
+                    'Локальный откат заблокирован: карточка была '
+                    'изменена после AI-предложения.'
+                )
+                card_conflicts.append({
+                    'product_id': product.id,
+                    'history_id': history.id,
+                    'fields': conflicting_fields,
+                })
+                continue
             for field, old_value in (history.snapshot_before or {}).items():
                 if hasattr(product, field):
                     setattr(product, field, old_value)
@@ -1337,8 +1943,11 @@ def rollback_task_tree(root_task_id: str, seller_id: int) -> dict:
         db.session.rollback()
         raise
     return {
-        'snapshots': len(snapshots) + len(card_snapshots),
-        'products': len(restored_products), 'task_ids': ids,
+        'snapshots': len(snapshots) + len(card_snapshots) - len(card_conflicts),
+        'products': len(restored_products),
+        'conflicts': len(card_conflicts),
+        'conflict_details': card_conflicts[:20],
+        'task_ids': ids,
     }
 
 
@@ -1463,6 +2072,51 @@ def sync_run_message(message: AgentMessage) -> bool:
         if task.status == 'completed' and result.get('steps'):
             risk = result.get('risk') or 'write'
             requires_approval = risk != 'read'
+            raw_resolved_ids = result.get('product_ids')
+            if (
+                isinstance(raw_resolved_ids, list)
+                and len(raw_resolved_ids) <= MAX_PRODUCT_IDS
+                and all(
+                    isinstance(value, int) and not isinstance(value, bool) and value > 0
+                    for value in raw_resolved_ids
+                )
+                and len(set(raw_resolved_ids)) == len(raw_resolved_ids)
+            ):
+                resolved_ids = list(raw_resolved_ids)
+            else:
+                resolved_ids = metadata.get('product_ids') or []
+            resolved_scope_mode = (
+                'global' if result.get('scope_mode') == 'global' else 'active'
+            )
+            if resolved_scope_mode == 'global':
+                resolved_ids = []
+            resolved_kind = str(
+                result.get('entity_kind')
+                or (metadata.get('entity_scope') or {}).get('kind')
+                or 'imported_product'
+            )
+            if resolved_kind not in {'product', 'imported_product'}:
+                resolved_kind = 'imported_product'
+
+            source_message_id = metadata.get('source_message_id')
+            conversation_id = getattr(message, 'conversation_id', None)
+            if resolved_scope_mode == 'global' and source_message_id and conversation_id:
+                source_message = AgentMessage.query.filter_by(
+                    id=source_message_id,
+                    conversation_id=conversation_id,
+                    role='user',
+                ).first()
+                if source_message:
+                    source_metadata = source_message.get_metadata()
+                    source_metadata.update({
+                        'product_ids': [],
+                        'scope_origin': 'global',
+                        'scope_mode': 'global',
+                        'scope_label': 'Весь каталог',
+                        'entity_scope': {'kind': resolved_kind, 'ids': []},
+                    })
+                    source_message.set_metadata(source_metadata)
+                    source_message.updated_at = datetime.utcnow()
             message.kind = 'plan'
             message.content = result.get('summary') or 'План готов.'
             message.task_id = None
@@ -1478,15 +2132,13 @@ def sync_run_message(message: AgentMessage) -> bool:
                 'confidence': result.get('confidence', 0.7),
                 'requires_approval': requires_approval,
                 'status': 'pending_approval' if requires_approval else 'ready',
-                'product_ids': metadata.get('product_ids') or [],
+                'product_ids': resolved_ids,
                 'scope_label': result.get('scope_label') or 'Область определена из запроса',
+                'scope_mode': resolved_scope_mode,
                 'model_policy': metadata.get('model_policy') or {},
                 'request_text': metadata.get('request_text') or '',
                 'page_context': metadata.get('page_context') or {},
-                'entity_scope': metadata.get('entity_scope') or {
-                    'kind': _page_entity_kind(metadata.get('page_context') or {}),
-                    'ids': metadata.get('product_ids') or [],
-                },
+                'entity_scope': {'kind': resolved_kind, 'ids': resolved_ids},
                 'planning_task_id': task.id,
                 'planning_usage': result.get('_usage') or {},
                 'auto_started': not requires_approval,
@@ -1577,9 +2229,11 @@ def conversation_payload(conversation: AgentConversation, message_limit: int = 1
             AgentReviewProposal.task_id.in_(task_ids),
         ).order_by(AgentReviewProposal.created_at.desc()).limit(100).all()
 
+    active_scope = _latest_conversation_scope(conversation)
     return {
         'conversation': conversation.to_dict(),
         'messages': [message.to_dict() for message in messages],
+        'active_scope': active_scope,
         'run': task_payload,
         'steps': [step.to_dict() for step in steps],
         'subtasks': [task.to_dict() for task in subtasks],

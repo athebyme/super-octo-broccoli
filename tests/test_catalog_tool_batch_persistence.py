@@ -58,6 +58,7 @@ def _tool_batch_agent(agent_class, products, result_factory, reference_data):
     agent._tools = ToolRegistry()
     reference_names = (
         'search_wb_categories', 'get_category_characteristics',
+        'search_characteristic_values',
     )
     for name in reference_names + tuple(_WRITE_TOOL_NAMES):
         if name in reference_names and name not in agent_class.tool_allowlist:
@@ -217,10 +218,10 @@ def test_characteristics_tool_batch_serializes_patch_and_writes_once():
     assert json.loads(updates[0]['characteristics']) == {
         'Цвет товара': 'Черный',
     }
-    assert observed['tool_names'][0] == set()
+    assert observed['tool_names'][0] == {'search_characteristic_values'}
     assert '"results"' in observed['prompts'][0]
     assert 'LEAK_SCHEMA_MARKER' not in observed['prompts'][0]
-    assert observed['api_budgets'] == [1]
+    assert observed['api_budgets'] == [4]
     assert observed['token_budgets'] == [agent.config.RUN_TOKEN_BUDGET]
 
 
@@ -580,3 +581,21 @@ def test_platform_client_rejects_reordered_schema_batch_response():
 
     with pytest.raises(ValueError, match='request order'):
         client.get_category_characteristics_batch([1001, 1002])
+
+
+def test_platform_client_rejects_reordered_characteristic_value_search():
+    client = object.__new__(PlatformClient)
+
+    def request(method, path, **kwargs):
+        queries = kwargs['json']['queries']
+        return {
+            'count': len(queries),
+            'results': [{**item, 'values': []} for item in reversed(queries)],
+        }
+
+    client._request = request
+    with pytest.raises(ValueError, match='order mismatch'):
+        client.search_characteristic_values_batch([
+            {'subject_id': 1001, 'charc_id': 1, 'query': 'крас'},
+            {'subject_id': 1002, 'charc_id': 2, 'query': 'син'},
+        ])

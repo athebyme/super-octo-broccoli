@@ -824,6 +824,64 @@ class OpenAICompatLLM(BaseLLM):
             'usage': usage,
         }
 
+    @llm_retry()
+    def structured_output_multimodal_with_usage(
+        self,
+        system: str,
+        prompt: str,
+        schema: dict,
+        image_urls: list[str],
+        max_tokens: int = None,
+    ) -> dict:
+        """Structured OpenAI-compatible call with up to two public images.
+
+        This is intentionally opt-in instead of widening every agent message to
+        multimodal content.  The caller owns URL validation and uses the images
+        only as read-only visual references.
+        """
+        if not isinstance(image_urls, list) or not 1 <= len(image_urls) <= 2:
+            raise ValueError('image_urls must contain 1..2 URLs')
+        if any(not isinstance(value, str) or not value for value in image_urls):
+            raise ValueError('image_urls must contain non-empty strings')
+        schema_str = json.dumps(
+            schema, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+        )
+        structured_system = (
+            f"{system}\n\n"
+            "СТАБИЛЬНЫЙ КОНТРАКТ JSON-ОТВЕТА:\n"
+            f"{schema_str}\n"
+            "Ответь строго валидным JSON по этой схеме, без markdown и комментариев."
+        )
+        content = [{'type': 'text', 'text': prompt}]
+        content.extend({
+            'type': 'image_url',
+            'image_url': {'url': value},
+        } for value in image_urls)
+        messages = [
+            {'role': 'system', 'content': structured_system},
+            {'role': 'user', 'content': content},
+        ]
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.cfg.TEMPERATURE,
+                max_tokens=max_tokens or self.cfg.MAX_TOKENS,
+                **self._thinking_request_kwargs(),
+            )
+        except Exception as error:
+            self._check_api_error(error)
+            raise
+
+        text = resp.choices[0].message.content or ''
+        usage = _extract_openai_usage(getattr(resp, 'usage', None), self.model)
+        try:
+            data = _extract_json_from_text(text)
+        except Exception as error:
+            error.llm_usage = usage
+            raise
+        return {'data': data, 'usage': usage}
+
 
 class CloudRuLLM(OpenAICompatLLM):
     """Cloud.ru Foundation Models — основной провайдер (GPT-OSS-120B и др.)."""
@@ -849,6 +907,7 @@ class OpenRouterLLM(OpenAICompatLLM):
 
     def __init__(self, config: AgentConfig = None):
         cfg = config or AgentConfig
+        import httpx
         from openai import OpenAI
 
         self.cfg = cfg
@@ -861,6 +920,25 @@ class OpenRouterLLM(OpenAICompatLLM):
         if not self.model:
             raise LLMProviderError("OPENROUTER_MODEL не задан")
 
+        client_kwargs = {}
+        proxy_url = str(getattr(cfg, 'AI_PROXY', '') or '').strip()
+        if proxy_url:
+            parsed_proxy = urlsplit(proxy_url)
+            if parsed_proxy.scheme.casefold() not in {
+                'http', 'https', 'socks5', 'socks5h',
+            } or not parsed_proxy.hostname:
+                raise LLMProviderError(
+                    'AI_PROXY должен быть корректным HTTP(S) или SOCKS5 URL'
+                )
+            client_kwargs['http_client'] = httpx.Client(
+                proxy=proxy_url,
+                timeout=httpx.Timeout(60.0, connect=15.0),
+            )
+            logger.info(
+                'OpenRouter using configured %s proxy',
+                parsed_proxy.scheme.casefold(),
+            )
+
         self.client = OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
@@ -868,6 +946,7 @@ class OpenRouterLLM(OpenAICompatLLM):
                 'HTTP-Referer': 'https://seller-platform.tech',
                 'X-Title': 'Seller Hub Agents',
             },
+            **client_kwargs,
         )
         logger.info(f"OpenRouter LLM initialized: {self.model}")
 

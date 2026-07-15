@@ -15,6 +15,9 @@ from flask import Flask
 from sqlalchemy import event
 
 from migrations.migrate_add_marketplace_reference_freshness import apply_migration
+from migrations.migrate_add_wb_dictionary_provenance import (
+    apply_migration as apply_wb_dictionary_migration,
+)
 from models import (
     Brand,
     BrandAlias,
@@ -49,6 +52,8 @@ class FakeWBClient:
         }
         self.directory_failures = set()
         self.directory_calls = []
+        self.tnved_payloads = {}
+        self.tnved_calls = []
         self.brand_result = {'data': [], 'complete': True, 'errors': []}
         self.brand_subject_calls = []
 
@@ -101,6 +106,18 @@ class FakeWBClient:
 
     def get_directory_vat(self):
         return self._directory('vat')
+
+    def get_directory_tnved(self, subject_id):
+        self.tnved_calls.append(subject_id)
+        value = self.tnved_payloads.get(subject_id, [])
+        if isinstance(value, Exception):
+            raise value
+        return {
+            'data': value,
+            'error': False,
+            'errorText': '',
+            'additionalErrors': None,
+        }
 
     def fetch_all_brands(self, subject_ids, top=5000, progress_callback=None):
         self.brand_subject_calls.append(list(subject_ids))
@@ -701,6 +718,9 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
             required=False,
             max_count=1,
             dictionary_json=dictionary_json,
+            dictionary_source='admin',
+            dictionary_hash=MarketplaceService._dictionary_hash(dictionary_json),
+            dictionary_version=1,
             ai_instruction=MarketplaceService.generate_ai_instruction(
                 name='Материал изделия',
                 charc_type=1,
@@ -753,6 +773,101 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         self.assertEqual(explicit_empty['updated'], 0)
         self.assertEqual(material.dictionary_json, dictionary_json)
         self.assertEqual(explicit_empty['schema_hash'], initial_hash)
+
+    def test_tnved_dictionary_is_category_scoped_versioned_and_fail_closed(self):
+        category = self.add_category(
+            111, 'Category', is_enabled=True, is_available=True,
+        )
+        self.client.characteristics[category.subject_id] = [
+            charc(71, 'ТНВЭД', subject_id=category.subject_id),
+        ]
+        self.client.tnved_payloads[category.subject_id] = [
+            {'tnved': '1234567890', 'isKiz': False},
+            {'tnved': '9876543210', 'isKiz': True},
+        ]
+        now = datetime(2026, 7, 15, 8, 0, 0)
+
+        first = MarketplaceService.sync_category_characteristics(
+            category.id, client=self.client, now=now, sleep_fn=lambda _seconds: None,
+        )
+        characteristic = MarketplaceCategoryCharacteristic.query.filter_by(
+            category_id=category.id, charc_id=71,
+        ).one()
+
+        self.assertTrue(first['success'])
+        self.assertEqual(self.client.tnved_calls, [category.subject_id])
+        self.assertEqual(characteristic.dictionary_source, 'wb_directory')
+        self.assertEqual(characteristic.dictionary_version, 1)
+        self.assertEqual(json.loads(characteristic.dictionary_json), [
+            {'isKiz': False, 'value': '1234567890'},
+            {'isKiz': True, 'value': '9876543210'},
+        ])
+        saved_json = characteristic.dictionary_json
+        saved_hash = characteristic.dictionary_hash
+
+        second = MarketplaceService.sync_category_characteristics(
+            category.id, client=self.client, now=now + timedelta(hours=1),
+            sleep_fn=lambda _seconds: None,
+        )
+        db.session.refresh(characteristic)
+        self.assertTrue(second['success'])
+        self.assertEqual(second['updated'], 0)
+        self.assertEqual(characteristic.dictionary_version, 1)
+
+        self.client.tnved_payloads[category.subject_id] = RuntimeError('tnved down')
+        failed = MarketplaceService.sync_category_characteristics(
+            category.id, client=self.client, now=now + timedelta(hours=2),
+            sleep_fn=lambda _seconds: None,
+        )
+        db.session.refresh(characteristic)
+        self.assertFalse(failed['success'])
+        self.assertEqual(characteristic.dictionary_json, saved_json)
+        self.assertEqual(characteristic.dictionary_hash, saved_hash)
+        self.assertEqual(characteristic.dictionary_version, 1)
+
+    def test_batch_reference_preflight_refreshes_each_scope_once(self):
+        now = datetime(2026, 7, 15, 9, 0, 0)
+        self.add_category(
+            112, 'Old category name', is_enabled=True, is_available=True,
+        )
+        self.client.category_pages[0] = [{
+            'subjectID': 112,
+            'subjectName': 'Leaf category',
+            'parentID': 1,
+            'parentName': 'Parent',
+        }]
+        self.client.characteristics[112] = [
+            charc(80, 'Материал изделия', subject_id=112),
+        ]
+
+        first = MarketplaceService.ensure_wb_references_current(
+            [112, 112], client=self.client, now=now,
+            sleep_fn=lambda _seconds: None,
+        )
+        self.assertTrue(first['success'], first)
+        self.assertEqual(first['subjects'], [112])
+        self.assertEqual(first['refreshed']['schemas'], [112])
+        self.assertEqual(self.client.characteristic_calls, [112])
+        self.assertEqual(
+            set(self.client.directory_calls),
+            {'colors', 'countries', 'kinds', 'seasons', 'vat'},
+        )
+
+        call_counts = (
+            len(self.client.category_calls),
+            len(self.client.directory_calls),
+            len(self.client.characteristic_calls),
+        )
+        second = MarketplaceService.ensure_wb_references_current(
+            [112], client=self.client, now=now + timedelta(hours=1),
+            sleep_fn=lambda _seconds: None,
+        )
+        self.assertTrue(second['success'], second)
+        self.assertEqual(call_counts, (
+            len(self.client.category_calls),
+            len(self.client.directory_calls),
+            len(self.client.characteristic_calls),
+        ))
 
     def test_save_characteristic_allowlist_normalizes_and_preserves_custom_instruction(self):
         category = self.add_category(
@@ -838,7 +953,7 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
 
         self.assertEqual(material.dictionary_json, '[{"value":"Хлопок"}]')
 
-    def test_save_characteristic_allowlist_can_override_global_gender_values(self):
+    def test_save_characteristic_allowlist_cannot_override_global_gender_values(self):
         category = self.add_category(
             108, 'Category', is_enabled=True, is_available=True,
         )
@@ -863,19 +978,14 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
         db.session.add_all([gender, kinds])
         db.session.commit()
 
-        result = MarketplaceService.save_characteristic_allowlist(
-            gender.id,
-            ['Женский', 'Мужской'],
-        )
+        with self.assertRaisesRegex(ValueError, 'Официальный словарь WB'):
+            MarketplaceService.save_characteristic_allowlist(
+                gender.id,
+                ['Женский', 'Мужской'],
+            )
 
-        self.assertTrue(result['success'])
-        self.assertEqual(result['dictionary_values'], ['Женский', 'Мужской'])
-        self.assertEqual(
-            json.loads(gender.dictionary_json),
-            [{'value': 'Женский'}, {'value': 'Мужской'}],
-        )
+        self.assertIsNone(gender.dictionary_json)
         self.assertIn('Унисекс', json.loads(kinds.data_json))
-        self.assertNotIn('Унисекс', result['dictionary_values'])
 
     def test_admin_route_saves_characteristic_allowlist(self):
         category = self.add_category(
@@ -1801,6 +1911,49 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
 
 
 class MarketplaceReferenceMigrationTestCase(unittest.TestCase):
+    def test_wb_dictionary_provenance_migration_is_idempotent(self):
+        connection = sqlite3.connect(':memory:')
+        connection.executescript(
+            """
+            CREATE TABLE marketplace_category_characteristics (
+                id INTEGER PRIMARY KEY,
+                category_id INTEGER NOT NULL,
+                dictionary_json TEXT,
+                created_at DATETIME,
+                updated_at DATETIME
+            );
+            INSERT INTO marketplace_category_characteristics
+                (id, category_id, dictionary_json, created_at, updated_at)
+                VALUES (
+                    1, 10, '[{"value":"Хлопок"}]',
+                    '2026-01-01', '2026-02-01'
+                );
+            INSERT INTO marketplace_category_characteristics
+                (id, category_id, dictionary_json, created_at, updated_at)
+                VALUES (2, 10, '[]', '2026-01-01', '2026-02-01');
+            """
+        )
+
+        first = apply_wb_dictionary_migration(connection, verbose=False)
+        second = apply_wb_dictionary_migration(connection, verbose=False)
+        rows = connection.execute(
+            'SELECT id, dictionary_source, dictionary_version, '
+            'dictionary_hash, dictionary_synced_at '
+            'FROM marketplace_category_characteristics ORDER BY id'
+        ).fetchall()
+        connection.close()
+
+        self.assertGreater(first, 0)
+        self.assertEqual(second, 0)
+        self.assertEqual(rows[0][1], 'admin')
+        self.assertEqual(rows[0][2], 1)
+        self.assertEqual(
+            rows[0][3],
+            MarketplaceService._dictionary_hash('[{"value":"Хлопок"}]'),
+        )
+        self.assertEqual(rows[0][4], '2026-02-01')
+        self.assertEqual(rows[1][1:], ('none', 0, None, None))
+
     def test_migration_is_idempotent_and_non_destructive(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / 'db.sqlite'

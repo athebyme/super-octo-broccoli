@@ -10,6 +10,7 @@ from services.infographic_prompts import (
     TEXT_SAMPLE_PHRASES,
     build_background_prompt,
     build_edit_prompt,
+    build_native_scene_prompt,
     sanitize_prompt,
 )
 
@@ -31,6 +32,14 @@ class PresetTests(unittest.TestCase):
         p = build_background_prompt("neon")
         self.assertIn("empty", p.lower())
         self.assertIn("no people", p.lower())
+
+    def test_native_scene_prompt_forbids_duplicate_and_requires_review(self):
+        p = build_native_scene_prompt("spa")
+        self.assertIn("exactly one", p.lower())
+        self.assertIn("second copy", p.lower())
+        self.assertIn("one coherent photograph", p.lower())
+        self.assertIn("pasted cutout", p.lower())
+        self.assertIn("human identity review", p.lower())
 
     def test_unknown_preset_raises(self):
         with self.assertRaises(KeyError):

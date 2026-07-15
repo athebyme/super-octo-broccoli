@@ -83,10 +83,68 @@
     </template>
   </div>
 
-  {# ── Фильтры по причинам ── #}
+  {# ── Основные фильтры ── #}
+  <div class="sh-filter-bar" role="search" aria-label="Фильтры карточек по качеству">
+    <label for="cq-search" style="flex:1 1 260px;min-width:220px">
+      <span style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">Поиск</span>
+      <input id="cq-search" type="search" x-model="searchQuery"
+             @input.debounce.350ms="applySearch()" @keydown.escape.prevent="clearSearch()"
+             maxlength="100" autocomplete="off"
+             placeholder="Название, артикул продавца или nmID"
+             style="width:100%">
+    </label>
+    <label for="cq-category-filter" style="flex:1 1 180px;min-width:170px">
+      <span style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">Категория</span>
+      <select id="cq-category-filter" x-model="activeCategory"
+              @change="applyCatalogFilter()" :disabled="filtersLoading" style="width:100%">
+        <option value="" x-text="filtersLoading ? 'Загрузка…' : 'Все категории'"></option>
+        <template x-for="option in filterOptions.categories" :key="option.value">
+          <option :value="option.value" x-text="option.label + ' · ' + option.count"></option>
+        </template>
+      </select>
+    </label>
+    <label for="cq-brand-filter" style="flex:1 1 170px;min-width:160px">
+      <span style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">Бренд</span>
+      <select id="cq-brand-filter" x-model="activeBrand"
+              @change="applyCatalogFilter()" :disabled="filtersLoading" style="width:100%">
+        <option value="" x-text="filtersLoading ? 'Загрузка…' : 'Все бренды'"></option>
+        <template x-for="option in filterOptions.brands" :key="option.value">
+          <option :value="option.value" x-text="option.label + ' · ' + option.count"></option>
+        </template>
+      </select>
+    </label>
+    <label for="cq-supplier-filter" style="flex:1 1 180px;min-width:170px">
+      <span style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">Поставщик</span>
+      <select id="cq-supplier-filter" x-model="activeSupplier"
+              @change="applyCatalogFilter()" :disabled="filtersLoading" style="width:100%">
+        <option value="" x-text="filtersLoading ? 'Загрузка…' : 'Все поставщики'"></option>
+        <template x-for="option in filterOptions.suppliers" :key="option.value">
+          <option :value="option.value" x-text="option.label + ' · ' + option.count"></option>
+        </template>
+      </select>
+    </label>
+    <label for="cq-quality-filter" style="flex:1 1 170px;min-width:160px">
+      <span style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px">Уровень качества</span>
+      <select id="cq-quality-filter" x-model="activeBucket"
+              @change="setBucket($event.target.value || null)" style="width:100%">
+        <option value="">Любой уровень</option>
+        <option value="poor">Слабые · до 50</option>
+        <option value="average">Средние · 50–69</option>
+        <option value="good">Хорошие · от 70</option>
+      </select>
+    </label>
+    <div style="margin-left:auto;align-self:flex-end;display:flex;align-items:center;gap:8px;min-height:32px">
+      <span style="font-size:12px;color:var(--text-muted)"
+            x-text="loading ? 'Поиск…' : 'Найдено: ' + (summary.total ?? 0)"></span>
+      <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm"
+              x-show="hasFilters" x-cloak @click="resetFilters()">Сбросить</button>
+    </div>
+  </div>
+
+  {# ── Быстрые фильтры по причинам ── #}
   <div x-show="!loading" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
     <button class="sh-btn sh-btn--sm"
-            :class="!activeReason ? 'sh-btn--accent' : 'sh-btn--white-outline'"
+            :class="!hasFilters ? 'sh-btn--accent' : 'sh-btn--white-outline'"
             @click="resetFilters()">
       Все · <span x-text="summary.need_attention ?? 0"></span>
     </button>
@@ -382,10 +440,16 @@ function cardQualityPage() {
     improveRunning: false, improveStatus: '', applyRunning: false,
     supplierDiff: null, proposal: {}, selected: {},
     history: [], historyLoading: false,
-    page: 1, pages: 1, activeReason: null, activeBucket: null,
+    page: 1, pages: 1, activeReason: null, activeBucket: null, searchQuery: '',
+    activeCategory: '', activeBrand: '', activeSupplier: '',
+    filterOptions: { categories: [], brands: [], suppliers: [] }, filtersLoading: true,
     BUCKET_LABELS: { poor: 'Слабые', average: 'Средние', good: 'Хорошие' },
-    selectedMap: {}, aiHandoffRunning: false,
+    selectedMap: {}, aiHandoffRunning: false, _loadSeq: 0,
     get selectedCount() { return Object.keys(this.selectedMap).length; },
+    get hasFilters() {
+      return !!(this.searchQuery.trim() || this.activeCategory || this.activeBrand ||
+        this.activeSupplier || this.activeReason || this.activeBucket);
+    },
     get reasonChips() {
       const rc = (this.summary && this.summary.reason_counts) || {};
       const labels = (this.summary && this.summary.reason_labels) || {};
@@ -408,23 +472,38 @@ function cardQualityPage() {
       return defs.map(x => ({ ...x, pct: (x.count / total * 100) }));
     },
     resetFilters() {
-      this.activeReason = null; this.activeBucket = null;
-      this.page = 1; this.clearSelection(); this.load();
+      this.searchQuery = ''; this.activeReason = null; this.activeBucket = null;
+      this.activeCategory = ''; this.activeBrand = ''; this.activeSupplier = '';
+      this.page = 1; this.clearSelection(); this.syncFilterUrl(); this.load();
+    },
+    syncFilterUrl() {
       const url = new URL(window.location);
-      url.searchParams.delete('reason'); url.searchParams.delete('bucket');
+      const search = this.searchQuery.trim();
+      if (search) url.searchParams.set('search', search); else url.searchParams.delete('search');
+      if (this.activeCategory) url.searchParams.set('category', this.activeCategory); else url.searchParams.delete('category');
+      if (this.activeBrand) url.searchParams.set('brand', this.activeBrand); else url.searchParams.delete('brand');
+      if (this.activeSupplier) url.searchParams.set('supplier_id', this.activeSupplier); else url.searchParams.delete('supplier_id');
+      if (this.activeReason) url.searchParams.set('reason', this.activeReason); else url.searchParams.delete('reason');
+      if (this.activeBucket) url.searchParams.set('bucket', this.activeBucket); else url.searchParams.delete('bucket');
       history.replaceState(null, '', url);
+    },
+    applySearch() {
+      this.page = 1; this.clearSelection(); this.syncFilterUrl(); this.load();
+    },
+    applyCatalogFilter() {
+      this.page = 1; this.clearSelection(); this.syncFilterUrl(); this.load();
+    },
+    clearSearch() {
+      if (!this.searchQuery) return;
+      this.searchQuery = ''; this.applySearch();
     },
     setReason(code) {
-      this.activeReason = code; this.page = 1; this.clearSelection(); this.load();
-      const url = new URL(window.location);
-      if (code) url.searchParams.set('reason', code); else url.searchParams.delete('reason');
-      history.replaceState(null, '', url);
+      this.activeReason = code; this.page = 1; this.clearSelection();
+      this.syncFilterUrl(); this.load();
     },
     setBucket(code) {
-      this.activeBucket = code; this.page = 1; this.clearSelection(); this.load();
-      const url = new URL(window.location);
-      if (code) url.searchParams.set('bucket', code); else url.searchParams.delete('bucket');
-      history.replaceState(null, '', url);
+      this.activeBucket = code; this.page = 1; this.clearSelection();
+      this.syncFilterUrl(); this.load();
     },
     toggleSelect(id) {
       if (this.selectedMap[id]) delete this.selectedMap[id]; else this.selectedMap[id] = true;
@@ -436,25 +515,55 @@ function cardQualityPage() {
     clearSelection() { this.selectedMap = {}; },
     selectedList() { return Object.keys(this.selectedMap).map(Number); },
     async load() {
+      const loadSeq = ++this._loadSeq;
       this.loading = true;
       try {
         let url = '/api/card-quality/list?sort=impact&order=desc&per_page=50&page=' + this.page;
+        const search = this.searchQuery.trim();
+        if (search) url += '&search=' + encodeURIComponent(search);
+        if (this.activeCategory) url += '&category=' + encodeURIComponent(this.activeCategory);
+        if (this.activeBrand) url += '&brand=' + encodeURIComponent(this.activeBrand);
+        if (this.activeSupplier) url += '&supplier_id=' + encodeURIComponent(this.activeSupplier);
         if (this.activeReason) url += '&reason=' + encodeURIComponent(this.activeReason);
         if (this.activeBucket) url += '&bucket=' + encodeURIComponent(this.activeBucket);
         const r = await fetch(url);
         const d = await r.json();
+        if (loadSeq !== this._loadSeq) return;
         this.items = d.items || []; this.summary = d.summary || {};
         this.pages = d.pages || 1;
       } finally {
-        this.loading = false;
+        if (loadSeq === this._loadSeq) this.loading = false;
+      }
+    },
+    async loadFilters() {
+      this.filtersLoading = true;
+      try {
+        const r = await fetch('/api/card-quality/filters');
+        const d = await r.json();
+        if (!r.ok || !d.success) return;
+        const data = d.data || {};
+        this.filterOptions = {
+          categories: Array.isArray(data.categories) ? data.categories : [],
+          brands: Array.isArray(data.brands) ? data.brands : [],
+          suppliers: Array.isArray(data.suppliers) ? data.suppliers : [],
+        };
+      } catch (e) {
+        this.filterOptions = { categories: [], brands: [], suppliers: [] };
+      } finally {
+        this.filtersLoading = false;
       }
     },
     async init() {
       const params = new URLSearchParams(window.location.search);
+      this.searchQuery = (params.get('search') || '').slice(0, 100);
+      this.activeCategory = (params.get('category') || '').slice(0, 200);
+      this.activeBrand = (params.get('brand') || '').slice(0, 200);
+      const supplierId = params.get('supplier_id') || '';
+      this.activeSupplier = /^\d+$/.test(supplierId) && Number(supplierId) > 0 ? supplierId : '';
       this.activeReason = params.get('reason') || null;
       const bucket = params.get('bucket');
       this.activeBucket = ['poor', 'average', 'good'].includes(bucket) ? bucket : null;
-      await this.load();
+      await Promise.all([this.loadFilters(), this.load()]);
     },
     async fixWithAI(ids) {
       ids = ids || this.selectedList();
@@ -485,7 +594,10 @@ function cardQualityPage() {
           '. Составь план исправления контента.';
         const mr = await fetch('/agents/api/conversations/' + cid + '/messages', {
           method: 'POST', headers: hdrs,
-          body: JSON.stringify({message: message, product_ids: ids, entity_kind: 'product'}),
+          body: JSON.stringify({
+            message: message, product_ids: ids,
+            entity_kind: 'product', scope_mode: 'selected',
+          }),
         });
         if (!mr.ok) {
           const err = await mr.json().catch(() => ({}));

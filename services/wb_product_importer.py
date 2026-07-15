@@ -948,25 +948,49 @@ class WBProductImporter:
         import time as _bt
         _bt_start = _bt.time()
 
-        unique_subjects = set(
+        unique_subjects = sorted(set(
             ip.wb_subject_id for ip in imported_products
             if ip.wb_subject_id and ip.import_status in ('validated', 'imported')
-        )
+        ))
         if unique_subjects and self.api_client:
             _cb('preparing', {'current': 0, 'total': len(imported_products),
-                              'detail': f'Загрузка конфигурации WB ({len(unique_subjects)} кат.)...'})
+                              'detail': f'Актуализация справочников WB ({len(unique_subjects)} кат.)...'})
+            from services.marketplace_service import MarketplaceService
+            reference_result = MarketplaceService.ensure_wb_references_current(
+                unique_subjects, client=self.api_client,
+            )
+            if not reference_result.get('success'):
+                error = (
+                    'Предпроверка справочников WB не пройдена: '
+                    f'{reference_result.get("error") or reference_result.get("errors")}'
+                )
+                failed_results = []
+                for ip in imported_products:
+                    failed_results.append({
+                        'product_id': ip.id,
+                        'title': (ip.title or '')[:50],
+                        'status': 'failed',
+                        'error': error,
+                        'nm_id': None,
+                        'warnings': [],
+                    })
+                _cb('preparing', {
+                    'current': 0, 'total': len(imported_products),
+                    'detail': error, 'items': failed_results,
+                })
+                return failed_results
+
+            self._wb_validation_cache = {}
             for sid in unique_subjects:
-                try:
-                    wb_chars = self._get_live_characteristics_config(sid)
-                    # Кеш размеров тоже заполняем из уже загруженных данных
-                    if sid not in self._category_sizes_cache:
-                        has_sizes = any(
-                            (c.get('name') or '').lower() in ('размер', 'рос. размер', 'размер пользователя')
-                            for c in wb_chars
-                        )
-                        self._category_sizes_cache[sid] = has_sizes
-                except Exception as e:
-                    logger.warning(f"Ошибка предзагрузки конфигурации subject {sid}: {e}")
+                wb_chars = MarketplaceService.get_cached_characteristics_snapshot(sid)
+                self._chars_config_cache[sid] = wb_chars
+                has_sizes = any(
+                    (c.get('name') or '').lower() in (
+                        'размер', 'рос. размер', 'размер пользователя',
+                    )
+                    for c in wb_chars
+                )
+                self._category_sizes_cache[sid] = has_sizes
 
         # ────────────────────────────────────────────────────
         # Фаза 1: Подготовка и валидация
@@ -1533,10 +1557,11 @@ class WBProductImporter:
         )
 
     def _get_live_characteristics_config(self, wb_subject_id: int) -> List[Dict[str, Any]]:
-        """Return a validated live WB characteristic schema for one subject.
+        """Return one current schema from the shared admin reference cache.
 
-        An unavailable or malformed schema is a safety boundary: card preparation
-        must stop instead of treating it as a category without characteristics.
+        The same cache is used by AI prompts and the final write validator. A
+        bounded on-demand refresh happens before the first read, eliminating the
+        former live-WB/admin-cache race within one import batch.
         """
         if not wb_subject_id:
             raise ValueError("Не указан subject_id для загрузки характеристик WB")
@@ -1553,20 +1578,21 @@ class WBProductImporter:
                 raise ValueError(
                     f"Не настроен WB API client для загрузки характеристик subject_id={wb_subject_id}"
                 )
-            try:
-                response = self.api_client.get_card_characteristics_config(wb_subject_id)
-            except Exception as exc:
+            from services.marketplace_service import MarketplaceService
+            refresh = MarketplaceService.ensure_wb_references_current(
+                [wb_subject_id], client=self.api_client,
+            )
+            if not refresh.get('success'):
                 raise ValueError(
-                    f"Не удалось получить конфигурацию характеристик WB "
-                    f"для subject_id={wb_subject_id}: {exc}"
-                ) from exc
-
-            if not isinstance(response, dict):
-                raise ValueError(
-                    f"WB вернул некорректную конфигурацию характеристик "
-                    f"для subject_id={wb_subject_id}"
+                    f"Не удалось актуализировать справочники WB для "
+                    f"subject_id={wb_subject_id}: "
+                    f"{refresh.get('error') or refresh.get('errors') or 'неизвестная ошибка'}"
                 )
-            wb_chars = response.get('data')
+            # Reference refresh invalidates every per-run validator object.
+            self._wb_validation_cache = {}
+            wb_chars = MarketplaceService.get_cached_characteristics_snapshot(
+                wb_subject_id,
+            )
 
         if (
             not isinstance(wb_chars, list)
@@ -1574,7 +1600,7 @@ class WBProductImporter:
             or any(not isinstance(char, dict) for char in wb_chars)
         ):
             raise ValueError(
-                f"WB вернул пустую или некорректную конфигурацию характеристик "
+                f"Админ-кэш WB вернул пустую или некорректную конфигурацию характеристик "
                 f"для subject_id={wb_subject_id}"
             )
 

@@ -502,7 +502,7 @@ class CardEditHistory(db.Model):
 
     # Результат синхронизации с WB
     wb_synced = db.Column(db.Boolean, default=False)  # Синхронизировано ли с WB
-    wb_sync_status = db.Column(db.String(50))  # success|failed|pending|uncertain|partial
+    wb_sync_status = db.Column(db.String(50))  # success|failed|pending|uncertain|partial|conflict
     wb_error_message = db.Column(db.Text)  # Сообщение об ошибке от WB
 
     # Откат
@@ -3143,6 +3143,12 @@ class MarketplaceCategoryCharacteristic(db.Model):
 
     # Dictionary of allowed values (JSON array)
     dictionary_json = db.Column(db.Text)                       # [{"value":"Черный"},...]
+    dictionary_source = db.Column(
+        db.String(30), default='none', nullable=False,
+    )                                                          # none/admin/wb_schema/wb_directory
+    dictionary_synced_at = db.Column(db.DateTime)
+    dictionary_hash = db.Column(db.String(64))
+    dictionary_version = db.Column(db.Integer, default=0, nullable=False)
 
     # AI parsing instruction — auto-generated or admin-customized
     ai_instruction = db.Column(db.Text)                        # Per-field AI instruction
@@ -3164,6 +3170,10 @@ class MarketplaceCategoryCharacteristic(db.Model):
     __table_args__ = (
         db.UniqueConstraint('category_id', 'charc_id', name='uq_category_charc'),
         db.Index('idx_mp_charc_required', 'category_id', 'required'),
+        db.Index(
+            'idx_mp_charc_dictionary_source',
+            'category_id', 'dictionary_source',
+        ),
     )
 
     @property

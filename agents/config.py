@@ -14,6 +14,7 @@
   LLM_PROVIDER        — "cloudru" | "claude" | "gemini" | "openrouter" | "openai_compat" (default: cloudru)
   OPENROUTER_API_KEY   — ключ OpenRouter (для DeepSeek, Claude, Gemini и др.)
   OPENROUTER_MODEL     — модель OpenRouter (default: deepseek/deepseek-v3.2)
+  AI_PROXY             — optional HTTP/SOCKS proxy только для OpenRouter
   CLOUDRU_API_KEY      — ключ Cloud.ru Foundation Models
   CLOUDRU_MODEL        — модель Cloud.ru (default: openai/gpt-oss-120b)
   CLOUDRU_BASE_URL     — base URL Cloud.ru API
@@ -34,6 +35,9 @@
   AGENT_RUN_API_BUDGET — максимум LLM API-вызовов одного запуска (default: 24)
   AGENT_OBSERVATION_MAX_CHARS — максимум символов одного tool result в контексте (default: 1200)
   AGENT_STEP_NAMER_ENABLED — разрешить отдельные LLM-вызовы для названий шагов (default: 0)
+  AGENT_IMAGE_PROMPT_MODEL — Gemini Flash через OpenRouter для промпта фото
+  AGENT_IMAGE_PROMPT_MAX_TOKENS — output cap prompt-writer (default: 420)
+  AGENT_IMAGE_WAIT_SECONDS — сколько chat-run ждёт итог Фотостудии (default: 210)
   LOG_LEVEL            — уровень логирования (default: INFO)
 """
 import os
@@ -119,6 +123,8 @@ _FIELD_DEFS = {
     # OpenRouter — единый API для 300+ моделей
     'OPENROUTER_API_KEY':  ('OPENROUTER_API_KEY', '', str),
     'OPENROUTER_MODEL':    ('OPENROUTER_MODEL', 'deepseek/deepseek-v3.2', str),
+    'AI_PROXY':             ('AI_PROXY', '', str),
+    'AITUNNEL_API_KEY':     ('AITUNNEL_API_KEY', '', str),
 
     # DeepSeek Platform — нативный API (api.deepseek.com)
     'DEEPSEEK_API_KEY':  ('DEEPSEEK_API_KEY', '', str),
@@ -146,6 +152,11 @@ _FIELD_DEFS = {
     'OBSERVATION_MAX_CHARS': ('AGENT_OBSERVATION_MAX_CHARS', '1200', int),
     'MAX_PRODUCTS_PER_RUN': ('AGENT_MAX_PRODUCTS_PER_RUN', '200', int),
     'STEP_NAMER_ENABLED': ('AGENT_STEP_NAMER_ENABLED', '0', int),
+    'IMAGE_PROMPT_MODEL': (
+        'AGENT_IMAGE_PROMPT_MODEL', 'google/gemini-2.5-flash', str,
+    ),
+    'IMAGE_PROMPT_MAX_TOKENS': ('AGENT_IMAGE_PROMPT_MAX_TOKENS', '420', int),
+    'IMAGE_WAIT_SECONDS': ('AGENT_IMAGE_WAIT_SECONDS', '210', int),
     'LOG_LEVEL':          ('LOG_LEVEL', 'INFO', str),
 
     # LLM параметры

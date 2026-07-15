@@ -27,6 +27,18 @@ class CensorshipClassifierTests(unittest.TestCase):
 
 
 class FromEnvTests(unittest.TestCase):
+    def test_openrouter_key_and_proxy_from_env(self):
+        with mock.patch.dict(os.environ, {
+            "OPENROUTER_API_KEY": "or-key",
+            "AI_PROXY": "http://proxy.test:8080",
+        }, clear=True):
+            cfg = ImageGenerationConfig.from_env(ImageProvider.OPENROUTER)
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg.openrouter_api_key, "or-key")
+        self.assertEqual(cfg.openrouter_model, "google/gemini-3.1-flash-lite-image")
+        self.assertEqual(cfg.openrouter_resolution, "1K")
+        self.assertTrue(cfg.proxy_enabled)
+
     def test_gen_api_key_from_env(self):
         with mock.patch.dict(os.environ, {"GEN_API_KEY": "k1"}):
             cfg = ImageGenerationConfig.from_env(ImageProvider.GEN_API)
@@ -97,6 +109,94 @@ class FitImageTests(unittest.TestCase):
         from services.image_generation_service import fit_image_to_size
 
         self.assertEqual(fit_image_to_size(b"not-a-png", 900, 1200), b"not-a-png")
+
+
+class OpenRouterGeneratorTests(unittest.TestCase):
+    def _config(self, model="google/gemini-3.1-flash-lite-image"):
+        return ImageGenerationConfig(
+            provider=ImageProvider.OPENROUTER,
+            api_key="or-key",
+            openrouter_api_key="or-key",
+            openrouter_model=model,
+            openrouter_resolution="1K",
+            timeout=10,
+        )
+
+    @mock.patch("services.image_generation_service.requests.post")
+    def test_native_edit_uses_dedicated_api_and_input_references(self, post):
+        import base64 as b64
+
+        from services.image_generation_service import OpenRouterImageGenerator
+
+        post.return_value = _resp(json_data={
+            "data": [{"b64_json": b64.b64encode(b"IMAGE").decode("ascii")}],
+            "usage": {"cost": 0.034},
+        })
+        ok, data, error = OpenRouterImageGenerator(self._config()).edit(
+            prompt="scene",
+            source_image_bytes=b"\x89PNG\r\n\x1a\nMAIN",
+            additional_source_images=[b"\xff\xd8\xffDETAIL"],
+            width=900,
+            height=1200,
+        )
+        self.assertTrue(ok, error)
+        self.assertEqual(data, b"IMAGE")
+        self.assertEqual(post.call_args.args[0], "https://openrouter.ai/api/v1/images")
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "google/gemini-3.1-flash-lite-image")
+        self.assertEqual(payload["resolution"], "1K")
+        self.assertEqual(payload["aspect_ratio"], "3:4")
+        self.assertEqual(len(payload["input_references"]), 2)
+        self.assertTrue(
+            payload["input_references"][0]["image_url"]["url"].startswith(
+                "data:image/png;base64,"
+            )
+        )
+        self.assertTrue(
+            payload["input_references"][1]["image_url"]["url"].startswith(
+                "data:image/jpeg;base64,"
+            )
+        )
+        self.assertNotIn("mask", payload)
+        self.assertNotIn("size", payload)
+
+    @mock.patch("services.image_generation_service.requests.post")
+    def test_mask_is_rejected_before_paid_request(self, post):
+        from services.image_generation_service import OpenRouterImageGenerator
+
+        ok, _, error = OpenRouterImageGenerator(self._config()).edit(
+            prompt="scene", source_image_bytes=b"MAIN", mask_bytes=b"MASK",
+        )
+        self.assertFalse(ok)
+        self.assertIn("mask", error)
+        post.assert_not_called()
+
+    @mock.patch("services.image_generation_service.requests.post")
+    def test_grok_reference_limit_is_local(self, post):
+        from services.image_generation_service import OpenRouterImageGenerator
+
+        generator = OpenRouterImageGenerator(
+            self._config("x-ai/grok-imagine-image-quality")
+        )
+        ok, _, error = generator.edit(
+            prompt="angle",
+            source_image_bytes=b"MAIN",
+            additional_source_images=[b"A", b"B", b"C"],
+        )
+        self.assertFalse(ok)
+        self.assertIn("не более 3", error)
+        post.assert_not_called()
+
+    @mock.patch("services.image_generation_service.requests.post")
+    def test_non_json_error_is_normalized(self, post):
+        from services.image_generation_service import OpenRouterImageGenerator
+
+        response = _resp(status_code=502)
+        response.json.side_effect = ValueError("html")
+        post.return_value = response
+        ok, _, error = OpenRouterImageGenerator(self._config()).generate("scene")
+        self.assertFalse(ok)
+        self.assertEqual(error, "OpenRouter: HTTP 502")
 
 
 class GenApiGeneratorTests(unittest.TestCase):
@@ -355,6 +455,7 @@ class AITunnelGeneratorTests(unittest.TestCase):
             prompt="scene",
             source_image_bytes=b"MAIN",
             input_fidelity="high",
+            quality="high",
             width=900,
             height=1200,
         )
@@ -362,6 +463,7 @@ class AITunnelGeneratorTests(unittest.TestCase):
         request_data = m_post.call_args.kwargs["data"]
         self.assertEqual(request_data["model"], "gpt-image-2")
         self.assertEqual(request_data["input_fidelity"], "high")
+        self.assertEqual(request_data["quality"], "high")
         self.assertEqual(request_data["size"], "1024x1536")
 
     @mock.patch("services.image_generation_service.requests.get")

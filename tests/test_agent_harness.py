@@ -78,10 +78,12 @@ class _ContentLLM:
         self.title = title
         self.calls = 0
         self.schema = None
+        self.prompt = ''
 
     def structured_output_with_usage(self, **kwargs):
         self.calls += 1
         self.schema = kwargs['schema']
+        self.prompt = kwargs['prompt']
         result = {
             'product_id': 9741,
             'description': 'Новое точное описание',
@@ -108,6 +110,56 @@ class _ContentPlatform(_DescriptionPlatform):
             'has_prohibited': False,
             'filtered_text': item['text'],
         } for item in items]}
+
+
+class _ConflictContentPlatform(_ContentPlatform):
+    def __init__(self, content_changed=False):
+        super().__init__()
+        self.content_changed = content_changed
+        self.brief_calls = 0
+        self.batch_calls = []
+
+    def get_task_status(self, task_id):
+        return {'task': {'status': 'running'}}
+
+    def get_products_content_brief(self, seller_id, entity_kind, product_ids):
+        self.brief_calls += 1
+        description = (
+            'Параллельное ручное описание'
+            if self.content_changed and self.brief_calls > 1
+            else 'Старое описание'
+        )
+        return {
+            'entity_kind': entity_kind,
+            'products': [{
+                'id': 9741,
+                'title': 'Свеча',
+                'description': description,
+                'brand': '',
+                'category': '',
+                'updated_at': (
+                    '2026-07-15T07:15:00'
+                    if self.brief_calls > 1 else '2026-07-15T07:14:49'
+                ),
+            }],
+        }
+
+    def batch_update_products(self, seller_id, updates):
+        self.batch_calls.append(list(updates))
+        if len(self.batch_calls) == 1:
+            return {
+                'updated': 0, 'failed': 1,
+                'results': [{
+                    'product_id': 9741,
+                    'status': 'error',
+                    'error': 'Product changed after brief',
+                    'conflict': True,
+                }],
+            }
+        return {
+            'updated': 1, 'failed': 0,
+            'results': [{'product_id': 9741, 'status': 'updated'}],
+        }
 
 
 class _GeneratedBatchLLM:
@@ -385,6 +437,27 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
                 self.assertEqual(plan.steps[0]['agent'], 'batch-audit')
                 self.assertEqual(plan.steps[0]['params']['entity_kind'], entity_kind)
 
+    def test_ambiguous_problem_followup_is_not_captured_by_audit_keywords(self):
+        self.assertIsNone(build_plan(
+            'Основные проблемы — исправь их как считаешь правильно',
+            [16128], entity_kind='product',
+        ))
+        self.assertIsNone(build_plan(
+            'Основные проблемы', [16128], entity_kind='product',
+        ))
+
+    def test_composite_selected_request_always_goes_to_semantic_planner(self):
+        self.assertIsNone(build_plan(
+            'Исправь название, описание и характеристики этой карточки',
+            [16128], entity_kind='product',
+        ))
+
+    def test_publish_prepared_content_is_not_misread_as_new_generation(self):
+        self.assertIsNone(build_plan(
+            'Отправь на WB подготовленные изменения: название и описание',
+            [16128], entity_kind='product',
+        ))
+
     def test_batch_audit_skill_uses_one_platform_call_and_zero_llm(self):
         platform = _BatchAuditPlatform()
         skill = object.__new__(BatchAuditSkill)
@@ -529,6 +602,70 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
         self.assertEqual(change['new'], 'Новое безопасное описание')
         self.assertEqual(result['_usage']['api_requests'], 1)
 
+    def test_content_writer_retries_version_only_conflict_without_second_llm(self):
+        platform = _ConflictContentPlatform(content_changed=False)
+        llm = _ContentLLM(include_title=False)
+        skill = object.__new__(DescriptionWriterSkill)
+        skill.llm = llm
+        skill.platform = platform
+        skill.system_prompt = DescriptionWriterSkill.system_prompt
+        skill._run_api_budget_override = 10
+        skill._run_token_budget_override = 10000
+
+        result = skill.execute_task({
+            'id': 'content-conflict',
+            'seller_id': 7,
+            'task_type': 'rewrite_content',
+            'input_data': json.dumps({
+                'product_ids': [9741],
+                'entity_scope': {'kind': 'product', 'ids': [9741]},
+                'params': {
+                    'entity_kind': 'product',
+                    'fields': ['description'],
+                },
+            }),
+        })
+
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['saved'], 1)
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(platform.brief_calls, 2)
+        self.assertEqual(len(platform.batch_calls), 2)
+        self.assertEqual(
+            platform.batch_calls[1][0]['expected_updated_at'],
+            '2026-07-15T07:15:00',
+        )
+
+    def test_content_writer_blocks_conflict_when_content_itself_changed(self):
+        platform = _ConflictContentPlatform(content_changed=True)
+        llm = _ContentLLM(include_title=False)
+        skill = object.__new__(DescriptionWriterSkill)
+        skill.llm = llm
+        skill.platform = platform
+        skill.system_prompt = DescriptionWriterSkill.system_prompt
+        skill._run_api_budget_override = 10
+        skill._run_token_budget_override = 10000
+
+        result = skill.execute_task({
+            'id': 'content-conflict',
+            'seller_id': 7,
+            'task_type': 'rewrite_content',
+            'input_data': json.dumps({
+                'product_ids': [9741],
+                'entity_scope': {'kind': 'product', 'ids': [9741]},
+                'params': {
+                    'entity_kind': 'product',
+                    'fields': ['description'],
+                },
+            }),
+        })
+
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['saved'], 0)
+        self.assertEqual(result['failure_details'][0]['code'], 'content_changed')
+        self.assertEqual(llm.calls, 1)
+        self.assertEqual(len(platform.batch_calls), 1)
+
     def test_content_writer_batches_100_cards_without_silent_truncation(self):
         platform = _GeneratedBatchPlatform()
         llm = _GeneratedBatchLLM()
@@ -574,7 +711,7 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
                 'params': {'entity_kind': 'product', 'fields': ['title', 'description']},
             }),
         })
-        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['saved'], 0)
         self.assertEqual(result['failed'], 2)
         self.assertEqual(platform.batch_calls, [])
@@ -666,7 +803,7 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
             }),
         })
 
-        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['status'], 'failed')
         self.assertEqual(skill.llm.calls, 2)
         self.assertEqual(result['_usage']['api_requests'], 2)
         self.assertEqual(platform.batch_calls, [])
@@ -686,6 +823,7 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
                 'params': {
                     'entity_kind': 'product',
                     'fields': ['title', 'description'],
+                    'instruction': 'Артикул 907560659: улучши слабый заголовок',
                 },
             }),
         })
@@ -695,6 +833,18 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
         self.assertEqual(llm.calls, 1)
         required = llm.schema['properties']['results']['items']['required']
         self.assertEqual(required, ['product_id', 'title', 'description'])
+        results_schema = llm.schema['properties']['results']
+        self.assertEqual(results_schema['minItems'], 1)
+        self.assertEqual(results_schema['maxItems'], 1)
+        self.assertEqual(
+            results_schema['items']['properties']['product_id'],
+            {'type': 'integer', 'enum': [9741]},
+        )
+        self.assertFalse(results_schema['items']['additionalProperties'])
+        self.assertIn('разрешены ровно эти ID: [9741]', llm.prompt)
+        self.assertNotIn('907560659', llm.prompt)
+        self.assertIn('выбранные карточки', llm.prompt)
+        self.assertIn('никогда не являются product_id', llm.prompt)
         self.assertEqual(
             {(item['product_id'], item['field']) for item in platform.checked_items},
             {(9741, 'title'), (9741, 'description')},
@@ -721,8 +871,11 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
             }),
         })
 
-        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['failed'], 1)
+        self.assertEqual(
+            result['failure_details'][0]['code'], 'missing_content_field',
+        )
         self.assertEqual(platform.saved, [])
         self.assertEqual(platform.checked_items, [])
 
@@ -750,8 +903,9 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
             }),
         })
 
-        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['saved'], 0)
+        self.assertEqual(result['failure_details'][0]['code'], 'invalid_product_id')
         self.assertEqual(platform.saved, [])
         self.assertEqual(platform.checked_items, [])
 
@@ -820,6 +974,8 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
     def test_help_is_answered_without_task(self):
         response = direct_response('Что ты умеешь?')
         self.assertIn('единый помощник', response)
+        self.assertIn('Gemini Flash составляет только промпт', response)
+        self.assertIn('google/gemini-3.1-flash-lite-image', response)
 
 
 if __name__ == '__main__':

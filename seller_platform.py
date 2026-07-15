@@ -6532,6 +6532,13 @@ def _run_startup_migrations():
         ('auto_publish_settings', 'run_lock_token', 'VARCHAR(64)'),
         # Standard photos — минимальный порог фото для глобального правила продавца
         ('product_defaults', 'min_photos', 'INTEGER'),
+        # Provenance and freshness for category-scoped WB dictionaries.
+        ('marketplace_category_characteristics', 'dictionary_source', "VARCHAR(30) NOT NULL DEFAULT 'none'"),
+        ('marketplace_category_characteristics', 'dictionary_synced_at', 'DATETIME'),
+        ('marketplace_category_characteristics', 'dictionary_hash', 'VARCHAR(64)'),
+        ('marketplace_category_characteristics', 'dictionary_version', 'INTEGER NOT NULL DEFAULT 0'),
+        ('marketplace_category_characteristics', 'has_filter', 'BOOLEAN DEFAULT 0'),
+        ('marketplace_category_characteristics', 'is_variable', 'BOOLEAN DEFAULT 0'),
     ]
 
     for table, column, col_type in migrations:

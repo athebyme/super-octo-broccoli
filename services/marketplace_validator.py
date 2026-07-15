@@ -28,8 +28,9 @@ class WBCharacteristicValidationError(ValueError):
         issues = result.get('issues') or []
         details = '; '.join(issue.get('message', '') for issue in issues[:8])
         super().__init__(
-            'Характеристики WB не прошли обязательную проверку по словарям '
-            f'из админки: {details or "неизвестная ошибка"}'
+            'Характеристики WB не прошли обязательную проверку по актуальной '
+            'схеме и справочникам WB/админки: '
+            f'{details or "неизвестная ошибка"}'
         )
 
 
@@ -42,13 +43,6 @@ _DIRECTORY_BY_CHARACTERISTIC = {
     'сезон': 'seasons',
     'ставка ндс': 'vat',
 }
-
-_MATERIAL_CHARACTERISTIC_ALIASES = {
-    'состав',
-    'состав изделия',
-    'состав материала',
-}
-
 
 def _strict_positive_integer(value: Any) -> int:
     """Return a positive JSON integer without bool/float/string coercion."""
@@ -71,14 +65,6 @@ def _normalized_dictionary_value(value: Any) -> str:
 def _directory_type_for_characteristic(name: str) -> Optional[str]:
     normalized = _normalized_label(name)
     return _DIRECTORY_BY_CHARACTERISTIC.get(normalized)
-
-
-def _is_material_characteristic(name: Any) -> bool:
-    normalized = _normalized_label(name)
-    return bool(
-        'материал' in normalized
-        or normalized in _MATERIAL_CHARACTERISTIC_ALIASES
-    )
 
 
 def _is_fresh(synced_at: Optional[datetime]) -> bool:
@@ -234,9 +220,12 @@ def _allowed_values_for_characteristic(
     normalized_name = _normalized_label(characteristic.name)
     directory_type = _directory_type_for_characteristic(characteristic.name)
 
-    uses_global_directory = bool(
-        directory_type and normalized_name not in ('пол', 'пол товара')
-    )
+    # Documented global WB directories are authoritative even when an old
+    # installation still has a historical category-level list. Schema sync
+    # clears those legacy lists, but validation must already be safe before the
+    # next sweep. Category dictionaries remain authoritative for TNVED,
+    # upstream schema dictionaries and deliberate admin policies.
+    uses_global_directory = bool(directory_type)
     if characteristic.dictionary_json and not uses_global_directory:
         try:
             raw = json.loads(characteristic.dictionary_json)
@@ -253,22 +242,8 @@ def _allowed_values_for_characteristic(
                 charc_id=characteristic.charc_id,
                 name=characteristic.name,
             ))
-        # Официальная схема часто отдаёт explicit []. Для общих справочников
-        # это означает fallback к синхронизированному MarketplaceDirectory.
-        # Category-scoped Пол/Материал/ТНВЭД обрабатываются ниже fail-closed.
-
-    # Общий WB-справочник kinds описывает все варианты пола во всём каталоге
-    # и потому не доказывает допустимость значения для конкретного предмета.
-    # Для supplier/card-update путей администратор обязан задать category-scoped
-    # allowlist (например, без «Унисекс» для конкретной категории).
-    if normalized_name in ('пол', 'пол товара'):
-        return resolved(issue=_issue(
-            'category_dictionary_not_configured',
-            f'«{characteristic.name}»: задайте словарь допустимых значений '
-            'для этой WB-категории в админке',
-            charc_id=characteristic.charc_id,
-            name=characteristic.name,
-        ))
+        # Explicit [] falls through to a documented global directory or free
+        # text. It is not evidence that WB requires a missing local allowlist.
 
     if normalized_name in ('тнвэд', 'тнвэд код', 'тн вэд', 'тн вэд код'):
         return resolved(issue=_issue(
@@ -322,16 +297,6 @@ def _allowed_values_for_characteristic(
             ))
         return resolved(values, directory_type)
 
-    # Для материала в supplier workflow запрещён непроверяемый свободный текст:
-    # именно такой путь превращал фразу «в наилучшем виде» в материал изделия.
-    if _is_material_characteristic(characteristic.name):
-        return resolved(issue=_issue(
-            'dictionary_not_synced',
-            f'«{characteristic.name}»: нет словаря допустимых материалов в админке',
-            charc_id=characteristic.charc_id,
-            name=characteristic.name,
-        ))
-
     return resolved()
 
 
@@ -351,7 +316,6 @@ def prime_wb_characteristic_directory_cache(
             _directory_type_for_characteristic(characteristic.name),
         ]
         if directory_type
-        and _normalized_label(characteristic.name) not in ('пол', 'пол товара')
     }
     cache = validation_cache.setdefault('directories', {})
     missing_types = sorted(
@@ -387,22 +351,51 @@ def get_wb_characteristic_constraint(
     )
 
     normalized_name = _normalized_label(characteristic.name)
+    directory_type = _directory_type_for_characteristic(characteristic.name)
+    is_tnved = normalized_name in (
+        'тнвэд', 'тнвэд код', 'тн вэд', 'тн вэд код',
+    )
+    # A TNVED allowlist is stored on the characteristic because the official
+    # directory is subject-scoped. Expose its effective origin rather than the
+    # generic storage label used by other category dictionaries.
+    if is_tnved and allowed is not None:
+        source = 'tnved'
     if source is None:
-        directory_type = _directory_type_for_characteristic(characteristic.name)
-        if normalized_name in ('пол', 'пол товара'):
-            source = 'category'
-        elif normalized_name in (
-            'тнвэд', 'тнвэд код', 'тн вэд', 'тн вэд код',
-        ):
+        if is_tnved:
             source = 'tnved'
-        elif _is_material_characteristic(characteristic.name):
-            source = 'category'
         elif directory_type:
             source = directory_type
         elif characteristic.dictionary_json:
             source = 'category'
         else:
             source = 'free_text'
+
+    dictionary_source = getattr(
+        characteristic, 'dictionary_source', None,
+    ) or ('admin' if characteristic.dictionary_json else 'none')
+    dictionary_synced_at = getattr(
+        characteristic, 'dictionary_synced_at', None,
+    )
+    dictionary_version = getattr(
+        characteristic, 'dictionary_version', 0,
+    ) or 0
+    if directory_type:
+        directory_key = (marketplace.id, directory_type)
+        directory_cache = (
+            validation_cache.get('directories', {})
+            if validation_cache is not None else {}
+        )
+        directory = directory_cache.get(directory_key)
+        if directory_key not in directory_cache:
+            directory = MarketplaceDirectory.query.filter_by(
+                marketplace_id=marketplace.id,
+                directory_type=directory_type,
+            ).first()
+        # Global WB directories are the effective source even if this schema
+        # row still carries a historical manual list that validation ignores.
+        dictionary_source = 'wb_directory'
+        dictionary_synced_at = directory.synced_at if directory else None
+        dictionary_version = int(directory.version or 0) if directory else 0
 
     canonical_values = list(allowed or [])
     result = {
@@ -412,6 +405,11 @@ def get_wb_characteristic_constraint(
         'count': len(canonical_values),
         'values': canonical_values[:values_limit],
         'truncated': len(canonical_values) > values_limit,
+        'dictionary_source': dictionary_source,
+        'dictionary_synced_at': (
+            dictionary_synced_at.isoformat() if dictionary_synced_at else None
+        ),
+        'dictionary_version': dictionary_version,
     }
     if issue:
         result['issue'] = {
@@ -420,6 +418,79 @@ def get_wb_characteristic_constraint(
             if issue.get(key) is not None
         }
     return result
+
+
+def search_wb_characteristic_values(
+    marketplace: Marketplace,
+    characteristic: MarketplaceCategoryCharacteristic,
+    query: str,
+    *,
+    validation_cache: Optional[Dict[str, Any]] = None,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """Search one effective allowlist and return canonical values only.
+
+    Search is deterministic and read-only. It may normalize punctuation for
+    ranking, but the returned value is always the exact canonical string that
+    the write validator will accept.
+    """
+    query = str(query or '').strip()
+    if not query or len(query) > 120:
+        raise ValueError('query must contain 1..120 characters')
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+        raise ValueError('limit must be an integer from 1 to 50')
+    allowed, source, issue = _allowed_values_for_characteristic(
+        marketplace, characteristic, validation_cache,
+    )
+    if issue:
+        return {
+            'usable': False,
+            'constrained': True,
+            'source': source,
+            'count': 0,
+            'values': [],
+            'issue': issue,
+        }
+    if allowed is None:
+        return {
+            'usable': True,
+            'constrained': False,
+            'source': 'free_text',
+            'count': 0,
+            'values': [],
+        }
+
+    folded = query.casefold()
+    normalized = _normalized_label(query)
+    query_tokens = set(normalized.split())
+    ranked = []
+    for index, value in enumerate(allowed):
+        value_folded = value.casefold()
+        value_normalized = _normalized_label(value)
+        value_tokens = set(value_normalized.split())
+        if value_folded == folded:
+            rank = 0
+        elif value_normalized == normalized:
+            rank = 1
+        elif value_folded.startswith(folded) or value_normalized.startswith(normalized):
+            rank = 2
+        elif folded in value_folded or normalized in value_normalized:
+            rank = 3
+        elif query_tokens and query_tokens <= value_tokens:
+            rank = 4
+        else:
+            continue
+        ranked.append((rank, len(value), index, value))
+    ranked.sort(key=lambda item: item[:3])
+    values = [item[3] for item in ranked[:limit]]
+    return {
+        'usable': True,
+        'constrained': True,
+        'source': source,
+        'count': len(values),
+        'values': values,
+        'truncated': len(ranked) > limit,
+    }
 
 
 def _coerce_number(value: Any, unit_name: Optional[str]) -> Optional[Any]:
@@ -717,9 +788,9 @@ def validate_wb_full_card_dictionary_values(
 
     WB may contain old/legacy characteristics that are no longer in the active
     admin schema. Those untouched unknown IDs remain authoritative. Every known
-    characteristic backed by a category/global dictionary (especially material
-    and gender) must still pass the current admin reference before any full-card
-    replacement is sent.
+    characteristic backed by an explicit category/global dictionary (for
+    example an admin allowlist or the official gender directory) must still
+    pass the current reference before any full-card replacement is sent.
     """
     validation_cache = validation_cache if validation_cache is not None else {}
     marketplace, category, schema = _resolve_wb_schema(
@@ -753,7 +824,6 @@ def validate_wb_full_card_dictionary_values(
         is_constrained = bool(
             charc.dictionary_json
             or _directory_type_for_characteristic(charc.name)
-            or _is_material_characteristic(charc.name)
             or normalized_name in (
                 'тнвэд', 'тнвэд код', 'тн вэд', 'тн вэд код',
             )

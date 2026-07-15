@@ -1043,6 +1043,14 @@ def migrate(db_path):
             from migrations.migrate_add_marketplace_reference_freshness import apply_migration
         total_added += apply_migration(conn, verbose=False)
 
+        # WB characteristic dictionary provenance/freshness. This remains in
+        # the comprehensive path as well as the fail-fast Docker migration.
+        try:
+            from migrate_add_wb_dictionary_provenance import apply_migration as apply_wb_dictionary_migration
+        except ImportError:
+            from migrations.migrate_add_wb_dictionary_provenance import apply_migration as apply_wb_dictionary_migration
+        total_added += apply_wb_dictionary_migration(conn, verbose=False)
+
         # Curated agent knowledge + FTS5. This also reconciles an existing FTS
         # index so the comprehensive path is safe after interrupted deploys.
         try:

@@ -26,7 +26,11 @@ class TestWBProductImporterStrictCharacteristicMatching(unittest.TestCase):
                 return_value={'data': wb_chars},
             ),
         )
-        importer._chars_config_cache = {}
+        # Production batch preflight fills this shared admin-cache snapshot
+        # once per subject before per-card mapping begins.
+        importer._chars_config_cache = {
+            TestWBProductImporterStrictCharacteristicMatching.SUBJECT_ID: wb_chars,
+        }
         importer._category_sizes_cache = {}
         importer._wb_directories_cache = {}
         importer._wb_validation_cache = {}
@@ -98,19 +102,21 @@ class TestWBProductImporterStrictCharacteristicMatching(unittest.TestCase):
 
         self.assertEqual(result, [{'id': 20, 'value': ['Красный']}])
 
-    def test_build_fails_closed_when_live_config_request_fails(self):
+    def test_build_fails_closed_when_reference_preflight_fails(self):
         importer = self._importer([
             {'charcID': 10, 'name': 'Материал изделия', 'charcType': 1},
         ])
-        importer.api_client.get_card_characteristics_config.side_effect = RuntimeError(
-            'upstream unavailable'
-        )
+        importer._chars_config_cache = {}
 
-        with self.assertRaisesRegex(ValueError, 'Не удалось получить конфигурацию'):
-            self._build(
-                importer,
-                self._product({'Материал изделия': 'Силикон'}),
-            )
+        with patch(
+            'services.marketplace_service.MarketplaceService.ensure_wb_references_current',
+            return_value={'success': False, 'error': 'upstream unavailable'},
+        ):
+            with self.assertRaisesRegex(ValueError, 'Не удалось актуализировать'):
+                self._build(
+                    importer,
+                    self._product({'Материал изделия': 'Силикон'}),
+                )
 
     def test_required_coverage_rejects_empty_cached_live_config(self):
         importer = self._importer([])

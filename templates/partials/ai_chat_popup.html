@@ -66,6 +66,28 @@
                     <span class="sh-ai-pop-message-author" x-text="message.role === 'user' ? 'Вы' : 'ИИ-помощник'"></span>
                     <div class="sh-ai-pop-bubble">
                         <p x-text="displayContent(message)"></p>
+                        <div class="sh-ai-pop-image-list" x-show="imageArtifacts(message).length">
+                            <template x-for="artifact in imageArtifacts(message)" :key="`image-${artifact.id}`">
+                                <a class="sh-ai-pop-image-card"
+                                   :href="artifact.has_final ? artifact.image_url : (artifact.lab_url || artifact.url || fullChatHref)"
+                                   target="_blank"
+                                   rel="noopener">
+                                    <span class="sh-ai-pop-image-media">
+                                        <template x-if="artifact.has_final && artifact.image_url">
+                                            <img :src="artifact.image_url" :alt="artifact.scene_title || 'Сгенерированное фото'" loading="lazy">
+                                        </template>
+                                        <template x-if="!artifact.has_final || !artifact.image_url">
+                                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 10h.01M4 16l4-4 3 3 2-2 7 5M12 3v4m-2-2h4"/></svg>
+                                        </template>
+                                    </span>
+                                    <span class="sh-ai-pop-image-copy">
+                                        <small>AI-фотостудия</small>
+                                        <strong x-text="artifact.scene_title || artifact.title || 'Новая сцена'"></strong>
+                                        <span x-text="popupImageStatus(artifact)"></span>
+                                    </span>
+                                </a>
+                            </template>
+                        </div>
                         <span class="sh-ai-pop-plan-state"
                               x-show="message.kind === 'plan' && message.metadata && message.metadata.status === 'pending_approval'">
                             Требуется подтверждение

@@ -271,7 +271,11 @@ class AgentReferenceFreshnessApiTest(unittest.TestCase):
             'count': 2,
             'values': ['Красный', 'Синий'],
             'truncated': False,
+            'dictionary_source': 'wb_directory',
+            'dictionary_synced_at': constraints[2001]['dictionary_synced_at'],
+            'dictionary_version': 0,
         })
+        self.assertIsNotNone(constraints[2001]['dictionary_synced_at'])
         self.assertEqual(constraints[2003], {
             'source': 'free_text',
             'constrained': False,
@@ -279,6 +283,9 @@ class AgentReferenceFreshnessApiTest(unittest.TestCase):
             'count': 0,
             'values': [],
             'truncated': False,
+            'dictionary_source': 'none',
+            'dictionary_synced_at': None,
+            'dictionary_version': 0,
         })
         self.assertNotIn('dictionary', schema['characteristics'][0])
 

@@ -23,6 +23,7 @@ class CharacteristicsFillerAgent(BaseAgent):
         'get_product', 'update_product', 'get_imported_products',
         'get_imported_product', 'update_imported_product',
         'batch_update_imported_products', 'get_category_characteristics',
+        'search_characteristic_values',
     )
 
     system_prompt = """Ты — эксперт по характеристикам карточек Wildberries.
@@ -37,7 +38,7 @@ class CharacteristicsFillerAgent(BaseAgent):
 2. Заполни МАКСИМУМ характеристик из описания/названия товара — не только required
 3. Извлекай: материал, цвет, страну, пол, комплектацию, размеры, вес, объём, количество в упаковке и любые другие данные
 4. Для constraint.constrained=true используй ТОЛЬКО канонические constraint.values
-5. constraint.values может быть ограниченной выборкой (truncated=true). Если точного значения в ней нет — пропусти поле
+5. Если constraint.truncated=true и нужного значения нет в выборке, пакетно вызови search_characteristic_values. Используй только точный канонический values из ответа; если совпадения нет — пропусти поле
 6. Если constraint.usable=false у необязательного поля — пропусти его. Обязательная непроверяемая схема блокируется до LLM
 7. Числовые (type="Число") = число. Строковые (type="Строка") = строка
 8. Ключи = ТОЧНЫЕ названия характеристик (поле name)
@@ -203,6 +204,9 @@ Product-карточки — update_product. В tool-assisted batch и режи�
             f"3. Подготовь typed result с product_id и characteristics\n\n"
             f"Формат characteristics: {{\"Цвет\": \"черный\", \"Страна производства\": \"Китай\"}}\n"
             f"Ключи = ТОЧНЫЕ названия из схемы (поле name).\n"
+            f"Если constraint.truncated=true, можно вызвать только read-only "
+            f"search_characteristic_values одним пакетом запросов. Значение в "
+            f"результате должно дословно совпасть с одним из возвращённых values.\n"
             f"НЕ вызывай update_imported_product или batch_update_imported_products. "
             f"Сохранение выполнит Python harness ровно одним batch-вызовом после "
             f"проверки результата.\n\n"
@@ -375,7 +379,10 @@ Product-карточки — update_product. В tool-assisted batch и режи�
                 f"- Комплектация → из описания (\"набор\", \"1 шт\")\n"
                 f"- Размеры (длина, ширина, диаметр) → из описания, в числах\n"
                 f"- ВСЕ остальные характеристики — ищи данные в описании\n\n"
-                f"Для constraint.constrained=true используй ТОЛЬКО constraint.values.\n"
+                f"Для constraint.constrained=true используй ТОЛЬКО constraint.values. "
+                f"Если truncated=true и нужного значения нет в выборке, "
+                f"вызови search_characteristic_values и используй "
+                f"только каноническую строку из его values.\n"
                 f"Числовые (type=\"Число\") = число. Строковые (type=\"Строка\") = строка.\n"
                 f"Ключи = ТОЧНЫЕ названия из схемы (поле name).\n\n"
                 f"ОБЯЗАТЕЛЬНО вызови update_imported_product — без него характеристики НЕ сохранятся!\n"
@@ -445,7 +452,8 @@ Product-карточки — update_product. В tool-assisted batch и режи�
             "get_category_characteristics. Не выдумывай отсутствующие факты. "
             "Ключи patch должны точно совпадать с name из схемы; при "
             "constraint.constrained=true используй только constraint.values. "
-            "Если список truncated и точного значения нет, пропусти поле.\n"
+            "Если truncated=true и точного значения нет, вызови "
+            "search_characteristic_values; применяй только дословно возвращённое values.\n"
             f"{action}\n"
             "Верни JSON: {characteristics: {...}, filled_count: N, "
             "missing: [...], confidence: 0..1}."

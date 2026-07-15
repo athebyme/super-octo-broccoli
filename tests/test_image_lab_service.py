@@ -9,12 +9,14 @@ from unittest import mock
 from PIL import Image
 
 from services.image_lab_service import (
+    _generate_provider_output,
     ImageLabError,
     build_experiment_prompt,
     capabilities,
     download_public_image,
     fetch_original_product_bytes,
     photo_entries,
+    openrouter_balance_usd,
     validate_photo_roles,
     validate_photo_indices,
     validate_requested_views,
@@ -29,12 +31,26 @@ class ImageLabPromptTests(unittest.TestCase):
         Image.new("RGB", (100, 100), color).save(output, format="PNG")
         return output.getvalue()
 
-    def test_custom_scene_is_wrapped_in_reference_contract_by_default(self):
-        prompt = build_experiment_prompt("luxury", "warm stone and soft side light")
+    def test_custom_scene_is_wrapped_in_reference_contract(self):
+        prompt = build_experiment_prompt(
+            "luxury",
+            "warm stone and soft side light",
+            generation_strategy="reference_guided",
+        )
         self.assertIn("warm stone", prompt)
         self.assertIn("no people", prompt.lower())
         self.assertIn("do not generate text", prompt.lower())
         self.assertIn("preserve the complete foreground", prompt.lower())
+
+    def test_default_prompt_is_native_and_background_is_explicit(self):
+        default_prompt = build_experiment_prompt("luxury", "warm stone")
+        background_prompt = build_experiment_prompt(
+            "luxury", "warm stone", generation_strategy="background_only"
+        )
+        self.assertIn("native image-to-image", default_prompt)
+        self.assertIn("exactly one", default_prompt)
+        self.assertIn("requires human identity review", default_prompt)
+        self.assertIn("nothing in the middle", background_prompt)
 
     def test_background_control_keeps_empty_center_contract(self):
         prompt = build_experiment_prompt(
@@ -66,60 +82,141 @@ class ImageLabPromptTests(unittest.TestCase):
     def test_backend_requires_server_side_secret(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(ImageLabError):
-                validate_target("gen_api", "flux-2")
-            gpu = next(x for x in capabilities()["backends"] if x["id"] == "gpu")
-            self.assertFalse(gpu["enabled"])
-        with mock.patch.dict(os.environ, {"GEN_API_KEY": "secret"}, clear=True):
-            self.assertEqual(validate_target("gen_api", "flux-2"), 3.3)
-
-    def test_gpt_image_2_supports_reference_edit_mode(self):
-        with mock.patch.dict(os.environ, {"AITUNNEL_API_KEY": "secret"}, clear=True):
+                validate_target(
+                    "openrouter", "google/gemini-3.1-flash-lite-image"
+                )
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "secret"}, clear=True):
             self.assertEqual(
-                validate_target("aitunnel", "gpt-image-2", "reference_guided"),
-                1.53,
+                validate_target(
+                    "openrouter", "google/gemini-3.1-flash-lite-image"
+                ),
+                3.3,
             )
+
+    @mock.patch("services.image_lab_service.requests.get")
+    def test_openrouter_balance_is_bounded_and_hides_key(self, get):
+        get.return_value = SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "data": {"total_credits": 58.0, "total_usage": 48.49},
+                "unrelated": "ignored",
+            },
+        )
+        with mock.patch.dict(
+            os.environ, {
+                "OPENROUTER_API_KEY": "server-secret",
+                "AI_PROXY": "http://proxy.test:8080",
+            }, clear=True,
+        ):
+            self.assertAlmostEqual(openrouter_balance_usd(), 9.51)
+
+        self.assertEqual(
+            get.call_args.args[0],
+            "https://openrouter.ai/api/v1/credits",
+        )
+        self.assertNotIn("server-secret", get.call_args.args[0])
+        self.assertEqual(
+            get.call_args.kwargs["proxies"]["https"],
+            "http://proxy.test:8080",
+        )
+
+    def test_openrouter_models_are_the_only_visible_targets(self):
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "secret"}, clear=True):
+            config = capabilities()
+            self.assertEqual(
+                validate_target(
+                    "openrouter",
+                    "google/gemini-3.1-flash-lite-image",
+                    "native_scene",
+                ),
+                3.3,
+            )
+            self.assertEqual(
+                config["policy"]["default_target"],
+                {
+                    "backend": "openrouter",
+                    "model": "google/gemini-3.1-flash-lite-image",
+                },
+            )
+            self.assertEqual(config["policy"]["default_model_input"], "native_scene")
+            self.assertEqual([item["id"] for item in config["backends"]], ["openrouter"])
             model = next(
                 model
-                for backend in capabilities()["backends"]
-                if backend["id"] == "aitunnel"
+                for backend in config["backends"]
+                if backend["id"] == "openrouter"
                 for model in backend["models"]
-                if model["id"] == "gpt-image-2"
+                if model["id"] == "google/gemini-3.1-flash-lite-image"
             )
             self.assertTrue(model["supports_reference"])
+            self.assertEqual(model["resolution"], "1K")
+            self.assertNotIn("reference_guided", model["supported_strategies"])
 
-    def test_angle_synthesis_requires_reference_capable_target(self):
-        with mock.patch.dict(os.environ, {"AITUNNEL_API_KEY": "secret"}, clear=True):
-            self.assertEqual(
-                validate_target("aitunnel", "gpt-image-2", "angle_synthesis"),
-                1.53,
-            )
+    def test_legacy_and_masked_targets_are_rejected_for_new_runs(self):
         with mock.patch.dict(os.environ, {
-            "GPU_IMAGE_SERVER_URL": "http://127.0.0.1:8787",
-            "GPU_IMAGE_SERVER_TOKEN": "x" * 32,
-            "GPU_IMAGE_ALLOW_HTTP": "1",
+            "OPENROUTER_API_KEY": "secret",
+            "AITUNNEL_API_KEY": "legacy-secret",
         }, clear=True):
             with self.assertRaises(ImageLabError):
-                validate_target("gpu", "qwen-image-2512", "angle_synthesis")
+                validate_target("aitunnel", "gpt-image-2", "native_scene")
+            with self.assertRaises(ImageLabError):
+                validate_target(
+                    "openrouter",
+                    "google/gemini-3.1-flash-lite-image",
+                    "reference_guided",
+                )
 
-    def test_gpu_requires_transport_and_long_token(self):
-        base = {
-            "GPU_IMAGE_SERVER_URL": "http://127.0.0.1:8787",
-            "GPU_IMAGE_SERVER_TOKEN": "x" * 32,
-        }
-        with mock.patch.dict(os.environ, base, clear=True):
-            self.assertFalse(next(
-                item for item in capabilities()["backends"] if item["id"] == "gpu"
-            )["enabled"])
-        with mock.patch.dict(
-            os.environ,
-            {**base, "GPU_IMAGE_ALLOW_HTTP": "1", "GPU_IMAGE_RUB_PER_GENERATION": "2.5"},
-            clear=True,
-        ):
-            gpu = next(
-                item for item in capabilities()["backends"] if item["id"] == "gpu"
+    @mock.patch("services.image_lab_service.canonicalize_image", side_effect=lambda value: value)
+    @mock.patch(
+        "services.image_lab_service._prepare_native_model_input",
+        return_value=(b"raw-primary", [], None),
+    )
+    @mock.patch("services.image_generation_service.ImageGenerationService")
+    @mock.patch("services.image_generation_service.ImageGenerationConfig.from_env")
+    def test_native_scene_uses_openrouter_model_and_resolution(
+        self, from_env, service_class, prepare_native, canonicalize
+    ):
+        from_env.return_value = SimpleNamespace(
+            timeout=120,
+            openrouter_model="",
+            openrouter_resolution="",
+        )
+        service = service_class.return_value
+        service.edit_image.return_value = (True, b"provider-output", "")
+        experiment = SimpleNamespace(
+            backend="openrouter",
+            model="google/gemini-3.1-flash-lite-image",
+            generation_strategy="native_scene",
+            prompt="native scene",
+        )
+
+        self.assertEqual(_generate_provider_output(experiment), b"provider-output")
+        prepare_native.assert_called_once_with(experiment)
+        self.assertIsNone(service.edit_image.call_args.kwargs["input_fidelity"])
+        self.assertIsNone(service.edit_image.call_args.kwargs["quality"])
+        self.assertEqual(
+            from_env.return_value.openrouter_model,
+            "google/gemini-3.1-flash-lite-image",
+        )
+        self.assertEqual(from_env.return_value.openrouter_resolution, "1K")
+
+    def test_angle_synthesis_and_grok_reference_limit(self):
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "secret"}, clear=True):
+            self.assertEqual(
+                validate_target(
+                    "openrouter",
+                    "google/gemini-3.1-flash-image",
+                    "angle_synthesis",
+                    reference_count=10,
+                ),
+                8.5,
             )
-            self.assertTrue(gpu["enabled"])
-            self.assertEqual(gpu["models"][0]["cost_rub"], 2.5)
+            with self.assertRaises(ImageLabError):
+                validate_target(
+                    "openrouter",
+                    "x-ai/grok-imagine-image-quality",
+                    "angle_synthesis",
+                    reference_count=4,
+                )
 
     @mock.patch("services.image_lab_service.requests.Session.get")
     def test_private_source_url_is_rejected_before_request(self, get):

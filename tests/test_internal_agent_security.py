@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """Security and seller-context tests for the internal agent API."""
+import json
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from flask import Flask
 from werkzeug.security import generate_password_hash
@@ -9,17 +11,27 @@ from werkzeug.security import generate_password_hash
 from models import (
     db, APILog, AgentChangeSnapshot, AgentConversation, AgentMessage, AgentTask,
     AutoImportSettings, ProductDefaults, CardEditHistory, ImportedProduct,
-    Product, Seller, SellerSupplier,
+    ImageGenerationExperiment, Product, Seller, SellerSupplier,
     ServiceAgent, Supplier, User,
 )
 from routes.internal_api import internal_api_bp
 from agents.platform_client import PlatformClient
-from services.agent_harness import conversation_payload, rollback_task_tree, snapshot_count
+from services.agent_harness import (
+    _compact_dialog_context,
+    _conversation_memory,
+    _latest_conversation_scope,
+    _resolve_message_product_scope,
+    conversation_payload,
+    rollback_task_tree,
+    snapshot_count,
+    submit_turn,
+)
 
 
 class InternalAgentSecurityTestCase(unittest.TestCase):
     def setUp(self):
         self.app = Flask(__name__)
+        self.app.config['TESTING'] = True
         self.app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
         self.app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
         db.init_app(self.app)
@@ -371,6 +383,237 @@ class InternalAgentSecurityTestCase(unittest.TestCase):
         )
         self.assertEqual(mixed_scope.status_code, 409)
         self.assertNotIn('products', mixed_scope.get_json())
+
+    def test_paid_image_generation_requires_approved_task_and_is_idempotent(self):
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        product = Product(
+            seller_id=self.seller1.id,
+            nm_id=907560659,
+            title='Карточка для фотостудии',
+        )
+        db.session.add(product)
+        db.session.flush()
+        source.product_id = product.id
+        source.wb_nm_id = product.nm_id
+        self.task1.input_data = json.dumps({
+            'risk': 'write',
+            'steps': [{'agent': 'image-generator'}],
+            'product_ids': [product.id],
+            'entity_scope': {'kind': 'product', 'ids': [product.id]},
+        })
+        db.session.commit()
+        base = f'/internal/v1/sellers/{self.seller1.id}/image-generation'
+
+        brief = self.client.post(
+            f'{base}/brief',
+            headers=self.task_headers(),
+            json={'entity_kind': 'product', 'product_id': product.id},
+        )
+        self.assertEqual(brief.status_code, 200)
+        self.assertEqual(brief.get_json()['source_product_id'], source.id)
+        self.assertEqual(brief.get_json()['generation'], {
+            'backend': 'openrouter',
+            'model': 'google/gemini-3.1-flash-lite-image',
+            'strategy': 'native_scene',
+            'resolution': '1K',
+            'estimated_cost_usd': 0.04,
+            'estimated_cost_rub': 3.3,
+            'publishable': False,
+            'review_required': True,
+        })
+
+        body = {
+            'entity_kind': 'product',
+            'product_id': product.id,
+            'photo_index': 0,
+            'scene_prompt': (
+                'Saturated cyan gradient studio with a water splash on the left '
+                'and a glossy white pedestal on the right'
+            ),
+            'prompt_model': 'google/gemini-2.5-flash',
+        }
+        with patch.dict('os.environ', {'OPENROUTER_API_KEY': 'synthetic-test-key'}), \
+                patch('services.image_lab_service.launch_experiments') as launch:
+            created = self.client.post(
+                f'{base}/experiments', headers=self.task_headers(), json=body,
+            )
+            replay = self.client.post(
+                f'{base}/experiments', headers=self.task_headers(), json=body,
+            )
+            changed_replay = self.client.post(
+                f'{base}/experiments', headers=self.task_headers(), json={
+                    **body,
+                    'scene_prompt': (
+                        'Warm neutral studio with a stone pedestal and soft '
+                        'directional daylight from the left'
+                    ),
+                },
+            )
+
+        self.assertEqual(created.status_code, 202)
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(changed_replay.status_code, 200)
+        experiment_id = created.get_json()['experiment']['id']
+        self.assertEqual(replay.get_json()['experiment']['id'], experiment_id)
+        self.assertEqual(changed_replay.get_json()['experiment']['id'], experiment_id)
+        self.assertTrue(replay.get_json()['idempotent_replay'])
+        self.assertFalse(changed_replay.get_json()['request_signature_matched'])
+        self.assertEqual(ImageGenerationExperiment.query.filter_by(
+            seller_id=self.seller1.id,
+        ).count(), 1)
+        experiment = db.session.get(ImageGenerationExperiment, experiment_id)
+        self.assertEqual(experiment.backend, 'openrouter')
+        self.assertEqual(experiment.model, 'google/gemini-3.1-flash-lite-image')
+        self.assertEqual(experiment.generation_strategy, 'native_scene')
+        self.assertEqual(float(experiment.estimated_cost_rub), 3.3)
+        self.assertEqual(launch.call_count, 3)
+
+        polled = self.client.get(
+            f'{base}/experiments/{experiment_id}', headers=self.task_headers(),
+        )
+        self.assertEqual(polled.status_code, 200)
+        outside = ImageGenerationExperiment(
+            seller_id=self.seller1.id,
+            imported_product_id=source.id,
+            backend='aitunnel',
+            model='gpt-image-2',
+            generation_strategy='native_scene',
+            composition_mode='single',
+            source_photo_indices_json='[0]',
+            source_photo_roles_json='{"0":"angle"}',
+            primary_photo_index=0,
+            prompt='unrelated',
+            prompt_sha256='0' * 64,
+            status='queued',
+            estimated_cost_rub=1.53,
+        )
+        db.session.add(outside)
+        db.session.commit()
+        denied_poll = self.client.get(
+            f'{base}/experiments/{outside.id}', headers=self.task_headers(),
+        )
+        self.assertEqual(denied_poll.status_code, 403)
+
+        self.task1.input_data = json.dumps({
+            'risk': 'read', 'steps': [{'agent': 'image-generator'}],
+        })
+        db.session.commit()
+        denied_create = self.client.post(
+            f'{base}/experiments', headers=self.task_headers(), json=body,
+        )
+        self.assertEqual(denied_create.status_code, 403)
+
+    def test_paid_image_generation_backfills_exact_linked_wb_photos_atomically(self):
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        source.photo_urls = '[]'
+        product = Product(
+            seller_id=self.seller1.id,
+            nm_id=100138374,
+            title='Опубликованная карточка с WB-фото',
+            photos_json='[1, 2, 3]',
+        )
+        db.session.add(product)
+        db.session.flush()
+        source.product_id = product.id
+        source.wb_nm_id = product.nm_id
+        self.task1.input_data = json.dumps({
+            'risk': 'write',
+            'steps': [{'agent': 'image-generator'}],
+            'product_ids': [product.id],
+            'entity_scope': {'kind': 'product', 'ids': [product.id]},
+        })
+        db.session.commit()
+        base = f'/internal/v1/sellers/{self.seller1.id}/image-generation'
+        normalized = [
+            f'https://basket.example/{product.nm_id}/{index}.webp'
+            for index in (1, 2, 3)
+        ]
+
+        with patch(
+            'services.wb_media.normalize_photo_urls', return_value=normalized,
+        ):
+            brief = self.client.post(
+                f'{base}/brief',
+                headers=self.task_headers(),
+                json={'entity_kind': 'product', 'product_id': product.id},
+            )
+
+        self.assertEqual(brief.status_code, 200)
+        self.assertEqual(brief.get_json()['photo_count'], 3)
+        self.assertEqual(json.loads(source.photo_urls), [])
+
+        body = {
+            'entity_kind': 'product',
+            'product_id': product.id,
+            'photo_index': 0,
+            'scene_prompt': (
+                'Cool tropical studio with clear water reflections and a clean '
+                'white pedestal under soft directional daylight'
+            ),
+            'prompt_model': 'gemini-2.5-flash',
+        }
+        with patch(
+            'services.wb_media.normalize_photo_urls', return_value=normalized,
+        ), patch.dict(
+            'os.environ', {'OPENROUTER_API_KEY': 'synthetic-test-key'},
+        ), patch(
+            'services.image_lab_service.launch_experiments',
+        ) as launch:
+            created = self.client.post(
+                f'{base}/experiments', headers=self.task_headers(), json=body,
+            )
+
+        self.assertEqual(created.status_code, 202)
+        db.session.refresh(source)
+        self.assertEqual(json.loads(source.photo_urls), normalized)
+        experiment_id = created.get_json()['experiment']['id']
+        experiment = db.session.get(ImageGenerationExperiment, experiment_id)
+        self.assertEqual(experiment.imported_product_id, source.id)
+        launch.assert_called_once_with(self.app, [experiment_id])
+
+    def test_paid_image_generation_checks_provider_balance_before_gemini(self):
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        product = Product(
+            seller_id=self.seller1.id,
+            nm_id=99112233,
+            title='Карточка с проверкой баланса',
+            photos_json='[1]',
+        )
+        db.session.add(product)
+        db.session.flush()
+        source.product_id = product.id
+        source.wb_nm_id = product.nm_id
+        self.task1.input_data = json.dumps({
+            'risk': 'write',
+            'steps': [{'agent': 'image-generator'}],
+            'product_ids': [product.id],
+            'entity_scope': {'kind': 'product', 'ids': [product.id]},
+        })
+        db.session.commit()
+
+        with patch.dict(self.app.config, {'TESTING': False}), patch(
+            'services.image_lab_service.openrouter_balance_usd',
+            return_value=0.01,
+        ):
+            response = self.client.post(
+                f'/internal/v1/sellers/{self.seller1.id}/image-generation/brief',
+                headers=self.task_headers(),
+                json={'entity_kind': 'product', 'product_id': product.id},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        error = response.get_json()['error']
+        self.assertIn('$0.01', error)
+        self.assertIn('$0.04', error)
+        self.assertEqual(ImageGenerationExperiment.query.filter_by(
+            seller_id=self.seller1.id,
+        ).count(), 0)
 
     def test_product_batch_update_is_scoped_audited_and_reports_unchanged(self):
         changed = Product(
@@ -763,6 +1006,242 @@ class InternalAgentSecurityTestCase(unittest.TestCase):
         self.assertEqual(messages[0]['content'], 'Message 5')
         self.assertEqual(messages[-1]['content'], 'Message 104')
 
+    def test_chat_keeps_typed_scope_and_run_outcome_as_durable_context(self):
+        conversation = AgentConversation(
+            id='conversation-context', seller_id=self.seller1.id,
+            user_id=self.seller1.user_id, title='Context',
+        )
+        db.session.add(conversation)
+        start = datetime(2026, 7, 15, 10, 0, 0)
+        selected = AgentMessage(
+            id='context-user', conversation_id=conversation.id,
+            role='user', kind='text', content='Улучши эту карточку',
+            created_at=start, updated_at=start,
+        )
+        selected.set_metadata({
+            'scope_origin': 'request',
+            'entity_scope': {'kind': 'product', 'ids': [13989]},
+            'page_context': {'url': '/products/13989'},
+        })
+        run = AgentMessage(
+            id='context-run', conversation_id=conversation.id,
+            role='assistant', kind='run', content='Подготовлено предложение.',
+            created_at=start + timedelta(seconds=1),
+            updated_at=start + timedelta(seconds=1),
+        )
+        run.set_metadata({
+            'status': 'completed',
+            'result': {
+                'status': 'completed',
+                'message': 'Название и описание подготовлены.',
+                'saved': 1,
+                'results': [{
+                    'skill': 'content-writer',
+                    'status': 'completed',
+                    'result': {
+                        'message': 'Название и описание подготовлены.',
+                        'requested_fields': ['title', 'description'],
+                    },
+                }],
+            },
+        })
+        db.session.add_all([selected, run])
+        db.session.commit()
+
+        self.assertEqual(_latest_conversation_scope(conversation), {
+            'kind': 'product',
+            'ids': [13989],
+            'page_context': {'url': '/products/13989'},
+        })
+        context = _compact_dialog_context(conversation)
+        self.assertIn('Результат запуска: completed', context[-1]['content'])
+        memory = _conversation_memory(conversation)
+        self.assertEqual(
+            memory['last_run']['requested_fields'], ['title', 'description'],
+        )
+        self.assertEqual(
+            conversation_payload(conversation)['active_scope']['ids'], [13989],
+        )
+
+        followup = submit_turn(
+            conversation, 'привет', [13989],
+            entity_kind='product', scope_mode='selected',
+        )
+        self.assertEqual(
+            followup['user_message'].get_metadata()['scope_origin'],
+            'conversation',
+        )
+
+        explicit_global = submit_turn(
+            conversation, 'привет', [], scope_mode='global',
+        )
+        self.assertEqual(
+            explicit_global['user_message'].get_metadata()['entity_scope']['ids'],
+            [],
+        )
+        self.assertEqual(
+            explicit_global['user_message'].get_metadata()['scope_origin'],
+            'global',
+        )
+
+        boundary = AgentMessage(
+            id='context-global', conversation_id=conversation.id,
+            role='user', kind='text', content='Покажи весь каталог',
+            created_at=start + timedelta(seconds=2),
+            updated_at=start + timedelta(seconds=2),
+        )
+        boundary.set_metadata({
+            'scope_origin': 'global',
+            'entity_scope': {'kind': 'imported_product', 'ids': []},
+        })
+        db.session.add(boundary)
+        db.session.commit()
+        self.assertIsNone(_latest_conversation_scope(conversation))
+
+    def test_chat_grounds_wb_article_from_text_to_typed_product_scope(self):
+        product = Product(
+            seller_id=self.seller1.id, nm_id=68092554,
+            vendor_code='id-5167-1277', title='Карточка WB',
+        )
+        conversation = AgentConversation(
+            id='conversation-article', seller_id=self.seller1.id,
+            user_id=self.seller1.user_id, title='Article grounding',
+        )
+        db.session.add_all([product, conversation])
+        db.session.commit()
+
+        text = (
+            'Проверь карточку (1 шт.): артикул 68092554. '
+            'Покажи основные проблемы.'
+        )
+        resolved = _resolve_message_product_scope(self.seller1.id, text)
+        self.assertEqual(resolved['kind'], 'product')
+        self.assertEqual(resolved['ids'], [product.id])
+        self.assertEqual(resolved['references'][0]['matched_by'], 'nm_id')
+
+        result = submit_turn(
+            conversation, text, [], scope_mode='global',
+        )
+        metadata = result['user_message'].get_metadata()
+        self.assertEqual(metadata['scope_origin'], 'message_reference')
+        self.assertEqual(metadata['scope_mode'], 'selected')
+        self.assertEqual(metadata['entity_scope'], {
+            'kind': 'product', 'ids': [product.id],
+        })
+        self.assertEqual(result['assistant_message'].kind, 'plan')
+        self.assertEqual(
+            conversation_payload(conversation)['active_scope']['ids'],
+            [product.id],
+        )
+
+    def test_chat_can_ground_explicit_any_card_for_image_approval_plan(self):
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        product = Product(
+            seller_id=self.seller1.id,
+            nm_id=907560659,
+            title='Карточка со сценой',
+            quality_impact=91,
+        )
+        conversation = AgentConversation(
+            id='conversation-any-image', seller_id=self.seller1.id,
+            user_id=self.seller1.user_id, title='Any image',
+        )
+        db.session.add_all([product, conversation])
+        db.session.flush()
+        source.product_id = product.id
+        source.wb_nm_id = product.nm_id
+        db.session.commit()
+
+        result = submit_turn(
+            conversation,
+            'собери сцену для карточки любой',
+            [],
+            scope_mode='global',
+        )
+
+        user_metadata = result['user_message'].get_metadata()
+        plan_metadata = result['assistant_message'].get_metadata()
+        self.assertEqual(result['assistant_message'].kind, 'plan')
+        self.assertEqual(user_metadata['scope_mode'], 'selected')
+        self.assertEqual(user_metadata['entity_scope'], {
+            'kind': 'product', 'ids': [product.id],
+        })
+        self.assertIn('выбран помощником', user_metadata['scope_label'])
+        self.assertEqual(plan_metadata['status'], 'pending_approval')
+        self.assertEqual(plan_metadata['product_ids'], [product.id])
+        self.assertEqual(plan_metadata['steps'][0]['agent'], 'image-generator')
+        self.assertIn('google/gemini-3.1-flash-lite-image', plan_metadata['summary'])
+        self.assertIn('≈3,30 ₽', plan_metadata['summary'])
+
+    def test_production_quality_prompt_with_nm_id_starts_typed_semantic_plan(self):
+        product = Product(
+            seller_id=self.seller1.id, nm_id=68092554,
+            vendor_code='id-5167-1277', title='Карточка WB',
+        )
+        conversation = AgentConversation(
+            id='conversation-production-article', seller_id=self.seller1.id,
+            user_id=self.seller1.user_id, title='Production regression',
+        )
+        orchestrator = ServiceAgent(
+            id='orchestrator-regression', name='orchestrator',
+            display_name='Orchestrator', status='online',
+            last_heartbeat=datetime.utcnow(),
+        )
+        db.session.add_all([product, conversation, orchestrator])
+        db.session.commit()
+
+        result = submit_turn(
+            conversation,
+            'Улучши карточки (1 шт.): артикулы 68092554. Основные '
+            'проблемы: Мало фото, Слабые характеристики, Слабое описание, '
+            'Слабый заголовок, Нет просмотров, Низкий рейтинг. Составь план '
+            'исправления контента.',
+            [], scope_mode='global',
+        )
+
+        self.assertEqual(result['assistant_message'].kind, 'run')
+        planning_task = db.session.get(
+            AgentTask, result['assistant_message'].task_id,
+        )
+        task_input = planning_task.get_input()
+        self.assertEqual(planning_task.task_type, 'plan_request')
+        self.assertEqual(task_input['product_ids'], [product.id])
+        self.assertEqual(task_input['entity_scope'], {
+            'kind': 'product', 'ids': [product.id],
+        })
+        self.assertEqual(task_input['scope_origin'], 'message_reference')
+        self.assertNotIn('pipeline', task_input)
+
+    def test_unknown_explicit_article_clarifies_without_global_plan(self):
+        conversation = AgentConversation(
+            id='conversation-unknown-article', seller_id=self.seller1.id,
+            user_id=self.seller1.user_id, title='Unknown article',
+        )
+        foreign = Product(
+            seller_id=self.seller2.id, nm_id=99999999,
+            vendor_code='foreign', title='Чужая карточка',
+        )
+        db.session.add_all([conversation, foreign])
+        db.session.commit()
+
+        result = submit_turn(
+            conversation,
+            'Улучши карточку с артикулом 99999999',
+            [], scope_mode='global',
+        )
+
+        self.assertEqual(result['assistant_message'].kind, 'clarification')
+        self.assertIn('99999999', result['assistant_message'].content)
+        self.assertEqual(
+            result['assistant_message'].get_metadata()['reason'],
+            'product_reference_not_found',
+        )
+        self.assertEqual(
+            result['user_message'].get_metadata()['entity_scope']['ids'], [],
+        )
+
     def test_product_write_creates_agent_task_rollback_snapshot(self):
         product = Product(
             seller_id=self.seller1.id, nm_id=123456,
@@ -801,6 +1280,99 @@ class InternalAgentSecurityTestCase(unittest.TestCase):
         self.assertEqual(product.description, 'Before')
         self.assertTrue(history.reverted)
         self.assertEqual(snapshot_count(self.task1.id), 0)
+
+    def test_local_rollback_never_overwrites_a_later_manual_edit(self):
+        product = Product(
+            seller_id=self.seller1.id, nm_id=123457,
+            title='Original', description='Before',
+        )
+        db.session.add(product)
+        db.session.commit()
+        response = self.client.patch(
+            f'/internal/v1/sellers/{self.seller1.id}/products/{product.id}',
+            headers=self.task_headers(), json={'description': 'AI proposal'},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        product.description = 'Manual edit after AI'
+        self.task1.status = 'completed'
+        db.session.commit()
+        result = rollback_task_tree(self.task1.id, self.seller1.id)
+
+        history = CardEditHistory.query.filter_by(product_id=product.id).one()
+        db.session.refresh(product)
+        self.assertEqual(result['snapshots'], 0)
+        self.assertEqual(result['conflicts'], 1)
+        self.assertEqual(result['conflict_details'][0]['fields'], ['description'])
+        self.assertEqual(product.description, 'Manual edit after AI')
+        self.assertFalse(history.reverted)
+        self.assertEqual(history.wb_sync_status, 'conflict')
+        self.assertEqual(snapshot_count(self.task1.id), 0)
+
+    def test_wb_content_publish_requires_exact_approved_product_scope_and_fields(self):
+        product = Product(
+            seller_id=self.seller1.id, nm_id=919191,
+            title='Prepared', description='Prepared description',
+        )
+        conversation = AgentConversation(
+            id='publish-conversation', seller_id=self.seller1.id,
+            user_id=self.seller1.user_id, title='Publish',
+        )
+        db.session.add_all([product, conversation])
+        db.session.flush()
+        self.task1.input_data = json.dumps({
+            'conversation_id': conversation.id,
+            'product_ids': [product.id],
+            'entity_scope': {'kind': 'product', 'ids': [product.id]},
+            'steps': [{
+                'agent': 'wb-content-publisher',
+                'params': {'fields': ['title', 'description']},
+            }],
+        })
+        db.session.commit()
+        expected = {
+            'published': 1, 'already_published': 0, 'failed': 0,
+            'results': [{
+                'product_id': product.id, 'status': 'published',
+                'fields': ['title', 'description'],
+            }],
+        }
+        with patch(
+            'services.agent_wb_content.publish_confirmed_content_proposals',
+            return_value=expected,
+        ) as publish:
+            response = self.client.post(
+                f'/internal/v1/sellers/{self.seller1.id}/products/'
+                'content-proposals/publish-batch',
+                headers=self.task_headers(),
+                json={
+                    'product_ids': [product.id],
+                    'fields': ['title', 'description'],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        publish.assert_called_once_with(
+            self.task1, self.seller1.id, [product.id], ['title', 'description'],
+        )
+
+        wrong_fields = self.client.post(
+            f'/internal/v1/sellers/{self.seller1.id}/products/'
+            'content-proposals/publish-batch',
+            headers=self.task_headers(),
+            json={'product_ids': [product.id], 'fields': ['title']},
+        )
+        duplicate = self.client.post(
+            f'/internal/v1/sellers/{self.seller1.id}/products/'
+            'content-proposals/publish-batch',
+            headers=self.task_headers(),
+            json={
+                'product_ids': [product.id, product.id],
+                'fields': ['title', 'description'],
+            },
+        )
+        self.assertEqual(wrong_fields.status_code, 403)
+        self.assertEqual(duplicate.status_code, 400)
 
     def test_product_price_and_stock_require_manual_review(self):
         product = Product(

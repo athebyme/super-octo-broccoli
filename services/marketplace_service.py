@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 
@@ -101,6 +102,13 @@ class MarketplaceService:
     CHARACTERISTIC_REQUEST_INTERVAL_SECONDS = 0.65
     MAX_CHARACTERISTIC_ALLOWLIST_VALUES = 2000
     MAX_CHARACTERISTIC_ALLOWLIST_VALUE_LENGTH = 300
+    TNVED_CHARACTERISTIC_NAMES = frozenset({
+        'тнвэд', 'тнвэд код', 'тн вэд', 'тн вэд код',
+    })
+    GLOBAL_DIRECTORY_CHARACTERISTIC_NAMES = frozenset({
+        'цвет', 'цвет товара', 'пол', 'пол товара',
+        'страна производства', 'сезон', 'ставка ндс',
+    })
 
     @staticmethod
     def _stable_json(value: Any) -> str:
@@ -111,6 +119,48 @@ class MarketplaceService:
     @classmethod
     def _payload_hash(cls, value: Any) -> str:
         return hashlib.sha256(cls._stable_json(value).encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _normalized_characteristic_name(value: Any) -> str:
+        text = str(value or '').strip().casefold().replace('ё', 'е')
+        text = re.sub(r'[^\w\s]+', ' ', text, flags=re.UNICODE)
+        return re.sub(r'\s+', ' ', text).strip()
+
+    @classmethod
+    def _is_tnved_characteristic(cls, value: Any) -> bool:
+        return cls._normalized_characteristic_name(value) in cls.TNVED_CHARACTERISTIC_NAMES
+
+    @classmethod
+    def _dictionary_hash(cls, dictionary_json: Optional[str]) -> Optional[str]:
+        if not dictionary_json:
+            return None
+        try:
+            return cls._payload_hash(json.loads(dictionary_json))
+        except (json.JSONDecodeError, TypeError):
+            return hashlib.sha256(dictionary_json.encode('utf-8')).hexdigest()
+
+    @classmethod
+    def _normalize_tnved_snapshot(cls, items: List[Any]) -> List[Dict[str, Any]]:
+        """Validate the category-scoped TNVED response and keep KIZ metadata."""
+        normalized = []
+        seen = set()
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ValueError(f'tnved[{index}] must be an object')
+            code = item.get('tnved')
+            is_kiz = item.get('isKiz')
+            if not isinstance(code, str) or not code.strip():
+                raise ValueError(f'tnved[{index}].tnved must be a non-empty string')
+            code = code.strip()
+            if not re.fullmatch(r'\d{4,20}', code):
+                raise ValueError(f'tnved[{index}].tnved has an invalid format')
+            if not isinstance(is_kiz, bool):
+                raise ValueError(f'tnved[{index}].isKiz must be a boolean')
+            if code in seen:
+                raise ValueError('tnved snapshot contains a duplicate code')
+            seen.add(code)
+            normalized.append({'value': code, 'isKiz': is_kiz})
+        return sorted(normalized, key=lambda item: item['value'])
 
     @staticmethod
     def _error_text(exc: Exception) -> str:
@@ -329,6 +379,9 @@ class MarketplaceService:
                 'has_filter': bool(charc.has_filter),
                 'is_variable': bool(charc.is_variable),
                 'dictionary_json': dictionary_json,
+                'dictionary_source': getattr(charc, 'dictionary_source', None) or (
+                    'admin' if dictionary_json else 'none'
+                ),
             })
         return cls._payload_hash(payload)
 
@@ -546,6 +599,7 @@ class MarketplaceService:
         *,
         client: Optional[WildberriesAPIClient] = None,
         now: Optional[datetime] = None,
+        sleep_fn=time.sleep,
     ) -> Dict[str, Any]:
         """Синхронизация характеристик для одной категории."""
         category = MarketplaceCategory.query.get(category_id)
@@ -628,6 +682,14 @@ class MarketplaceService:
                     raise ValueError('WB characteristic dictionary has an invalid type')
                 if isinstance(dictionary, list):
                     dictionary = sorted(dictionary, key=cls._stable_json)
+                dictionary_json = (
+                    cls._stable_json(dictionary) if dictionary is not None else None
+                )
+                dictionary_values = cls.characteristic_allowlist_values(dictionary_json)
+                if dictionary not in (None, [], {}) and not dictionary_values:
+                    raise ValueError(
+                        f'WB characteristic {charc_id} has an unusable dictionary'
+                    )
                 normalized_items[charc_id] = {
                     'charc_id': charc_id,
                     'name': name.strip(),
@@ -638,10 +700,34 @@ class MarketplaceService:
                     'popular': item['popular'],
                     'has_filter': item.get('hasFilter', False),
                     'is_variable': item.get('isVariable', False),
-                    'dictionary_json': (
-                        cls._stable_json(dictionary) if dictionary is not None else None
+                    'dictionary_json': dictionary_json if dictionary_values else None,
+                    'dictionary_source': 'wb_schema' if dictionary_values else 'none',
+                    'dictionary_synced_at': synced_at if dictionary_values else None,
+                    'dictionary_hash': cls._dictionary_hash(
+                        dictionary_json if dictionary_values else None
                     ),
                 }
+
+            tnved_characteristics = [
+                item for item in normalized_items.values()
+                if cls._is_tnved_characteristic(item['name'])
+            ]
+            if tnved_characteristics:
+                sleep_fn(cls.CHARACTERISTIC_REQUEST_INTERVAL_SECONDS)
+                tnved_response = client.get_directory_tnved(category.subject_id)
+                tnved_items = cls._wb_data_list(tnved_response, 'tnved directory')
+                if not tnved_items:
+                    raise ValueError(
+                        f'WB returned an empty TNVED directory for subjectID={category.subject_id}'
+                    )
+                normalized_tnved = cls._normalize_tnved_snapshot(tnved_items)
+                tnved_json = cls._stable_json(normalized_tnved)
+                tnved_hash = cls._dictionary_hash(tnved_json)
+                for item in tnved_characteristics:
+                    item['dictionary_json'] = tnved_json
+                    item['dictionary_source'] = 'wb_directory'
+                    item['dictionary_synced_at'] = synced_at
+                    item['dictionary_hash'] = tnved_hash
 
             existing = {
                 int(charc.charc_id): charc
@@ -671,6 +757,7 @@ class MarketplaceService:
             schema_fields = (
                 'name', 'charc_type', 'required', 'unit_name', 'max_count',
                 'popular', 'has_filter', 'is_variable', 'dictionary_json',
+                'dictionary_source', 'dictionary_hash',
             )
             for charc_id, item in normalized_items.items():
                 charc = existing.get(charc_id)
@@ -678,14 +765,38 @@ class MarketplaceService:
                     # WB's characteristic schema commonly omits dictionary values
                     # or sends an explicit empty array. Preserve a non-empty
                     # admin allowlist until WB supplies a non-empty replacement.
+                    existing_source = getattr(charc, 'dictionary_source', None) or (
+                        'admin' if cls.characteristic_allowlist_values(charc.dictionary_json)
+                        else 'none'
+                    )
+                    if (
+                        existing_source == 'none'
+                        and cls.characteristic_allowlist_values(charc.dictionary_json)
+                    ):
+                        existing_source = 'admin'
                     if (
                         not cls.characteristic_allowlist_values(
                             item['dictionary_json'])
                         and cls.characteristic_allowlist_values(charc.dictionary_json)
+                        and cls._normalized_characteristic_name(item['name'])
+                        not in cls.GLOBAL_DIRECTORY_CHARACTERISTIC_NAMES
                     ):
                         item = dict(item)
                         item['dictionary_json'] = charc.dictionary_json
+                        item['dictionary_source'] = existing_source
+                        item['dictionary_synced_at'] = getattr(
+                            charc, 'dictionary_synced_at', None,
+                        )
+                        item['dictionary_hash'] = getattr(
+                            charc, 'dictionary_hash', None,
+                        ) or cls._dictionary_hash(charc.dictionary_json)
                     instruction_is_generated = cls._instruction_is_generated(charc)
+                    dictionary_changed = any(
+                        getattr(charc, field, None) != item[field]
+                        for field in (
+                            'dictionary_json', 'dictionary_source', 'dictionary_hash',
+                        )
+                    )
                     changed_fields = [
                         field for field in schema_fields
                         if getattr(charc, field) != item[field]
@@ -698,6 +809,14 @@ class MarketplaceService:
                         total_updated += 1
                     for field in schema_fields:
                         setattr(charc, field, item[field])
+                    if item['dictionary_source'] in {'wb_schema', 'wb_directory'}:
+                        charc.dictionary_synced_at = synced_at
+                    elif item['dictionary_source'] == 'none':
+                        charc.dictionary_synced_at = None
+                    if dictionary_changed:
+                        charc.dictionary_version = (
+                            getattr(charc, 'dictionary_version', 0) or 0
+                        ) + 1
                     # WB requirements take precedence over an old admin parsing
                     # preference. A characteristic that became required must be
                     # visible to every agent and publication validator again.
@@ -741,6 +860,10 @@ class MarketplaceService:
                         has_filter=item['has_filter'],
                         is_variable=item['is_variable'],
                         dictionary_json=item['dictionary_json'],
+                        dictionary_source=item['dictionary_source'],
+                        dictionary_synced_at=item['dictionary_synced_at'],
+                        dictionary_hash=item['dictionary_hash'],
+                        dictionary_version=1 if item['dictionary_json'] else 0,
                         ai_instruction=ai_instruction,
                         ai_instruction_source='generated',
                         is_available=True,
@@ -837,13 +960,31 @@ class MarketplaceService:
             raise ValueError('Ручной словарь поддерживается только для WB')
         if not category.is_available or not charc.is_available:
             raise ValueError('Нельзя изменить словарь недоступной характеристики')
+        normalized_name = cls._normalized_characteristic_name(charc.name)
+        if (
+            normalized_name in cls.GLOBAL_DIRECTORY_CHARACTERISTIC_NAMES
+            or cls._is_tnved_characteristic(charc.name)
+            or getattr(charc, 'dictionary_source', None) in {
+                'wb_schema', 'wb_directory',
+            }
+        ):
+            raise ValueError(
+                'Официальный словарь WB обновляется автоматически и не может '
+                'быть заменён ручным списком'
+            )
 
         normalized = cls._normalize_characteristic_allowlist(values)
         dictionary_json = (
             cls._stable_json([{'value': value} for value in normalized])
             if normalized else None
         )
-        changed = charc.dictionary_json != dictionary_json
+        dictionary_source = 'admin' if dictionary_json else 'none'
+        dictionary_hash = cls._dictionary_hash(dictionary_json)
+        changed = any((
+            charc.dictionary_json != dictionary_json,
+            (getattr(charc, 'dictionary_source', None) or 'none') != dictionary_source,
+            getattr(charc, 'dictionary_hash', None) != dictionary_hash,
+        ))
         if not changed:
             schema_hash = cls._category_characteristics_schema_hash(category.id)
             hash_changed = category.characteristics_schema_hash != schema_hash
@@ -863,6 +1004,12 @@ class MarketplaceService:
                 'success': True,
                 'changed': False,
                 'dictionary_values': normalized,
+                'dictionary_source': dictionary_source,
+                'dictionary_synced_at': (
+                    charc.dictionary_synced_at.isoformat()
+                    if getattr(charc, 'dictionary_synced_at', None) else None
+                ),
+                'dictionary_version': getattr(charc, 'dictionary_version', 0) or 0,
                 'count': len(normalized),
                 'schema_version': category.characteristics_version,
                 'schema_hash': schema_hash,
@@ -871,6 +1018,12 @@ class MarketplaceService:
         instruction_is_generated = cls._instruction_is_generated(charc)
         changed_at = now or datetime.utcnow()
         charc.dictionary_json = dictionary_json
+        charc.dictionary_source = dictionary_source
+        charc.dictionary_hash = dictionary_hash
+        charc.dictionary_synced_at = changed_at
+        charc.dictionary_version = (
+            getattr(charc, 'dictionary_version', 0) or 0
+        ) + 1
         charc.updated_at = changed_at
         if instruction_is_generated:
             charc.ai_instruction = cls.generate_ai_instruction(
@@ -900,6 +1053,9 @@ class MarketplaceService:
             'success': True,
             'changed': True,
             'dictionary_values': normalized,
+            'dictionary_source': dictionary_source,
+            'dictionary_synced_at': changed_at.isoformat(),
+            'dictionary_version': charc.dictionary_version,
             'count': len(normalized),
             'schema_version': category.characteristics_version,
             'schema_hash': schema_hash,
@@ -979,6 +1135,7 @@ class MarketplaceService:
                 sleep_fn(cls.CHARACTERISTIC_REQUEST_INTERVAL_SECONDS)
             result = cls.sync_category_characteristics(
                 category.id, client=client, now=current_time,
+                sleep_fn=sleep_fn,
             )
             if result.get('skipped'):
                 skipped_categories += 1
@@ -1000,6 +1157,214 @@ class MarketplaceService:
             'errors': errors[:10],
             'limit': limit,
         }
+
+    @classmethod
+    def ensure_wb_references_current(
+        cls,
+        subject_ids: List[int],
+        *,
+        client: WildberriesAPIClient,
+        now: Optional[datetime] = None,
+        refresh_after_hours: int = SCHEMA_REFRESH_AFTER_HOURS,
+        sleep_fn=time.sleep,
+    ) -> Dict[str, Any]:
+        """Refresh every reference needed by a typed import batch once.
+
+        This is the shared preflight for AI preparation and WB writes. It
+        prevents the importer from reading a fresh live schema while the final
+        validator reads a different/stale admin cache.
+        """
+        if not isinstance(subject_ids, (list, tuple, set)):
+            return {'success': False, 'error': 'subject_ids must be an array'}
+        normalized_subjects = []
+        seen = set()
+        for raw in subject_ids:
+            if not cls._is_typed_integer(raw) or raw <= 0:
+                return {'success': False, 'error': 'subject_ids must contain positive integers'}
+            if raw in seen:
+                continue
+            seen.add(raw)
+            normalized_subjects.append(raw)
+        if not normalized_subjects:
+            return {'success': False, 'error': 'No WB subject IDs supplied'}
+        if len(normalized_subjects) > cls.MAX_STALE_SCHEMA_BATCH:
+            return {
+                'success': False,
+                'error': f'At most {cls.MAX_STALE_SCHEMA_BATCH} WB categories per preflight',
+            }
+        if client is None:
+            return {'success': False, 'error': 'WB API client is not configured'}
+
+        marketplace = Marketplace.query.filter_by(code='wb').first()
+        if not marketplace:
+            return {'success': False, 'error': 'Маркетплейс WB не настроен в админке'}
+        current_time = now or datetime.utcnow()
+        cutoff = current_time - timedelta(hours=max(1, int(refresh_after_hours)))
+        refreshed = {'categories': False, 'directories': False, 'schemas': []}
+        errors = []
+
+        existing_subjects = {
+            row[0] for row in db.session.query(MarketplaceCategory.subject_id).filter(
+                MarketplaceCategory.marketplace_id == marketplace.id,
+                MarketplaceCategory.subject_id.in_(normalized_subjects),
+            ).all()
+        }
+        categories_stale = bool(
+            marketplace.categories_sync_status != 'success'
+            or not marketplace.categories_synced_at
+            or marketplace.categories_synced_at < cutoff
+            or existing_subjects != set(normalized_subjects)
+        )
+        if categories_stale:
+            result = cls.sync_categories(
+                marketplace.id, client=client, now=current_time, sleep_fn=sleep_fn,
+            )
+            if result.get('skipped'):
+                return {
+                    'success': False,
+                    'error': 'Справочник категорий WB уже обновляется; повторите пакет позже',
+                    'refreshed': refreshed,
+                }
+            if not result.get('success'):
+                return {
+                    'success': False,
+                    'error': f'Не удалось обновить категории WB: {result.get("error")}',
+                    'refreshed': refreshed,
+                }
+            refreshed['categories'] = bool(result.get('success'))
+            db.session.expire_all()
+            marketplace = Marketplace.query.get(marketplace.id)
+
+        directories_stale = bool(
+            marketplace.directories_sync_status != 'success'
+            or not marketplace.directories_synced_at
+            or marketplace.directories_synced_at < cutoff
+        )
+        if directories_stale:
+            result = cls.sync_directories(
+                marketplace.id, client=client, now=current_time, sleep_fn=sleep_fn,
+            )
+            if result.get('skipped'):
+                return {
+                    'success': False,
+                    'error': 'Справочники WB уже обновляются; повторите пакет позже',
+                    'refreshed': refreshed,
+                }
+            if not result.get('success'):
+                return {
+                    'success': False,
+                    'error': f'Не удалось обновить справочники WB: {result.get("error")}',
+                    'refreshed': refreshed,
+                }
+            refreshed['directories'] = bool(result.get('success'))
+            db.session.expire_all()
+            marketplace = Marketplace.query.get(marketplace.id)
+            if marketplace.directories_sync_status != 'success':
+                return {
+                    'success': False,
+                    'error': (
+                        'Не все обязательные справочники WB обновились: '
+                        f'{marketplace.directories_sync_error or "неизвестная ошибка"}'
+                    ),
+                    'refreshed': refreshed,
+                }
+
+        categories = MarketplaceCategory.query.filter(
+            MarketplaceCategory.marketplace_id == marketplace.id,
+            MarketplaceCategory.subject_id.in_(normalized_subjects),
+        ).all()
+        by_subject = {int(category.subject_id): category for category in categories}
+        for index, subject_id in enumerate(normalized_subjects):
+            category = by_subject.get(subject_id)
+            if not category:
+                errors.append(f'subjectID={subject_id}: категория отсутствует в актуальном WB-кэше')
+                continue
+            if not category.is_available:
+                errors.append(f'subjectID={subject_id}: категория больше недоступна в WB')
+                continue
+            if not category.is_enabled:
+                errors.append(f'subjectID={subject_id}: категория отключена в админке')
+                continue
+            schema_stale = bool(
+                category.characteristics_sync_status != 'success'
+                or not category.characteristics_synced_at
+                or category.characteristics_synced_at < cutoff
+            )
+            if schema_stale:
+                if index and refreshed['schemas']:
+                    sleep_fn(cls.CHARACTERISTIC_REQUEST_INTERVAL_SECONDS)
+                result = cls.sync_category_characteristics(
+                    category.id, client=client, now=current_time, sleep_fn=sleep_fn,
+                )
+                if result.get('success'):
+                    refreshed['schemas'].append(subject_id)
+                elif result.get('skipped'):
+                    errors.append(
+                        f'subjectID={subject_id}: схема уже обновляется; повторите пакет позже'
+                    )
+                else:
+                    errors.append(
+                        f'subjectID={subject_id}: {result.get("error", "ошибка синхронизации")}'
+                    )
+
+        return {
+            'success': not errors,
+            'subjects': normalized_subjects,
+            'refreshed': refreshed,
+            'errors': errors[:20],
+            'error': '; '.join(errors[:5]) if errors else None,
+        }
+
+    @classmethod
+    def get_cached_characteristics_snapshot(cls, subject_id: int) -> List[Dict[str, Any]]:
+        """Return the exact admin-cache schema in the WB response shape."""
+        if not cls._is_typed_integer(subject_id) or subject_id <= 0:
+            raise ValueError('subject_id must be a positive integer')
+        marketplace = Marketplace.query.filter_by(code='wb').first()
+        category = MarketplaceCategory.query.filter_by(
+            marketplace_id=marketplace.id if marketplace else -1,
+            subject_id=subject_id,
+            is_available=True,
+        ).first()
+        if not marketplace or not category:
+            raise ValueError(f'Категория WB subject_id={subject_id} отсутствует в кэше')
+        rows = MarketplaceCategoryCharacteristic.query.filter_by(
+            marketplace_id=marketplace.id,
+            category_id=category.id,
+            is_available=True,
+        ).order_by(MarketplaceCategoryCharacteristic.display_order.asc(),
+                   MarketplaceCategoryCharacteristic.charc_id.asc()).all()
+        rows = [row for row in rows if row.is_enabled or row.required]
+        if not rows:
+            raise ValueError(f'Схема WB subject_id={subject_id} пуста')
+        snapshot = []
+        for row in rows:
+            dictionary = None
+            if row.dictionary_json:
+                try:
+                    parsed = json.loads(row.dictionary_json)
+                    dictionary = parsed if isinstance(parsed, list) else None
+                except (json.JSONDecodeError, TypeError):
+                    dictionary = None
+            snapshot.append({
+                'charcID': int(row.charc_id),
+                'subjectID': int(category.subject_id),
+                'subjectName': category.subject_name or str(category.subject_id),
+                'name': row.name,
+                'charcType': int(row.charc_type or 0),
+                'required': bool(row.required),
+                'unitName': row.unit_name,
+                'maxCount': int(row.max_count or 0),
+                'popular': bool(row.popular),
+                'hasFilter': bool(row.has_filter),
+                'isVariable': bool(row.is_variable),
+                'dictionary': dictionary,
+                'dictionarySource': row.dictionary_source or (
+                    'admin' if dictionary else 'none'
+                ),
+                'dictionaryVersion': int(row.dictionary_version or 0),
+            })
+        return snapshot
 
     # =========================================================================
     # AI INSTRUCTION GENERATION

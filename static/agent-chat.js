@@ -29,6 +29,7 @@
                 primary_model: 'deepseek-v4-pro',
                 fast_model: 'deepseek-v4-pro',
             }),
+            activeScope: initial.active_scope || null,
             draft: '',
             productIds: [],
             productIdsInput: '',
@@ -60,6 +61,7 @@
 
             init() {
                 this.normalizePayload();
+                this.hydrateScope(this.activeScope);
                 this.$nextTick(() => this.scrollToBottom(false));
                 this.schedulePoll(this.isRunActive() ? 1400 : 0);
                 document.addEventListener('visibilitychange', () => {
@@ -148,7 +150,6 @@
                 try {
                     const payload = await this.api(`/agents/api/conversations/${id}`);
                     this.applyPayload(payload, true);
-                    this.resetScope();
                     this.schedulePoll(this.isRunActive() ? 1400 : 0);
                     this.historyOpen = false;
                     history.replaceState(null, '', `/agents?conversation=${id}`);
@@ -203,6 +204,20 @@
                 this.selectedEntityKind = 'imported_product';
             },
 
+            hydrateScope(scope) {
+                const ids = Array.isArray((scope || {}).ids)
+                    ? scope.ids.map(Number).filter(id => Number.isSafeInteger(id) && id > 0).slice(0, 500)
+                    : [];
+                if (!ids.length) {
+                    this.resetScope();
+                    return;
+                }
+                this.productIds = Array.from(new Set(ids));
+                this.productIdsInput = this.productIds.join(', ');
+                this.selectedEntityKind = this.normalizedEntityKind(scope.kind);
+                this.scopeMode = 'selected';
+            },
+
             async sendMessage() {
                 const text = this.draft.trim();
                 if (!text || this.busy) return;
@@ -236,6 +251,7 @@
                                 message: text,
                                 product_ids: this.productIds,
                                 entity_kind: this.productIds.length ? this.selectedEntityKind : null,
+                                scope_mode: this.productIds.length ? 'selected' : 'global',
                             }),
                         },
                     );
@@ -243,7 +259,6 @@
                     for (const message of data.messages || []) this.upsertMessage(message);
                     this.conversation = data.conversation || this.conversation;
                     this.upsertConversation(this.conversation);
-                    this.resetScope();
                     await this.refresh(true);
                     this.$nextTick(() => this.scrollToBottom(true));
                 } catch (error) {
@@ -316,7 +331,14 @@
                     });
                     this.undoTaskId = null;
                     await this.refresh(true);
-                    this.setBanner(`Откат выполнен: восстановлено товаров — ${data.products}`, 'success');
+                    if (Number(data.conflicts || 0) > 0) {
+                        this.setBanner(
+                            `Откат выполнен частично: восстановлено — ${data.products}, `
+                            + `конфликтов ручных изменений — ${data.conflicts}`,
+                        );
+                    } else {
+                        this.setBanner(`Откат выполнен: восстановлено товаров — ${data.products}`, 'success');
+                    }
                 } catch (error) {
                     this.setBanner(error.message);
                 } finally {
@@ -374,6 +396,12 @@
                 this.run = payload.run || null;
                 this.subtasks = payload.subtasks || [];
                 this.proposals = payload.proposals || [];
+                this.activeScope = payload.active_scope || null;
+                // Server-side grounding may resolve a typed card from an nmID
+                // written in the message, and the semantic planner may also
+                // explicitly switch back to global scope. Keep the composer in
+                // sync so the next conversational turn cannot lose that state.
+                if (resetSteps || !this.scopeOpen) this.hydrateScope(this.activeScope);
                 if (resetSteps) {
                     this.runSteps = payload.steps || [];
                 } else {
@@ -416,6 +444,14 @@
             },
 
             isRunActive() { return this.run && ['queued', 'running'].includes(this.run.status); },
+            runDisplayStatus(value) {
+                const metadata = (value || {}).metadata || {};
+                const taskStatus = metadata.status || (value || {}).status || 'queued';
+                const result = metadata.result || (value || {}).result || {};
+                if (taskStatus === 'completed' && result.status === 'partial') return 'partial';
+                if (taskStatus === 'completed' && result.status === 'failed') return 'failed';
+                return taskStatus;
+            },
             runUsage(run) {
                 return (((run || {}).result || {})._usage || {});
             },
@@ -437,7 +473,8 @@
             statusLabel(status) {
                 return ({
                     queued: 'В очереди', running: 'Выполняется', completed: 'Завершено',
-                    failed: 'Ошибка', cancelled: 'Остановлено', pending_approval: 'Нужно подтверждение',
+                    partial: 'Частично выполнено', failed: 'Ошибка',
+                    cancelled: 'Остановлено', pending_approval: 'Нужно подтверждение',
                 })[status] || 'Готово';
             },
             skillLabel(name) {
@@ -447,8 +484,10 @@
                     'brand-resolver': 'Бренды', 'size-normalizer': 'Размеры',
                     'price-optimizer': 'Ценообразование', 'review-analyst': 'Отзывы',
                     'photo-optimizer': 'Фотографии', 'supplier-audit': 'Аудит поставщика',
+                    'image-generator': 'AI-фотостудия',
                     'batch-audit': 'Пакетный аудит', 'catalog-query': 'Поиск по каталогу', 'card-insight': 'Анализ карточки',
-                    'content-writer': 'Редактор карточки', 'description-writer': 'Редактор описания', 'system-query': 'Данные системы',
+                    'content-writer': 'Редактор карточки', 'description-writer': 'Редактор описания',
+                    'wb-content-publisher': 'Отправка в WB', 'system-query': 'Данные системы',
                 })[name] || 'Внутренний навык';
             },
             runArtifacts(message) {
@@ -505,7 +544,7 @@
                             collection_kind: step.skill === 'batch-audit' ? 'audit' : 'results',
                             entity_kind: entityKind,
                             id: `${message.task_id || message.id}-${step.skill || 'step'}-${stepIndex}`,
-                            title: stepResult.condition || 'Результаты поиска',
+                            title: stepResult.collection_title || stepResult.condition || 'Результаты поиска',
                             total: Number(stepResult.total || stepProducts.length),
                             issue_total: Number(stepResult.cards_with_issues || 0),
                             truncated: Boolean(stepResult.truncated) || stepProducts.length > items.length,
@@ -514,6 +553,41 @@
                     }
                 }
                 return artifacts.slice(0, 20);
+            },
+            imageArtifactStatusLabel(artifact) {
+                if ((artifact || {}).has_final && (artifact || {}).status === 'completed') return 'Готово';
+                return ({
+                    queued: 'В очереди', running: 'Создаётся',
+                    remote_running: 'Создаётся', finalizing: 'Собирается',
+                    completed: 'Готово', failed: 'Ошибка', cancelled: 'Остановлено',
+                })[(artifact || {}).status] || 'На проверке';
+            },
+            imageArtifactStatusClass(artifact) {
+                if ((artifact || {}).has_final && (artifact || {}).status === 'completed') return 'is-ready';
+                if ((artifact || {}).status === 'failed') return 'is-failed';
+                return 'is-progress';
+            },
+            imageArtifactCostLabel(artifact) {
+                const value = Number((artifact || {}).estimated_cost_rub);
+                if (!Number.isFinite(value)) return 'Стоимость по тарифу';
+                return `${new Intl.NumberFormat('ru-RU', {
+                    minimumFractionDigits: 2, maximumFractionDigits: 2,
+                }).format(value)} ₽`;
+            },
+            runFailures(message) {
+                const result = ((message || {}).metadata || {}).result || {};
+                const failures = [];
+                for (const step of result.results || []) {
+                    for (const item of ((step || {}).result || {}).failure_details || []) {
+                        if (!item || typeof item !== 'object') continue;
+                        failures.push({
+                            product_id: Number(item.product_id || 0),
+                            code: String(item.code || 'error'),
+                            error: String(item.error || 'Не удалось сохранить карточку'),
+                        });
+                    }
+                }
+                return failures.slice(0, 20);
             },
             decodeText(value) {
                 const node = document.createElement('textarea');

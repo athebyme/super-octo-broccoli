@@ -226,13 +226,15 @@
 
                 const send = async (allowRetry) => {
                     const conversationId = await this.ensureConversation();
+                    const productIds = this.scopedProductIds();
                     try {
                         return await this.api(`/agents/api/conversations/${conversationId}/messages`, {
                             method: 'POST',
                             body: JSON.stringify({
                                 message: text,
-                                product_ids: this.scopedProductIds(),
+                                product_ids: productIds,
                                 page_context: this.contextAttached ? this.pageContext : null,
+                                scope_mode: productIds.length ? 'page' : 'global',
                             }),
                         });
                     } catch (error) {
@@ -325,6 +327,36 @@
                     if (status === 'running') return message.content || 'Выполняю задачу.';
                 }
                 return content;
+            },
+
+            imageArtifacts(message) {
+                const result = (((message || {}).metadata || {}).result || {});
+                const artifacts = [];
+                for (const step of result.results || []) {
+                    const stepArtifacts = (((step || {}).result || {}).artifacts || []);
+                    for (const artifact of stepArtifacts) {
+                        if (!artifact || artifact.type !== 'image_generation') continue;
+                        artifacts.push(artifact);
+                    }
+                }
+                return artifacts.slice(0, 2);
+            },
+
+            popupImageStatus(artifact) {
+                if ((artifact || {}).has_final && (artifact || {}).status === 'completed') {
+                    const cost = Number((artifact || {}).estimated_cost_rub);
+                    const label = Number.isFinite(cost)
+                        ? new Intl.NumberFormat('ru-RU', {
+                            minimumFractionDigits: 2, maximumFractionDigits: 2,
+                        }).format(cost) + ' ₽'
+                        : '';
+                    return `Готово${label ? ` · ${label}` : ''} · нужна проверка`;
+                }
+                return ({
+                    queued: 'В очереди', running: 'Создаётся',
+                    remote_running: 'Создаётся', finalizing: 'Собирается',
+                    failed: 'Ошибка', cancelled: 'Остановлено',
+                })[(artifact || {}).status] || 'Открыть результат';
             },
 
             scrollToBottom(smooth) {

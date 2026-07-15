@@ -68,6 +68,7 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
                     [{'value': 'Силикон'}, {'value': 'Пластик'}, {'value': 'Металл'}],
                     ensure_ascii=False,
                 ),
+                dictionary_source='admin',
                 is_enabled=True,
                 is_available=True,
             ),
@@ -78,10 +79,6 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
                 name='Пол',
                 charc_type=1,
                 max_count=1,
-                dictionary_json=json.dumps(
-                    [{'value': 'Женский'}, {'value': 'Мужской'}],
-                    ensure_ascii=False,
-                ),
                 is_enabled=True,
                 is_available=True,
             ),
@@ -89,8 +86,8 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         db.session.add(MarketplaceDirectory(
             marketplace_id=marketplace.id,
             directory_type='kinds',
-            # Глобальный WB kinds шире конкретной категории. Даже если в нём
-            # есть «Унисекс», category-scoped allowlist выше имеет приоритет.
+            # Пол — документированный общий справочник WB; локальный список
+            # для этой характеристики не требуется.
             data_json=json.dumps(
                 ['Женский', 'Мужской', 'Унисекс'], ensure_ascii=False),
             items_count=3,
@@ -113,7 +110,7 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             ],
         }
 
-    def test_invalid_material_and_unlisted_unisex_are_rejected(self):
+    def test_admin_material_policy_is_strict_and_global_gender_is_canonical(self):
         from services.marketplace_validator import validate_wb_characteristics
 
         material = validate_wb_characteristics(self.SUBJECT_ID, [{
@@ -127,8 +124,8 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             'id': self.GENDER_ID,
             'value': ['Унисекс'],
         }])
-        self.assertFalse(gender['valid'])
-        self.assertEqual(gender['issues'][0]['code'], 'value_not_allowed')
+        self.assertTrue(gender['valid'], gender['issues'])
+        self.assertEqual(gender['normalized'][0]['value'], ['Унисекс'])
 
     def test_exact_dictionary_match_canonicalizes_case(self):
         from services.marketplace_validator import validate_wb_characteristics
@@ -143,7 +140,33 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             {'id': self.MATERIAL_ID, 'value': ['Силикон']},
             {'id': self.GENDER_ID, 'value': ['Женский']},
         ])
-        self.assertEqual(set(result['directories_used']), {'category'})
+        self.assertEqual(set(result['directories_used']), {'category', 'kinds'})
+
+    def test_dictionary_search_returns_canonical_values_without_fuzzy_write(self):
+        from services.marketplace_validator import search_wb_characteristic_values
+
+        marketplace = Marketplace.query.filter_by(code='wb').one()
+        material = MarketplaceCategoryCharacteristic.query.filter_by(
+            charc_id=self.MATERIAL_ID,
+        ).one()
+        prefix = search_wb_characteristic_values(
+            marketplace, material, 'сили', limit=10,
+        )
+        typo = search_wb_characteristic_values(
+            marketplace, material, 'силекон', limit=10,
+        )
+        self.assertTrue(prefix['constrained'])
+        self.assertEqual(prefix['values'], ['Силикон'])
+        self.assertEqual(typo['values'], [])
+
+        material.dictionary_json = None
+        db.session.commit()
+        free_text = search_wb_characteristic_values(
+            marketplace, material, 'силикон', limit=10,
+        )
+        self.assertTrue(free_text['usable'])
+        self.assertFalse(free_text['constrained'])
+        self.assertEqual(free_text['values'], [])
 
     def test_characteristic_and_subject_ids_reject_numeric_coercion(self):
         from services.marketplace_validator import validate_wb_characteristics
@@ -298,7 +321,7 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         self.assertFalse(result['valid'])
         self.assertEqual(result['issues'][0]['code'], 'category_not_found')
 
-    def test_missing_material_dictionary_fails_closed(self):
+    def test_material_without_explicit_dictionary_is_wb_free_text(self):
         from services.marketplace_validator import validate_wb_characteristics
 
         characteristic = MarketplaceCategoryCharacteristic.query.filter_by(
@@ -312,10 +335,13 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             'value': ['Силикон'],
         }])
 
-        self.assertFalse(result['valid'])
-        self.assertEqual(result['issues'][0]['code'], 'dictionary_not_synced')
+        self.assertTrue(result['valid'], result['issues'])
+        self.assertEqual(result['normalized'], [{
+            'id': self.MATERIAL_ID,
+            'value': ['Силикон'],
+        }])
 
-    def test_composition_alias_is_treated_as_material_and_requires_dictionary(self):
+    def test_composition_without_explicit_dictionary_is_wb_free_text(self):
         from services.marketplace_validator import validate_wb_characteristics
 
         characteristic = MarketplaceCategoryCharacteristic.query.filter_by(
@@ -330,8 +356,8 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             'value': ['наилучшем виде'],
         }])
 
-        self.assertFalse(result['valid'])
-        self.assertEqual(result['issues'][0]['code'], 'dictionary_not_synced')
+        self.assertTrue(result['valid'], result['issues'])
+        self.assertEqual(result['normalized'][0]['value'], ['наилучшем виде'])
 
     def test_legacy_disabled_required_characteristic_is_still_required_on_create(self):
         from services.marketplace_validator import (
@@ -357,7 +383,7 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             'required_characteristic_missing',
         )
 
-    def test_gender_requires_category_allowlist_even_if_global_kinds_has_value(self):
+    def test_gender_uses_global_kinds_without_category_allowlist(self):
         from services.marketplace_validator import validate_wb_characteristics
 
         characteristic = MarketplaceCategoryCharacteristic.query.filter_by(
@@ -371,11 +397,9 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
             'value': ['Унисекс'],
         }])
 
-        self.assertFalse(result['valid'])
-        self.assertEqual(
-            result['issues'][0]['code'],
-            'category_dictionary_not_configured',
-        )
+        self.assertTrue(result['valid'], result['issues'])
+        self.assertEqual(result['normalized'][0]['value'], ['Унисекс'])
+        self.assertEqual(result['directories_used'], ['kinds'])
 
     def test_global_directory_wins_for_global_characteristic(self):
         from services.marketplace_validator import validate_wb_characteristics
@@ -423,6 +447,27 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
         self.assertEqual(valid['directories_used'], ['colors'])
         self.assertFalse(invalid['valid'])
         self.assertEqual(invalid['issues'][0]['code'], 'value_not_allowed')
+
+    def test_legacy_ai_parser_validates_beyond_bounded_dictionary_sample(self):
+        from services.marketplace_ai_parser import MarketplaceAwareParsingTask
+
+        material = MarketplaceCategoryCharacteristic.query.filter_by(
+            charc_id=self.MATERIAL_ID,
+        ).one()
+        material.dictionary_json = json.dumps(
+            [f'Материал {index:03d}' for index in range(140)],
+            ensure_ascii=False,
+        )
+        db.session.commit()
+
+        parser = object.__new__(MarketplaceAwareParsingTask)
+        parser._constraint_cache = {}
+        valid, values, error = parser._coerce_to_string_array(
+            ['материал 139'], material,
+        )
+
+        self.assertTrue(valid, error)
+        self.assertEqual(values, ['Материал 139'])
 
     def test_optional_invalid_value_is_not_persisted_by_marketplace_validator(self):
         from services.marketplace_validator import MarketplaceValidator
@@ -1021,24 +1066,22 @@ class WBCharacteristicDictionaryTestCase(unittest.TestCase):
 
         importer = WBProductImporter.__new__(WBProductImporter)
         importer.seller = SimpleNamespace(id=1)
-        importer._chars_config_cache = {}
+        importer._chars_config_cache = {self.SUBJECT_ID: [
+            {
+                'charcID': self.MATERIAL_ID,
+                'name': 'Материал изделия',
+                'charcType': 1,
+                'maxCount': 1,
+            },
+            {
+                'charcID': self.GENDER_ID,
+                'name': 'Пол',
+                'charcType': 1,
+                'maxCount': 1,
+            },
+        ]}
         importer._wb_directories_cache = None
-        importer.api_client = SimpleNamespace(
-            get_card_characteristics_config=lambda _subject_id: {'data': [
-                {
-                    'charcID': self.MATERIAL_ID,
-                    'name': 'Материал изделия',
-                    'charcType': 1,
-                    'maxCount': 1,
-                },
-                {
-                    'charcID': self.GENDER_ID,
-                    'name': 'Пол',
-                    'charcType': 1,
-                    'maxCount': 1,
-                },
-            ]},
-        )
+        importer.api_client = SimpleNamespace()
 
         with self.assertRaises(WBCharacteristicValidationError):
             importer._build_wb_characteristics(imp)

@@ -93,12 +93,13 @@
                     <th class="text-center" style="width:54px">Вкл.</th>
                     <th style="width:22%">Характеристика</th>
                     <th style="width:130px">Тип</th>
-                    <th style="width:30%">Словарь WB</th>
+                    <th style="width:30%">Ограничение значения</th>
                     <th>AI-инструкция</th>
                 </tr>
             </thead>
             <tbody>
                 {% for charc in characteristics %}
+                {% set constraint = characteristic_constraints.get(charc.id, {}) %}
                 <tr :class="{'mp-characteristic-disabled': !isEnabled({{ charc.id }}) || {{ 'true' if not charc.is_available else 'false' }} }">
                     <td class="text-center">
                         <input type="checkbox"
@@ -136,6 +137,19 @@
                     </td>
                     <td>
                         {% if charc.charc_type == 1 %}
+                        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px">
+                            {% if charc.dictionary_source == 'admin' %}
+                            <span class="sh-badge sh-badge--sm sh-badge--yellow">Политика админки</span>
+                            {% elif constraint.get('source') == 'free_text' %}
+                            <span class="sh-badge sh-badge--sm sh-badge--gray">Свободный текст WB</span>
+                            {% else %}
+                            <span class="sh-badge sh-badge--sm sh-badge--green">Официальный справочник WB</span>
+                            {% endif %}
+                            {% if not constraint.get('usable', true) %}
+                            <span class="sh-badge sh-badge--sm sh-badge--red">Недоступен</span>
+                            {% endif %}
+                        </div>
+                        {% if charc.dictionary_source == 'admin' or constraint.get('source') == 'free_text' %}
                         <button type="button"
                                 class="sh-btn sh-btn--secondary sh-btn--sm"
                                 @click="toggleAllowlist({{ charc.id }})"
@@ -148,8 +162,8 @@
                         <div id="allowlist-{{ charc.id }}" class="mp-allowlist-panel"
                              x-show="openAllowlistId === {{ charc.id }}" x-cloak>
                             <label for="allowlist-input-{{ charc.id }}" class="mp-allowlist-help">
-                                Допустимые значения для этой категории, по одному на строке.
-                                Пустой список включает fail-closed проверку для обязательных словарных полей.
+                                Внутренняя строгая политика для этой категории, по одному значению на строке.
+                                Пустой список возвращает характеристику к свободному тексту WB.
                             </label>
                             <textarea id="allowlist-input-{{ charc.id }}"
                                       class="mp-editor" rows="5"
@@ -169,6 +183,17 @@
                             <p class="mp-inline-error" x-show="allowlistErrors[{{ charc.id }}]"
                                x-text="allowlistErrors[{{ charc.id }}]" role="alert"></p>
                         </div>
+                        {% else %}
+                        <div class="mp-characteristic-note">
+                            {{ constraint.get('count', 0) }} значений · {{ constraint.get('source', 'WB') }}
+                            {% if constraint.get('dictionary_synced_at') %}
+                            · {{ constraint.get('dictionary_synced_at')[:16].replace('T', ' ') }}
+                            {% endif %}
+                        </div>
+                        {% if constraint.get('issue') %}
+                        <div class="mp-inline-error">{{ constraint.get('issue', {}).get('message') }}</div>
+                        {% endif %}
+                        {% endif %}
                         {% else %}
                         <span class="mp-characteristic-note">Не применяется</span>
                         {% endif %}

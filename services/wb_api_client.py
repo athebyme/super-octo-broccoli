@@ -105,6 +105,14 @@ class WBRateLimitException(WBAPIException):
         self.retry_after = retry_after
 
 
+class WBTransportUncertainException(WBAPIException):
+    """Transport/server failure whose write may already have reached WB."""
+
+    def __init__(self, message: str, *, request_may_have_been_applied: bool):
+        super().__init__(message)
+        self.request_may_have_been_applied = bool(request_may_have_been_applied)
+
+
 class RateLimiter:
     """Thread-safe rate limiter для соблюдения лимитов API WB"""
 
@@ -353,7 +361,7 @@ class WildberriesAPIClient:
         # Логирование запроса
         params_str = f" params={kwargs.get('params')}" if kwargs.get('params') else ""
         logger.info(f"WB API Request: {method} {url}{params_str}")
-        logger.debug(f"API Key (first 10 chars): {self.api_key[:10]}...")
+        logger.debug("WB API credential is configured")
         start_time = time.time()
 
         # Сохраняем request body для логирования
@@ -396,7 +404,7 @@ class WildberriesAPIClient:
                     logger.warning(f"Failed to log to DB: {log_error}")
 
             # Обработка ошибок
-            if response.status_code == 401:
+            if response.status_code in {401, 403}:
                 raise WBAuthException("Ошибка авторизации. Проверьте API ключ.")
             elif response.status_code == 429:
                 retry_after = None
@@ -473,6 +481,13 @@ class WildberriesAPIClient:
                         logger.error(f"WB API {response.status_code} request body: {request_body_str[:2000]}")
                 except Exception:
                     error_msg = response.text or error_msg
+                if response.status_code == 408 or response.status_code >= 500:
+                    raise WBTransportUncertainException(
+                        error_msg,
+                        request_may_have_been_applied=(
+                            str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                        ),
+                    )
                 raise WBAPIException(error_msg)
 
             return response
@@ -497,24 +512,48 @@ class WildberriesAPIClient:
                 except Exception as log_error:
                     logger.warning(f"Failed to log timeout to DB: {log_error}")
 
-            raise WBAPIException(f"Timeout при запросе к API ({self.timeout}s). Попробуйте позже.")
+            raise WBTransportUncertainException(
+                f"Timeout при запросе к API ({self.timeout}s). Попробуйте позже.",
+                request_may_have_been_applied=(
+                    str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                ),
+            )
         except requests.exceptions.SSLError as e:
             logger.error(f"SSL error for {url}: {e}")
-            raise WBAPIException(f"Ошибка SSL соединения: {str(e)}. Проверьте сетевое подключение.")
+            raise WBTransportUncertainException(
+                f"Ошибка SSL соединения: {str(e)}. Проверьте сетевое подключение.",
+                request_may_have_been_applied=(
+                    str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                ),
+            )
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Connection error for {url}: {e}")
             error_msg = str(e)
+            request_may_have_been_applied = (
+                str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+            )
             if "Name or service not known" in error_msg or "getaddrinfo failed" in error_msg:
-                raise WBAPIException("Не удалось разрешить имя хоста API Wildberries. Проверьте интернет-соединение.")
+                message = "Не удалось разрешить имя хоста API Wildberries. Проверьте интернет-соединение."
+                request_may_have_been_applied = False
             elif "Connection refused" in error_msg:
-                raise WBAPIException("Подключение отклонено сервером API Wildberries. Проверьте URL и доступность API.")
+                message = "Подключение отклонено сервером API Wildberries. Проверьте URL и доступность API."
+                request_may_have_been_applied = False
             else:
-                raise WBAPIException(f"Ошибка соединения с API Wildberries: {error_msg}")
+                message = f"Ошибка соединения с API Wildberries: {error_msg}"
+            raise WBTransportUncertainException(
+                message,
+                request_may_have_been_applied=request_may_have_been_applied,
+            )
         except (WBAuthException, WBRateLimitException, WBAPIException):
             raise
         except Exception as e:
             logger.exception(f"Unexpected error for {url}: {e}")
-            raise WBAPIException(f"Неожиданная ошибка: {str(e)}")
+            raise WBTransportUncertainException(
+                f"Неожиданная ошибка: {str(e)}",
+                request_may_have_been_applied=(
+                    str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                ),
+            )
 
     # ==================== CONTENT API ====================
 
@@ -889,6 +928,10 @@ class WildberriesAPIClient:
                 card = self.get_card_by_nm_id(nm_id, log_to_db=log_to_db, seller_id=seller_id)
                 if card and card.get('sizes'):
                     sizes_map[nm_id] = card['sizes']
+            except WBTransportUncertainException:
+                # Reference freshness failed at transport level. Do not hide
+                # it as a merely missing size snapshot.
+                raise
             except Exception as e:
                 logger.warning(f"⚠️ Failed to fetch sizes for nmID={nm_id}: {e}")
 
@@ -1228,6 +1271,16 @@ class WildberriesAPIClient:
                         'before': before,
                         'after': after,
                     }
+            except (
+                WBTransportUncertainException,
+                WBAuthException,
+                WBRateLimitException,
+            ):
+                # A timeout/5xx during a write cannot be bisected safely: WB
+                # may already be applying the original chunk. Auth/rate-limit
+                # errors are batch-wide and immediate bisection only creates a
+                # retry storm.
+                raise
             except Exception as e:
                 result['requests'] += 1
                 if len(chunk) == 1:
@@ -2406,6 +2459,10 @@ class WildberriesAPIClient:
                 if card.get('nmID') == nm_id:
                     return card
             return None
+        except WBTransportUncertainException:
+            # A failed read means "unknown", not "card is missing". Let the
+            # caller distinguish a safe pre-write failure from WB absence.
+            raise
         except Exception as e:
             logger.error(f"Failed to get card by nmID={nm_id}: {e}")
             return None

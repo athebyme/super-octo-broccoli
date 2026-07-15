@@ -3,7 +3,7 @@
 {% block title %}ИИ-помощник — Seller Hub{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='agent-chat.css', v='20260713-4') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='agent-chat.css', v='20260715-image1') }}">
 {% endblock %}
 
 {% block content %}
@@ -171,19 +171,29 @@
                             <template x-if="message.kind === 'run'">
                                 <div class="agent-run-card">
                                     <div class="agent-run-row">
-                                        <span class="agent-run-icon" :class="'is-' + (message.metadata.status || 'queued')">
-                                            <svg x-show="message.metadata.status === 'completed'" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg>
-                                            <svg x-show="message.metadata.status === 'failed'" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
-                                            <svg x-show="!['completed','failed'].includes(message.metadata.status)" viewBox="0 0 24 24"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.6 5.6l2.8 2.8m7.2 7.2l2.8 2.8M18.4 5.6l-2.8 2.8m-7.2 7.2l-2.8 2.8"/></svg>
+                                        <span class="agent-run-icon" :class="'is-' + runDisplayStatus(message)">
+                                            <svg x-show="runDisplayStatus(message) === 'completed'" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></svg>
+                                            <svg x-show="runDisplayStatus(message) === 'partial'" viewBox="0 0 24 24"><path d="M12 7v6m0 4h.01M4 19h16L12 4 4 19z"/></svg>
+                                            <svg x-show="runDisplayStatus(message) === 'failed'" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
+                                            <svg x-show="!['completed','partial','failed'].includes(runDisplayStatus(message))" viewBox="0 0 24 24"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.6 5.6l2.8 2.8m7.2 7.2l2.8 2.8M18.4 5.6l-2.8 2.8m-7.2 7.2l-2.8 2.8"/></svg>
                                         </span>
                                         <div>
-                                            <strong x-text="statusLabel(message.metadata.status)"></strong>
+                                            <strong x-text="statusLabel(runDisplayStatus(message))"></strong>
                                             <p x-text="message.content"></p>
                                         </div>
                                         <span class="agent-duration" x-show="message.metadata.duration_seconds" x-text="formatDuration(message.metadata.duration_seconds)"></span>
                                     </div>
                                     <div class="agent-progress" x-show="['queued','running'].includes(message.metadata.status)">
                                         <span :style="`width:${message.metadata.progress_percent || 4}%`"></span>
+                                    </div>
+                                    <div class="agent-run-failures" x-show="runFailures(message).length">
+                                        <strong>Не удалось обработать</strong>
+                                        <template x-for="failure in runFailures(message)" :key="`${failure.product_id}-${failure.code}`">
+                                            <p>
+                                                <span x-text="failure.product_id ? `#${failure.product_id}` : 'Карточка'"></span>
+                                                <span x-text="failure.error"></span>
+                                            </p>
+                                        </template>
                                     </div>
                                     <div class="agent-artifacts" x-show="runArtifacts(message).length">
                                         <template x-for="(artifact, artifactIndex) in runArtifacts(message)" :key="`${artifact.entity_kind || artifact.type}-${artifact.id}-${artifactIndex}`">
@@ -250,7 +260,41 @@
                                                         </div>
                                                     </article>
                                                 </template>
-                                                <template x-if="artifact.type !== 'collection'">
+                                                <template x-if="artifact.type === 'image_generation'">
+                                                    <article class="agent-image-artifact">
+                                                        <a class="agent-image-preview"
+                                                           :href="artifact.has_final ? artifact.image_url : (artifact.lab_url || artifact.url)"
+                                                           target="_blank"
+                                                           rel="noopener">
+                                                            <template x-if="artifact.has_final && artifact.image_url">
+                                                                <img :src="artifact.image_url" :alt="artifact.scene_title || artifact.title || 'Сгенерированное фото товара'" loading="lazy">
+                                                            </template>
+                                                            <template x-if="!artifact.has_final || !artifact.image_url">
+                                                                <span class="agent-image-placeholder" aria-hidden="true">
+                                                                    <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 10h.01M4 16l4-4 3 3 2-2 7 5M12 3v4m-2-2h4"/></svg>
+                                                                    <small x-text="imageArtifactStatusLabel(artifact)"></small>
+                                                                </span>
+                                                            </template>
+                                                            <span class="agent-image-status" :class="imageArtifactStatusClass(artifact)" x-text="imageArtifactStatusLabel(artifact)"></span>
+                                                        </a>
+                                                        <div class="agent-image-copy">
+                                                            <span class="agent-image-eyebrow">AI-фотостудия</span>
+                                                            <strong x-text="artifact.scene_title || artifact.title || 'Новая сцена товара'"></strong>
+                                                            <p x-text="`${artifact.prompt_model || 'Gemini Flash'} → ${artifact.model || 'Nano Banana 2 Lite'}`"></p>
+                                                            <div class="agent-image-tags">
+                                                                <span x-text="imageArtifactCostLabel(artifact)"></span>
+                                                                <span>Ручная проверка</span>
+                                                                <span x-show="artifact.reference_used">Стиль из референса</span>
+                                                            </div>
+                                                            <p class="agent-image-note" x-show="artifact.error" x-text="artifact.error"></p>
+                                                            <div class="agent-image-actions">
+                                                                <a x-show="artifact.has_final && artifact.image_url" :href="artifact.image_url" target="_blank" rel="noopener">Открыть фото</a>
+                                                                <a :href="artifact.lab_url || artifact.url || '/image-lab'">В Фотостудию</a>
+                                                            </div>
+                                                        </div>
+                                                    </article>
+                                                </template>
+                                                <template x-if="!['collection', 'image_generation'].includes(artifact.type)">
                                                     <article class="agent-artifact">
                                                         <a :href="artifact.url" class="agent-artifact-head">
                                                             <span class="agent-artifact-icon">
@@ -362,8 +406,8 @@
         <template x-if="run">
             <div class="agent-inspector-content">
                 <section class="agent-run-summary">
-                    <div class="agent-run-summary-head"><strong x-text="run.title"></strong><span :class="'is-' + run.status" x-text="statusLabel(run.status)"></span></div>
-                    <div class="agent-progress is-large"><span :style="`width:${run.progress_percent || (run.status === 'completed' ? 100 : 4)}%`"></span></div>
+                    <div class="agent-run-summary-head"><strong x-text="run.title"></strong><span :class="'is-' + runDisplayStatus(run)" x-text="statusLabel(runDisplayStatus(run))"></span></div>
+                    <div class="agent-progress is-large"><span :style="`width:${run.progress_percent || (['completed','partial'].includes(runDisplayStatus(run)) ? 100 : 4)}%`"></span></div>
                     <p x-text="run.current_step_label || 'Ожидание следующего шага'"></p>
                     <div class="agent-run-facts">
                         <span><small>Время</small><strong x-text="formatDuration(run.duration_seconds || 0)"></strong></span>
@@ -443,5 +487,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='agent-chat.js', v='20260713-4') }}"></script>
+<script src="{{ url_for('static', filename='agent-chat.js', v='20260715-image1') }}"></script>
 {% endblock %}

@@ -106,12 +106,34 @@ def category_detail(category_id):
         )
         for charc in characteristics
     }
+    characteristic_constraints = {}
+    try:
+        from services.marketplace_validator import (
+            get_wb_characteristic_constraint,
+            prime_wb_characteristic_directory_cache,
+        )
+        constraint_cache = {}
+        prime_wb_characteristic_directory_cache(
+            category.marketplace, characteristics, constraint_cache,
+        )
+        characteristic_constraints = {
+            charc.id: get_wb_characteristic_constraint(
+                category.marketplace, charc, constraint_cache,
+            )
+            for charc in characteristics
+        }
+    except Exception:
+        current_app.logger.exception(
+            'Failed to render effective WB constraints for category_id=%s',
+            category_id,
+        )
 
     return render_template(
         'admin_marketplace_category_detail.html',
         category=category,
         characteristics=characteristics,
         characteristic_allowlists=characteristic_allowlists,
+        characteristic_constraints=characteristic_constraints,
     )
 
 

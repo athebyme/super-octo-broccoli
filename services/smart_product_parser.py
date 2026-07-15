@@ -1811,37 +1811,9 @@ class CharacteristicsValidator:
                 }
             return {'status': 'valid'}
 
-        # Fuzzy match
-        from difflib import SequenceMatcher
-        best_match = None
-        best_ratio = 0.0
-
-        for dict_val in dictionary:
-            ratio = SequenceMatcher(
-                None, value_lower, dict_val.lower()
-            ).ratio()
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_match = dict_val
-
-        if best_ratio >= CharacteristicsValidator.FUZZY_THRESHOLD:
-            return {
-                'status': 'corrected',
-                'corrected': best_match,
-                'error': (
-                    f'Автозамена: "{value_clean}" → "{best_match}" '
-                    f'(совпадение {best_ratio:.0%})'
-                ),
-            }
-
         return {
             'status': 'invalid',
-            'error': (
-                f'Значение "{value_clean}" не найдено в справочнике. '
-                f'Ближайшее: "{best_match}" ({best_ratio:.0%})'
-                if best_match
-                else f'Значение "{value_clean}" не найдено в справочнике'
-            ),
+            'error': f'Значение "{value_clean}" не найдено в справочнике',
         }
 
     @staticmethod

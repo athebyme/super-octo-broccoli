@@ -17,8 +17,13 @@
 import unittest
 from unittest.mock import MagicMock
 
+import requests
+
 from services.brand_cache import BrandCache
-from services.wb_api_client import WildberriesAPIClient, WBRateLimitException
+from services.wb_api_client import (
+    WildberriesAPIClient, WBRateLimitException,
+    WBTransportUncertainException,
+)
 
 
 class TestPerEndpointLimiters(unittest.TestCase):
@@ -138,6 +143,19 @@ class TestRateLimit429RetryAfter(unittest.TestCase):
         with self.assertRaises(WBRateLimitException) as ctx:
             client._make_request('POST', 'statistics', '/test', json={})
         self.assertEqual(ctx.exception.retry_after, 7)
+
+    def test_transport_timeout_marks_only_write_as_possibly_applied(self):
+        client = WildberriesAPIClient('transport-classification-token')
+        client.session = MagicMock()
+        client.session.request.side_effect = requests.exceptions.Timeout('late')
+
+        with self.assertRaises(WBTransportUncertainException) as write_ctx:
+            client._make_request('POST', 'statistics', '/transport-test', json={})
+        self.assertTrue(write_ctx.exception.request_may_have_been_applied)
+
+        with self.assertRaises(WBTransportUncertainException) as read_ctx:
+            client._make_request('GET', 'statistics', '/transport-test')
+        self.assertFalse(read_ctx.exception.request_may_have_been_applied)
 
 
 class TestBrandCursorPagination(unittest.TestCase):

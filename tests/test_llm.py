@@ -12,6 +12,7 @@ from agents.llm import (
     BaseLLM, llm_retry, llm_retry_attempt_limit,
     _extract_json_from_text, create_llm_from_profile,
     _extract_openai_usage, _safe_base_url_for_log, DeepSeekLLM, OpenAICompatLLM,
+    OpenRouterLLM, LLMProviderError,
 )
 
 
@@ -150,6 +151,51 @@ class TestLLMRetry:
         with pytest.raises(ValueError):
             with llm_retry_attempt_limit(value):
                 pass
+
+
+class TestOpenRouterProxy:
+    def test_explicit_socks_proxy_is_passed_only_as_http_client(
+            self, monkeypatch):
+        import httpx
+        import openai
+
+        captured = {}
+        marker = object()
+
+        def fake_http_client(**kwargs):
+            captured['httpx'] = kwargs
+            return marker
+
+        def fake_openai(**kwargs):
+            captured['openai'] = kwargs
+            return SimpleNamespace()
+
+        monkeypatch.setattr(httpx, 'Client', fake_http_client)
+        monkeypatch.setattr(openai, 'OpenAI', fake_openai)
+        cfg = SimpleNamespace(
+            OPENROUTER_API_KEY='test-secret',
+            OPENROUTER_MODEL='google/gemini-2.5-flash',
+            AI_PROXY='socks5://proxy.local:1080',
+        )
+
+        OpenRouterLLM(cfg)
+
+        assert captured['httpx']['proxy'] == 'socks5://proxy.local:1080'
+        assert captured['openai']['http_client'] is marker
+        assert 'proxy.local' not in captured['openai']['default_headers'].values()
+
+    @pytest.mark.parametrize('proxy', [
+        'ftp://proxy.local:21', 'socks5://', 'not-a-url',
+    ])
+    def test_invalid_proxy_is_rejected_before_client_creation(self, proxy):
+        cfg = SimpleNamespace(
+            OPENROUTER_API_KEY='test-secret',
+            OPENROUTER_MODEL='google/gemini-2.5-flash',
+            AI_PROXY=proxy,
+        )
+
+        with pytest.raises(LLMProviderError, match='AI_PROXY'):
+            OpenRouterLLM(cfg)
 
 
 class TestCompatibilityUsage:
@@ -337,3 +383,44 @@ class TestPromptCacheUsage:
         assert calls[0]['messages'][1]['content'] == 'dynamic request one'
         assert calls[1]['messages'][1]['content'] == 'dynamic request two'
         assert 'dynamic request' not in calls[0]['messages'][0]['content']
+
+    def test_multimodal_structured_output_keeps_reference_out_of_system_prefix(self):
+        calls = []
+
+        class Completions:
+            def create(self, **kwargs):
+                calls.append(kwargs)
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(
+                        message=SimpleNamespace(content='{"scene":"cyan studio"}'),
+                    )],
+                    usage=SimpleNamespace(prompt_tokens=80, completion_tokens=12),
+                )
+
+        provider = object.__new__(OpenAICompatLLM)
+        provider.model = 'google/gemini-2.5-flash'
+        provider.base_url = 'https://openrouter.ai/api/v1'
+        provider.cfg = SimpleNamespace(TEMPERATURE=0.1, MAX_TOKENS=256)
+        provider.client = SimpleNamespace(
+            chat=SimpleNamespace(completions=Completions()),
+        )
+        schema = {
+            'type': 'object',
+            'properties': {'scene': {'type': 'string'}},
+            'required': ['scene'],
+        }
+        reference = 'https://cdn.example.test/reference.webp'
+
+        result = provider.structured_output_multimodal_with_usage(
+            'stable system', 'inspect style only', schema,
+            image_urls=[reference], max_tokens=64,
+        )
+
+        assert result['data'] == {'scene': 'cyan studio'}
+        assert result['usage']['api_requests'] == 1
+        assert reference not in calls[0]['messages'][0]['content']
+        content = calls[0]['messages'][1]['content']
+        assert content[0] == {'type': 'text', 'text': 'inspect style only'}
+        assert content[1] == {
+            'type': 'image_url', 'image_url': {'url': reference},
+        }

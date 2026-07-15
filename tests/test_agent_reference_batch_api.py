@@ -344,6 +344,43 @@ class AgentReferenceBatchApiTest(unittest.TestCase):
             results[1]['reference_status']['reason'], 'category_disabled',
         )
 
+    def test_characteristic_value_search_returns_only_canonical_global_values(self):
+        response = self.client.post(
+            '/internal/v1/categories/characteristic-values/search-batch',
+            headers=self.auth,
+            json={'queries': [{
+                'subject_id': 1001,
+                'charc_id': 2001,
+                'query': 'крас',
+            }]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()['results'][0]
+        self.assertTrue(result['usable'])
+        self.assertTrue(result['constrained'])
+        self.assertEqual(result['source'], 'colors')
+        self.assertEqual(result['values'], ['Красный'])
+        self.assertEqual(result['query'], 'крас')
+
+        duplicate = self.client.post(
+            '/internal/v1/categories/characteristic-values/search-batch',
+            headers=self.auth,
+            json={'queries': [
+                {'subject_id': 1001, 'charc_id': 2001, 'query': 'крас'},
+                {'subject_id': 1001, 'charc_id': 2001, 'query': 'КРАС'},
+            ]},
+        )
+        invalid_id = self.client.post(
+            '/internal/v1/categories/characteristic-values/search-batch',
+            headers=self.auth,
+            json={'queries': [{
+                'subject_id': True, 'charc_id': 2001, 'query': 'крас',
+            }]},
+        )
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertEqual(invalid_id.status_code, 400)
+
     def test_batch_inputs_are_strict_and_authenticated(self):
         endpoints = (
             ('/internal/v1/categories/search-batch', {'queries': ['одежда']}),

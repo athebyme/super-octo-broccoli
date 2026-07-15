@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """Seller-scoped experiment runner for product scenes and novel-view research.
 
-In the default mode a provider sees a locally prepared composition plus
-optional identity references.  The returned pixels are never trusted as the
-product source of truth: original RGB is restored locally before the final is
-shown.  The isolated ``angle_synthesis`` strategy deliberately cannot make that
-guarantee and is therefore never auto-publishable.  Every run is persisted
-before external work starts.
+``background_only`` is the pixel-preserving boundary: the provider creates an
+empty scene and the original foreground is composited exactly once locally.
+Masked ``reference_guided`` and raw-photo ``native_scene`` edits use the provider
+output directly, without a second foreground layer, and therefore always need
+human identity review.  The isolated ``angle_synthesis`` strategy additionally
+synthesizes hidden geometry.  Every run is persisted before external work starts.
 """
 
 from __future__ import annotations
@@ -40,6 +40,8 @@ from services.infographic_prompts import (
     build_background_prompt_for_scene,
     build_edit_prompt,
     build_edit_prompt_for_scene,
+    build_native_scene_prompt,
+    build_native_scene_prompt_for_scene,
     sanitize_prompt,
 )
 from services.infographic_quality import (
@@ -52,13 +54,19 @@ from services.infographic_quality import (
     evaluate_background_text,
     evaluate_final_image,
 )
+from agents.image_chat_contract import (
+    CHAT_IMAGE_BACKEND,
+    CHAT_IMAGE_COST_RUB,
+    CHAT_IMAGE_MODEL,
+    CHAT_IMAGE_RESOLUTION,
+)
 
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 ACTIVE_STATUSES = frozenset({"queued", "running", "remote_running", "finalizing"})
 PROCESSING_STATUSES = frozenset({"running", "remote_running", "finalizing"})
 GENERATION_MODES = frozenset({"single", "each", "reference_set", "collage", "angles"})
 GENERATION_STRATEGIES = frozenset({
-    "reference_guided", "background_only", "angle_synthesis",
+    "reference_guided", "background_only", "native_scene", "angle_synthesis",
 })
 PHOTO_ROLES = frozenset({"angle", "packaging", "detail"})
 MAX_SELECTED_PHOTOS = 10
@@ -105,19 +113,59 @@ RATING_TAGS = frozenset({
     "other",
 })
 BACKENDS = {
+    "openrouter": {
+        "label": "OpenRouter",
+        "visible": True,
+        "accept_new": True,
+        "models": {
+            "google/gemini-3.1-flash-lite-image": {
+                "label": "Nano Banana 2 Lite",
+                "cost_rub": 3.30,
+                "resolution": "1K",
+                "max_references": 10,
+                "supported_strategies": frozenset({
+                    "background_only", "native_scene", "angle_synthesis",
+                }),
+            },
+            "google/gemini-3.1-flash-image": {
+                "label": "Nano Banana 2",
+                "cost_rub": 8.50,
+                "resolution": "2K",
+                "max_references": 10,
+                "supported_strategies": frozenset({
+                    "background_only", "native_scene", "angle_synthesis",
+                }),
+            },
+            "x-ai/grok-imagine-image-quality": {
+                "label": "Grok Imagine Quality",
+                "cost_rub": 8.50,
+                "resolution": "2K",
+                "max_references": 3,
+                "supported_strategies": frozenset({
+                    "background_only", "native_scene", "angle_synthesis",
+                }),
+            },
+        },
+    },
     "gpu": {
         "label": "GPU · Qwen Image 2512",
+        "visible": False,
+        "accept_new": False,
         "models": {"qwen-image-2512": 1.0},
         "reference_models": frozenset(),
     },
     "gen_api": {
         "label": "Gen-API",
+        "visible": False,
+        "accept_new": False,
         "models": {"flux-2": 3.3},
         "reference_models": frozenset({"flux-2"}),
     },
     "aitunnel": {
         "label": "AITunnel",
-        "models": {"gpt-image-2": 1.53, "seedream-4.5": 6.8},
+        "visible": False,
+        "accept_new": False,
+        "models": {"gpt-image-2": 32.13, "seedream-4.5": 6.8},
         "reference_models": frozenset({"gpt-image-2", "seedream-4.5"}),
     },
 }
@@ -156,6 +204,8 @@ def json_load(raw: Optional[str], fallback: Any) -> Any:
 
 def _model_cost(backend: str, model: str) -> float:
     configured = BACKENDS[backend]["models"][model]
+    if isinstance(configured, dict):
+        configured = configured["cost_rub"]
     if backend != "gpu":
         return float(configured)
     try:
@@ -166,6 +216,8 @@ def _model_cost(backend: str, model: str) -> float:
 
 
 def _backend_enabled(backend: str) -> bool:
+    if backend == "openrouter":
+        return bool(os.environ.get("OPENROUTER_API_KEY"))
     if backend == "gpu":
         url = os.environ.get("GPU_IMAGE_SERVER_URL", "")
         token = os.environ.get("GPU_IMAGE_SERVER_TOKEN", "")
@@ -184,6 +236,64 @@ def _backend_enabled(backend: str) -> bool:
     return False
 
 
+def aitunnel_balance_rub() -> Optional[float]:
+    """Best-effort provider balance without exposing the server-side key."""
+    key = os.environ.get("AITUNNEL_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        response = requests.get(
+            "https://api.aitunnel.ru/v1/aitunnel/balance",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=5,
+        )
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        balance = payload.get("balance") if isinstance(payload, dict) else None
+        if isinstance(balance, bool) or not isinstance(balance, (int, float)):
+            return None
+        return max(0.0, float(balance))
+    except (requests.RequestException, TypeError, ValueError):
+        return None
+
+
+def openrouter_balance_usd() -> Optional[float]:
+    """Best-effort account credit balance through the configured image proxy."""
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        return None
+    proxy_url = (
+        os.environ.get("IMAGE_GEN_PROXY")
+        or os.environ.get("AI_PROXY")
+        or os.environ.get("HTTPS_PROXY")
+    )
+    proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+    try:
+        response = requests.get(
+            "https://openrouter.ai/api/v1/credits",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=5,
+            proxies=proxies,
+        )
+        if response.status_code != 200:
+            return None
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            return None
+        total = data.get("total_credits")
+        used = data.get("total_usage")
+        if (
+            isinstance(total, bool) or not isinstance(total, (int, float))
+            or isinstance(used, bool) or not isinstance(used, (int, float))
+        ):
+            return None
+        return max(0.0, float(total) - float(used))
+    except (requests.RequestException, TypeError, ValueError):
+        return None
+
+
 def capabilities() -> Dict[str, Any]:
     return {
         "backends": [
@@ -194,13 +304,39 @@ def capabilities() -> Dict[str, Any]:
                 "models": [
                     {
                         "id": model,
+                        "label": (
+                            details.get("label", model)
+                            if isinstance(details, dict) else model
+                        ),
                         "cost_rub": _model_cost(key, model),
-                        "supports_reference": model in value["reference_models"],
+                        "resolution": (
+                            details.get("resolution")
+                            if isinstance(details, dict) else None
+                        ),
+                        "max_references": (
+                            details.get("max_references", 0)
+                            if isinstance(details, dict)
+                            else (10 if model in value.get("reference_models", ()) else 0)
+                        ),
+                        "supported_strategies": sorted(
+                            details.get("supported_strategies", {"background_only"})
+                            if isinstance(details, dict)
+                            else (
+                                GENERATION_STRATEGIES
+                                if model in value.get("reference_models", ())
+                                else {"background_only"}
+                            )
+                        ),
+                        "supports_reference": (
+                            "native_scene" in details.get("supported_strategies", ())
+                            if isinstance(details, dict)
+                            else model in value.get("reference_models", ())
+                        ),
                     }
-                    for model in value["models"]
+                    for model, details in value["models"].items()
                 ],
             }
-            for key, value in BACKENDS.items()
+            for key, value in BACKENDS.items() if value.get("visible", True)
         ],
         "scenes": [
             {
@@ -215,11 +351,17 @@ def capabilities() -> Dict[str, Any]:
             for key, value in ANGLE_VIEWS.items()
         ],
         "policy": {
-            "default_model_input": "reference_guided",
+            "default_target": {
+                "backend": CHAT_IMAGE_BACKEND,
+                "model": CHAT_IMAGE_MODEL,
+            },
+            "default_model_input": "native_scene",
             "available_model_inputs": [
-                "reference_guided", "background_only", "angle_synthesis",
+                "background_only", "native_scene", "angle_synthesis",
             ],
-            "foreground": "original_rgb_local_composite",
+            "background_only": "original_rgb_single_local_composite",
+            "reference_guided": "masked_edit_no_local_recomposite",
+            "native_scene": "raw_photo_edit_no_mask_provider_default_fidelity_human_review",
             "angle_synthesis": "research_only_human_review",
             "text": "deterministic_overlay_only",
             "target_size": [900, 1200],
@@ -230,7 +372,7 @@ def capabilities() -> Dict[str, Any]:
 def build_experiment_prompt(
     scene_key: str,
     custom_scene: str = "",
-    generation_strategy: str = "reference_guided",
+    generation_strategy: str = "native_scene",
 ) -> str:
     if scene_key not in ATMOSPHERE_PRESETS:
         raise ImageLabError("Неизвестная сцена")
@@ -240,6 +382,8 @@ def build_experiment_prompt(
     if not scene:
         if generation_strategy == "reference_guided":
             return build_edit_prompt(scene_key)
+        if generation_strategy == "native_scene":
+            return build_native_scene_prompt(scene_key)
         if generation_strategy == "angle_synthesis":
             return build_angle_prompt(scene_key)
         return build_background_prompt(scene_key)
@@ -251,6 +395,8 @@ def build_experiment_prompt(
         )
     if generation_strategy == "reference_guided":
         return build_edit_prompt_for_scene(scene)
+    if generation_strategy == "native_scene":
+        return build_native_scene_prompt_for_scene(scene)
     if generation_strategy == "angle_synthesis":
         return build_angle_prompt_for_scene(scene)
     return build_background_prompt_for_scene(scene)
@@ -260,15 +406,32 @@ def validate_target(
     backend: str,
     model: str,
     generation_strategy: str = "background_only",
+    reference_count: int = 1,
 ) -> float:
     config = BACKENDS.get(backend)
     if not config or model not in config["models"]:
         raise ImageLabError("Неподдерживаемый backend/model")
-    if (
-        generation_strategy in {"reference_guided", "angle_synthesis"}
-        and model not in config["reference_models"]
-    ):
-        raise ImageLabError(f"{backend}/{model} не принимает фото-референсы")
+    if not config.get("accept_new", True):
+        raise ImageLabError(f"Backend {backend} временно скрыт для новых запусков")
+    details = config["models"][model]
+    strategies = (
+        details.get("supported_strategies", {"background_only"})
+        if isinstance(details, dict)
+        else (
+            GENERATION_STRATEGIES
+            if model in config.get("reference_models", ())
+            else {"background_only"}
+        )
+    )
+    if generation_strategy not in strategies:
+        raise ImageLabError(
+            f"{backend}/{model} не поддерживает стратегию {generation_strategy}"
+        )
+    max_references = details.get("max_references", 0) if isinstance(details, dict) else 0
+    if generation_strategy != "background_only" and reference_count > max_references:
+        raise ImageLabError(
+            f"{backend}/{model} принимает не более {max_references} фото-референсов"
+        )
     if not _backend_enabled(backend):
         raise ImageLabError(f"Backend {backend} не настроен")
     return _model_cost(backend, model)
@@ -503,6 +666,36 @@ def _reference_instructions(
     )
 
 
+def _native_scene_instructions(
+    mode: str,
+    indices: List[int],
+    primary_index: int,
+    roles: Dict[str, str],
+) -> str:
+    ordered = [primary_index] + [value for value in indices if value != primary_index]
+    manifest = [
+        f"input {input_number}=photo {photo_index + 1}, role={roles[str(photo_index)]}"
+        for input_number, photo_index in enumerate(ordered, start=1)
+    ]
+    if mode == "reference_set":
+        return (
+            " The first input is the primary catalog photo whose product must be integrated "
+            "natively into the new scene exactly once. All remaining inputs are identity "
+            "evidence for the same SKU only. A role=packaging or role=detail input must never "
+            "become another object. Replace the primary photo background and do not preserve "
+            "a second copy at its old position. Reference manifest: "
+            + "; ".join(manifest)
+            + "."
+        )
+    return (
+        " The first input is the primary catalog photo. Replace its environment and integrate "
+        "exactly one product instance naturally into the requested scene. Do not retain a "
+        "second product copy from the source background. Reference manifest: "
+        + "; ".join(manifest)
+        + "."
+    )
+
+
 def _angle_synthesis_instructions(
     requested_view: str,
     indices: List[int],
@@ -554,14 +747,15 @@ def create_experiments(
     targets: Iterable[Dict[str, str]],
     photo_indices: Optional[Iterable[int]] = None,
     generation_mode: str = "single",
-    generation_strategy: str = "reference_guided",
+    generation_strategy: str = "native_scene",
     primary_photo_index: Optional[int] = None,
     photo_roles: Any = None,
-    include_product_context: bool = True,
+    include_product_context: bool = False,
     watermark: Any = None,
     overlay: Any = None,
     additional_prompt: str = "",
     requested_views: Any = None,
+    commit: bool = True,
 ) -> List[ImageGenerationExperiment]:
     product = ImportedProduct.query.filter_by(id=product_id, seller_id=seller_id).first()
     if not product:
@@ -585,8 +779,12 @@ def create_experiments(
         raise ImageLabError("Для режима «Одно фото» выберите ровно одно фото")
     if generation_mode in ("reference_set", "collage") and len(selected) < 2:
         raise ImageLabError("Для общего макета выберите минимум два фото")
-    if generation_mode == "reference_set" and generation_strategy != "reference_guided":
-        raise ImageLabError("Режим «Учесть все» требует передачи фото модели")
+    if generation_mode == "reference_set" and generation_strategy not in {
+        "reference_guided", "native_scene",
+    }:
+        raise ImageLabError("Режим «Учесть все» требует masked или native передачи фото")
+    if generation_mode == "collage" and generation_strategy == "native_scene":
+        raise ImageLabError("Нативный режим недоступен для общего макета")
     if generation_mode == "angles" and generation_strategy != "angle_synthesis":
         raise ImageLabError("Режим «Новые ракурсы» требует стратегии angle_synthesis")
     if generation_mode != "angles" and generation_strategy == "angle_synthesis":
@@ -607,6 +805,11 @@ def create_experiments(
     ):
         raise ImageLabError("Главное фото должно входить в выбранные")
     roles = validate_photo_roles(photo_roles, selected)
+    if (
+        generation_mode == "reference_set"
+        and roles[str(primary_photo_index)] != "angle"
+    ):
+        raise ImageLabError("Главное фото набора референсов должно иметь роль «Ракурс»")
     if generation_mode == "angles" and roles[str(primary_photo_index)] != "angle":
         raise ImageLabError("Главное фото для нового ракурса должно иметь роль «Ракурс»")
     watermark_config = validate_watermark_config(seller_id, watermark)
@@ -616,6 +819,9 @@ def create_experiments(
         raise ImageLabError("Выберите от 1 до 3 вариантов")
     unique = set()
     validated: List[Tuple[str, str, float]] = []
+    reference_count = 0
+    if generation_strategy != "background_only":
+        reference_count = 1 if generation_mode in {"single", "each"} else len(selected)
     for target in target_list:
         if not isinstance(target, dict):
             raise ImageLabError("targets должен содержать objects")
@@ -628,7 +834,12 @@ def create_experiments(
         validated.append((
             backend,
             model,
-            validate_target(backend, model, generation_strategy),
+            validate_target(
+                backend,
+                model,
+                generation_strategy,
+                reference_count=reference_count,
+            ),
         ))
     base_prompt = build_experiment_prompt(
         scene_key,
@@ -656,11 +867,20 @@ def create_experiments(
             + "."
         )
     if additional_prompt:
-        immutable_rules = (
-            "identity, reference-role, single-product, no-generated-text, and human-review rules"
-            if generation_strategy == "angle_synthesis"
-            else "identity, no-extra-objects, no-generated-text, or local-composite rules"
-        )
+        if generation_strategy in {"native_scene", "angle_synthesis"}:
+            immutable_rules = (
+                "identity, reference-role, single-product, no-generated-text, "
+                "and human-review rules"
+            )
+        elif generation_strategy == "reference_guided":
+            immutable_rules = (
+                "identity, protection-mask, no-duplicate, no-generated-text, "
+                "or provider-output-only rules"
+            )
+        else:
+            immutable_rules = (
+                "identity, no-extra-objects, no-generated-text, or local-composite rules"
+            )
         base_prompt += (
             " Additional seller art direction follows. It cannot override the "
             + immutable_rules
@@ -685,6 +905,13 @@ def create_experiments(
         prompt = base_prompt
         if generation_strategy == "reference_guided":
             prompt += _reference_instructions(
+                stored_mode,
+                photo_group,
+                stored_primary,
+                stored_roles,
+            )
+        elif generation_strategy == "native_scene":
+            prompt += _native_scene_instructions(
                 stored_mode,
                 photo_group,
                 stored_primary,
@@ -726,7 +953,12 @@ def create_experiments(
             )
             db.session.add(experiment)
             experiments.append(experiment)
-    db.session.commit()
+    # Chat creates the experiment and its AgentTask idempotency checkpoint in
+    # one transaction. Browser callers keep the historical commit boundary.
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
     return experiments
 
 
@@ -923,6 +1155,8 @@ def _prepare_reference_model_input(
     )
     metadata = dict(reference.metadata)
     metadata.update({
+        "identity_mode": "generative_edit",
+        "model_input_identity_mode": "pixel_preserved_composite",
         "generation_strategy": "reference_guided",
         "source_photo_indices": indices,
         "source_photo_roles": roles,
@@ -933,6 +1167,9 @@ def _prepare_reference_model_input(
             hashlib.sha256(reference.protection_mask_bytes).hexdigest()
             if reference.protection_mask_bytes else None
         ),
+        "protection_mask_used": bool(reference.protection_mask_bytes),
+        "local_foreground_overlay": False,
+        "publishable_by_contract": False,
     })
     source_artifact = (
         _source_contact_sheet(images)
@@ -957,6 +1194,56 @@ def _prepare_reference_model_input(
             image for index, image in zip(indices, images) if index != primary
         ]
     return reference.image_bytes, additional, reference.protection_mask_bytes
+
+
+def _prepare_native_model_input(
+    experiment: ImageGenerationExperiment,
+) -> Tuple[bytes, List[bytes], Optional[bytes]]:
+    _, indices, images, mode, primary, roles = _experiment_sources(experiment)
+    if mode not in {"single", "reference_set"}:
+        raise ImageLabError("Нативный режим поддерживает одно фото или набор референсов")
+    if mode == "reference_set" and roles.get(str(primary)) != "angle":
+        raise ImageLabError("Главный нативный референс должен показывать товар")
+    image_by_index = dict(zip(indices, images))
+    ordered_indices = [primary] + [index for index in indices if index != primary]
+    ordered_images = [image_by_index[index] for index in ordered_indices]
+    for index, image in zip(indices, images):
+        _write_artifact(experiment, f"source_photo_{index}.bin", image)
+    metadata = {
+        "identity_mode": "generative_edit",
+        "generation_strategy": "native_scene",
+        "source_photo_indices": indices,
+        "source_photo_roles": roles,
+        "primary_photo_index": primary,
+        "composition_mode": mode,
+        "reference_manifest": [
+            {"photo_index": index, "role": roles[str(index)]}
+            for index in ordered_indices
+        ],
+        "primary_reference_sha256": hashlib.sha256(ordered_images[0]).hexdigest(),
+        "reference_sha256": [hashlib.sha256(image).hexdigest() for image in ordered_images],
+        "raw_primary_photo_sent": True,
+        "protection_mask_used": False,
+        "provider_input_fidelity": "provider_default",
+        "local_foreground_overlay": False,
+        "publishable_by_contract": False,
+    }
+    source_artifact = (
+        _source_contact_sheet(images) if len(images) > 1 else images[0]
+    )
+    experiment.source_path = _write_artifact(
+        experiment,
+        "source_contact_sheet.png" if len(images) > 1 else "source_original",
+        source_artifact,
+    )
+    experiment.reference_path = _write_artifact(
+        experiment,
+        "native_model_input",
+        ordered_images[0],
+    )
+    experiment.composite_metadata_json = json.dumps(metadata, ensure_ascii=False)
+    db.session.commit()
+    return ordered_images[0], ordered_images[1:], None
 
 
 def _prepare_angle_model_input(
@@ -1025,11 +1312,19 @@ def _generate_provider_output(experiment: ImageGenerationExperiment) -> bytes:
     elif experiment.backend == "aitunnel":
         config.aitunnel_model = experiment.model
         config.aitunnel_edit_model = experiment.model
+    elif experiment.backend == "openrouter":
+        config.openrouter_model = experiment.model
+        details = BACKENDS["openrouter"]["models"].get(experiment.model, {})
+        config.openrouter_resolution = str(
+            details.get("resolution") or CHAT_IMAGE_RESOLUTION
+        )
     service = ImageGenerationService(config)
     strategy = experiment.generation_strategy or "background_only"
-    if strategy in {"reference_guided", "angle_synthesis"}:
+    if strategy in {"reference_guided", "native_scene", "angle_synthesis"}:
         if strategy == "angle_synthesis":
             model_input, additional, protection_mask = _prepare_angle_model_input(experiment)
+        elif strategy == "native_scene":
+            model_input, additional, protection_mask = _prepare_native_model_input(experiment)
         else:
             model_input, additional, protection_mask = _prepare_reference_model_input(experiment)
         success, image_bytes, error = service.edit_image(
@@ -1037,7 +1332,8 @@ def _generate_provider_output(experiment: ImageGenerationExperiment) -> bytes:
             source_image_bytes=model_input,
             additional_source_images=additional,
             mask_bytes=protection_mask,
-            input_fidelity="high",
+            input_fidelity=None if strategy == "native_scene" else "high",
+            quality=None,
             width=900,
             height=1200,
         )
@@ -1246,22 +1542,6 @@ def artifact_path(experiment: ImageGenerationExperiment, kind: str) -> Optional[
     return candidate if candidate.is_file() else None
 
 
-def _remove_protected_region_for_ocr(image_bytes: bytes, mask_bytes: Optional[bytes]) -> bytes:
-    if not mask_bytes:
-        return image_bytes
-    from PIL import Image
-
-    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    mask = Image.open(io.BytesIO(mask_bytes)).convert("RGBA").getchannel("A")
-    if mask.size != image.size:
-        mask = mask.resize(image.size, Image.Resampling.NEAREST)
-    neutral = Image.new("RGB", image.size, "#ece9e3")
-    image.paste(neutral, (0, 0), mask)
-    output = io.BytesIO()
-    image.save(output, format="PNG", optimize=True)
-    return output.getvalue()
-
-
 def _finalize_experiment(
     experiment: ImageGenerationExperiment,
     provider_output_bytes: bytes,
@@ -1275,10 +1555,9 @@ def _finalize_experiment(
     stored_metadata = _json_load(experiment.composite_metadata_json, {})
     if not isinstance(stored_metadata, dict):
         stored_metadata = {}
-    protection_mask = None
-    if strategy == "angle_synthesis":
-        if composition_mode != "angles" or experiment.requested_view not in ANGLE_VIEWS:
-            raise ImageLabError("Не сохранён целевой ракурс")
+    if strategy in {"reference_guided", "native_scene", "angle_synthesis"}:
+        if not stored_metadata and strategy in {"reference_guided", "native_scene"}:
+            raise ImageLabError("Не сохранены metadata входа модели")
         metadata = dict(stored_metadata)
         metadata.update({
             "identity_mode": "generative_edit",
@@ -1289,12 +1568,27 @@ def _finalize_experiment(
             "composition_mode": composition_mode,
             "generation_strategy": strategy,
             "reference_chain_verified": False,
-            "hidden_geometry_synthesized": True,
+            "local_foreground_overlay": False,
             "publishable_by_contract": False,
         })
+        if strategy == "angle_synthesis":
+            if composition_mode != "angles" or experiment.requested_view not in ANGLE_VIEWS:
+                raise ImageLabError("Не сохранён целевой ракурс")
+            metadata["hidden_geometry_synthesized"] = True
+        elif strategy == "native_scene":
+            metadata.update({
+                "raw_primary_photo_sent": True,
+                "protection_mask_used": False,
+                "hidden_geometry_synthesized": False,
+            })
+        else:
+            metadata.update({
+                "masked_reference_input": True,
+                "hidden_geometry_synthesized": False,
+            })
         final_bytes = provider_output
         identity_mode = "generative_edit"
-    else:
+    elif strategy == "background_only":
         composite = _compose_experiment_foreground(
             provider_output,
             source_images,
@@ -1303,22 +1597,6 @@ def _finalize_experiment(
             primary,
             reserve_text_zone=bool(_json_load(experiment.overlay_json, {})),
         )
-        if strategy == "reference_guided":
-            if not stored_metadata:
-                raise ImageLabError("Не сохранены metadata референсного входа")
-            for key in ("rendered_foreground_sha256", "cutout_sha256"):
-                if stored_metadata.get(key) != composite.metadata.get(key):
-                    raise ImageLabError(
-                        "Foreground изменился между model input и финальным композитом"
-                    )
-            reference_placement = (
-                stored_metadata.get("placements") or stored_metadata.get("placement")
-            )
-            final_placement = (
-                composite.metadata.get("placements") or composite.metadata.get("placement")
-            )
-            if reference_placement != final_placement:
-                raise ImageLabError("Placement товара изменился после передачи референса")
         metadata = composite.metadata
         metadata.update({
             "source_photo_indices": source_indices,
@@ -1326,11 +1604,13 @@ def _finalize_experiment(
             "primary_photo_index": primary,
             "composition_mode": composition_mode,
             "generation_strategy": strategy,
-            "reference_chain_verified": strategy == "reference_guided",
+            "reference_chain_verified": False,
+            "local_foreground_overlay": True,
         })
         final_bytes = composite.image_bytes
-        protection_mask = composite.protection_mask_bytes
         identity_mode = "pixel_preserved_composite"
+    else:
+        raise ImageLabError("Неизвестная сохранённая стратегия генерации")
     overlay_config = _json_load(experiment.overlay_json, {})
     expected_texts: List[str] = []
     rendered_texts: List[str] = []
@@ -1367,11 +1647,20 @@ def _finalize_experiment(
         )
 
     metadata["output_sha256"] = hashlib.sha256(final_bytes).hexdigest()
-    ocr_input = _remove_protected_region_for_ocr(
-        provider_output,
-        protection_mask if strategy == "reference_guided" else None,
-    )
-    background_check = evaluate_background_text(ocr_input)
+    if strategy == "background_only":
+        background_check = evaluate_background_text(provider_output)
+    else:
+        full_frame_ocr = evaluate_background_text(provider_output)
+        metadata["full_frame_ocr_diagnostic"] = full_frame_ocr
+        background_check = {
+            "checked": False,
+            "pass": None,
+            "reason": (
+                "Generative scene has no trusted product/background segmentation; "
+                "full-frame OCR is diagnostic and human review is required"
+            ),
+            "diagnostic": full_frame_ocr,
+        }
     quality = evaluate_final_image(
         final_bytes,
         identity_mode=identity_mode,

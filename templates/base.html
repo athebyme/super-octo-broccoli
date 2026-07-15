@@ -2059,7 +2059,7 @@
     </style>
     <link rel="stylesheet" href="{{ url_for('static', filename='sh-ui.css', v='20260716-1') }}">
     {% if current_user.is_authenticated and current_user.seller %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='ai-chat-popup.css', v='20260713-3') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='ai-chat-popup.css', v='20260715-image1') }}">
     {% endif %}
     {% block extra_head %}{% endblock %}
 </head>
@@ -2650,7 +2650,7 @@
 
 {% if current_user.is_authenticated and current_user.seller and request.endpoint != 'agents_dashboard' and not request.path.startswith('/admin') %}
 {% include "partials/ai_chat_popup.html" %}
-<script src="{{ url_for('static', filename='ai-chat-popup.js', v='20260713-2') }}"></script>
+<script src="{{ url_for('static', filename='ai-chat-popup.js', v='20260715-image1') }}"></script>
 {% endif %}
 
 {% block extra_scripts %}{% endblock %}

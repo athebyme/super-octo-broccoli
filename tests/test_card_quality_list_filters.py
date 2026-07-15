@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Тест роута GET /api/card-quality/list (фильтры reason/bucket, сортировка impact)."""
+"""Тесты поиска, catalog-фильтров и сортировки card-quality API."""
 
 import os
 import unittest
@@ -36,7 +36,7 @@ class TestCardQualityListFilters(unittest.TestCase):
 
     @classmethod
     def _seed(cls):
-        from models import User, Seller, Product
+        from models import User, Seller, Product, ImportedProduct, Supplier
 
         # Own seller — needs a valid WB API key for api_card_quality_list to pass
         # the has_valid_api_key() guard.
@@ -59,23 +59,59 @@ class TestCardQualityListFilters(unittest.TestCase):
         cls.db.session.add(other_seller)
         cls.db.session.flush()
 
+        supplier_alpha = Supplier(name='Alpha Supplier', code='cq-alpha')
+        supplier_beta = Supplier(name='Beta Supplier', code='cq-beta')
+        supplier_foreign = Supplier(name='Foreign Supplier', code='cq-foreign')
+        cls.db.session.add_all([supplier_alpha, supplier_beta, supplier_foreign])
+        cls.db.session.flush()
+        cls.supplier_alpha_id = supplier_alpha.id
+        cls.supplier_beta_id = supplier_beta.id
+        cls.supplier_foreign_id = supplier_foreign.id
+
         # 3 own products, impacts 5 / 20 / 40, different reasons, different buckets
+        product_low = Product(
+            seller_id=seller.id, nm_id=101, vendor_code='LOW', title='Льняная рубашка',
+            brand='Nord', object_name='Рубашки', is_active=True,
+            quality_score=80, nm_rating=9.0,
+            photos_json='["https://cdn.example.com/photo1.jpg"]',
+            attention_reasons='low_rating', quality_impact=5,
+        )
+        product_mid = Product(
+            seller_id=seller.id, nm_id=102, vendor_code='MID', title='Брюки прямые',
+            brand='Line', object_name='Брюки', is_active=True,
+            quality_score=60, nm_rating=7.0,
+            attention_reasons='weak_chars', quality_impact=20,
+        )
+        product_high = Product(
+            seller_id=seller.id, nm_id=103, vendor_code='HIGH', title='Кардиган тёплый',
+            brand='Nord', object_name='Кардиганы', is_active=True,
+            quality_score=30, nm_rating=5.0,
+            photos_json='[1, 2, 3]',
+            attention_reasons='few_photos,weak_chars', quality_impact=40,
+        )
+        foreign_product = Product(
+            seller_id=other_seller.id, nm_id=999, vendor_code='OTHER',
+            title='Кардиган чужой', brand='Foreign', object_name='Чужая категория',
+            is_active=True, quality_score=10, nm_rating=3.0,
+            attention_reasons='few_photos', quality_impact=99,
+        )
         cls.db.session.add_all([
-            Product(seller_id=seller.id, nm_id=101, vendor_code='LOW', is_active=True,
-                    quality_score=80, nm_rating=9.0,
-                    photos_json='["https://cdn.example.com/photo1.jpg"]',
-                    attention_reasons='low_rating', quality_impact=5),
-            Product(seller_id=seller.id, nm_id=102, vendor_code='MID', is_active=True,
-                    quality_score=60, nm_rating=7.0,
-                    attention_reasons='weak_chars', quality_impact=20),
-            Product(seller_id=seller.id, nm_id=103, vendor_code='HIGH', is_active=True,
-                    quality_score=30, nm_rating=5.0,
-                    photos_json='[1, 2, 3]',
-                    attention_reasons='few_photos,weak_chars', quality_impact=40),
-            # Other seller's product — must never appear in own seller's results
-            Product(seller_id=other_seller.id, nm_id=999, vendor_code='OTHER', is_active=True,
-                    quality_score=10, nm_rating=3.0,
-                    attention_reasons='few_photos', quality_impact=99),
+            product_low, product_mid, product_high, foreign_product,
+        ])
+        cls.db.session.flush()
+        cls.db.session.add_all([
+            ImportedProduct(
+                seller_id=seller.id, product_id=product_low.id,
+                supplier_id=supplier_alpha.id, import_status='imported',
+            ),
+            ImportedProduct(
+                seller_id=seller.id, product_id=product_mid.id,
+                supplier_id=supplier_beta.id, import_status='imported',
+            ),
+            ImportedProduct(
+                seller_id=other_seller.id, product_id=foreign_product.id,
+                supplier_id=supplier_foreign.id, import_status='imported',
+            ),
         ])
         cls.db.session.commit()
 
@@ -90,6 +126,7 @@ class TestCardQualityListFilters(unittest.TestCase):
         # Общий процессный TTL-кэш сводки не должен переносить данные между тестами
         from services.ttl_cache import cache
         cache.invalidate('cq-summary')
+        cache.invalidate('cq-filters')
 
     def _client_logged_in(self):
         client = self.app.test_client()
@@ -121,6 +158,85 @@ class TestCardQualityListFilters(unittest.TestCase):
         nm_ids = self._nm_ids(payload)
         # Only nm_id=103 has quality_score < 50 (30)
         self.assertEqual(nm_ids, {103})
+
+    def test_search_matches_title_vendor_code_and_nm_id(self):
+        client = self._client_logged_in()
+
+        by_title = client.get('/api/card-quality/list?search=Кардиган').get_json()
+        self.assertEqual(self._nm_ids(by_title), {103})
+
+        by_vendor_code = client.get('/api/card-quality/list?search=mid').get_json()
+        self.assertEqual(self._nm_ids(by_vendor_code), {102})
+
+        by_nm_id = client.get('/api/card-quality/list?search=101').get_json()
+        self.assertEqual(self._nm_ids(by_nm_id), {101})
+
+    def test_search_stays_tenant_scoped_and_combines_with_filters(self):
+        client = self._client_logged_in()
+
+        foreign = client.get('/api/card-quality/list?search=чужой').get_json()
+        self.assertEqual(self._nm_ids(foreign), set())
+
+        combined = client.get(
+            '/api/card-quality/list?search=Кардиган&reason=weak_chars&bucket=poor'
+        ).get_json()
+        self.assertEqual(self._nm_ids(combined), {103})
+
+    def test_category_brand_and_supplier_filters(self):
+        client = self._client_logged_in()
+        cases = [
+            ({'category': 'Кардиганы'}, {103}),
+            ({'brand': 'Nord'}, {101, 103}),
+            ({'supplier_id': self.supplier_alpha_id}, {101}),
+        ]
+        for query, expected in cases:
+            with self.subTest(query=query):
+                payload = client.get(
+                    '/api/card-quality/list', query_string=query,
+                ).get_json()
+                self.assertEqual(self._nm_ids(payload), expected)
+
+    def test_catalog_filters_combine_and_foreign_supplier_returns_nothing(self):
+        client = self._client_logged_in()
+        combined = client.get('/api/card-quality/list', query_string={
+            'category': 'Рубашки',
+            'brand': 'Nord',
+            'supplier_id': self.supplier_alpha_id,
+            'bucket': 'good',
+        }).get_json()
+        self.assertEqual(self._nm_ids(combined), {101})
+
+        foreign = client.get('/api/card-quality/list', query_string={
+            'supplier_id': self.supplier_foreign_id,
+        }).get_json()
+        self.assertEqual(self._nm_ids(foreign), set())
+
+    def test_filter_options_are_counted_and_tenant_scoped(self):
+        client = self._client_logged_in()
+        resp = client.get('/api/card-quality/filters')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()['data']
+
+        categories = {item['value']: item['count'] for item in data['categories']}
+        self.assertEqual(categories, {'Брюки': 1, 'Кардиганы': 1, 'Рубашки': 1})
+
+        brands = {item['value']: item['count'] for item in data['brands']}
+        self.assertEqual(brands, {'Line': 1, 'Nord': 2})
+
+        suppliers = {item['label']: item['count'] for item in data['suppliers']}
+        self.assertEqual(suppliers, {'Alpha Supplier': 1, 'Beta Supplier': 1})
+        self.assertNotIn('Foreign Supplier', suppliers)
+
+    def test_page_renders_search_and_quality_controls(self):
+        client = self._client_logged_in()
+        resp = client.get('/card-quality')
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn('id="cq-search"', html)
+        self.assertIn('id="cq-category-filter"', html)
+        self.assertIn('id="cq-brand-filter"', html)
+        self.assertIn('id="cq-supplier-filter"', html)
+        self.assertIn('id="cq-quality-filter"', html)
 
     def test_sort_impact_default_orders_desc_by_quality_impact(self):
         client = self._client_logged_in()

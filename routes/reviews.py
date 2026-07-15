@@ -278,6 +278,8 @@ def register_reviews_routes(app):
         """Send reply to a feedback or question via WB API."""
         if not current_user.seller or not current_user.seller.has_valid_api_key():
             return jsonify({'error': 'API ключ WB не настроен'}), 403
+        from requests import RequestException
+        from services.feedback_service import FeedbackService, FeedbackServiceError
         try:
             body = request.get_json(silent=True) or {}
             item_id = body.get('id')
@@ -292,7 +294,6 @@ def register_reviews_routes(app):
             if len(text) > 5000:
                 return jsonify({'error': 'Ответ слишком длинный (максимум 5000 символов)'}), 400
 
-            from services.feedback_service import FeedbackService
             svc = FeedbackService(current_user.seller.wb_api_key)
 
             if item_type == 'question':
@@ -301,9 +302,21 @@ def register_reviews_routes(app):
                 result = svc.answer_feedback(item_id, text)
 
             return jsonify({'success': True, 'result': result})
+        except FeedbackServiceError as e:
+            logger.warning(f"WB rejected review reply: {e}")
+            return jsonify({'error': str(e), 'code': 'wb_feedback_error'}), 502
+        except RequestException as e:
+            logger.warning(f"WB review reply transport failed: {type(e).__name__}")
+            return jsonify({
+                'error': 'WB API временно недоступен. Повторите отправку позже.',
+                'code': 'wb_feedback_transport',
+            }), 502
         except Exception as e:
-            logger.error(f"Error sending reply: {e}")
-            return jsonify({'error': str(e)}), 500
+            logger.error(f"Error sending reply: {e}\n{traceback.format_exc()}")
+            return jsonify({
+                'error': 'Не удалось отправить ответ из-за внутренней ошибки.',
+                'code': 'review_reply_internal',
+            }), 500
 
     @app.route('/api/reviews/check-new', methods=['POST'])
     @login_required

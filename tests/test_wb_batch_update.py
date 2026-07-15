@@ -8,7 +8,10 @@ WB даёт cards/update всего 10 запросов/мин (у нас 8), н
 import unittest
 from unittest.mock import patch, MagicMock
 
-from services.wb_api_client import WildberriesAPIClient, WBAPIException
+from services.wb_api_client import (
+    WildberriesAPIClient, WBAPIException, WBRateLimitException,
+    WBTransportUncertainException,
+)
 
 
 def _card(nm_id, vendor_code=None, **extra):
@@ -128,6 +131,38 @@ class TestUpdateCardsMerged(unittest.TestCase):
         self.assertEqual(set(result['sent']), {1, 2, 4})
         self.assertEqual(set(result['failed']), {3})
         self.assertIn('WB отклонил', result['failed'][3])
+
+    def test_uncertain_transport_failure_is_never_bisected_or_retried(self):
+        cards_map = {i: _card(i) for i in range(1, 5)}
+        nm_updates = {i: {'brand': 'New'} for i in range(1, 5)}
+        error = WBTransportUncertainException(
+            'timeout after request body', request_may_have_been_applied=True,
+        )
+
+        with patch.object(
+            self.client, 'fetch_cards_by_nm_ids', return_value=cards_map,
+        ), patch.object(
+            self.client, 'update_cards_batch', side_effect=error,
+        ) as mock_batch:
+            with self.assertRaises(WBTransportUncertainException):
+                self.client.update_cards_merged(nm_updates, chunk_size=10)
+
+        self.assertEqual(mock_batch.call_count, 1)
+
+    def test_rate_limit_is_batch_wide_and_never_bisected(self):
+        cards_map = {i: _card(i) for i in range(1, 5)}
+        nm_updates = {i: {'brand': 'New'} for i in range(1, 5)}
+
+        with patch.object(
+            self.client, 'fetch_cards_by_nm_ids', return_value=cards_map,
+        ), patch.object(
+            self.client, 'update_cards_batch',
+            side_effect=WBRateLimitException('rate limit', retry_after=30),
+        ) as mock_batch:
+            with self.assertRaises(WBRateLimitException):
+                self.client.update_cards_merged(nm_updates, chunk_size=10)
+
+        self.assertEqual(mock_batch.call_count, 1)
 
     def test_partial_progress_survives_later_chunk_failure(self):
         """Падение позднего чанка не теряет уже отправленные карточки."""

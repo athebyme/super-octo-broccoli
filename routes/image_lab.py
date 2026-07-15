@@ -39,7 +39,13 @@ def _image_mimetype(data_or_path) -> str:
 def _seller_required(function):
     @wraps(function)
     def wrapped(*args, **kwargs):
-        if not current_user.is_authenticated or not current_user.seller:
+        if not current_user.is_authenticated:
+            return jsonify({
+                "success": False,
+                "code": "auth_required",
+                "error": "Сессия истекла. Войдите снова",
+            }), 401
+        if not current_user.seller:
             return jsonify({"success": False, "error": "Нужен профиль продавца"}), 403
         return function(*args, **kwargs)
     return wrapped
@@ -104,8 +110,8 @@ def register_image_lab_routes(app):
         )
 
     @app.post('/image-lab/api/experiments')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_create_experiments():
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
@@ -129,10 +135,10 @@ def register_image_lab_routes(app):
                 targets=targets,
                 photo_indices=data.get("photo_indices"),
                 generation_mode=data.get("generation_mode", "single"),
-                generation_strategy=data.get("generation_strategy", "reference_guided"),
+                generation_strategy=data.get("generation_strategy", "native_scene"),
                 primary_photo_index=data.get("primary_photo_index"),
                 photo_roles=data.get("photo_roles"),
-                include_product_context=data.get("include_product_context", True),
+                include_product_context=data.get("include_product_context", False),
                 watermark=data.get("watermark"),
                 overlay=data.get("overlay"),
                 additional_prompt=data.get("additional_prompt", ""),
@@ -149,8 +155,8 @@ def register_image_lab_routes(app):
             return jsonify({"success": False, "error": str(exc)}), 400
 
     @app.get('/image-lab/api/experiments')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_list_experiments():
         limit_raw = request.args.get('limit', '60')
         try:
@@ -173,8 +179,8 @@ def register_image_lab_routes(app):
         })
 
     @app.get('/image-lab/api/experiments/<int:experiment_id>')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_get_experiment(experiment_id):
         experiment = _owned_experiment(experiment_id)
         if experiment.status == 'queued':
@@ -190,8 +196,8 @@ def register_image_lab_routes(app):
         return jsonify({"success": True, "experiment": lab.experiment_dict(experiment)})
 
     @app.post('/image-lab/api/experiments/<int:experiment_id>/rating')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_rate_experiment(experiment_id):
         experiment = _owned_experiment(experiment_id)
         data = request.get_json(silent=True)
@@ -209,8 +215,8 @@ def register_image_lab_routes(app):
             return jsonify({"success": False, "error": str(exc)}), 400
 
     @app.post('/image-lab/api/experiments/<int:experiment_id>/cancel')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_cancel_experiment(experiment_id):
         experiment = _owned_experiment(experiment_id)
         try:
@@ -221,8 +227,8 @@ def register_image_lab_routes(app):
             return jsonify({"success": False, "error": str(exc)}), 409
 
     @app.post('/image-lab/api/experiments/<int:experiment_id>/repeat')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_repeat_experiment(experiment_id):
         source = _owned_experiment(experiment_id)
         if source.imported_product_id is None or source.imported_product is None:
@@ -266,8 +272,8 @@ def register_image_lab_routes(app):
             return jsonify({"success": False, "error": str(exc)}), 400
 
     @app.get('/image-lab/api/experiments/<int:experiment_id>/image/<kind>')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_experiment_image(experiment_id, kind):
         if kind not in ('source', 'reference', 'background', 'final', 'watermark'):
             return jsonify({"success": False, "error": "Неизвестный artifact"}), 404
@@ -280,8 +286,8 @@ def register_image_lab_routes(app):
         return response
 
     @app.post('/image-lab/api/watermarks')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_upload_watermark():
         upload = request.files.get('file')
         if upload is None:
@@ -297,8 +303,8 @@ def register_image_lab_routes(app):
             return jsonify({"success": False, "error": str(exc)}), 400
 
     @app.get('/image-lab/api/watermarks/<watermark_id>')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_watermark_preview(watermark_id):
         path = lab.watermark_preset_path(current_user.seller.id, watermark_id)
         if path is None:
@@ -308,8 +314,8 @@ def register_image_lab_routes(app):
         return response
 
     @app.get('/image-lab/api/products/<int:product_id>/original')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_product_original(product_id):
         product = ImportedProduct.query.filter_by(
             id=product_id, seller_id=current_user.seller.id).first_or_404()
@@ -331,14 +337,14 @@ def register_image_lab_routes(app):
         return response
 
     @app.get('/image-lab/api/analytics')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_analytics():
         return jsonify({"success": True, **lab.analytics(current_user.seller.id)})
 
     @app.get('/image-lab/api/export.csv')
-    @login_required
     @_seller_required
+    @login_required
     def image_lab_export_csv():
         items = ImageGenerationExperiment.query.filter_by(
             seller_id=current_user.seller.id,

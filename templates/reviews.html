@@ -295,6 +295,7 @@
                 <button @click="bulkCancel()" class="px-3 py-1.5 rounded-lg text-xs font-medium" style="color:var(--text-secondary);border:1px solid var(--border)">
                     Отмена
                 </button>
+                <span x-show="bulkFailed > 0" class="self-center text-xs" style="color:var(--danger)" x-text="'Ошибок: ' + bulkFailed"></span>
             </div>
         </template>
         <template x-if="bulkGenerating || bulkSending">
@@ -376,6 +377,7 @@
                                 <span x-show="item._generating">Генерация...</span>
                             </button>
                         </div>
+                        <p x-show="item._replyError" class="text-xs mb-2" style="color:var(--danger)" x-text="item._replyError"></p>
                         <div x-show="item._draft">
                             <textarea x-model="items[idx]._draft" rows="3"
                                 class="w-full rounded-lg p-3 text-sm resize-y focus:outline-none focus:ring-1"
@@ -462,6 +464,8 @@ function reviewsApp() {
         bulkSending: false,
         bulkProgress: 0,
         bulkTotal: 0,
+        bulkFailed: 0,
+        bulkConcurrency: 4,
 
         async init() {
             const params = new URLSearchParams(window.location.search);
@@ -483,8 +487,25 @@ function reviewsApp() {
                 ...item,
                 _draft: '',
                 _generating: false,
-                _sending: false
+                _sending: false,
+                _replyError: ''
             }));
+        },
+
+        async responseError(resp, fallback) {
+            let text = '';
+            try { text = await resp.text(); } catch (e) {}
+            if (text) {
+                try {
+                    const payload = JSON.parse(text);
+                    const detail = payload.error || payload.detail || payload.message;
+                    if (detail) return String(detail);
+                } catch (e) {
+                    // HTML/proxy errors must not surface as JSON.parse or an empty alert.
+                }
+            }
+            const status = Number(resp.status || 0);
+            return `${fallback}${status ? ` (HTTP ${status})` : ''}`;
         },
 
         async loadStats() {
@@ -550,9 +571,10 @@ function reviewsApp() {
             this.loadingMore = false;
         },
 
-        async generateReply(idx) {
+        async generateReply(idx, options = {}) {
             const item = this.items[idx];
             this.items[idx]._generating = true;
+            this.items[idx]._replyError = '';
             try {
                 const body = {
                     type: this.tab === 'feedbacks' ? 'feedback' : 'question',
@@ -571,22 +593,30 @@ function reviewsApp() {
                 });
                 if (resp.ok) {
                     const json = await resp.json();
-                    this.items[idx]._draft = json.reply;
+                    if (!json.reply || String(json.reply).trim().length < 2) {
+                        throw new Error('Сервис не вернул текст ответа');
+                    }
+                    this.items[idx]._draft = String(json.reply).trim();
                 } else {
-                    const err = await resp.json().catch(() => ({}));
-                    alert('Ошибка генерации: ' + (err.error || 'Неизвестная ошибка'));
+                    throw new Error(await this.responseError(resp, 'Не удалось сгенерировать ответ'));
                 }
+                return true;
             } catch (e) {
                 console.error('Failed to generate reply:', e);
-                alert('Ошибка: ' + e.message);
+                const message = e.message || 'Не удалось сгенерировать ответ';
+                this.items[idx]._replyError = message;
+                if (!options.silent) alert('Ошибка генерации: ' + message);
+                return false;
+            } finally {
+                this.items[idx]._generating = false;
             }
-            this.items[idx]._generating = false;
         },
 
         async sendReply(idx) {
             const item = this.items[idx];
             if (!item._draft || item._draft.length < 2) return;
             this.items[idx]._sending = true;
+            this.items[idx]._replyError = '';
             try {
                 const resp = await fetch('/api/reviews/send-reply', {
                     method: 'POST',
@@ -606,14 +636,18 @@ function reviewsApp() {
                         this.stats.questions_unanswered = Math.max(0, (this.stats.questions_unanswered || 0) - 1);
                     }
                 } else {
-                    const err = await resp.json().catch(() => ({}));
-                    alert('Ошибка: ' + (err.error || 'Неизвестная ошибка'));
+                    throw new Error(await this.responseError(resp, 'Не удалось отправить ответ'));
                 }
+                return true;
             } catch (e) {
                 console.error('Failed to send reply:', e);
-                alert('Ошибка отправки: ' + e.message);
+                const message = e.message || 'Не удалось отправить ответ';
+                this.items[idx]._replyError = message;
+                alert('Ошибка отправки: ' + message);
+                return false;
+            } finally {
+                this.items[idx]._sending = false;
             }
-            this.items[idx]._sending = false;
         },
 
         formatDate(dateStr) {
@@ -690,8 +724,9 @@ function reviewsApp() {
                     this.testSource = json.source || 'template';
                     this.testAiError = json.ai_error || '';
                 } else {
-                    const err = await resp.json().catch(() => ({}));
-                    this.testResult = 'Ошибка: ' + (err.error || 'Неизвестная ошибка');
+                    this.testResult = 'Ошибка: ' + await this.responseError(
+                        resp, 'Не удалось сгенерировать тестовый ответ'
+                    );
                     this.testSource = '';
                 }
             } catch (e) {
@@ -701,20 +736,42 @@ function reviewsApp() {
         },
 
         // --- Bulk reply ---
+        async _runPool(indices, concurrency, worker) {
+            let cursor = 0;
+            const workerCount = Math.min(Math.max(1, concurrency), indices.length);
+            const runners = Array.from({length: workerCount}, async () => {
+                while (cursor < indices.length) {
+                    const position = cursor;
+                    cursor += 1;
+                    try {
+                        await worker(indices[position]);
+                    } finally {
+                        this.bulkProgress += 1;
+                    }
+                }
+            });
+            await Promise.all(runners);
+        },
+
         async bulkGenerateAll() {
-            const unanswered = this.items.filter(i => !i.answer);
-            if (!unanswered.length) return;
+            const indices = this.items
+                .map((item, idx) => (!item.answer ? idx : null))
+                .filter(idx => idx !== null);
+            if (!indices.length) return;
             this.bulkMode = true;
             this.bulkGenerating = true;
             this.bulkProgress = 0;
-            this.bulkTotal = unanswered.length;
+            this.bulkTotal = indices.length;
+            this.bulkFailed = 0;
 
-            for (let i = 0; i < this.items.length; i++) {
-                if (this.items[i].answer) continue;
-                await this.generateReply(i);
-                this.bulkProgress++;
+            try {
+                await this._runPool(indices, this.bulkConcurrency, async (idx) => {
+                    const ok = await this.generateReply(idx, {silent: true});
+                    if (!ok) this.bulkFailed += 1;
+                });
+            } finally {
+                this.bulkGenerating = false;
             }
-            this.bulkGenerating = false;
         },
 
         async bulkSendAll() {
@@ -723,10 +780,14 @@ function reviewsApp() {
             this.bulkSending = true;
             this.bulkProgress = 0;
             this.bulkTotal = ready.length;
+            this.bulkFailed = 0;
 
+            // WB write limits are stricter than AI generation limits. Keep
+            // sends serial; only draft generation runs in a bounded pool.
             for (let i = 0; i < this.items.length; i++) {
                 if (this.items[i].answer || !this.items[i]._draft || this.items[i]._draft.length < 2) continue;
-                await this.sendReply(i);
+                const ok = await this.sendReply(i);
+                if (!ok) this.bulkFailed++;
                 this.bulkProgress++;
             }
             this.bulkSending = false;
@@ -735,8 +796,12 @@ function reviewsApp() {
 
         bulkCancel() {
             this.items.forEach((item, i) => {
-                if (!item.answer) this.items[i]._draft = '';
+                if (!item.answer) {
+                    this.items[i]._draft = '';
+                    this.items[i]._replyError = '';
+                }
             });
+            this.bulkFailed = 0;
             this.bulkMode = false;
         }
     };

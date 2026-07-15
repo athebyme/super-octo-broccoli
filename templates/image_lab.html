@@ -164,14 +164,14 @@
           </div>
         </div>
         <p class="mt-2 text-xs text-gray-500">★ — главное фото. В «Учесть все» остальные ракурсы, упаковка и детали помогают модели понять товар, но не должны появляться отдельными объектами.</p>
-        <div x-show="generationMode!=='angles'" class="grid grid-cols-2 gap-2 mt-3">
-          <label class="lab-mode" :class="{'active':generationStrategy==='reference_guided'}">
-            <input type="radio" value="reference_guided" x-model="generationStrategy" @change="onStrategyChange()" class="mr-1"> <strong class="text-xs">С фото</strong>
-            <span class="block text-[10px] text-gray-500 mt-1">Модель видит товар</span>
-          </label>
+        <div x-show="generationMode!=='angles'" class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
           <label class="lab-mode" :class="{'active':generationStrategy==='background_only'}">
-            <input type="radio" value="background_only" x-model="generationStrategy" @change="onStrategyChange()" class="mr-1"> <strong class="text-xs">Только фон</strong>
-            <span class="block text-[10px] text-gray-500 mt-1">Контрольный режим</span>
+            <input type="radio" value="background_only" x-model="generationStrategy" @change="onStrategyChange()" class="mr-1"> <strong class="text-xs">Точный товар</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">AI делает только фон</span>
+          </label>
+          <label class="lab-mode" :class="{'active':generationStrategy==='native_scene'}">
+            <input type="radio" value="native_scene" x-model="generationStrategy" @change="onStrategyChange()" class="mr-1"> <strong class="text-xs">Нативно</strong>
+            <span class="block text-[10px] text-gray-500 mt-1">Оригинал прямо в модель</span>
           </label>
         </div>
         <div x-show="generationMode==='angles'" x-cloak class="lab-mode active mt-3">
@@ -186,7 +186,8 @@
           <summary class="cursor-pointer">Что попадёт в контекст</summary>
           <pre class="mt-2 whitespace-pre-wrap text-[10px]" x-text="JSON.stringify(currentProduct?.visual_context || {}, null, 2)"></pre>
         </details>
-        <p x-show="generationMode!=='angles'" class="mt-2 text-xs text-gray-500">После ответа модели исходный RGB товара повторно накладывается локально. Референсный результат всегда требует проверки на лишние объекты.</p>
+        <p x-show="generationMode!=='angles' && generationStrategy==='background_only'" class="mt-2 text-xs text-gray-500">Модель не получает фото товара: она создаёт пустую сцену, а исходный RGB накладывается локально ровно один раз.</p>
+        <p x-show="generationMode!=='angles' && generationStrategy==='native_scene'" x-cloak class="mt-2 text-xs text-amber-700">Оригинальное фото передаётся модели без protection mask. Ответ используется как финал без второго наложения; товар может измениться, поэтому результат всегда REVIEW.</p>
         <p x-show="generationMode==='angles'" x-cloak class="mt-2 text-xs text-amber-700">В новых ракурсах модель перерисовывает весь товар. Больше фото с ролями «Ракурс» снижает mismatch; упаковка и детали не считаются геометрией товара.</p>
       </section>
 
@@ -238,7 +239,7 @@
       </section>
 
       <section class="sh-card">
-        <div class="sh-card-header"><h2 class="sh-card-title">4. Движки</h2><span class="text-xs text-gray-500" x-text="`${selectedTargetKeys.length}/3`"></span></div>
+        <div class="sh-card-header"><h2 class="sh-card-title">4. Модели OpenRouter</h2><span class="text-xs text-gray-500" x-text="`${selectedTargetKeys.length}/3`"></span></div>
         <div class="space-y-2">
           <template x-for="variant in variants" :key="variant.key">
             <label class="lab-target" :class="{'disabled':!variantAvailable(variant)}">
@@ -246,9 +247,10 @@
                      :checked="selectedTargetKeys.includes(variant.key)"
                      @change="toggleTarget(variant)">
               <span class="min-w-0"><strong class="block text-sm" x-text="variant.label"></strong>
-                <span class="lab-provider" x-text="`${variant.model} · ~${variant.cost_rub} ₽`"></span>
+                <span class="lab-provider" x-text="`${variant.providerLabel} · ${variant.resolution} · ≈${variant.cost_rub} ₽`"></span>
                 <span x-show="!variant.enabled" class="block text-xs text-red-600">Не настроен</span>
-                <span x-show="variant.enabled && ['reference_guided','angle_synthesis'].includes(generationStrategy) && !variant.supports_reference" class="block text-xs text-amber-600">Не принимает фото-референсы</span>
+                <span x-show="variant.enabled && !variant.supported_strategies.includes(generationStrategy)" class="block text-xs text-amber-600">Не поддерживает выбранный режим</span>
+                <span x-show="variant.enabled && generationStrategy!=='background_only' && selectedPhotoIndices.length > variant.max_references && !['single','each'].includes(generationMode)" class="block text-xs text-amber-600" x-text="`Не более ${variant.max_references} референсов`"></span>
               </span>
             </label>
           </template>
@@ -258,7 +260,7 @@
           <span x-show="!submitting" x-text="generateButtonLabel"></span>
           <span x-show="submitting">Ставлю задачи…</span>
         </button>
-        <p class="text-xs text-gray-500 mt-2"><span x-text="`${plannedJobs} задач · примерно ${plannedCost.toFixed(2)} ₽`"></span>. Очередь, бюджет и параллелизм проверяет сервер.</p>
+        <p class="text-xs text-gray-500 mt-2"><span x-text="`${plannedJobs} задач · оценка ${plannedCost.toFixed(2)} ₽`"></span>. Фактическая цена приходит от OpenRouter; очередь, бюджет и параллелизм проверяет сервер.</p>
       </section>
     </aside>
 
@@ -307,7 +309,7 @@
               <div x-show="item.has_final" class="flex gap-2 mt-3">
                 <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='final'">Финал</button>
                 <button x-show="item.has_reference" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='reference'">Вход модели</button>
-                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='background'" x-text="item.generation_strategy==='angle_synthesis' ? 'AI-ракурс' : (item.generation_strategy==='reference_guided' ? 'AI-черновик' : 'Фон')"></button>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='background'" x-text="item.generation_strategy==='angle_synthesis' ? 'AI-ракурс' : (['reference_guided','native_scene'].includes(item.generation_strategy) ? 'AI-финал' : 'Фон')"></button>
                 <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="viewMode[item.id]='source'">Оригинал</button>
               </div>
               <div x-show="item.status==='completed'" class="mt-4 border-t border-gray-200 pt-3">
@@ -345,5 +347,5 @@ window.IMAGE_LAB_BOOTSTRAP = {
   ratingTags: {{ rating_tags|tojson }}
 };
 </script>
-<script src="{{ url_for('static', filename='image-lab.js', v='20260714-angles1') }}"></script>
+<script src="{{ url_for('static', filename='image-lab.js', v='20260715-api-errors1') }}"></script>
 {% endblock %}

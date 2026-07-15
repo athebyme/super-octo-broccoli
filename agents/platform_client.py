@@ -36,6 +36,18 @@ class ReferenceDataUnavailableError(RuntimeError):
         super().__init__(str(message)[:500])
 
 
+class PlatformAPIError(RuntimeError):
+    """Safe, bounded error returned by the authenticated platform API."""
+
+    def __init__(self, status_code: int, message: str):
+        self.status_code = int(status_code or 0)
+        normalized = " ".join(str(message or "").split()).strip()
+        if not normalized:
+            normalized = f"Platform API error ({self.status_code})"
+        self.message = normalized[:500]
+        super().__init__(self.message)
+
+
 def require_usable_reference(payload: dict, resource: str) -> dict:
     """Validate the typed reference contract before an agent uses its data."""
     status = payload.get('reference_status') if isinstance(payload, dict) else None
@@ -120,8 +132,20 @@ class PlatformClient:
                 logger.warning(f"Request error (attempt {attempt+1}/4), retry in {wait}s: {e}")
                 time.sleep(wait)
             except requests.exceptions.HTTPError as e:
-                logger.error(f"HTTP error {resp.status_code}: {resp.text}")
-                raise
+                try:
+                    payload = resp.json()
+                except (TypeError, ValueError):
+                    payload = {}
+                message = None
+                if isinstance(payload, dict):
+                    message = payload.get('error') or payload.get('message')
+                safe_error = PlatformAPIError(resp.status_code, message)
+                logger.error(
+                    "Platform API HTTP %s: %s",
+                    safe_error.status_code,
+                    safe_error.message,
+                )
+                raise safe_error from e
         raise ConnectionError(f"Failed after 4 attempts: {last_error}")
 
     # ── Heartbeat ──────────────────────────────────────────────────
@@ -286,6 +310,52 @@ class PlatformClient:
             },
         )
 
+    def get_image_generation_brief(
+        self, seller_id: int, entity_kind: str, product_id: int,
+    ) -> dict:
+        """Resolve one typed card to a bounded Image Lab visual context."""
+        if entity_kind not in {'product', 'imported_product'}:
+            raise ValueError('invalid entity_kind')
+        prepared_id = _validated_product_ids([product_id], 1)[0]
+        return self._request(
+            'POST', f'/sellers/{seller_id}/image-generation/brief',
+            json={'entity_kind': entity_kind, 'product_id': prepared_id},
+        )
+
+    def create_image_generation_experiment(
+        self,
+        seller_id: int,
+        entity_kind: str,
+        product_id: int,
+        *,
+        photo_index: int,
+        scene_prompt: str,
+        prompt_model: str,
+    ) -> dict:
+        """Create the single paid experiment allowed by the approved chat plan."""
+        if entity_kind not in {'product', 'imported_product'}:
+            raise ValueError('invalid entity_kind')
+        prepared_id = _validated_product_ids([product_id], 1)[0]
+        return self._request(
+            'POST', f'/sellers/{seller_id}/image-generation/experiments',
+            json={
+                'entity_kind': entity_kind,
+                'product_id': prepared_id,
+                'photo_index': photo_index,
+                'scene_prompt': scene_prompt,
+                'prompt_model': prompt_model,
+            },
+        )
+
+    def get_image_generation_experiment(
+        self, seller_id: int, experiment_id: int,
+    ) -> dict:
+        prepared_id = _validated_product_ids([experiment_id], 1)[0]
+        return self._request(
+            'GET',
+            f'/sellers/{seller_id}/image-generation/experiments/{prepared_id}',
+        )
+
     def audit_product_batch(self, seller_id: int, entity_kind: str,
                             product_ids: list[int], focus_limit: int = 100) -> dict:
         product_ids = _validated_product_ids(product_ids)
@@ -369,6 +439,44 @@ class PlatformClient:
             **totals,
             'results': all_results,
         }
+
+    def publish_product_content_proposals(
+        self, seller_id: int, product_ids: list[int], fields: list[str],
+    ) -> dict:
+        """Publish exact chat proposals and validate per-card accounting."""
+        prepared_ids = _validated_product_ids(product_ids, 100)
+        if (
+            not isinstance(fields, list) or not fields or len(fields) > 2
+            or any(field not in {'title', 'description'} for field in fields)
+            or len(set(fields)) != len(fields)
+        ):
+            raise ValueError('fields must be a unique title/description array')
+        prepared_fields = [
+            field for field in ('title', 'description') if field in fields
+        ]
+        payload = self._request(
+            'POST',
+            f'/sellers/{seller_id}/products/content-proposals/publish-batch',
+            json={
+                'product_ids': prepared_ids,
+                'fields': prepared_fields,
+            },
+        )
+        results = payload.get('results') if isinstance(payload, dict) else None
+        if (
+            not isinstance(results, list)
+            or len(results) != len(prepared_ids)
+            or [item.get('product_id') for item in results
+                if isinstance(item, dict)] != prepared_ids
+            or any(
+                item.get('status') not in {
+                    'published', 'already_published', 'error',
+                }
+                for item in results if isinstance(item, dict)
+            )
+        ):
+            raise ValueError('Invalid WB content publish response')
+        return payload
 
     def list_imported_products(self, seller_id: int, page: int = 1,
                                per_page: int = 50) -> dict:
@@ -552,6 +660,61 @@ class PlatformClient:
             raise ValueError(
                 'Characteristic schema batch subject set does not match request',
             )
+        return payload
+
+    def search_characteristic_values_batch(
+        self, queries: list[dict], limit: int = 20,
+    ) -> dict:
+        """Search effective WB dictionaries and verify exact request order."""
+        if not isinstance(queries, list) or not 1 <= len(queries) <= 50:
+            raise ValueError('queries must contain 1..50 objects')
+        prepared = []
+        seen = set()
+        for index, item in enumerate(queries):
+            if not isinstance(item, dict) or set(item) != {
+                'subject_id', 'charc_id', 'query',
+            }:
+                raise ValueError(
+                    f'queries[{index}] must contain subject_id, charc_id and query only'
+                )
+            subject_id = item['subject_id']
+            charc_id = item['charc_id']
+            query = item['query']
+            if (
+                not isinstance(subject_id, int) or isinstance(subject_id, bool)
+                or subject_id <= 0
+                or not isinstance(charc_id, int) or isinstance(charc_id, bool)
+                or charc_id <= 0
+                or not isinstance(query, str) or not query.strip()
+                or len(query.strip()) > 120
+            ):
+                raise ValueError(f'queries[{index}] is invalid')
+            key = (subject_id, charc_id, query.strip().casefold())
+            if key in seen:
+                raise ValueError(f'Duplicate characteristic query at index {index}')
+            seen.add(key)
+            prepared.append({
+                'subject_id': subject_id,
+                'charc_id': charc_id,
+                'query': query.strip(),
+            })
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+            raise ValueError('limit must be an integer from 1 to 50')
+        payload = self._request(
+            'POST', '/categories/characteristic-values/search-batch',
+            json={'queries': prepared, 'limit': limit},
+        )
+        results = payload.get('results') if isinstance(payload, dict) else None
+        if not isinstance(results, list) or len(results) != len(prepared):
+            raise ValueError('Invalid characteristic value search response')
+        for expected, result in zip(prepared, results):
+            if not isinstance(result, dict) or any(
+                result.get(key) != expected[key]
+                for key in ('subject_id', 'charc_id', 'query')
+            ):
+                raise ValueError('Characteristic value search order mismatch')
+            if not isinstance(result.get('values'), list):
+                raise ValueError('Characteristic value search has invalid values')
         return payload
 
     # ── Справочники ────────────────────────────────────────────────

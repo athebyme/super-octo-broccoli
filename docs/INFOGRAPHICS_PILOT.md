@@ -1,6 +1,6 @@
 # «Фотостудия»: production flow, лаборатория и честная оценка пилота
 
-Актуально на 2026-07-14. Исторические прогоны полезны для выбора latency,
+Актуально на 2026-07-16. Исторические прогоны полезны для выбора latency,
 стоимости и частоты provider refusals, но их старый `status=ok` означал только
 «получен файл». Он не доказывал сохранность товара, правильность текста или
 готовность к публикации. При чтении старого JSON `ok` теперь консервативно
@@ -11,9 +11,15 @@
 Production pipeline разделён на независимые этапы:
 
 1. Из БД берутся исходные байты фото и bounded visual fact pack товара.
-2. В основном режиме Gen-API/AITunnel получает локальный композиционный canvas
-   с главным товаром и при необходимости дополнительные фото-референсы. Qwen GPU
-   и контрольный режим по-прежнему получают только описание пустого фона.
+2. UI по умолчанию использует pilot-like `native_scene`: исходное главное фото
+   отправляется напрямую без mask, forced `input_fidelity` и включённого по
+   умолчанию текстового product context. Provider output используется напрямую и
+   всегда требует human review. Новый OpenRouter flow не предлагает
+   `reference_guided`, потому что dedicated image API не принимает protection
+   mask; старые masked experiments остаются доступными только для просмотра.
+   `background_only`
+   получает только описание пустой сцены и добавляет исходный товар локально ровно
+   один раз. Qwen GPU поддерживает только `background_only`.
    Отдельный research-режим новых ракурсов получает 1–10 фото одного SKU и
    создаёт самостоятельный generative edit для каждого выбранного вида. Он не
    входит в original-RGB production boundary и никогда не auto-publishable.
@@ -22,9 +28,11 @@ Production pipeline разделён на независимые этапы:
    случае использует детерминированный фон. Отдельный scene gate проверяет
    людей, лишние предметы и свободную центральную зону: negative prompt не
    считается доказательством, поэтому AI-фон до CV/human review не auto-pass.
-4. rembg строит только alpha matte. RGB foreground принудительно берётся из
-   оригинала, поэтому сегментатор не может отретушировать цвет, лицо, принт,
-   упаковку или этикетку. Разрешены только Lanczos resize и translate.
+4. Для `background_only` rembg строит только alpha matte. RGB foreground
+   принудительно берётся из оригинала, поэтому сегментатор не может
+   отретушировать цвет, лицо, принт, упаковку или этикетку. Разрешены только
+   Lanczos resize и translate. В masked/native edit локального foreground поверх
+   ответа модели нет: иначе даже небольшое смещение AI-товара создаёт дубликат.
    При этом автоматическая маска может ошибиться на краю: пока она не
    подтверждена отдельно, результат остаётся `review_required`. Если исходный
    PNG уже содержит осмысленную alpha-mask, она считается source-of-truth и
@@ -43,9 +51,10 @@ Production pipeline разделён на независимые этапы:
 - `research_only` — i2i/text benchmark, публикация запрещена;
 - `nsfw` / `error` — provider refusal или технический сбой.
 
-Нулевую вероятность ошибки у генеративной модели обещать нельзя. Архитектура
-делает иначе: не даёт модели менять source-of-truth, детерминирует claims и
-типографику, а всё недоказанное блокирует или отправляет на review.
+Нулевую вероятность ошибки у генеративной модели обещать нельзя. Default-путь
+не даёт модели менять source-of-truth; явно выбранные masked/native edits честно
+теряют эту гарантию и потому никогда не auto-publishable. Claims и типографика
+остаются детерминированными, а всё недоказанное блокируется или уходит на review.
 
 ## Web-лаборатория
 
@@ -59,6 +68,9 @@ Production pipeline разделён на независимые этапы:
 - пять режимов: одно выбранное фото; отдельная генерация для каждого; один
   герой с несколькими identity references; общий макет из 2–10 foreground;
   research-only генерация отдельных новых видов из одного или нескольких фото;
+- две стратегии обычной сцены: точный локальный композит `background_only` и
+  raw-photo edit без mask `native_scene`; последний доступен для одного
+  фото/`reference_set`, но не для `collage`;
 - в новых ракурсах доступны `front/back/left/right/3/4/top`; главное фото с
   ролью «Ракурс» идёт первым, каждый вид хранится отдельной job и всегда имеет
   `review_required|rejected`, `publishable=false`;
@@ -68,13 +80,16 @@ Production pipeline разделён на независимые этапы:
 - точный локальный текст, отдельный additional prompt и seller-scoped PNG
   watermark с настройкой позиции, размера и прозрачности на все jobs запуска;
 - пресет или своё описание сцены (до 800 символов, только фон);
-- один prompt одновременно на 1–3 вариантах GPU/Gen-API/AITunnel;
-- live polling: queue → generation → local composite → quality;
-- переключение «оригинал / вход модели / AI-черновик / финал»;
-- Flux 2 получает локальные reference bytes только через multipart
-  `image_urls[]` (`files_array`), а не JSON data URI; `gpt-image-2` AITunnel
-  доступен и для фона, и для reference/edit через `/v1/images/edits` с
-  вертикальным provider size 1024×1536 и локальным финалом 900×1200;
+- один prompt одновременно на 1–3 OpenRouter-моделях: Nano Banana 2 Lite (1K,
+  default), Nano Banana 2 (2K) и Grok Imagine Quality (2K); российские
+  GPU/Gen-API/AITunnel скрыты и запрещены для новых create/repeat;
+- live polling: queue → generation → conditional local composite → quality;
+- переключение «оригинал / вход модели / AI-финал или фон / финал»;
+- OpenRouter получает локальные reference bytes как PNG/JPEG/WebP data URL в
+  `input_references[]` запроса `POST /api/v1/images`, с `aspect_ratio=3:4` и
+  `resolution=1K|2K`; Nano принимает до 10 UI-референсов, Grok — до 3. Chat по
+  умолчанию использует Nano Banana 2 Lite и показывает оценку около 3,30 ₽, но
+  фактическую USD-стоимость определяет `usage.cost` OpenRouter;
 - слепое сравнение, чтобы название модели не влияло на оценку;
 - оценка 1–5, включая теги «ракурс совпал»/«геометрия выдумана», комментарий,
   повтор запуска;
@@ -88,6 +103,13 @@ Production pipeline разделён на независимые этапы:
 очереди. За 24 часа разрешено 50 job и 500 ₽ оценочной стоимости. Настройки:
 
 ```bash
+# Единственный backend для новых генераций
+OPENROUTER_API_KEY=
+OPENROUTER_IMAGE_MODEL=google/gemini-3.1-flash-lite-image
+OPENROUTER_IMAGE_RESOLUTION=1K
+IMAGE_GEN_PROXY=
+
+# Legacy: только завершение уже созданных jobs
 GEN_API_KEY=
 AITUNNEL_API_KEY=
 GPU_IMAGE_SERVER_URL=https://gpu.example/v1-base-if-any

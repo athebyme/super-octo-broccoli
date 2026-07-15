@@ -6,7 +6,7 @@ to the target marketplace category schema.
 Key features:
 - Per-characteristic AI instructions with type/unit/dictionary awareness
 - Post-validation of AI responses against the marketplace schema
-- Dictionary fuzzy-matching to auto-correct AI output
+- Exact canonical dictionary validation shared with the WB write path
 - Two-pass strategy: bulk parse + targeted re-query for missed required fields
 - Few-shot examples from validated products of the same category
 - AI response caching via content hash
@@ -15,7 +15,6 @@ import json
 import logging
 import re
 from typing import Dict, Any, List, Optional, Tuple
-from difflib import SequenceMatcher
 
 from models import MarketplaceCategoryCharacteristic, SupplierProduct
 from services.ai_service import AITask
@@ -24,10 +23,7 @@ logger = logging.getLogger('marketplace_ai_parser')
 
 
 def _fuzzy_match_dictionary(value: str, dictionary_json: str, threshold: float = 0.75) -> Optional[str]:
-    """
-    Try to fuzzy-match a value against a dictionary of allowed values.
-    Returns the best match if similarity >= threshold, else None.
-    """
+    """Backward-compatible name for exact case-insensitive canonicalization."""
     if not dictionary_json:
         return None
     try:
@@ -36,9 +32,6 @@ def _fuzzy_match_dictionary(value: str, dictionary_json: str, threshold: float =
         return None
 
     value_lower = value.strip().lower()
-    best_match = None
-    best_ratio = 0.0
-
     for item in dict_items:
         if isinstance(item, dict):
             dict_val = str(item.get('value') or item.get('name', ''))
@@ -47,18 +40,8 @@ def _fuzzy_match_dictionary(value: str, dictionary_json: str, threshold: float =
         if not dict_val:
             continue
 
-        # Exact match (case-insensitive)
         if dict_val.strip().lower() == value_lower:
             return dict_val
-
-        # Fuzzy match
-        ratio = SequenceMatcher(None, value_lower, dict_val.strip().lower()).ratio()
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_match = dict_val
-
-    if best_ratio >= threshold and best_match:
-        return best_match
     return None
 
 
@@ -73,6 +56,19 @@ class MarketplaceAwareParsingTask(AITask):
         super().__init__(client, custom_instruction)
         self.characteristics = characteristics
         self.category_id = category_id
+        self._constraint_cache = {}
+        try:
+            from services.marketplace_validator import (
+                prime_wb_characteristic_directory_cache,
+            )
+            category = characteristics[0].category if characteristics else None
+            marketplace = category.marketplace if category else None
+            if marketplace:
+                prime_wb_characteristic_directory_cache(
+                    marketplace, characteristics, self._constraint_cache,
+                )
+        except Exception:
+            logger.exception('Failed to prime WB characteristic constraints')
         # Build lookup for validation
         self._charc_by_name = {c.name: c for c in characteristics if c.is_enabled}
 
@@ -110,25 +106,22 @@ class MarketplaceAwareParsingTask(AITask):
             if c.unit_name:
                 block += f'  UNIT: {c.unit_name}\n'
 
-            if c.dictionary_json:
-                try:
-                    dict_items = json.loads(c.dictionary_json)
-                    allowed = []
-                    for item in dict_items:
-                        if isinstance(item, dict):
-                            val = item.get('value') or item.get('name', '')
-                        else:
-                            val = str(item)
-                        if val:
-                            allowed.append(str(val))
-                    if allowed:
-                        if len(allowed) <= 25:
-                            block += f'  ALLOWED VALUES: {", ".join(allowed)}\n'
-                        else:
-                            block += f'  ALLOWED VALUES ({len(allowed)} total, showing first 20): {", ".join(allowed[:20])}...\n'
-                        block += '  IMPORTANT: Value MUST exactly match one of the allowed values!\n'
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            constraint = self._constraint_for(c)
+            if c.required and not constraint.get('usable'):
+                raise ValueError(
+                    f'Обязательная характеристика «{c.name}» не имеет '
+                    'доступного актуального ограничения WB'
+                )
+            allowed = constraint.get('values') or []
+            if constraint.get('constrained') and allowed:
+                block += f'  ALLOWED VALUES: {", ".join(allowed)}\n'
+                if constraint.get('truncated'):
+                    block += (
+                        '  LIST IS TRUNCATED: if the source explicitly contains a value '
+                        'outside this sample, return that exact source text; Python will '
+                        'accept it only when it exactly matches the full canonical dictionary.\n'
+                    )
+                block += '  IMPORTANT: Value MUST exactly match one of the allowed values!\n'
 
             if c.ai_instruction:
                 block += f'  INSTRUCTION: {c.ai_instruction}\n'
@@ -146,11 +139,8 @@ class MarketplaceAwareParsingTask(AITask):
                 "Ты ДОЛЖЕН заполнить их, используя ВСЕ доступные данные и экспертное знание.\n\n"
                 "СТРАТЕГИЯ:\n"
                 "- Извлеки из текста описания, названия, характеристик.\n"
-                "- Если точного значения нет — ВЫВЕДИ ЛОГИЧЕСКИ из контекста:\n"
-                "  • Вес — оцени по типу товара и материалу (силикон ~100-300г, пластик ~50-150г).\n"
-                "  • Ширина — оцени по диаметру или типу изделия.\n"
-                "  • Особенности — определи по материалу, форме, описанию.\n"
-                "- Не оставляй поля пустыми если можно разумно предположить значение.\n\n"
+                "- Используй только явно подтверждённые данные товара; не оценивай вес, состав, размеры или комплектацию.\n"
+                "- Если точного факта нет — оставь поле пустым.\n\n"
                 "ПРАВИЛА:\n"
                 "1. Ответ — ТОЛЬКО валидный JSON объект.\n"
                 "2. Ключи JSON = точные имена FIELD ниже.\n"
@@ -169,14 +159,11 @@ class MarketplaceAwareParsingTask(AITask):
                 "3. Для TYPE=NUMBER верни число (int/float), НЕ строку, НЕ массив.\n"
                 "4. Для TYPE=STRING ARRAY верни массив строк: [\"значение\"].\n"
                 "5. Если есть ALLOWED VALUES — значение ДОЛЖНО совпадать с одним из них.\n"
-                "6. Если значение можно ЛОГИЧЕСКИ ВЫВЕСТИ из контекста — выведи.\n"
-                "   Например: из описания видно материал, из размеров — ширину, из названия — особенности.\n"
-                "   Используй своё экспертное знание о товарах этой категории.\n"
+                "6. Заполняй только явно подтверждённые факты из входных данных; не угадывай.\n"
                 "7. Ключи JSON = только имена FIELD из схемы, не добавляй своих.\n"
                 "8. Если в тексте единица измерения отличается от UNIT — конвертируй.\n"
                 "9. Старайся заполнить МАКСИМУМ полей. Пустые поля = плохо заполненная карточка.\n"
-                "   Для числовых полей (размеры, вес) — используй здравый смысл если точное значение неизвестно,\n"
-                "   но можно оценить по типу товара, материалу, аналогичным изделиям.\n\n"
+                "   Неизвестное значение нужно пропустить.\n\n"
                 "СХЕМА ХАРАКТЕРИСТИК:\n\n"
             )
 
@@ -281,12 +268,6 @@ class MarketplaceAwareParsingTask(AITask):
                 validated[field_name] = coerced
             else:
                 validation_log.append(f"'{field_name}': {msg} (original: {value})")
-                # Try to salvage — for dictionary fields, fuzzy-match
-                if charc.charc_type == 1 and charc.dictionary_json:
-                    salvaged = self._try_fuzzy_salvage(value, charc)
-                    if salvaged is not None:
-                        validated[field_name] = salvaged
-                        validation_log.append(f"'{field_name}': fuzzy-matched to {salvaged}")
 
         if validation_log:
             logger.info(f"AI parse validation: {'; '.join(validation_log)}")
@@ -410,27 +391,67 @@ class MarketplaceAwareParsingTask(AITask):
                 return False, [], "Empty array for required field"
             return True, [], None
 
-        # Max count constraint — truncate instead of rejecting
+        # Max count is a hard WB contract; never silently drop model output.
         if charc.max_count > 0 and len(arr) > charc.max_count:
-            arr = arr[:charc.max_count]
+            return False, arr, f'Too many values: {len(arr)} > {charc.max_count}'
 
-        # Dictionary validation with fuzzy matching
-        if charc.dictionary_json:
+        constraint = self._constraint_for(charc)
+        if not constraint.get('usable'):
+            return False, arr, 'Characteristic constraint is unavailable'
+        allowed = constraint.get('values') if constraint.get('constrained') else None
+        if allowed is not None:
             validated_arr = []
             for v in arr:
-                matched = _fuzzy_match_dictionary(v, charc.dictionary_json, threshold=0.7)
+                matched = self._canonical_constraint_value(
+                    charc, v, constraint,
+                )
                 if matched:
                     validated_arr.append(matched)
                 else:
-                    return False, arr, f"Value '{v}' not in dictionary (no fuzzy match found)"
+                    return False, arr, f"Value '{v}' not in the canonical dictionary"
             return True, validated_arr, None
 
         return True, arr, None
 
+    def _canonical_constraint_value(
+        self,
+        charc: MarketplaceCategoryCharacteristic,
+        value: Any,
+        constraint: Dict[str, Any],
+    ) -> Optional[str]:
+        """Resolve one exact value against the complete effective allowlist."""
+        key = str(value or '').strip().casefold()
+        if not key:
+            return None
+        for candidate in constraint.get('values') or []:
+            if str(candidate).strip().casefold() == key:
+                return str(candidate)
+        if not constraint.get('truncated'):
+            return None
+
+        category = getattr(charc, 'category', None)
+        marketplace = getattr(category, 'marketplace', None) if category else None
+        if not marketplace:
+            return None
+        from services.marketplace_validator import search_wb_characteristic_values
+        result = search_wb_characteristic_values(
+            marketplace,
+            charc,
+            str(value).strip(),
+            validation_cache=self._constraint_cache,
+            limit=20,
+        )
+        if not result.get('usable') or not result.get('constrained'):
+            return None
+        return next((
+            str(candidate) for candidate in (result.get('values') or [])
+            if str(candidate).strip().casefold() == key
+        ), None)
+
     def _try_fuzzy_salvage(
         self, value: Any, charc: MarketplaceCategoryCharacteristic
     ) -> Optional[List[str]]:
-        """Last-resort fuzzy match for failed dictionary values."""
+        """Legacy helper retained for callers; performs exact matching only."""
         if not charc.dictionary_json:
             return None
 
@@ -443,6 +464,37 @@ class MarketplaceAwareParsingTask(AITask):
             else:
                 return None  # Can't salvage all values
         return result if result else None
+
+    def _constraint_for(self, charc: MarketplaceCategoryCharacteristic) -> Dict[str, Any]:
+        category = getattr(charc, 'category', None)
+        marketplace = getattr(category, 'marketplace', None) if category else None
+        if not marketplace:
+            values = []
+            if charc.dictionary_json:
+                try:
+                    raw_values = json.loads(charc.dictionary_json)
+                    if not isinstance(raw_values, list):
+                        raise ValueError('dictionary must be an array')
+                    for item in raw_values:
+                        if isinstance(item, dict):
+                            value = item.get('value') or item.get('name')
+                        else:
+                            value = item
+                        value = str(value or '').strip()
+                        if value:
+                            values.append(value)
+                except Exception:
+                    return {'usable': False, 'constrained': True, 'values': []}
+            return {
+                'usable': True,
+                'constrained': bool(values),
+                'values': values,
+                'truncated': False,
+            }
+        from services.marketplace_validator import get_wb_characteristic_constraint
+        return get_wb_characteristic_constraint(
+            marketplace, charc, self._constraint_cache, values_limit=100,
+        )
 
     # ------------------------------------------------------------------
     # Two-pass execution with caching

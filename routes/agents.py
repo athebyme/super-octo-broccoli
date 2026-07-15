@@ -113,6 +113,7 @@ def register_agents_routes(app):
             result = agent_harness.submit_turn(
                 conversation, body.get('message', ''), body.get('product_ids'),
                 body.get('page_context'), body.get('entity_kind'),
+                body.get('scope_mode'),
             )
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
@@ -502,7 +503,13 @@ def register_agents_routes(app):
             flash('Не удалось откатить изменения', 'danger')
             return redirect(url_for('agent_task_detail', task_id=task_id))
 
-        if not result['snapshots']:
+        if result.get('conflicts'):
+            flash(
+                f"Откат выполнен частично: {result['products']} товаров, "
+                f"конфликтов ручных изменений: {result['conflicts']}",
+                'warning',
+            )
+        elif not result['snapshots']:
             flash('Нет изменений для отката (или они уже откачены)', 'warning')
         else:
             flash(

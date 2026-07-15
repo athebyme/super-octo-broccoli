@@ -96,7 +96,10 @@ class TestProductKindChainingGuard(unittest.TestCase):
     def test_product_kind_safe_skills_set(self):
         self.assertEqual(
             _PRODUCT_KIND_SAFE_SKILLS,
-            {'content-writer', 'batch-audit', 'card-insight', 'quality-audit'},
+            {
+                'content-writer', 'wb-content-publisher', 'batch-audit',
+                'card-insight', 'quality-audit',
+            },
         )
 
     def test_blocks_product_kind_into_legacy_imported_product_skill(self):

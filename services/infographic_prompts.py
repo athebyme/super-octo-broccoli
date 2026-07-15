@@ -70,6 +70,23 @@ _ANGLE_TEMPLATE = (
     "result requires human review."
 )
 
+_NATIVE_SCENE_TEMPLATE = (
+    "Research-only native image-to-image scene generation. Use the first supplied "
+    "catalog photo as the primary product reference and integrate exactly one "
+    "instance of that same item into {scene}. Preserve the visible silhouette, "
+    "proportions, colors, materials, controls, packaging and printed labels as "
+    "closely as possible. Re-render the whole result as one coherent photograph: "
+    "the product and environment must share physically plausible ambient light, "
+    "contact shadows, reflections and color spill. Do not make the result look like "
+    "a pasted cutout on a separately generated background. Keep the source camera "
+    "view unless the prompt explicitly requests a supported novel view. Replace the "
+    "original environment; do not "
+    "retain or create a second copy of the product, package, close-up or accessory. "
+    "Do not add people, new readable text, watermarks or new logos. Professional "
+    "commercial photography, vertical 3:4 composition. The model may redraw every "
+    "pixel, so the result requires human identity review."
+)
+
 # Рискованная лексика -> нейтральная (только для текста, попадающего в промпт;
 # fail-open: незнакомые слова не трогаем, товар в промпте не описываем без нужды).
 _SANITIZE_REPLACEMENTS = (
@@ -123,6 +140,11 @@ def build_angle_prompt_for_scene(scene: str) -> str:
     return _ANGLE_TEMPLATE.format(scene=scene)
 
 
+def build_native_scene_prompt_for_scene(scene: str) -> str:
+    """Prompt for a raw-photo i2i scene whose provider output is the final image."""
+    return _NATIVE_SCENE_TEMPLATE.format(scene=scene)
+
+
 def build_edit_prompt(preset_key: str) -> str:
     """Промпт режима A: сцена вокруг товара с исходного фото."""
     return build_edit_prompt_for_scene(ATMOSPHERE_PRESETS[preset_key]["scene"])
@@ -136,6 +158,11 @@ def build_background_prompt(preset_key: str) -> str:
 def build_angle_prompt(preset_key: str) -> str:
     """Research-only novel-view prompt using a safe atmosphere preset."""
     return build_angle_prompt_for_scene(ATMOSPHERE_PRESETS[preset_key]["scene"])
+
+
+def build_native_scene_prompt(preset_key: str) -> str:
+    """Research-only native scene prompt using a safe atmosphere preset."""
+    return build_native_scene_prompt_for_scene(ATMOSPHERE_PRESETS[preset_key]["scene"])
 
 
 def sanitize_prompt(text: str) -> str:

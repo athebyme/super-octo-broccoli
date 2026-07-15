@@ -58,6 +58,10 @@ def test_every_short_unresolved_goal_uses_semantic_fallback():
     assert build_plan('сколько у меня товаров на WB?') is not None
     assert direct_response('помощь с убыточными товарами') is None
     assert direct_response('привет!') is not None
+    assert direct_response('привет, паправь названее у этой картчоки') is None
+    assert _needs_semantic_planner(
+        'привет, паправь названее у этой картчоки'
+    )
 
 
 def test_explicit_knowledge_question_is_deterministic_read_plan():
@@ -157,7 +161,7 @@ def test_semantic_catalog_query_is_bounded_typed_and_one_model_call():
         'stock_state': 'out_of_stock',
         'quality_max': 55.0,
     }
-    assert llm.kwargs['max_tokens'] == 1200
+    assert llm.kwargs['max_tokens'] == 2200
     assert 'Речь про карточки на WB' in llm.kwargs['prompt']
     assert len(llm.kwargs['prompt']) < 8000
     assert 'drop table products' not in str(params)
@@ -203,6 +207,104 @@ def test_semantic_planner_enforces_global_no_write_constraint():
         'allow_writes': False,
     })
     assert result['status'] == 'needs_clarification'
+
+
+def test_semantic_planner_handles_typo_with_closed_content_field_enum():
+    llm = _PlannerLLM(_planned_step('content-writer', {
+        'fields': ['title'],
+    }, risk='write'))
+    result = _plan_with(llm, {
+        'text': 'паправь названее у этой картчоки',
+        'product_ids': [41],
+        'entity_scope': {'kind': 'product', 'ids': [41]},
+        'scope_origin': 'request',
+    })
+
+    assert result['status'] == 'completed'
+    assert result['risk'] == 'write'
+    assert result['steps'][0]['params']['fields'] == ['title']
+
+
+def test_semantic_planner_can_leave_stale_selection_for_typo_global_read():
+    planned = _planned_step('catalog-query', {
+        'entity_kind': 'product',
+        'condition_label': 'во всём каталоге',
+    })
+    planned['scope_mode'] = 'global'
+    result = _plan_with(_PlannerLLM(planned), {
+        'text': 'пакажи весь коталог на вб',
+        'product_ids': [41],
+        'entity_scope': {'kind': 'product', 'ids': [41]},
+        'scope_origin': 'conversation',
+    })
+
+    assert result['status'] == 'completed'
+    assert result['risk'] == 'read'
+    assert result['scope_mode'] == 'global'
+    assert result['product_ids'] == []
+    assert result['entity_kind'] == 'product'
+    assert result['steps'][0]['agent'] == 'catalog-query'
+
+
+def test_semantic_planner_cannot_broaden_old_selection_to_global_write():
+    planned = _planned_step('brand-resolver', risk='write')
+    planned['scope_mode'] = 'global'
+    result = _plan_with(_PlannerLLM(planned), {
+        'text': 'паправь бренды у других таваров',
+        'product_ids': [41],
+        'entity_scope': {'kind': 'product', 'ids': [41]},
+        'scope_origin': 'conversation',
+        'allow_global_write': False,
+    })
+
+    assert result['status'] == 'needs_clarification'
+    assert 'текущий выбор' in result['clarification_question']
+
+
+def test_semantic_publisher_reuses_durable_fields_without_regeneration():
+    llm = _PlannerLLM(_planned_step('wb-content-publisher', {}, risk='write'))
+    result = _plan_with(llm, {
+        'text': 'атправь теперь эти измененя на вб',
+        'product_ids': [41],
+        'entity_scope': {'kind': 'product', 'ids': [41]},
+        'scope_origin': 'conversation',
+        'conversation_memory': {
+            'last_run': {
+                'status': 'completed',
+                'requested_fields': ['title', 'description'],
+            },
+        },
+    })
+
+    assert result['status'] == 'completed'
+    assert result['steps'] == [{
+        'agent': 'wb-content-publisher',
+        'task_type': 'publish_content_proposal',
+        'label': 'Проверить условие',
+        'params': {
+            'fields': ['title', 'description'],
+            'entity_kind': 'product',
+        },
+    }]
+    assert 'scope_origin: conversation' in llm.kwargs['prompt']
+
+
+def test_semantic_planner_never_prepares_and_publishes_in_one_plan():
+    planned = _planned_step('content-writer', {
+        'fields': ['description'],
+    }, risk='write')
+    planned['steps'].append({
+        'skill': 'wb-content-publisher',
+        'label': 'Сразу отправить',
+        'params': {'fields': ['description']},
+    })
+    result = _plan_with(_PlannerLLM(planned), {
+        'text': 'подготовь и сразу отправь описание',
+        'product_ids': [41],
+        'entity_scope': {'kind': 'product', 'ids': [41]},
+    })
+    assert result['status'] == 'needs_clarification'
+    assert 'Сначала подготовьте' in result['clarification_question']
 
 
 def test_named_write_scope_never_expands_to_the_whole_catalog():
@@ -304,3 +406,32 @@ def test_semantic_read_plan_auto_starts_but_write_plan_waits_for_confirmation():
     create_run.assert_not_called()
     assert write_message.metadata['requires_approval'] is True
     assert write_message.metadata['status'] == 'pending_approval'
+
+
+def test_projected_semantic_global_plan_drops_transport_selection():
+    message = _ProjectedMessage({
+        'status': 'completed', 'title': 'Каталог',
+        'summary': 'Показать весь каталог.', 'risk': 'read',
+        'confidence': 0.9, 'scope_label': 'Весь каталог',
+        'scope_mode': 'global', 'product_ids': [], 'entity_kind': 'product',
+        'steps': [{
+            'agent': 'catalog-query', 'task_type': 'filter_wb_catalog',
+            'label': 'Каталог', 'params': {
+                'entity_kind': 'product', 'condition_label': 'все карточки',
+            },
+        }],
+        '_usage': {'api_requests': 1},
+    })
+    message.metadata.update({
+        'product_ids': [41],
+        'entity_scope': {'kind': 'product', 'ids': [41]},
+    })
+
+    with patch('services.agent_harness.snapshot_count', return_value=0), patch(
+        'services.agent_harness._create_run_from_plan', return_value=object(),
+    ):
+        assert sync_run_message(message)
+
+    assert message.metadata['product_ids'] == []
+    assert message.metadata['entity_scope'] == {'kind': 'product', 'ids': []}
+    assert message.metadata['scope_mode'] == 'global'

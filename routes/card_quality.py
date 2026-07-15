@@ -8,7 +8,8 @@ from datetime import datetime as _dt
 from flask import render_template, request, redirect, url_for, flash, jsonify, current_app
 from flask_login import login_required, current_user
 
-from models import db, Product, CardRatingHistory, BulkEditHistory, CardEditHistory
+from models import (db, Product, ImportedProduct, Supplier, CardRatingHistory,
+                    BulkEditHistory, CardEditHistory)
 from models import get_standard_media, get_min_photos
 from services.card_quality_scorer import (card_quality_detail, compute_quality_summary,
                                           score_status, ATTENTION_REASONS)
@@ -23,6 +24,62 @@ logger = logging.getLogger('card_quality')
 
 BULK_IMPROVE_LIMIT = 30
 STANDARD_PHOTOS_BULK_LIMIT = 30
+
+
+def _card_quality_filter_options(seller_id: int) -> dict:
+    """Кешированные варианты фильтров только по активным карточкам продавца."""
+    from services.ttl_cache import cache
+
+    def _load():
+        categories = db.session.query(
+            Product.object_name, db.func.count(Product.id),
+        ).filter(
+            Product.seller_id == seller_id,
+            Product.is_active == True,  # noqa: E712
+            Product.object_name.isnot(None),
+            db.func.trim(Product.object_name) != '',
+        ).group_by(Product.object_name).order_by(Product.object_name.asc()).all()
+
+        brands = db.session.query(
+            Product.brand, db.func.count(Product.id),
+        ).filter(
+            Product.seller_id == seller_id,
+            Product.is_active == True,  # noqa: E712
+            Product.brand.isnot(None),
+            db.func.trim(Product.brand) != '',
+        ).group_by(Product.brand).order_by(Product.brand.asc()).all()
+
+        suppliers = db.session.query(
+            Supplier.id, Supplier.name,
+            db.func.count(db.func.distinct(Product.id)),
+        ).join(
+            ImportedProduct, ImportedProduct.supplier_id == Supplier.id,
+        ).join(
+            Product, Product.id == ImportedProduct.product_id,
+        ).filter(
+            Product.seller_id == seller_id,
+            Product.is_active == True,  # noqa: E712
+            ImportedProduct.seller_id == seller_id,
+        ).group_by(Supplier.id, Supplier.name).order_by(
+            Supplier.name.asc(), Supplier.id.asc(),
+        ).all()
+
+        return {
+            'categories': [
+                {'value': value, 'label': value, 'count': count}
+                for value, count in categories
+            ],
+            'brands': [
+                {'value': value, 'label': value, 'count': count}
+                for value, count in brands
+            ],
+            'suppliers': [
+                {'value': str(supplier_id), 'label': name, 'count': count}
+                for supplier_id, name, count in suppliers
+            ],
+        }
+
+    return cache.get_or_load(f'cq-filters:{seller_id}', 120, _load)
 
 
 def _first_photo_url(product) -> str:
@@ -181,8 +238,29 @@ def register_card_quality_routes(app):
             per_page = min(request.args.get('per_page', 50, type=int), 200)
             reason = request.args.get('reason')
             bucket = request.args.get('bucket')
+            search = request.args.get('search', '', type=str).strip()[:100]
+            category = request.args.get('category', '', type=str).strip()[:200]
+            brand = request.args.get('brand', '', type=str).strip()[:200]
+            supplier_id = request.args.get('supplier_id', type=int)
 
             q = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True)
+            if search:
+                search_term = f'%{search}%'
+                q = q.filter(db.or_(
+                    Product.title.ilike(search_term),
+                    Product.vendor_code.ilike(search_term),
+                    Product.nm_id.cast(db.String).ilike(search_term),
+                ))
+            if category:
+                q = q.filter(Product.object_name == category)
+            if brand:
+                q = q.filter(Product.brand == brand)
+            if supplier_id and supplier_id > 0:
+                q = q.filter(db.exists().where(db.and_(
+                    ImportedProduct.product_id == Product.id,
+                    ImportedProduct.seller_id == current_user.seller.id,
+                    ImportedProduct.supplier_id == supplier_id,
+                )))
             if reason in ATTENTION_REASONS:
                 q = q.filter(Product.attention_reasons.like(f'%{reason}%'))
             if bucket == 'poor':
@@ -217,6 +295,18 @@ def register_card_quality_routes(app):
                             'page': page, 'pages': pagination.pages})
         except Exception as e:
             logger.exception('Ошибка в api_card_quality_list: %s', e)
+            return jsonify({'error': 'Внутренняя ошибка'}), 500
+
+    @app.route('/api/card-quality/filters')
+    @login_required
+    def api_card_quality_filters():
+        if not current_user.seller or not current_user.seller.has_valid_api_key():
+            return jsonify({'error': 'API ключ WB не настроен'}), 403
+        try:
+            data = _card_quality_filter_options(current_user.seller.id)
+            return jsonify({'success': True, 'data': data})
+        except Exception as e:
+            logger.exception('Ошибка в api_card_quality_filters: %s', e)
             return jsonify({'error': 'Внутренняя ошибка'}), 500
 
     @app.route('/api/card-quality/summary')
