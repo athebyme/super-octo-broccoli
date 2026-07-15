@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P8 implemented; P9 orders/finance next
+Статус: P0–P8 и P9A fulfillment implemented; P9B finance next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -170,8 +170,10 @@ unified chat
 ### 3.6 Fulfillment и заказы
 
 - FBO и FBS/rFBS хранятся как разные source/status families.
-- FBS list/get использует актуальные posting methods и сохраняет posting-level status history.
-- Методы, запланированные к отключению 01.08.2026, не вводятся в новый код; compatibility manifest выбирает replacement.
+- Новый read path использует только актуальные `/v4/posting/fbs/list` и `/v3/posting/fbo/list`. В уведомлении от 10.07.2026 Ozon назначил отключение заменённых `/v3/posting/fbs/list` и `/v2/posting/fbo/list` на 31.08.2026; эти старые paths отсутствуют в manifest и тестируются как запрещённые fallback.
+- FBO/FBS status history append-ится только при фактическом изменении normalized status/substatus. rFBS не угадывается по названию склада: отдельные rFBS сигналы приходят из current return/cancellation feeds.
+- `/v1/returns/list` является источником FBO/FBS возвратов, `/v2/returns/rfbs/list` — rFBS возвратов, `/v2/conditional-cancellation/list` — rFBS заявок на отмену. Cursor/offset обязан продвигаться; duplicate identity или malformed page отклоняет всю страницу.
+- В persistence попадает whitelist: posting/order identity, provider statuses/timestamps/reason enums и товарные строки. Buyer name/phone/address/email, свободные comments, photos, barcodes, analytics и posting `financial_data` не сохраняются.
 - Маркировка, экземпляры, акты и отгрузка — отдельный поздний milestone с обязательным human workflow. Это не часть базовой публикации карточки.
 - Push/event capabilities используются как invalidation signal, но polling reconciliation остаётся источником восстановления после потерь.
 
@@ -675,11 +677,21 @@ Definition of done: comparisons never mix WB and Ozon metrics without an explici
 
 ### P9 — orders, returns, cancellations and finance
 
-- Normalized order/posting, status history and fulfillment source.
-- Ozon FBO/FBS/rFBS ingestion with current endpoints.
-- Return/cancellation events and deduplication keys.
+- [x] Normalized order/posting, status history and explicit fulfillment source.
+- [x] Ozon FBO/FBS postings plus FBO/FBS/rFBS returns with current endpoints.
+- [x] Return/cancellation projections and account-scoped deduplication keys.
+- [x] Durable bounded phase/cursor sync, scheduler and separate Ozon UI/API.
 - Ozon 2026 finance feeds; no disabled v3 fallback.
 - Reconciliation totals and source-level traceability.
+
+P9A реализован отдельными `MarketplaceFulfillmentSync`, `MarketplacePosting`,
+`MarketplacePostingItem`, `MarketplacePostingStatusEvent`, `MarketplaceReturn`
+и `MarketplaceCancellation`. Ни одна строка не использует `WBOrder`, `WBSale`
+или `WBRealizationRow`. Пять read-only фаз commit-ятся постранично и могут быть
+продолжены scheduler-ом; failure не удаляет уже подтверждённые проекции и не
+порождает provider write. UI `/marketplaces/orders`, `/marketplaces/returns` и
+`/marketplaces/cancellations` требует exact seller-owned Ozon account и явно
+отделён от WB-разделов.
 
 Definition of done: finance/order UI can filter by marketplace/account and totals tie to raw facts.
 

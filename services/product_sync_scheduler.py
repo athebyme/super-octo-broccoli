@@ -367,6 +367,19 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    # Orders, returns and cancellations use a separate read-only projection.
+    # The durable phase/cursor lets this bounded job resume large accounts
+    # without ever invoking shipment, refund or cancellation writes.
+    scheduler.add_job(
+        func=lambda: sync_ozon_fulfillment_accounts(flask_app),
+        trigger=IntervalTrigger(minutes=10),
+        id='ozon_fulfillment_sync',
+        name='Sync account-scoped Ozon orders and returns (read-only)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Первоначальная загрузка аналитики через 30 сек после старта (если данных нет)
     scheduler.add_job(
         func=lambda: initial_analytics_sync_if_empty(flask_app),
@@ -1246,6 +1259,90 @@ def sync_ozon_analytics_accounts(flask_app, limit=3):
             logger.info(
                 'Ozon analytics scheduler: selected=%s completed=%s running=%s failed=%s',
                 result['selected'], result['completed'], result['running'], result['failed'],
+            )
+        return result
+
+
+def sync_ozon_fulfillment_accounts(flask_app, limit=2):
+    """Resume/start a bounded set of read-only Ozon fulfillment snapshots."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 10:
+        return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 1}
+    with flask_app.app_context():
+        if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0}
+        from models import (
+            Marketplace,
+            MarketplaceFulfillmentSync,
+            SellerMarketplaceAccount,
+            db,
+        )
+        from services.marketplace_fulfillment import MarketplaceFulfillmentService
+
+        current_time = datetime.utcnow()
+        current_date = current_time.date()
+        candidates = SellerMarketplaceAccount.query.join(Marketplace).filter(
+            Marketplace.code == 'ozon',
+            Marketplace.is_active.is_(True),
+            SellerMarketplaceAccount.is_active.is_(True),
+            SellerMarketplaceAccount.connection_status == 'connected',
+        ).order_by(
+            SellerMarketplaceAccount.is_default.desc(),
+            SellerMarketplaceAccount.id.asc(),
+        ).limit(50).all()
+        due = []
+        for account in candidates:
+            running = MarketplaceFulfillmentSync.query.filter_by(
+                seller_id=account.seller_id,
+                account_id=account.id,
+                status='running',
+            ).first()
+            latest = MarketplaceFulfillmentService._latest_completed(
+                seller_id=account.seller_id,
+                account_id=account.id,
+                period_code='30d',
+            )
+            period_start = current_date - timedelta(days=29)
+            fresh = (
+                latest is not None
+                and latest.period_start == period_start
+                and latest.period_end == current_date
+                and latest.completed_at is not None
+                and latest.completed_at
+                >= current_time - MarketplaceFulfillmentService.CACHE_TTL
+            )
+            if running is not None or not fresh:
+                due.append(account)
+            if len(due) >= limit:
+                break
+
+        result = {'selected': len(due), 'completed': 0, 'running': 0, 'failed': 0}
+        for account in due:
+            try:
+                run = MarketplaceFulfillmentService.sync_account(
+                    seller_id=account.seller_id,
+                    account_id=account.id,
+                    period_code='30d',
+                    force=False,
+                    max_pages=5,
+                    now=current_time,
+                    today=current_date,
+                )
+                result['completed' if run.status == 'completed' else 'running'] += 1
+            except Exception as exc:
+                db.session.rollback()
+                result['failed'] += 1
+                logger.error(
+                    'Ozon fulfillment scheduler failed for account=%s: %s',
+                    account.id,
+                    type(exc).__name__,
+                )
+        if result['selected'] or result['failed']:
+            logger.info(
+                'Ozon fulfillment scheduler: selected=%s completed=%s running=%s failed=%s',
+                result['selected'],
+                result['completed'],
+                result['running'],
+                result['failed'],
             )
         return result
 

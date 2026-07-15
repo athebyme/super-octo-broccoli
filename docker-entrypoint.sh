@@ -142,6 +142,7 @@ python migrations/migrate_add_marketplace_commercial.py /app/data/seller_platfor
 python migrations/migrate_add_marketplace_product_updates.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_auto_publish.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_quality_analytics.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_fulfillment.py /app/data/seller_platform.db
 python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
 python migrations/add_ai_job_heartbeat.py || echo "⚠️ AI job heartbeat migration skipped (already applied or error)"
 python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"

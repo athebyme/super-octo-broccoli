@@ -29,7 +29,9 @@ class OzonAdapter(MarketplaceAdapter):
             MarketplaceCapability.STOCKS_READ,
             MarketplaceCapability.STOCKS_WRITE,
             MarketplaceCapability.WAREHOUSES_READ,
+            MarketplaceCapability.ORDERS_READ,
             MarketplaceCapability.ANALYTICS_READ,
+            MarketplaceCapability.FINANCE_READ,
         )
     })
     endpoint_versions = {
@@ -267,3 +269,59 @@ class OzonAdapter(MarketplaceAdapter):
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         return self._client(credentials).get_analytics_data(payload)
+
+    def read_fbs_postings(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_fbs_postings(payload)
+
+    def read_fbo_postings(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_fbo_postings(payload)
+
+    def read_returns(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_returns(payload)
+
+    def read_rfbs_returns(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_rfbs_returns(payload)
+
+    def read_conditional_cancellations(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_conditional_cancellations(payload)
+
+    def read_finance_accrual_by_day(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_finance_accrual_by_day(payload)
+
+    def read_finance_compensation(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_finance_compensation(payload)
+
+    def read_finance_decompensation(
+        self,
+        credentials: MarketplaceCredentials,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self._client(credentials).get_finance_decompensation(payload)

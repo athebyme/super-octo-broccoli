@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% set page_titles = {
+  'orders': ('Заказы Ozon', 'Отправления FBO и FBS без персональных данных покупателей'),
+  'returns': ('Возвраты Ozon', 'Единая read-only лента FBO/FBS и rFBS возвратов'),
+  'cancellations': ('Отмены Ozon', 'Отменённые отправления и заявки rFBS на согласование')
+} %}
+{% set current_title = page_titles[page_kind] %}
+{% block title %}{{ current_title[0] }} — Seller Hub{% endblock %}
+
+{% block content %}
+<div x-data="ozonFulfillmentPage()" x-init="init()">
+  <div class="sh-page-header">
+    <div class="sh-page-header-content">
+      <div>
+        <h1 class="sh-page-title">{{ current_title[0] }}</h1>
+        <p class="sh-page-subtitle">{{ current_title[1] }}</p>
+      </div>
+      <div class="sh-page-actions" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;background:rgba(255,255,255,.12);padding:3px;border-radius:7px">
+          <button @click="changePeriod('7d')" class="px-3 py-1.5 rounded text-sm" :class="period==='7d'?'bg-white text-gray-900 shadow':'text-white'">7 дней</button>
+          <button @click="changePeriod('30d')" class="px-3 py-1.5 rounded text-sm" :class="period==='30d'?'bg-white text-gray-900 shadow':'text-white'">30 дней</button>
+        </div>
+        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="sync()" :disabled="syncing">
+          <span x-text="syncing ? 'Читаем Ozon…' : (syncState && syncState.status==='running' ? 'Продолжить sync' : 'Обновить из Ozon')"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:1380px;margin:0 auto;padding:0 24px 40px">
+    <div class="sh-card" style="padding:16px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <a href="{{ url_for('marketplace_fulfillment.orders_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--sm {{ 'sh-btn--primary' if page_kind == 'orders' else 'sh-btn--secondary' }}">Заказы</a>
+        <a href="{{ url_for('marketplace_fulfillment.returns_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--sm {{ 'sh-btn--primary' if page_kind == 'returns' else 'sh-btn--secondary' }}">Возвраты</a>
+        <a href="{{ url_for('marketplace_fulfillment.cancellations_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--sm {{ 'sh-btn--primary' if page_kind == 'cancellations' else 'sh-btn--secondary' }}">Отмены</a>
+        <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:14px">Кабинет
+          <select class="sh-input" style="min-width:220px" @change="switchAccount($event.target.value)">
+            {% for account in ozon_accounts %}
+            <option value="{{ account.id }}" {% if account.id == selected_account.id %}selected{% endif %}>{{ account.label }} · {{ account.external_account_id }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-start;padding:11px 13px;border:1px solid #bfdbfe;border-radius:9px;background:#eff6ff;color:#1e40af;font-size:13px;line-height:1.45">
+        <span aria-hidden="true">ℹ️</span>
+        <span>Это отдельный Ozon-контур. Данные WB не смешиваются с ним. Синхронизация только читает Seller API; данные покупателя, адреса, телефоны и свободные комментарии не сохраняются. Суммы из карточек отправления не считаются прибылью — финансовая сверка живёт отдельно.</span>
+      </div>
+    </div>
+
+    <template x-if="error">
+      <div style="padding:14px 16px;margin-bottom:20px;border:1px solid #fecaca;background:#fef2f2;border-radius:10px;color:#b91c1c" x-text="error"></div>
+    </template>
+
+    <div class="sh-card" style="padding:16px;margin-bottom:20px">
+      <div style="display:grid;grid-template-columns:minmax(240px,1fr) minmax(170px,220px) auto;gap:12px;align-items:center">
+        <input class="sh-input" x-model="search" @keyup.enter="applyFilters()" :placeholder="searchPlaceholder">
+        <select class="sh-input" x-model="source" @change="applyFilters()">
+          <option value="">Все источники</option>
+          <template x-for="option in sourceOptions" :key="option.value"><option :value="option.value" x-text="option.label"></option></template>
+        </select>
+        <button class="sh-btn sh-btn--secondary" @click="applyFilters()">Найти</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;color:var(--text-muted);font-size:12px">
+        <span x-text="totalLabel"></span>
+        <span>•</span>
+        <span x-text="syncLabel"></span>
+        <template x-if="syncState && syncState.unmatched_item_count"><span style="color:#b45309" x-text="'Не сопоставлено с каталогом: '+syncState.unmatched_item_count"></span></template>
+      </div>
+    </div>
+
+    <div class="sh-card" style="overflow:hidden">
+      <div x-show="loading" style="padding:52px;text-align:center;color:var(--text-muted)">Загрузка…</div>
+      <div x-show="!loading && !items.length" style="padding:54px 24px;text-align:center">
+        <div style="font-size:18px;font-weight:700;margin-bottom:7px">Данных пока нет</div>
+        <div style="color:var(--text-muted);font-size:14px;margin-bottom:18px">Запустите read-only синхронизацию выбранного кабинета Ozon.</div>
+        <button class="sh-btn sh-btn--primary" @click="sync()" :disabled="syncing">Получить данные</button>
+      </div>
+
+      <div x-show="!loading && items.length" style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;min-width:980px">
+          <thead>
+            <tr style="background:var(--surface-subtle);font-size:12px;color:var(--text-muted);text-align:left">
+              <template x-if="kind==='orders'"><th style="padding:12px 14px">Отправление и товары</th></template>
+              <template x-if="kind!=='orders'"><th style="padding:12px 14px">Событие и товар</th></template>
+              <th style="padding:12px 14px">Источник</th>
+              <th style="padding:12px 14px">Статус</th>
+              <th style="padding:12px 14px">Дата</th>
+              <th style="padding:12px 14px">Причина / связь</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="item in items" :key="kind+'-'+item.id">
+              <tr style="border-top:1px solid var(--border);vertical-align:top">
+                <td style="padding:14px;min-width:340px">
+                  <div style="font-weight:700" x-text="item.posting_number || ('Возврат '+item.external_return_id)"></div>
+                  <template x-if="kind==='orders'">
+                    <div style="margin-top:7px;display:flex;flex-direction:column;gap:5px">
+                      <template x-for="line in item.items" :key="line.id">
+                        <div style="font-size:13px">
+                          <span x-text="line.name || line.offer_id || ('SKU '+line.external_sku)"></span>
+                          <span style="color:var(--text-muted)" x-text="' · '+line.quantity+' шт.'+(line.unit_price ? ' · '+money(line.unit_price,line.currency) : '')"></span>
+                          <span x-show="line.listing_id" style="margin-left:5px;color:#15803d">связано</span>
+                          <span x-show="!line.listing_id" style="margin-left:5px;color:#b45309">нет карточки</span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="kind==='returns'">
+                    <div style="font-size:13px;color:var(--text-muted);margin-top:5px" x-text="(item.product_name || item.offer_id || ('SKU '+item.external_sku))+' · '+item.quantity+' шт.'+(item.unit_price ? ' · '+money(item.unit_price,item.currency) : '')"></div>
+                  </template>
+                  <template x-if="kind==='cancellations'">
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:5px" x-text="'ID '+item.external_cancellation_id"></div>
+                  </template>
+                </td>
+                <td style="padding:14px"><span class="sh-badge" x-text="sourceLabel(item)"></span></td>
+                <td style="padding:14px">
+                  <div style="font-weight:600" x-text="item.status_label || item.status"></div>
+                  <div x-show="item.status_label" style="font-size:11px;color:var(--text-muted);margin-top:3px" x-text="item.status"></div>
+                </td>
+                <td style="padding:14px;white-space:nowrap" x-text="dateLabel(item)"></td>
+                <td style="padding:14px;max-width:310px">
+                  <div x-text="item.reason || item.cancellation_reason || '—'"></div>
+                  <div x-show="kind==='returns'" style="font-size:12px;margin-top:5px" :style="'color:'+(item.listing_id?'#15803d':'#b45309')" x-text="item.listing_id?'Карточка каталога найдена':'Товар пока не сопоставлен'"></div>
+                  <div x-show="kind==='cancellations' && item.initiator" style="font-size:12px;color:var(--text-muted);margin-top:5px" x-text="'Инициатор: '+item.initiator"></div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <div x-show="pages > 1" style="padding:14px;display:flex;justify-content:center;gap:10px;border-top:1px solid var(--border)">
+        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="page--;load()">Назад</button>
+        <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="page+' / '+pages"></span>
+        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="page++;load()">Далее</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function ozonFulfillmentPage() {
+  const kind = {{ page_kind|tojson }};
+  const accountId = {{ selected_account.id|tojson }};
+  const paths = {
+    orders: '/marketplaces/api/orders',
+    returns: '/marketplaces/api/returns',
+    cancellations: '/marketplaces/api/cancellations'
+  };
+  const pages = {
+    orders: '/marketplaces/orders',
+    returns: '/marketplaces/returns',
+    cancellations: '/marketplaces/cancellations'
+  };
+  return {
+    kind, accountId, period: '30d', items: [], page: 1, pages: 0, total: 0,
+    search: '', source: '', loading: true, syncing: false, error: '', syncState: null,
+    get sourceOptions() {
+      if (this.kind === 'orders') return [{value:'fbo',label:'FBO'},{value:'fbs',label:'FBS'}];
+      if (this.kind === 'returns') return [{value:'fbo_fbs',label:'FBO + FBS'},{value:'rfbs',label:'rFBS'}];
+      return [{value:'posting_fbo',label:'Отправления FBO'},{value:'posting_fbs',label:'Отправления FBS'},{value:'rfbs_conditional',label:'Заявки rFBS'}];
+    },
+    get searchPlaceholder() {
+      return this.kind === 'orders' ? 'Номер, offer ID, SKU или товар' : (this.kind === 'returns' ? 'Номер, возврат, offer ID, SKU' : 'Номер отправления или причина');
+    },
+    get totalLabel() {
+      const labels={orders:'отправлений',returns:'возвратов',cancellations:'отмен'};
+      return this.total.toLocaleString('ru-RU')+' '+labels[this.kind];
+    },
+    get syncLabel() {
+      if (!this.syncState) return 'Синхронизация ещё не запускалась';
+      if (this.syncState.status === 'running') return 'Sync продолжается · фаза '+this.syncState.phase+' · '+this.syncState.page_count+' стр.';
+      if (this.syncState.status === 'failed') return 'Последний sync завершился ошибкой';
+      return this.syncState.completed_at ? 'Обновлено '+new Date(this.syncState.completed_at).toLocaleString('ru-RU') : 'Синхронизировано';
+    },
+    async init() {
+      const q=new URLSearchParams(location.search);
+      if (['7d','30d'].includes(q.get('period'))) this.period=q.get('period');
+      await this.load();
+    },
+    switchAccount(id) { location.href=pages[this.kind]+'?account_id='+encodeURIComponent(id)+'&period='+this.period; },
+    changePeriod(value) { this.period=value; this.page=1; const u=new URL(location); u.searchParams.set('period',value); history.replaceState(null,'',u); this.load(); },
+    applyFilters() { this.page=1; this.load(); },
+    async load() {
+      this.loading=true; this.error='';
+      try {
+        let u=paths[this.kind]+'?account_id='+this.accountId+'&period='+this.period+'&page='+this.page+'&per_page=50';
+        if (this.search.trim()) u+='&search='+encodeURIComponent(this.search.trim());
+        if (this.source) u+='&'+(this.kind==='orders'?'fulfillment':'source')+'='+encodeURIComponent(this.source);
+        const r=await fetch(u); const d=await r.json();
+        if (!r.ok) throw new Error(d.error||'Не удалось загрузить данные');
+        const data=d.data||{}; this.items=data.items||[];
+        this.total=(data.pagination&&data.pagination.total)||0;
+        this.pages=(data.pagination&&data.pagination.pages)||0;
+        if (data.sync) this.syncState=data.sync;
+      } catch(e) { this.error=e.message; }
+      finally { this.loading=false; }
+    },
+    async sync() {
+      this.syncing=true; this.error='';
+      try {
+        let force=!(this.syncState&&this.syncState.status==='running');
+        for (let attempt=0; attempt<2; attempt++) {
+          const r=await fetch('/marketplaces/api/fulfillment/sync?account_id='+this.accountId,{
+            method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
+            body:JSON.stringify({period:this.period,force:force,max_pages:5})
+          });
+          const d=await r.json(); if(!r.ok) throw new Error(d.error||'Ошибка синхронизации');
+          this.syncState=d.data; force=false;
+          if(this.syncState.status!=='running') break;
+        }
+        await this.load();
+        if(this.syncState&&this.syncState.status==='running') this.$store.toasts.info('Большой кабинет: sync сохранён и продолжится со следующей страницы');
+        else this.$store.toasts.success('Заказы и возвраты Ozon обновлены');
+      } catch(e) { this.error=e.message; }
+      finally { this.syncing=false; }
+    },
+    sourceLabel(item) {
+      const raw=item.fulfillment_kind||item.source_kind||'';
+      const labels={fbo:'FBO',fbs:'FBS',rfbs:'rFBS',fbo_fbs:'FBO + FBS',posting_fbo:'FBO posting',posting_fbs:'FBS posting',rfbs_conditional:'rFBS заявка'};
+      return labels[raw]||raw||'Ozon';
+    },
+    dateLabel(item) {
+      const raw=item.status_changed_at||item.requested_at||item.upstream_created_at||item.last_seen_at;
+      return raw ? new Date(raw).toLocaleString('ru-RU') : '—';
+    },
+    money(value,currency) {
+      const code=(currency&&currency.length===3)?currency:'RUB';
+      try { return new Intl.NumberFormat('ru-RU',{style:'currency',currency:code}).format(Number(value)); }
+      catch(e) { return Number(value).toLocaleString('ru-RU')+' '+code; }
+    }
+  };
+}
+</script>
+{% endblock %}

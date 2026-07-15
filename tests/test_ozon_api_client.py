@@ -200,7 +200,14 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "/v1/product/info/stocks-by-warehouse/fbo",
             "/v2/warehouse/list",
             "/v1/analytics/data",
+            "/v4/posting/fbs/list",
+            "/v3/posting/fbo/list",
+            "/v1/returns/list",
+            "/v2/returns/rfbs/list",
+            "/v2/conditional-cancellation/list",
             "/v1/finance/accrual/by-day",
+            "/v1/finance/compensation",
+            "/v1/finance/decompensation",
         ):
             self.assertIn(required, paths)
         for deprecated in (
@@ -210,8 +217,26 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "/v1/product/info/stocks-by-warehouse/fbs",
             "/v3/finance/transaction/list",
             "/v3/finance/transaction/totals",
+            "/v3/posting/fbs/list",
+            "/v2/posting/fbo/list",
+            "/v1/conditional-cancellation/list",
         ):
             self.assertNotIn(deprecated, paths)
+
+    def test_fulfillment_and_finance_methods_are_read_only(self):
+        endpoint_names = (
+            "posting_fbs_list",
+            "posting_fbo_list",
+            "returns_list",
+            "returns_rfbs_list",
+            "conditional_cancellation_list",
+            "finance_accrual_by_day",
+            "finance_compensation",
+            "finance_decompensation",
+        )
+        for endpoint_name in endpoint_names:
+            with self.subTest(endpoint_name=endpoint_name):
+                self.assertEqual(OZON_ENDPOINTS[endpoint_name].retry_class, "read")
 
 
 class OzonAdapterTest(unittest.TestCase):

@@ -107,6 +107,21 @@ OZON_ENDPOINTS: Mapping[str, OzonEndpointSpec] = MappingProxyType({
     "analytics_data": OzonEndpointSpec(
         "/v1/analytics/data", "analytics_read", "read"
     ),
+    "posting_fbs_list": OzonEndpointSpec(
+        "/v4/posting/fbs/list", "orders_read", "read"
+    ),
+    "posting_fbo_list": OzonEndpointSpec(
+        "/v3/posting/fbo/list", "orders_read", "read"
+    ),
+    "returns_list": OzonEndpointSpec(
+        "/v1/returns/list", "orders_read", "read"
+    ),
+    "returns_rfbs_list": OzonEndpointSpec(
+        "/v2/returns/rfbs/list", "orders_read", "read"
+    ),
+    "conditional_cancellation_list": OzonEndpointSpec(
+        "/v2/conditional-cancellation/list", "orders_read", "read"
+    ),
     "finance_accrual_by_day": OzonEndpointSpec(
         "/v1/finance/accrual/by-day", "finance_read", "read"
     ),
@@ -394,6 +409,42 @@ class OzonSellerAPIClient:
 
     def get_analytics_data(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("analytics_data", payload)
+
+    def get_fbs_postings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("posting_fbs_list", payload)
+
+    def get_fbo_postings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("posting_fbo_list", payload)
+
+    def get_returns(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("returns_list", payload)
+
+    def get_rfbs_returns(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.request("returns_rfbs_list", payload)
+
+    def get_conditional_cancellations(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.request("conditional_cancellation_list", payload)
+
+    def get_finance_accrual_by_day(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.request("finance_accrual_by_day", payload)
+
+    def get_finance_compensation(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.request("finance_compensation", payload)
+
+    def get_finance_decompensation(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.request("finance_decompensation", payload)
 
     def get_product_list(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("product_list", payload)

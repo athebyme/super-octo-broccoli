@@ -1222,6 +1222,10 @@ def main():
                 migrate as migrate_marketplace_quality_analytics,
             )
             migrate_marketplace_quality_analytics(db_path)
+            from migrate_add_marketplace_fulfillment import (
+                migrate as migrate_marketplace_fulfillment,
+            )
+            migrate_marketplace_fulfillment(db_path)
             from migrate_add_image_generation_lab import migrate as migrate_image_lab
             migrate_image_lab(db_path)
             from migrate_add_image_lab_reference_watermark import (
