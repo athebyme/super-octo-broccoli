@@ -125,11 +125,11 @@ OZON_ENDPOINTS: Mapping[str, OzonEndpointSpec] = MappingProxyType({
     "finance_accrual_by_day": OzonEndpointSpec(
         "/v1/finance/accrual/by-day", "finance_read", "read"
     ),
-    "finance_compensation": OzonEndpointSpec(
-        "/v1/finance/compensation", "finance_read", "read"
+    "finance_accrual_types": OzonEndpointSpec(
+        "/v1/finance/accrual/types", "finance_read", "read"
     ),
-    "finance_decompensation": OzonEndpointSpec(
-        "/v1/finance/decompensation", "finance_read", "read"
+    "finance_accrual_postings": OzonEndpointSpec(
+        "/v1/finance/accrual/postings", "finance_read", "read"
     ),
 })
 
@@ -434,17 +434,17 @@ class OzonSellerAPIClient:
     ) -> Dict[str, Any]:
         return self.request("finance_accrual_by_day", payload)
 
-    def get_finance_compensation(
+    def get_finance_accrual_types(
         self,
-        payload: Dict[str, Any],
+        payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return self.request("finance_compensation", payload)
+        return self.request("finance_accrual_types", payload or {})
 
-    def get_finance_decompensation(
+    def get_finance_accrual_postings(
         self,
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
-        return self.request("finance_decompensation", payload)
+        return self.request("finance_accrual_postings", payload)
 
     def get_product_list(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.request("product_list", payload)

@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P8 и P9A fulfillment implemented; P9B finance next
+Статус: P0–P9 implemented; P10 reviews/unified AI/image/content next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -183,13 +183,13 @@ unified chat
 - Product analytics нормализуется в definition-tagged facts (`views`, `cart_additions`, `ordered_units`, `ordered_revenue_rub`, conversion/delivery/cancel/return metrics), сохраняя provider metric, unit, definition version и `cross_marketplace_comparable=false`.
 - Каждый analytics run привязан к exact seller/account/period. Failed partial run не заменяет last-good snapshot, а неоднозначный локальный SKU блокирует read до provider call. Unmatched Ozon SKU остаётся наблюдаемым фактом без fake listing.
 - Premium-only metrics обязаны возвращать `unavailable_by_plan`, а не нули.
-- `/v3/finance/transaction/list` и `/v3/finance/transaction/totals` отключены 06.07.2026 и запрещены в новом adapter.
-- Новый finance ingestion строится на актуальных feeds:
-  - `/v1/finance/accrual/by-day`;
-  - `/v1/finance/compensation`;
-  - `/v1/finance/decompensation`;
-  - realization/cash-flow reports там, где нужен бухгалтерский срез.
-- До live contract fixtures finance capability остаётся feature-flagged read-only; запрещено молча падать обратно на отключённые v3 endpoints.
+- По актуальному уведомлению Ozon от 14.07.2026 `/v3/finance/transaction/list` и `/v3/finance/transaction/totals` устаревают и будут отключены 08.09.2026. Новый adapter уже не содержит их даже как временный fallback.
+- Текущий finance read contract использует три рекомендованных replacement feeds:
+  - `/v1/finance/accrual/by-day` — верхнеуровневые знаковые факты `accrual_id + total_amount`;
+  - `/v1/finance/accrual/types` — справочник nested fee type;
+  - `/v1/finance/accrual/postings` — exact-set детализация выбранных отправлений.
+- `/v1/finance/compensation` и `/v1/finance/decompensation` создают асинхронные файлы отчётов и возвращают report code. Они не маскируются под read feed, не вызываются scheduler-ом и потребуют отдельного audited report lifecycle, если бухгалтерский срез войдёт в scope.
+- Реализованный ingestion feature-flagged и read-only; запрещено молча падать обратно на устаревающие v3 endpoints.
 
 ### 3.8 Отзывы и вопросы
 
@@ -575,8 +575,9 @@ Definition of done: вручную подтверждённый новый offer
 ### P5b — update, media lifecycle and compensation
 
 Read-only staging discovery подготовлен отдельным
-`scripts/probe_ozon_read_contracts.py`: он проверяет current pictures v2 и
-catalog shapes без scalar data и технически не может вызвать manifest write.
+`scripts/probe_ozon_read_contracts.py`: он проверяет current pictures v2,
+catalog/warehouse shapes и finance accrual types/current-day без scalar data и
+технически не может вызвать manifest write.
 Проверка `/v1/roles` редуцируется к фиксированным boolean capabilities для
 archive/unarchive, pictures import, price import и stock update; произвольные
 названия ролей/методов наружу не выводятся.
@@ -681,8 +682,8 @@ Definition of done: comparisons never mix WB and Ozon metrics without an explici
 - [x] Ozon FBO/FBS postings plus FBO/FBS/rFBS returns with current endpoints.
 - [x] Return/cancellation projections and account-scoped deduplication keys.
 - [x] Durable bounded phase/cursor sync, scheduler and separate Ozon UI/API.
-- Ozon 2026 finance feeds; no disabled v3 fallback.
-- Reconciliation totals and source-level traceability.
+- [x] Ozon 2026 finance accrual feeds; no deprecated v3 fallback.
+- [x] Immutable last-good snapshots, reconciliation totals and source traceability.
 
 P9A реализован отдельными `MarketplaceFulfillmentSync`, `MarketplacePosting`,
 `MarketplacePostingItem`, `MarketplacePostingStatusEvent`, `MarketplaceReturn`
@@ -693,7 +694,23 @@ P9A реализован отдельными `MarketplaceFulfillmentSync`, `Mar
 `/marketplaces/cancellations` требует exact seller-owned Ozon account и явно
 отделён от WB-разделов.
 
-Definition of done: finance/order UI can filter by marketplace/account and totals tie to raw facts.
+P9B реализован отдельными `MarketplaceFinanceSync`,
+`MarketplaceFinanceAccrualType`, `MarketplaceFinanceFact`,
+`MarketplaceFinanceFactItem` и `MarketplaceFinanceComponent`. Sync сначала
+читает type dictionary, затем проходит каждый день exact периода с durable
+`date + last_id`; полностью нормализованная страница commit-ится атомарно.
+Partial/failed snapshot не виден seller и не заменяет последний completed.
+Верхнеуровневый ledger использует только знаковый
+`accruals[].total_amount`; positive/negative/net группируются по валюте, net
+определён как `sum(total_amount)`, не называется прибылью, а nested fee rows
+помечены `explanatory_only` и не суммируются повторно. Неоднозначный SKU
+остаётся `listing_id=NULL` со статусом `ambiguous`, без ложной связи. UI/API
+на `/marketplaces/finance` имеет exact account/period/category/sign/type/search
+scope, показывает last-good во время нового run и не смешивается с
+`FinanceSnapshot`/`WBRealizationRow`. Scheduler каждые 10 минут возобновляет не
+более двух кабинетов по пять read-only страниц.
+
+Definition of done: finance/order UI filters by exact marketplace/account and totals tie to normalized source facts. Выполнено.
 
 ### P10 — reviews, unified AI, image lab and content
 
@@ -751,6 +768,13 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
     normalized `is_filterable`, analytics sync/fact и quality tables с account
     indexes/checks/partial running unique. Он запускается fail-fast после
     listings/references во всех Docker/comprehensive/direct SQLite paths.
+13. `migrate_add_marketplace_fulfillment.py` additive/idempotent создаёт
+    account-scoped postings/items/status/returns/cancellations и durable
+    phase/cursor sync; он подключён fail-fast во все три startup paths.
+14. `migrate_add_marketplace_finance.py` additive/idempotent создаёт immutable
+    finance snapshots, accrual dictionary/facts/items/components с partial
+    unique running scope и запускается fail-fast после fulfillment migration в
+    Docker/comprehensive/direct SQLite paths.
 
 ## 10. Security и safety invariants
 

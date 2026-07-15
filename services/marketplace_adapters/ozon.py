@@ -312,16 +312,16 @@ class OzonAdapter(MarketplaceAdapter):
     ) -> Dict[str, Any]:
         return self._client(credentials).get_finance_accrual_by_day(payload)
 
-    def read_finance_compensation(
+    def read_finance_accrual_types(
         self,
         credentials: MarketplaceCredentials,
-        payload: Dict[str, Any],
+        payload: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        return self._client(credentials).get_finance_compensation(payload)
+        return self._client(credentials).get_finance_accrual_types(payload)
 
-    def read_finance_decompensation(
+    def read_finance_accrual_postings(
         self,
         credentials: MarketplaceCredentials,
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
-        return self._client(credentials).get_finance_decompensation(payload)
+        return self._client(credentials).get_finance_accrual_postings(payload)

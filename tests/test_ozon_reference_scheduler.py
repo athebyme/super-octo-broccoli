@@ -24,6 +24,7 @@ from services.product_sync_scheduler import (
     sync_marketplace_characteristics,
     sync_marketplaces,
     sync_ozon_analytics_accounts,
+    sync_ozon_finance_accounts,
     sync_ozon_fulfillment_accounts,
 )
 
@@ -259,6 +260,39 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
             "MarketplaceFulfillmentService.sync_account",
         ) as sync:
             result = sync_ozon_fulfillment_accounts(self.app)
+        self.assertEqual(result["selected"], 0)
+        sync.assert_not_called()
+
+    def test_finance_scheduler_is_bounded_and_read_only(self):
+        run = SimpleNamespace(status="completed")
+        with patch(
+            "services.marketplace_finance."
+            "MarketplaceFinanceService._latest_completed",
+            return_value=None,
+        ), patch(
+            "services.marketplace_finance."
+            "MarketplaceFinanceService.sync_account",
+            return_value=run,
+        ) as sync:
+            result = sync_ozon_finance_accounts(self.app, limit=1)
+
+        self.assertEqual(result["selected"], 1)
+        self.assertEqual(result["completed"], 1)
+        sync.assert_called_once()
+        kwargs = sync.call_args.kwargs
+        self.assertEqual(kwargs["seller_id"], self.seller_id)
+        self.assertEqual(kwargs["account_id"], self.account_id)
+        self.assertEqual(kwargs["period_code"], "30d")
+        self.assertFalse(kwargs["force"])
+        self.assertEqual(kwargs["max_pages"], 5)
+
+    def test_finance_scheduler_flag_blocks_read_calls(self):
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        with patch(
+            "services.marketplace_finance."
+            "MarketplaceFinanceService.sync_account",
+        ) as sync:
+            result = sync_ozon_finance_accounts(self.app)
         self.assertEqual(result["selected"], 0)
         sync.assert_not_called()
 

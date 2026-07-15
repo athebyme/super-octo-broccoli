@@ -6298,6 +6298,9 @@ register_marketplace_insight_routes(app)
 from routes.marketplace_fulfillment import register_marketplace_fulfillment_routes
 register_marketplace_fulfillment_routes(app)
 
+from routes.marketplace_finance import register_marketplace_finance_routes
+register_marketplace_finance_routes(app)
+
 # ============= РОУТЫ БРЕНДОВ =============
 from routes.brands import register_brand_routes
 register_brand_routes(app)
@@ -6399,6 +6402,10 @@ def _run_startup_migrations():
                 migrate as migrate_marketplace_fulfillment,
             )
             migrate_marketplace_fulfillment(sqlite_path)
+            from migrations.migrate_add_marketplace_finance import (
+                migrate as migrate_marketplace_finance,
+            )
+            migrate_marketplace_finance(sqlite_path)
             bind.dispose()
             bind = db.engine
     insp = sa_inspect(bind)

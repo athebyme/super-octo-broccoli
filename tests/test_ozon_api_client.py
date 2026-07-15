@@ -206,8 +206,8 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "/v2/returns/rfbs/list",
             "/v2/conditional-cancellation/list",
             "/v1/finance/accrual/by-day",
-            "/v1/finance/compensation",
-            "/v1/finance/decompensation",
+            "/v1/finance/accrual/types",
+            "/v1/finance/accrual/postings",
         ):
             self.assertIn(required, paths)
         for deprecated in (
@@ -231,8 +231,8 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             "returns_rfbs_list",
             "conditional_cancellation_list",
             "finance_accrual_by_day",
-            "finance_compensation",
-            "finance_decompensation",
+            "finance_accrual_types",
+            "finance_accrual_postings",
         )
         for endpoint_name in endpoint_names:
             with self.subTest(endpoint_name=endpoint_name):

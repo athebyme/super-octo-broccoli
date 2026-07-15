@@ -3,6 +3,7 @@
 
 import json
 import os
+from datetime import date
 from pathlib import Path
 import stat
 import tempfile
@@ -76,6 +77,12 @@ class OzonLiveReadProbeTest(unittest.TestCase):
         )
         for endpoint_name, _payload in client.calls:
             self.assertEqual(OZON_ENDPOINTS[endpoint_name].retry_class, "read")
+        calls = dict(client.calls)
+        self.assertEqual(calls["finance_accrual_types"], {})
+        self.assertEqual(
+            date.fromisoformat(calls["finance_accrual_by_day"]["date"]),
+            date.today(),
+        )
         encoded = json.dumps(result)
         for forbidden in (
             "private-offer",

@@ -5846,6 +5846,488 @@ class MarketplaceCancellation(db.Model):
         }
 
 
+class MarketplaceFinanceSync(db.Model):
+    """Durable exact-account snapshot of current Ozon accrual feeds."""
+    __tablename__ = 'marketplace_finance_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    period_code = db.Column(db.String(10), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='running')
+    phase = db.Column(db.String(20), nullable=False, default='types')
+    current_date = db.Column(db.Date, nullable=False)
+    next_cursor = db.Column(db.String(100))
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    fact_count = db.Column(db.Integer, nullable=False, default=0)
+    item_count = db.Column(db.Integer, nullable=False, default=0)
+    component_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_item_count = db.Column(db.Integer, nullable=False, default=0)
+    unmatched_item_count = db.Column(db.Integer, nullable=False, default=0)
+    ambiguous_item_count = db.Column(db.Integer, nullable=False, default=0)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-finance-accrual-v1',
+    )
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_page_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "period_code IN ('7d','30d')",
+            name='ck_marketplace_finance_period_code',
+        ),
+        db.CheckConstraint(
+            "status IN ('running','completed','failed','cancelled')",
+            name='ck_marketplace_finance_status',
+        ),
+        db.CheckConstraint(
+            "phase IN ('types','accruals','completed')",
+            name='ck_marketplace_finance_phase',
+        ),
+        db.CheckConstraint(
+            'period_start <= period_end AND current_date >= period_start '
+            'AND current_date <= period_end',
+            name='ck_marketplace_finance_period',
+        ),
+        db.CheckConstraint(
+            'page_count >= 0 AND fact_count >= 0 AND item_count >= 0 '
+            'AND component_count >= 0 AND matched_item_count >= 0 '
+            'AND unmatched_item_count >= 0 AND ambiguous_item_count >= 0',
+            name='ck_marketplace_finance_counters',
+        ),
+        db.Index(
+            'uq_marketplace_finance_running',
+            'account_id',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+        ),
+        db.Index(
+            'idx_marketplace_finance_sync_scope',
+            'seller_id',
+            'account_id',
+            'period_start',
+            'period_end',
+            'status',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'period_code': self.period_code,
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'status': self.status,
+            'phase': self.phase,
+            'current_date': self.current_date.isoformat() if self.current_date else None,
+            'page_count': self.page_count,
+            'fact_count': self.fact_count,
+            'item_count': self.item_count,
+            'component_count': self.component_count,
+            'matched_item_count': self.matched_item_count,
+            'unmatched_item_count': self.unmatched_item_count,
+            'ambiguous_item_count': self.ambiguous_item_count,
+            'contract_version': self.contract_version,
+            'request_fingerprint': self.request_fingerprint,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'last_page_at': self.last_page_at.isoformat() if self.last_page_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+
+class MarketplaceFinanceAccrualType(db.Model):
+    """Account-scoped dictionary label for a nested Ozon fee type."""
+    __tablename__ = 'marketplace_finance_accrual_types'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    last_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_finance_syncs.id', ondelete='SET NULL'),
+        index=True,
+    )
+    external_type_id = db.Column(db.BigInteger, nullable=False)
+    name = db.Column(db.String(300), nullable=False)
+    description = db.Column(db.String(2000))
+    source_endpoint = db.Column(
+        db.String(100),
+        nullable=False,
+        default='/v1/finance/accrual/types',
+    )
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'external_type_id',
+            name='uq_marketplace_finance_type_account_external',
+        ),
+        db.CheckConstraint(
+            'external_type_id > 0',
+            name='ck_marketplace_finance_type_positive',
+        ),
+        db.Index(
+            'idx_marketplace_finance_type_scope',
+            'seller_id',
+            'account_id',
+            'name',
+        ),
+    )
+
+
+class MarketplaceFinanceFact(db.Model):
+    """One immutable normalized top-level accrual in a completed snapshot."""
+    __tablename__ = 'marketplace_finance_facts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_finance_syncs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    posting_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_postings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    accrual_id = db.Column(db.String(100), nullable=False)
+    fact_date = db.Column(db.Date, nullable=False)
+    unit_number = db.Column(db.String(200))
+    accrued_category = db.Column(db.String(25), nullable=False)
+    total_amount = db.Column(db.Numeric(20, 4), nullable=False)
+    currency = db.Column(db.String(3), nullable=False)
+    amount_sign = db.Column(db.String(10), nullable=False)
+    definition_code = db.Column(
+        db.String(120),
+        nullable=False,
+        default='ozon-accrual-total-amount-v1',
+    )
+    source_endpoint = db.Column(
+        db.String(100),
+        nullable=False,
+        default='/v1/finance/accrual/by-day',
+    )
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-finance-accrual-v1',
+    )
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    observed_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    sync = db.relationship(
+        'MarketplaceFinanceSync',
+        backref=db.backref('facts', lazy='dynamic', cascade='all, delete-orphan'),
+    )
+    posting = db.relationship('MarketplacePosting')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'sync_id',
+            'accrual_id',
+            name='uq_marketplace_finance_fact_sync_accrual',
+        ),
+        db.CheckConstraint(
+            "accrued_category IN ('UNSPECIFIED','POSTING','ITEM','NON_ITEM')",
+            name='ck_marketplace_finance_fact_category',
+        ),
+        db.CheckConstraint(
+            "amount_sign IN ('positive','negative','zero')",
+            name='ck_marketplace_finance_fact_sign',
+        ),
+        db.CheckConstraint(
+            "(total_amount > 0 AND amount_sign = 'positive') OR "
+            "(total_amount < 0 AND amount_sign = 'negative') OR "
+            "(total_amount = 0 AND amount_sign = 'zero')",
+            name='ck_marketplace_finance_fact_amount_sign',
+        ),
+        db.Index(
+            'idx_marketplace_finance_fact_scope_date',
+            'seller_id',
+            'account_id',
+            'fact_date',
+            'currency',
+        ),
+        db.Index(
+            'idx_marketplace_finance_fact_unit',
+            'seller_id',
+            'account_id',
+            'unit_number',
+        ),
+    )
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        data = {
+            'id': self.id,
+            'sync_id': self.sync_id,
+            'account_id': self.account_id,
+            'posting_id': self.posting_id,
+            'accrual_id': self.accrual_id,
+            'fact_date': self.fact_date.isoformat() if self.fact_date else None,
+            'unit_number': self.unit_number,
+            'accrued_category': self.accrued_category,
+            'total_amount': str(self.total_amount),
+            'currency': self.currency,
+            'amount_sign': self.amount_sign,
+            'definition_code': self.definition_code,
+            'source_endpoint': self.source_endpoint,
+            'contract_version': self.contract_version,
+            'observed_at': self.observed_at.isoformat() if self.observed_at else None,
+        }
+        if detail:
+            data['items'] = [
+                item.to_public_dict()
+                for item in self.items.order_by(MarketplaceFinanceFactItem.id.asc()).all()
+            ]
+            data['components'] = [
+                item.to_public_dict()
+                for item in self.components.order_by(
+                    MarketplaceFinanceComponent.component_kind.asc(),
+                    MarketplaceFinanceComponent.id.asc(),
+                ).all()
+            ]
+        return data
+
+
+class MarketplaceFinanceFactItem(db.Model):
+    """SKU-to-listing evidence attached to one finance fact."""
+    __tablename__ = 'marketplace_finance_fact_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    fact_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_finance_facts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    external_sku = db.Column(db.String(100), nullable=False)
+    match_status = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    fact = db.relationship(
+        'MarketplaceFinanceFact',
+        backref=db.backref('items', lazy='dynamic', cascade='all, delete-orphan'),
+    )
+    listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'fact_id',
+            'external_sku',
+            name='uq_marketplace_finance_fact_item_sku',
+        ),
+        db.CheckConstraint(
+            "match_status IN ('matched','unmatched','ambiguous')",
+            name='ck_marketplace_finance_fact_item_match',
+        ),
+        db.Index(
+            'idx_marketplace_finance_fact_item_listing',
+            'seller_id',
+            'account_id',
+            'listing_id',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'listing_id': self.listing_id,
+            'external_sku': self.external_sku,
+            'match_status': self.match_status,
+            'offer_id': self.listing.offer_id if self.listing else None,
+            'title': self.listing.title if self.listing else None,
+        }
+
+
+class MarketplaceFinanceComponent(db.Model):
+    """Explanatory nested fee; never independently rolled into account net."""
+    __tablename__ = 'marketplace_finance_components'
+
+    id = db.Column(db.Integer, primary_key=True)
+    fact_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_finance_facts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    component_key = db.Column(db.String(64), nullable=False)
+    component_kind = db.Column(db.String(30), nullable=False)
+    external_type_id = db.Column(db.BigInteger, nullable=False)
+    type_name = db.Column(db.String(300))
+    external_sku = db.Column(db.String(100))
+    amount = db.Column(db.Numeric(20, 4), nullable=False)
+    currency = db.Column(db.String(3), nullable=False)
+    rollup_role = db.Column(
+        db.String(30),
+        nullable=False,
+        default='explanatory_only',
+    )
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    fact = db.relationship(
+        'MarketplaceFinanceFact',
+        backref=db.backref(
+            'components',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'fact_id',
+            'component_key',
+            name='uq_marketplace_finance_component_key',
+        ),
+        db.CheckConstraint(
+            "component_kind IN ('item_fee','non_item_fee','delivery_service')",
+            name='ck_marketplace_finance_component_kind',
+        ),
+        db.CheckConstraint(
+            'external_type_id > 0',
+            name='ck_marketplace_finance_component_type',
+        ),
+        db.CheckConstraint(
+            "rollup_role = 'explanatory_only'",
+            name='ck_marketplace_finance_component_rollup',
+        ),
+        db.Index(
+            'idx_marketplace_finance_component_type',
+            'seller_id',
+            'account_id',
+            'external_type_id',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'component_kind': self.component_kind,
+            'external_type_id': self.external_type_id,
+            'type_name': self.type_name,
+            'external_sku': self.external_sku,
+            'listing_id': self.listing_id,
+            'amount': str(self.amount),
+            'currency': self.currency,
+            'rollup_role': self.rollup_role,
+        }
+
+
 class MarketplaceWarehouseSync(db.Model):
     """Audit row for one bounded, all-pages warehouse reconciliation."""
     __tablename__ = 'marketplace_warehouse_syncs'

@@ -380,6 +380,19 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    # Ozon finance is an immutable snapshot projection. The runner only reads
+    # current accrual endpoints and keeps partial snapshots invisible until all
+    # requested days have passed strict normalization.
+    scheduler.add_job(
+        func=lambda: sync_ozon_finance_accounts(flask_app),
+        trigger=IntervalTrigger(minutes=10),
+        id='ozon_finance_sync',
+        name='Sync account-scoped Ozon accrual facts (read-only)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Первоначальная загрузка аналитики через 30 сек после старта (если данных нет)
     scheduler.add_job(
         func=lambda: initial_analytics_sync_if_empty(flask_app),
@@ -1339,6 +1352,95 @@ def sync_ozon_fulfillment_accounts(flask_app, limit=2):
         if result['selected'] or result['failed']:
             logger.info(
                 'Ozon fulfillment scheduler: selected=%s completed=%s running=%s failed=%s',
+                result['selected'],
+                result['completed'],
+                result['running'],
+                result['failed'],
+            )
+        return result
+
+
+def sync_ozon_finance_accounts(flask_app, limit=2):
+    """Resume/start a bounded set of read-only Ozon finance snapshots."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 10:
+        return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 1}
+    with flask_app.app_context():
+        if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0}
+        from models import (
+            Marketplace,
+            MarketplaceFinanceSync,
+            SellerMarketplaceAccount,
+            db,
+        )
+        from services.marketplace_finance import MarketplaceFinanceService
+
+        current_time = datetime.utcnow()
+        current_date = current_time.date()
+        candidates = SellerMarketplaceAccount.query.join(Marketplace).filter(
+            Marketplace.code == 'ozon',
+            Marketplace.is_active.is_(True),
+            SellerMarketplaceAccount.is_active.is_(True),
+            SellerMarketplaceAccount.connection_status == 'connected',
+        ).order_by(
+            SellerMarketplaceAccount.is_default.desc(),
+            SellerMarketplaceAccount.id.asc(),
+        ).limit(50).all()
+        due = []
+        period_start = current_date - timedelta(days=29)
+        for account in candidates:
+            running = MarketplaceFinanceSync.query.filter_by(
+                seller_id=account.seller_id,
+                account_id=account.id,
+                status='running',
+            ).first()
+            latest = MarketplaceFinanceService._latest_completed(
+                seller_id=account.seller_id,
+                account_id=account.id,
+                period_code='30d',
+            )
+            fresh = (
+                latest is not None
+                and latest.period_start == period_start
+                and latest.period_end == current_date
+                and latest.completed_at is not None
+                and latest.completed_at
+                >= current_time - MarketplaceFinanceService.CACHE_TTL
+                and latest.request_fingerprint
+                == MarketplaceFinanceService._run_fingerprint(
+                    period_start,
+                    current_date,
+                )
+            )
+            if running is not None or not fresh:
+                due.append(account)
+            if len(due) >= limit:
+                break
+
+        result = {'selected': len(due), 'completed': 0, 'running': 0, 'failed': 0}
+        for account in due:
+            try:
+                run = MarketplaceFinanceService.sync_account(
+                    seller_id=account.seller_id,
+                    account_id=account.id,
+                    period_code='30d',
+                    force=False,
+                    max_pages=5,
+                    now=current_time,
+                    today=current_date,
+                )
+                result['completed' if run.status == 'completed' else 'running'] += 1
+            except Exception as exc:
+                db.session.rollback()
+                result['failed'] += 1
+                logger.error(
+                    'Ozon finance scheduler failed for account=%s: %s',
+                    account.id,
+                    type(exc).__name__,
+                )
+        if result['selected'] or result['failed']:
+            logger.info(
+                'Ozon finance scheduler: selected=%s completed=%s running=%s failed=%s',
                 result['selected'],
                 result['completed'],
                 result['running'],

@@ -2099,7 +2099,7 @@
             </a>
 
             <!-- Аналитика -->
-            {% set analytics_active = request.endpoint in ['analytics_page', 'marketplace_analytics_page', 'finances_page', 'cancellations_page', 'regional_page', 'warehouse_page', 'inventory_page', 'finance_detail_page', 'sentiment_page', 'returns_page', 'telegram_alerts_page'] or (request.endpoint and request.endpoint.startswith('marketplace_fulfillment.')) %}
+            {% set analytics_active = request.endpoint in ['analytics_page', 'marketplace_analytics_page', 'finances_page', 'cancellations_page', 'regional_page', 'warehouse_page', 'inventory_page', 'finance_detail_page', 'sentiment_page', 'returns_page', 'telegram_alerts_page'] or (request.endpoint and (request.endpoint.startswith('marketplace_fulfillment.') or request.endpoint.startswith('marketplace_finance.'))) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if analytics_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if analytics_active else 'false' }} }" :aria-expanded="open" aria-label="Аналитика">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -2117,6 +2117,7 @@
                     <a href="{{ url_for('marketplace_fulfillment.orders_page') }}" class="sidebar-sublink {% if request.endpoint == 'marketplace_fulfillment.orders_page' %}active{% endif %}">Заказы Ozon</a>
                     <a href="{{ url_for('marketplace_fulfillment.returns_page') }}" class="sidebar-sublink {% if request.endpoint == 'marketplace_fulfillment.returns_page' %}active{% endif %}">Возвраты Ozon</a>
                     <a href="{{ url_for('marketplace_fulfillment.cancellations_page') }}" class="sidebar-sublink {% if request.endpoint == 'marketplace_fulfillment.cancellations_page' %}active{% endif %}">Отмены Ozon</a>
+                    <a href="{{ url_for('marketplace_finance.page') }}" class="sidebar-sublink {% if request.endpoint == 'marketplace_finance.page' %}active{% endif %}">Финансы Ozon</a>
                     {% endif %}
                     <a href="{{ url_for('finances_page') }}" class="sidebar-sublink {% if request.endpoint == 'finances_page' %}active{% endif %}">Финансы</a>
                     <a href="{{ url_for('finance_detail_page') }}" class="sidebar-sublink {% if request.endpoint == 'finance_detail_page' %}active{% endif %}">Детальный P&L</a>

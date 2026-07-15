@@ -9,6 +9,7 @@ values, product identities, credentials, or raw provider errors.
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,8 @@ BASE_READ_PROBES = (
         },
     ),
     ("warehouses", {"cursor": "", "limit": 100}),
+    ("finance_accrual_types", {}),
+    ("finance_accrual_by_day", {"date": date.today().isoformat()}),
 )
 ROLE_METHOD_CHECKS = (
     "/v1/product/archive",
