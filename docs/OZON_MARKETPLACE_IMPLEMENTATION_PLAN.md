@@ -1,6 +1,6 @@
 # Ozon и marketplace-neutral архитектура — мастер-план
 
-Статус: P0–P9, P10A и canonical WB/Ozon product linking implemented; P10B unified AI scope next
+Статус: P0–P10B, canonical WB/Ozon product linking и one-click local Ozon preparation implemented; P10C next
 Дата аудита контрактов: 2026-07-15
 Владелец: Seller Hub
 Главный принцип: Ozon добавляется через общий контракт маркетплейса, без регрессии WB и без размножения `if marketplace == ...` по routes/services.
@@ -739,6 +739,8 @@ Definition of done: finance/order UI filters by exact marketplace/account and to
 - [x] P10B: `entity_kind=marketplace_listing` with marketplace/account identity.
 - [x] P10B: deterministic intents accept explicit marketplace; ambiguity causes clarification.
 - [x] P10B: internal tools are adapter/capability-scoped and least privilege.
+- [x] P10B: one-click canonical/WB → local Ozon draft preparation with immediate deterministic validation and exact mapping/reference readiness UI.
+- [ ] P10C: reviewed Ozon → canonical common-fact diff; automatic dictionary/category round-trip remains prohibited.
 - [ ] P10C: Image Lab uses listing media adapter and Ozon image constraints.
 - [ ] P10C: Content factory selection works over unified listings.
 
@@ -768,6 +770,39 @@ raw provider payload. Детерминированный audit не вызыва
 возвращает clarification до planner и будет вводиться только отдельным reviewed
 proposal contract. Quality UI открывает выбранный exact account scope в новом
 диалоге, popup карточки прикладывает тот же grounded envelope.
+
+Из seller catalog и WB-preview доступна кнопка «Подготовить Ozon». Она выбирает
+только seller-owned active Ozon account, создаёт либо переиспользует его
+`MarketplaceProductDraft` и в том же HTTP workflow выполняет локальную
+`validate_draft`; adapter/provider не вызывается. Detail API/UI возвращает
+bounded `mapping_readiness`: свежесть canonical fact hash, связь с WB projection,
+источник общего AI-кэша, provenance category mapping, live freshness schema,
+полноту обязательных атрибутов и каждого official dictionary. Даже ранее
+валидный draft отображается stale, если после проверки устарел source/schema,
+dictionary или account. Provider publication остаётся отдельной кнопкой только
+для повторно проверенного `ready / valid` draft. Обратный механический перенос
+запрещён: Ozon IDs не имеют общего пространства с WB, поэтому будущий reverse
+workflow строит reviewed diff только marketplace-neutral фактов.
+
+Category mapping для уже опубликованной/подтверждённо связанной WB-карточки
+использует не её отображаемое название, а exact
+`wb_subject:<subject_id>` как первый seller-wide identity. При конфликте
+`Product.subject_id` из WB projection сильнее cached `ImportedProduct` поля;
+один лишь pre-publication/AI `ImportedProduct.wb_subject_id` без WB identity не
+даёт права расширить mapping. Подтверждённая привязка сохраняется независимо от
+поставщика и переиспользуется для другой canonical-карточки того же WB subject;
+seller scope остаётся обязательным. Старый supplier/source category mapping
+проверяется вторым, поэтому rollout не инвалидирует накопленные подтверждения.
+Ни WB characteristic ID, ни WB dictionary value ID в Ozon не переносятся:
+значение заново exact-resolve-ится в fresh dictionary выбранного Ozon type.
+
+One-click preparation не притворяется буквальным копированием последнего WB
+response. `ImportedProduct` остаётся master; для связанного `Product` локально
+сравниваются bounded общие поля `title/description/brand`. Расхождение явно
+показывается в WB-preview, draft readiness и validation warning, но не блокирует
+осознанную Ozon-проекцию и не перетирает master автоматически. Marketplace-
+specific price, stock, category IDs, media CDN URLs и characteristic IDs в этот
+diff намеренно не входят.
 
 Definition of done: AI cannot cross accounts or invoke an unsupported/bypassed write.
 

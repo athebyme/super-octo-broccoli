@@ -76,6 +76,95 @@
         </div>
     </div>
 
+    {% if ozon_enabled %}
+    <section id="ozon-preparation" class="bg-white rounded-xl border border-blue-200 shadow-sm mb-6 overflow-hidden">
+        <div class="p-5 border-b border-blue-100 bg-blue-50/60 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <div class="flex items-center gap-2">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold">Ozon</span>
+                    <h2 class="text-base font-semibold text-gray-900">Подготовка из общей карточки</h2>
+                </div>
+                <p class="mt-2 text-sm text-gray-600 max-w-3xl">
+                    WB и Ozon используют одну внутреннюю карточку #{{ product.id }}. Контент, подтверждённые факты и фото не парсятся заново; для Ozon создаются только отдельные category/type, атрибуты справочников и статусы публикации.
+                </p>
+                <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                    <span>{% if linked_wb_nm_id %}Связь с WB: nmID {{ linked_wb_nm_id }}{% else %}WB-проекция ещё не связана{% endif %}</span>
+                    <span>{% if shared_ai_source %}AI-кэш найден: {{ shared_ai_source }}{% else %}Общий AI-кэш пока отсутствует{% endif %}</span>
+                </div>
+            </div>
+            <a href="{{ url_for('marketplace_drafts.index') }}" class="text-sm font-medium text-blue-700 hover:underline shrink-0">Все Ozon-черновики</a>
+        </div>
+
+        <div class="p-5">
+            {% if wb_projection_drift.differing_fields %}
+            <div class="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+                Версия WB отличается от общей карточки в полях: {{ wb_projection_drift.differing_fields | join(', ') }}. Ozon возьмёт общую карточку, поэтому перед публикацией проверьте этот diff; канал автоматически не перезаписывает master-данные.
+            </div>
+            {% endif %}
+            {% if ozon_accounts %}
+            <div class="space-y-3">
+                {% for account in ozon_accounts %}
+                {% set draft = ozon_drafts_by_account.get(account.id) %}
+                <article class="rounded-lg border border-gray-200 p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div class="min-w-0">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="font-medium text-gray-900">{{ account.label }}</span>
+                            <span class="inline-flex px-2 py-0.5 rounded-full text-xs {{ 'bg-green-100 text-green-700' if account.connection_status == 'connected' else 'bg-yellow-100 text-yellow-700' }}">
+                                {{ account.connection_status }}
+                            </span>
+                            {% if account.is_default %}<span class="text-xs text-gray-400">по умолчанию</span>{% endif %}
+                        </div>
+                        {% if draft %}
+                        <p class="mt-1 text-xs text-gray-500">
+                            Черновик #{{ draft.id }} · {{ draft.status }} / {{ draft.validation_status }}
+                            {% if draft.category_mapping_id %} · exact category mapping сохранён{% elif not draft.product_type_id %} · нужно выбрать Ozon category/type{% endif %}
+                        </p>
+                        {% else %}
+                        <p class="mt-1 text-xs text-gray-500">Черновика ещё нет. Подготовка выполняется локально и ничего не публикует.</p>
+                        {% endif %}
+                    </div>
+                    <div class="flex flex-wrap gap-2 shrink-0">
+                        {% if draft %}
+                        <a href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}"
+                           class="px-3 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-50">
+                            Открыть
+                        </a>
+                        <form method="post" action="{{ url_for('marketplace_drafts.validate', draft_id=draft.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="expected_version" value="{{ draft.version }}">
+                            <button type="submit" class="px-3 py-2 bg-blue-700 text-white rounded-md text-sm font-medium hover:bg-blue-800">
+                                Проверить снова
+                            </button>
+                        </form>
+                        {% else %}
+                        <form method="post" action="{{ url_for('marketplace_drafts.create') }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="account_id" value="{{ account.id }}">
+                            <input type="hidden" name="imported_product_id" value="{{ product.id }}">
+                            <input type="hidden" name="validate" value="1">
+                            <button type="submit" class="px-3 py-2 bg-blue-700 text-white rounded-md text-sm font-medium hover:bg-blue-800">
+                                Подготовить и проверить
+                            </button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </article>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p class="text-sm text-gray-600">Сначала подключите хотя бы один кабинет Ozon.</p>
+                <a href="{{ url_for('marketplace_accounts.index') }}" class="px-3 py-2 bg-blue-700 text-white rounded-md text-sm font-medium hover:bg-blue-800">Подключить Ozon</a>
+            </div>
+            {% endif %}
+
+            <div class="mt-4 rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600">
+                Обратный перенос Ozon → WB выполняется только как проверяемый diff общих фактов. Ozon category/type и ID значений его справочников не копируются в WB: у каналов разные обязательные схемы.
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
     <!-- Issues -->
     {% if preview.issues %}
     <div class="mb-6 space-y-2">

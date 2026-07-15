@@ -16,6 +16,7 @@ from models import (
     MarketplaceListing,
     MarketplaceProductType,
     MarketplaceTaxonomyCategory,
+    Product,
     Seller,
     SellerMarketplaceAccount,
     Supplier,
@@ -370,6 +371,162 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         self.assertEqual(mapped.product_type_id, self.product_type.id)
         self.assertIsNotNone(mapped.category_mapping_id)
+
+    def test_mapping_readiness_explains_exact_refs_and_stale_dictionary(self):
+        _, draft = self._ready_draft(external_id="readiness-source")
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        readiness = MarketplaceDraftService.mapping_readiness(
+            seller_id=self.seller1_id,
+            draft_id=validated.id,
+        )
+
+        self.assertEqual(readiness["overall"], "ready")
+        self.assertEqual(readiness["category"]["status"], "exact_mapping")
+        self.assertTrue(readiness["schema"]["fresh"])
+        self.assertEqual(readiness["attributes"]["required_total"], 3)
+        self.assertEqual(readiness["attributes"]["required_supplied"], 3)
+        self.assertEqual(readiness["attributes"]["missing_required"], [])
+        self.assertEqual(readiness["dictionaries"]["total"], 1)
+        self.assertEqual(readiness["dictionaries"]["fresh"], 1)
+        self.assertTrue(readiness["source"]["facts_fresh"])
+        self.assertFalse(
+            readiness["reverse_mapping"]["automatic_round_trip"]
+        )
+
+        self.country_attribute.values_synced_at = self.now - timedelta(hours=49)
+        db.session.commit()
+        stale = MarketplaceDraftService.mapping_readiness(
+            seller_id=self.seller1_id,
+            draft_id=validated.id,
+        )
+        self.assertEqual(stale["overall"], "references_stale")
+        self.assertEqual(stale["dictionaries"]["fresh"], 0)
+        self.assertEqual(
+            stale["dictionaries"]["stale"][0]["attribute_id"],
+            "32",
+        )
+
+    def test_confirmed_wb_subject_mapping_precedes_supplier_category(self):
+        first = self._product(
+            external_id="wb-subject-first",
+            category="Supplier category A",
+        )
+        first.wb_subject_id = 123456
+        wb_projection = Product(
+            seller_id=self.seller1_id,
+            nm_id=700001,
+            subject_id=123456,
+            title="Футболка — версия WB",
+            description=first.description,
+            brand=first.brand,
+        )
+        db.session.add(wb_projection)
+        db.session.flush()
+        first.product_id = wb_projection.id
+        first.wb_subject_id = 999999
+        first.mapped_wb_category = "Футболки WB"
+        db.session.commit()
+        confirmed = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=first.id,
+            product_type_id=self.product_type.id,
+            save_mapping=True,
+        )
+        mapping = db.session.get(
+            MarketplaceCategoryMapping,
+            confirmed.category_mapping_id,
+        )
+        self.assertEqual(mapping.scope_key, "wb_subject")
+        self.assertEqual(mapping.source_type, "wb")
+        self.assertEqual(
+            mapping.source_category_normalized,
+            "wb_subject:123456",
+        )
+        self.assertIsNone(mapping.supplier_id)
+        self.assertEqual(
+            json.loads(mapping.evidence_json)["wb_subject_id"],
+            123456,
+        )
+        self.assertEqual(
+            json.loads(mapping.evidence_json)["wb_subject_source"],
+            "product_projection",
+        )
+        projection_drift = MarketplaceFactPackBuilder.wb_projection_drift(
+            first
+        )
+        self.assertEqual(projection_drift["differing_fields"], ["title"])
+        checked = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=confirmed.id,
+            expected_version=confirmed.version,
+        )
+        self.assertIn(
+            "wb_projection_differs_from_canonical",
+            {
+                item["code"]
+                for item in checked.to_public_dict(detail=True)
+                ["validation"]["warnings"]
+            },
+        )
+        readiness = MarketplaceDraftService.mapping_readiness(
+            seller_id=self.seller1_id,
+            draft_id=checked.id,
+        )
+        self.assertEqual(
+            readiness["source"]["wb_projection"]["differing_fields"],
+            ["title"],
+        )
+
+        second = self._product(
+            external_id="wb-subject-second",
+            category="Completely different supplier category",
+        )
+        second.wb_subject_id = 123456
+        second.wb_nm_id = 700002
+        second.import_status = "imported"
+        second.mapped_wb_category = "Футболки WB"
+        db.session.commit()
+        reused = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=second.id,
+        )
+        self.assertEqual(reused.product_type_id, self.product_type.id)
+        self.assertEqual(reused.category_mapping_id, mapping.id)
+
+        unconfirmed = self._product(
+            external_id="wb-subject-unconfirmed",
+            category="Unmapped supplier category",
+        )
+        unconfirmed.wb_subject_id = 123456
+        db.session.commit()
+        not_confirmed = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=unconfirmed.id,
+        )
+        self.assertIsNone(not_confirmed.product_type_id)
+
+        foreign = self._product(
+            seller_id=self.seller2_id,
+            external_id="wb-subject-foreign",
+            category="Supplier category A",
+        )
+        foreign.wb_subject_id = 123456
+        foreign.wb_nm_id = 700003
+        foreign.import_status = "imported"
+        db.session.commit()
+        not_reused = MarketplaceDraftService.create_draft(
+            seller_id=self.seller2_id,
+            account_id=self.account2.id,
+            imported_product_id=foreign.id,
+        )
+        self.assertIsNone(not_reused.product_type_id)
 
     def test_linked_existing_ozon_listing_reuses_fact_pack_as_update_draft(self):
         product = self._product(

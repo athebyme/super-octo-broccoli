@@ -18,7 +18,7 @@ from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
     ImportedProduct, Seller, AIHistory, log_admin_action, Product,
     BackgroundJob, Notification, AgentChangeSnapshot, Marketplace,
-    SellerMarketplaceAccount,
+    SellerMarketplaceAccount, MarketplaceProductDraft,
 )
 from services.supplier_service import SupplierService
 
@@ -2019,6 +2019,7 @@ def register_supplier_routes(app):
                 pass  # Таблица может не существовать
 
         marketplace_accounts = []
+        default_marketplace_account = None
         if current_app.config.get('MARKETPLACE_OZON_ENABLED', False):
             marketplace_accounts = SellerMarketplaceAccount.query.join(
                 Marketplace
@@ -2031,6 +2032,14 @@ def register_supplier_routes(app):
                 SellerMarketplaceAccount.is_default.desc(),
                 SellerMarketplaceAccount.label.asc(),
             ).all()
+            default_marketplace_account = next(
+                (
+                    account for account in marketplace_accounts
+                    if account.is_default
+                ),
+                marketplace_accounts[0]
+                if len(marketplace_accounts) == 1 else None,
+            )
 
         return render_template(
             'seller_my_products.html',
@@ -2057,6 +2066,7 @@ def register_supplier_routes(app):
             recent_imports=recent_imports,
             brand_category_map=brand_category_map,
             marketplace_accounts=marketplace_accounts,
+            default_marketplace_account=default_marketplace_account,
         )
 
     # -------------------------------------------------------------------
@@ -2076,11 +2086,70 @@ def register_supplier_routes(app):
         importer = WBProductImporter(seller)
         preview = importer.build_wb_card_preview(product)
 
+        ozon_enabled = bool(
+            current_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+        )
+        ozon_accounts = []
+        ozon_drafts_by_account = {}
+        if ozon_enabled:
+            ozon_accounts = SellerMarketplaceAccount.query.join(
+                Marketplace
+            ).filter(
+                SellerMarketplaceAccount.seller_id == seller.id,
+                SellerMarketplaceAccount.is_active.is_(True),
+                Marketplace.code == 'ozon',
+                Marketplace.is_active.is_(True),
+            ).order_by(
+                SellerMarketplaceAccount.is_default.desc(),
+                SellerMarketplaceAccount.label.asc(),
+                SellerMarketplaceAccount.id.asc(),
+            ).all()
+            account_ids = [account.id for account in ozon_accounts]
+            if account_ids:
+                drafts = MarketplaceProductDraft.query.filter(
+                    MarketplaceProductDraft.seller_id == seller.id,
+                    MarketplaceProductDraft.imported_product_id == product.id,
+                    MarketplaceProductDraft.account_id.in_(account_ids),
+                ).all()
+                ozon_drafts_by_account = {
+                    draft.account_id: draft for draft in drafts
+                }
+
+        supplier_product = product.supplier_product
+        if supplier_product and (
+            supplier_product.ai_parsed_at is not None
+            or bool(supplier_product.ai_parsed_data_json)
+        ):
+            shared_ai_source = 'supplier_product_cache'
+        elif any((
+            product.ai_analysis_at,
+            product.ai_keywords,
+            product.ai_attributes,
+            product.ai_seo_title,
+        )):
+            shared_ai_source = 'imported_product_cache'
+        else:
+            shared_ai_source = None
+
+        from services.marketplace_fact_pack import MarketplaceFactPackBuilder
+        wb_projection_drift = MarketplaceFactPackBuilder.wb_projection_drift(
+            product
+        )
+        linked_wb_nm_id = wb_projection_drift.get('wb_nm_id')
+        if linked_wb_nm_id is None and product.wb_nm_id is not None:
+            linked_wb_nm_id = str(product.wb_nm_id)
+
         return render_template(
             'seller_wb_card_preview.html',
             product=product,
             preview=preview,
             has_wb_key=seller.has_valid_api_key(),
+            ozon_enabled=ozon_enabled,
+            ozon_accounts=ozon_accounts,
+            ozon_drafts_by_account=ozon_drafts_by_account,
+            shared_ai_source=shared_ai_source,
+            linked_wb_nm_id=linked_wb_nm_id,
+            wb_projection_drift=wb_projection_drift,
         )
 
     # -------------------------------------------------------------------

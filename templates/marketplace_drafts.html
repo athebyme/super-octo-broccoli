@@ -28,11 +28,12 @@
     <section class="sh-card p-4 mb-5">
         <h2 class="font-semibold" style="color:var(--text)">Создать черновик</h2>
         <p class="mt-1 text-xs" style="color:var(--text-muted)">
-            Если category/type ещё не выбраны, черновик сохранится в статусе needs_category. Никакого запроса в Ozon не выполняется.
+            Общая внутренняя карточка будет преобразована в Ozon-проекцию и сразу локально проверена. Если category/type ещё не выбраны, черновик сохранится в статусе needs_category. Никакого запроса в Ozon не выполняется.
         </p>
         <form method="post" action="{{ url_for('marketplace_drafts.create') }}"
               class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="validate" value="1">
             <label class="block">
                 <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет Ozon</span>
                 <select name="account_id" required class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
@@ -60,7 +61,7 @@
                        style="border-color:var(--border);color:var(--text)">
             </label>
             <div class="flex items-end">
-                <button class="sh-btn sh-btn--primary w-full" type="submit" {% if not accounts or not sources %}disabled{% endif %}>Создать</button>
+                <button class="sh-btn sh-btn--primary w-full" type="submit" {% if not accounts or not sources %}disabled{% endif %}>Подготовить и проверить</button>
             </div>
         </form>
     </section>

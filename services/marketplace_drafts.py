@@ -272,7 +272,8 @@ class MarketplaceDraftService:
             "imported_product_id",
         )
         product = ImportedProduct.query.options(
-            joinedload(ImportedProduct.supplier_product)
+            joinedload(ImportedProduct.supplier_product),
+            joinedload(ImportedProduct.product),
         ).filter_by(
             id=imported_product_id,
             seller_id=seller_id,
@@ -293,10 +294,16 @@ class MarketplaceDraftService:
         draft = MarketplaceProductDraft.query.options(
             joinedload(MarketplaceProductDraft.marketplace),
             joinedload(MarketplaceProductDraft.account),
-            joinedload(MarketplaceProductDraft.imported_product),
+            joinedload(MarketplaceProductDraft.imported_product).joinedload(
+                ImportedProduct.product
+            ),
+            joinedload(MarketplaceProductDraft.imported_product).joinedload(
+                ImportedProduct.supplier_product
+            ),
             joinedload(MarketplaceProductDraft.product_type).joinedload(
                 MarketplaceProductType.category
             ),
+            joinedload(MarketplaceProductDraft.category_mapping),
         ).filter_by(
             id=draft_id,
             seller_id=seller_id,
@@ -373,6 +380,88 @@ class MarketplaceDraftService:
         return category, cls._normalized_text(category) if category else ""
 
     @classmethod
+    def _mapping_identities(cls, product: ImportedProduct) -> list:
+        """Return exact category identities in deterministic priority order.
+
+        A confirmed WB subject is stronger and more reusable than a supplier
+        category label.  The legacy supplier/source identity remains as a
+        fallback so existing mappings keep working after this rollout.
+        """
+        identities = []
+        wb_product = product.product
+        remote_wb_subject_id = (
+            wb_product.subject_id
+            if wb_product is not None
+            and isinstance(wb_product.subject_id, int)
+            and not isinstance(wb_product.subject_id, bool)
+            and wb_product.subject_id > 0
+            else None
+        )
+        imported_wb_subject_id = (
+            product.wb_subject_id
+            if isinstance(product.wb_subject_id, int)
+            and not isinstance(product.wb_subject_id, bool)
+            and product.wb_subject_id > 0
+            else None
+        )
+        has_confirmed_wb_projection = bool(
+            wb_product is not None
+            or product.product_id is not None
+            or product.wb_nm_id is not None
+            or product.import_status == "imported"
+        )
+        wb_subject_id = remote_wb_subject_id or (
+            imported_wb_subject_id
+            if has_confirmed_wb_projection else None
+        )
+        if wb_subject_id is not None:
+            wb_label = cls._optional_text(
+                product.mapped_wb_category,
+                "mapped_wb_category",
+                maximum=400,
+            )
+            if not wb_label and wb_product is not None:
+                wb_label = cls._optional_text(
+                    wb_product.object_name,
+                    "wb_object_name",
+                    maximum=400,
+                )
+            identities.append({
+                "scope_key": "wb_subject",
+                "supplier_id": None,
+                "source_type": "wb",
+                "source_category": (
+                    f"{wb_label} · WB subject {wb_subject_id}"
+                    if wb_label else f"WB subject {wb_subject_id}"
+                ),
+                "source_category_normalized": f"wb_subject:{wb_subject_id}",
+                "evidence": {
+                    "wb_subject_id": wb_subject_id,
+                    "wb_subject_source": (
+                        "product_projection"
+                        if remote_wb_subject_id is not None
+                        else "confirmed_imported_projection"
+                    ),
+                },
+            })
+
+        category, normalized = cls._source_category(product)
+        if category and normalized:
+            identities.append({
+                "scope_key": cls._scope_key(product),
+                "supplier_id": product.supplier_id,
+                "source_type": cls._optional_text(
+                    product.source_type,
+                    "source_type",
+                    maximum=80,
+                ) or "unknown",
+                "source_category": category,
+                "source_category_normalized": normalized,
+                "evidence": {},
+            })
+        return identities
+
+    @classmethod
     def _active_mapping(
         cls,
         *,
@@ -380,30 +469,35 @@ class MarketplaceDraftService:
         marketplace_id: int,
         product: ImportedProduct,
     ) -> Optional[MarketplaceCategoryMapping]:
-        category, normalized = cls._source_category(product)
-        if not category or not normalized:
+        for identity in cls._mapping_identities(product):
+            mapping = MarketplaceCategoryMapping.query.options(
+                joinedload(MarketplaceCategoryMapping.product_type).joinedload(
+                    MarketplaceProductType.category
+                )
+            ).filter_by(
+                seller_id=seller_id,
+                marketplace_id=marketplace_id,
+                scope_key=identity["scope_key"],
+                source_category_normalized=(
+                    identity["source_category_normalized"]
+                ),
+                mapping_status="active",
+            ).first()
+            if mapping is None:
+                continue
+            if (
+                mapping.product_type
+                and mapping.product_type.is_enabled
+                and mapping.product_type.is_available
+                and mapping.product_type.category
+                and mapping.product_type.category.is_available
+            ):
+                return mapping
+            # A stored stronger identity must fail closed when its target was
+            # disabled/removed; silently falling through to a weaker category
+            # label could route the product to a different Ozon type.
             return None
-        mapping = MarketplaceCategoryMapping.query.options(
-            joinedload(MarketplaceCategoryMapping.product_type).joinedload(
-                MarketplaceProductType.category
-            )
-        ).filter_by(
-            seller_id=seller_id,
-            marketplace_id=marketplace_id,
-            scope_key=cls._scope_key(product),
-            source_category_normalized=normalized,
-            mapping_status="active",
-        ).first()
-        if (
-            mapping is None
-            or not mapping.product_type
-            or not mapping.product_type.is_enabled
-            or not mapping.product_type.is_available
-            or not mapping.product_type.category
-            or not mapping.product_type.category.is_available
-        ):
-            return None
-        return mapping
+        return None
 
     @classmethod
     def _upsert_mapping(
@@ -415,11 +509,12 @@ class MarketplaceDraftService:
         product_type: MarketplaceProductType,
         corrected_by_user_id: Optional[int],
     ) -> MarketplaceCategoryMapping:
-        category, normalized = cls._source_category(product)
-        if not category or not normalized:
+        identities = cls._mapping_identities(product)
+        if not identities:
             raise MarketplaceDraftValidationError(
                 "Нельзя сохранить mapping без исходной категории"
             )
+        identity = identities[0]
         if corrected_by_user_id is not None:
             corrected_by_user_id = cls._positive_integer(
                 corrected_by_user_id,
@@ -432,51 +527,54 @@ class MarketplaceDraftService:
                 raise MarketplaceDraftValidationError(
                     "corrected_by_user_id не принадлежит seller"
                 )
-        scope_key = cls._scope_key(product)
         mapping = MarketplaceCategoryMapping.query.filter_by(
             seller_id=seller_id,
             marketplace_id=marketplace_id,
-            scope_key=scope_key,
-            source_category_normalized=normalized,
+            scope_key=identity["scope_key"],
+            source_category_normalized=(
+                identity["source_category_normalized"]
+            ),
         ).first()
+        evidence = {"confirmation": "seller"}
+        evidence.update(identity["evidence"])
+        evidence_json = json.dumps(
+            evidence,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         if mapping is None:
             mapping = MarketplaceCategoryMapping(
                 seller_id=seller_id,
                 marketplace_id=marketplace_id,
-                supplier_id=product.supplier_id,
-                scope_key=scope_key,
-                source_type=cls._optional_text(
-                    product.source_type,
-                    "source_type",
-                    maximum=80,
-                ) or "unknown",
-                source_category=category,
-                source_category_normalized=normalized,
+                supplier_id=identity["supplier_id"],
+                scope_key=identity["scope_key"],
+                source_type=identity["source_type"],
+                source_category=identity["source_category"],
+                source_category_normalized=(
+                    identity["source_category_normalized"]
+                ),
                 product_type_id=product_type.id,
                 external_category_id=product_type.category.external_category_id,
                 external_type_id=product_type.external_type_id,
                 mapping_source="manual",
                 mapping_status="active",
                 confidence=1.0,
-                evidence_json='{"confirmation":"seller"}',
+                evidence_json=evidence_json,
                 corrected_by_user_id=corrected_by_user_id,
             )
             db.session.add(mapping)
         else:
-            mapping.supplier_id = product.supplier_id
-            mapping.source_type = cls._optional_text(
-                product.source_type,
-                "source_type",
-                maximum=80,
-            ) or "unknown"
-            mapping.source_category = category
+            mapping.supplier_id = identity["supplier_id"]
+            mapping.source_type = identity["source_type"]
+            mapping.source_category = identity["source_category"]
             mapping.product_type_id = product_type.id
             mapping.external_category_id = product_type.category.external_category_id
             mapping.external_type_id = product_type.external_type_id
             mapping.mapping_source = "manual"
             mapping.mapping_status = "active"
             mapping.confidence = 1.0
-            mapping.evidence_json = '{"confirmation":"seller"}'
+            mapping.evidence_json = evidence_json
             mapping.corrected_by_user_id = corrected_by_user_id
             mapping.updated_at = datetime.utcnow()
         db.session.flush()
@@ -525,6 +623,242 @@ class MarketplaceDraftService:
             "schema_fresh": OzonReferenceService.reference_is_fresh(item),
             "schema_version": item.attributes_version,
         } for item in product_types]
+
+    @classmethod
+    def mapping_readiness(
+        cls,
+        *,
+        seller_id: int,
+        draft_id: int,
+    ) -> dict:
+        """Return a bounded explanation of WB/canonical -> Ozon readiness.
+
+        This is a local read.  It deliberately reports exact reference state
+        instead of guessing whether a value can be translated between the WB
+        and Ozon schemas.  ``validate_draft`` remains the final publishability
+        authority because it also checks content, media, physical values,
+        commercial data and account health.
+        """
+        draft = cls.get_draft(seller_id=seller_id, draft_id=draft_id)
+        product_type = draft.product_type
+        definitions = []
+        if product_type is not None:
+            definitions = MarketplaceAttributeDefinition.query.filter_by(
+                product_type_id=product_type.id,
+                is_available=True,
+                is_enabled=True,
+            ).order_by(
+                MarketplaceAttributeDefinition.sort_order.asc(),
+                MarketplaceAttributeDefinition.id.asc(),
+            ).all()
+
+        supplied_ids = set()
+        for item in cls._stored_json(draft.attributes_json, list):
+            if isinstance(item, dict) and isinstance(item.get("attribute_id"), str):
+                supplied_ids.add(item["attribute_id"])
+        for group in cls._stored_json(draft.complex_attributes_json, list):
+            if not isinstance(group, dict):
+                continue
+            for item in group.get("attributes", []):
+                if isinstance(item, dict) and isinstance(item.get("attribute_id"), str):
+                    supplied_ids.add(item["attribute_id"])
+        content = cls._stored_json(draft.content_json, dict)
+        if isinstance(content.get("description"), str) and content["description"].strip():
+            supplied_ids.add(cls.OZON_DESCRIPTION_ATTRIBUTE_ID)
+
+        required = [item for item in definitions if item.is_required]
+        missing_required = [
+            {
+                "attribute_id": item.external_attribute_id,
+                "name": item.name,
+                "complex_id": item.attribute_complex_id or "0",
+            }
+            for item in required
+            if item.external_attribute_id not in supplied_ids
+        ]
+        dictionary_definitions = [
+            item for item in definitions if item.dictionary_id
+        ]
+        stale_dictionaries = [
+            {
+                "attribute_id": item.external_attribute_id,
+                "name": item.name,
+                "dictionary_id": item.dictionary_id,
+            }
+            for item in dictionary_definitions
+            if not OzonReferenceService.dictionary_is_fresh(item)
+        ]
+        schema_fresh = bool(
+            product_type
+            and OzonReferenceService.reference_is_fresh(product_type)
+        )
+
+        product = draft.imported_product
+        supplier_product = product.supplier_product if product else None
+        if supplier_product and (
+            supplier_product.ai_parsed_at is not None
+            or bool(supplier_product.ai_parsed_data_json)
+        ):
+            ai_source = "supplier_product_cache"
+        elif product and any((
+            product.ai_analysis_at,
+            product.ai_keywords,
+            product.ai_attributes,
+            product.ai_seo_title,
+        )):
+            ai_source = "imported_product_cache"
+        else:
+            ai_source = None
+
+        try:
+            source_facts_fresh = bool(
+                product
+                and MarketplaceFactPackBuilder.build(product)["fact_hash"]
+                == draft.source_fact_hash
+            )
+        except MarketplaceFactPackError:
+            source_facts_fresh = False
+        try:
+            wb_projection = MarketplaceFactPackBuilder.wb_projection_drift(
+                product
+            ) if product else {
+                "linked": False,
+                "in_sync": None,
+                "differing_fields": [],
+            }
+        except MarketplaceFactPackError:
+            wb_projection = {
+                "linked": False,
+                "in_sync": None,
+                "differing_fields": [],
+            }
+        now = datetime.utcnow()
+        account_ready = bool(
+            draft.account
+            and draft.account.is_active
+            and draft.account.connection_status == "connected"
+            and draft.account.has_credentials
+            and (
+                draft.account.credential_expires_at is None
+                or draft.account.credential_expires_at > now
+            )
+        )
+
+        validation = cls._stored_json(draft.validation_result_json, dict)
+        if product_type is None:
+            overall = "needs_category"
+        elif not source_facts_fresh:
+            overall = "source_stale"
+        elif not schema_fresh or stale_dictionaries:
+            overall = "references_stale"
+        elif missing_required:
+            overall = "needs_attributes"
+        elif not account_ready:
+            overall = "account_blocked"
+        elif draft.status == "ready" and validation.get("publishable") is True:
+            overall = "ready"
+        elif draft.validation_status in {"never_validated", "stale"}:
+            overall = "needs_validation"
+        else:
+            overall = "blocked"
+
+        if draft.category_mapping_id is not None:
+            category_status = "exact_mapping"
+        elif draft.published_listing_id is not None and product_type is not None:
+            category_status = "linked_listing"
+        elif product_type is not None:
+            category_status = "selected"
+        else:
+            category_status = "missing"
+
+        wb_product = product.product if product else None
+        wb_nm_id = None
+        if wb_product is not None and wb_product.nm_id is not None:
+            wb_nm_id = str(wb_product.nm_id)
+        elif product is not None and product.wb_nm_id is not None:
+            wb_nm_id = str(product.wb_nm_id)
+
+        return {
+            "version": 1,
+            "overall": overall,
+            "source": {
+                "kind": "canonical_imported_product",
+                "imported_product_id": draft.imported_product_id,
+                "wb_projection_linked": bool(
+                    product and (product.product_id is not None or wb_nm_id)
+                ),
+                "wb_product_id": product.product_id if product else None,
+                "wb_nm_id": wb_nm_id,
+                "ai_cache_reused": ai_source is not None,
+                "ai_source": ai_source,
+                "facts_fresh": source_facts_fresh,
+                "wb_projection": wb_projection,
+            },
+            "account": {
+                "ready": account_ready,
+                "active": bool(draft.account and draft.account.is_active),
+                "connection_status": (
+                    draft.account.connection_status if draft.account else None
+                ),
+                "has_credentials": bool(
+                    draft.account and draft.account.has_credentials
+                ),
+            },
+            "category": {
+                "status": category_status,
+                "mapping_id": draft.category_mapping_id,
+                "mapping_source_type": (
+                    draft.category_mapping.source_type
+                    if draft.category_mapping else None
+                ),
+                "mapping_source_category": (
+                    draft.category_mapping.source_category
+                    if draft.category_mapping else None
+                ),
+                "product_type_id": draft.product_type_id,
+                "external_category_id": draft.external_category_id,
+                "external_type_id": draft.external_type_id,
+            },
+            "schema": {
+                "fresh": schema_fresh,
+                "version": (
+                    product_type.attributes_version if product_type else None
+                ),
+                "hash": (
+                    product_type.attributes_schema_hash if product_type else None
+                ),
+            },
+            "attributes": {
+                "schema_total": len(definitions),
+                "supplied_known": sum(
+                    1
+                    for item in definitions
+                    if item.external_attribute_id in supplied_ids
+                ),
+                "required_total": len(required),
+                "required_supplied": len(required) - len(missing_required),
+                "missing_required": missing_required[:50],
+                "missing_required_truncated": len(missing_required) > 50,
+            },
+            "dictionaries": {
+                "total": len(dictionary_definitions),
+                "fresh": len(dictionary_definitions) - len(stale_dictionaries),
+                "stale": stale_dictionaries[:50],
+                "stale_truncated": len(stale_dictionaries) > 50,
+            },
+            "validation": {
+                "status": draft.validation_status,
+                "publishable": validation.get("publishable") is True,
+                "error_count": len(validation.get("errors", []))
+                if isinstance(validation.get("errors"), list) else 0,
+                "warning_count": len(validation.get("warnings", []))
+                if isinstance(validation.get("warnings"), list) else 0,
+            },
+            "reverse_mapping": {
+                "automatic_round_trip": False,
+                "mode": "reviewed_common_fact_diff",
+            },
+        }
 
     @classmethod
     def list_drafts(
@@ -1885,6 +2219,25 @@ class MarketplaceDraftService:
             errors.append(cls._validation_item(
                 "source_facts_unavailable", "source_facts",
                 "Не удалось повторно проверить исходные факты",
+            ))
+
+        try:
+            wb_projection = MarketplaceFactPackBuilder.wb_projection_drift(
+                draft.imported_product
+            )
+        except MarketplaceFactPackError:
+            wb_projection = {
+                "linked": False,
+                "differing_fields": [],
+            }
+        if wb_projection.get("differing_fields"):
+            warnings.append(cls._validation_item(
+                "wb_projection_differs_from_canonical",
+                "source_facts",
+                "Связанная WB-карточка отличается в общих полях: "
+                + ", ".join(wb_projection["differing_fields"])
+                + ". Ozon-черновик использует общую внутреннюю карточку; "
+                "сначала проверьте diff, если нужна именно версия WB.",
             ))
 
         facts_document = cls._stored_json(draft.source_facts_json, dict)

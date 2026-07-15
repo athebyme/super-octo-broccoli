@@ -263,32 +263,46 @@ def create():
         data = _payload()
         allowed = {
             "account_id", "imported_product_id", "product_type_id",
-            "offer_id", "save_mapping",
+            "offer_id", "save_mapping", "validate",
         }
         unknown = set(data) - allowed
         if unknown:
             raise MarketplaceDraftValidationError(
                 "Неизвестные поля: " + ", ".join(sorted(unknown))
             )
+        account_id = _integer(data.get("account_id"), "account_id")
+        imported_product_id = _integer(
+            data.get("imported_product_id"),
+            "imported_product_id",
+        )
+        product_type_id = _integer(
+            data.get("product_type_id"),
+            "product_type_id",
+            required=False,
+        )
+        save_mapping = _boolean(
+            data.get("save_mapping"),
+            "save_mapping",
+        )
+        validate_immediately = _boolean(
+            data.get("validate"),
+            "validate",
+        )
         draft = MarketplaceDraftService.create_draft(
             seller_id=seller_id,
-            account_id=_integer(data.get("account_id"), "account_id"),
-            imported_product_id=_integer(
-                data.get("imported_product_id"),
-                "imported_product_id",
-            ),
-            product_type_id=_integer(
-                data.get("product_type_id"),
-                "product_type_id",
-                required=False,
-            ),
+            account_id=account_id,
+            imported_product_id=imported_product_id,
+            product_type_id=product_type_id,
             offer_id=data.get("offer_id") or None,
-            save_mapping=_boolean(
-                data.get("save_mapping"),
-                "save_mapping",
-            ),
+            save_mapping=save_mapping,
             corrected_by_user_id=getattr(current_user, "id", None),
         )
+        if validate_immediately:
+            draft = MarketplaceDraftService.validate_draft(
+                seller_id=seller_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+            )
     except Exception as exc:
         return _write_failure(exc, seller_id=seller_id, action="create")
     if _wants_json():
@@ -296,7 +310,19 @@ def create():
             "success": True,
             "draft": draft.to_public_dict(detail=True),
         }), 201
-    flash("Черновик Ozon создан", "success")
+    result = draft.to_public_dict(detail=True)
+    if validate_immediately and result["validation"].get("publishable"):
+        flash(
+            "Карточка подготовлена: Ozon-черновик полностью готов к публикации",
+            "success",
+        )
+    elif validate_immediately:
+        flash(
+            "Ozon-черновик подготовлен; ниже показано, что нужно уточнить",
+            "warning",
+        )
+    else:
+        flash("Черновик Ozon создан", "success")
     return redirect(url_for("marketplace_drafts.detail", draft_id=draft.id))
 
 
@@ -325,6 +351,10 @@ def detail(draft_id: int):
             draft_id=draft.id,
             limit=20,
         )
+        mapping_readiness = MarketplaceDraftService.mapping_readiness(
+            seller_id=seller_id,
+            draft_id=draft.id,
+        )
     except MarketplaceDraftError as exc:
         return _error_response(exc)
     if _wants_json():
@@ -335,6 +365,7 @@ def detail(draft_id: int):
                 operation.to_public_dict(detail=False)
                 for operation in operations
             ],
+            "mapping_readiness": mapping_readiness,
         })
     active_operation = next(
         (
@@ -354,6 +385,7 @@ def detail(draft_id: int):
         publication_idempotency_key=secrets.token_urlsafe(24),
         operations=operations,
         active_operation=active_operation,
+        mapping_readiness=mapping_readiness,
     )
 
 

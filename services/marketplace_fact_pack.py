@@ -239,6 +239,61 @@ class MarketplaceFactPackBuilder:
         provenance[path] = {"source": source, "trust": trust}
 
     @classmethod
+    def wb_projection_drift(cls, imported_product: ImportedProduct) -> dict:
+        """Compare bounded common content with the linked WB projection.
+
+        ``ImportedProduct`` remains the canonical source.  This helper never
+        merges channel data; it only makes divergence visible before another
+        marketplace projection is prepared.
+        """
+        if not isinstance(imported_product, ImportedProduct):
+            raise MarketplaceFactPackError(
+                "WB projection comparison requires an ImportedProduct"
+            )
+        wb_product = imported_product.product
+        if wb_product is None:
+            return {
+                "linked": False,
+                "in_sync": None,
+                "differing_fields": [],
+            }
+
+        pairs = {
+            "title": (imported_product.title, wb_product.title),
+            "description": (
+                imported_product.description,
+                wb_product.description,
+            ),
+            "brand": (imported_product.brand, wb_product.brand),
+        }
+
+        def comparable(value: Any, maximum: int) -> Optional[str]:
+            text = cls._text(value, maximum=maximum)
+            return " ".join(text.split()) if text is not None else None
+
+        limits = {
+            "title": 500,
+            "description": cls.MAX_DESCRIPTION,
+            "brand": 200,
+        }
+        differing_fields = [
+            field
+            for field, (canonical_value, wb_value) in pairs.items()
+            if comparable(canonical_value, limits[field])
+            != comparable(wb_value, limits[field])
+        ]
+        return {
+            "linked": True,
+            "wb_product_id": wb_product.id,
+            "wb_nm_id": (
+                str(wb_product.nm_id)
+                if wb_product.nm_id is not None else None
+            ),
+            "in_sync": not differing_fields,
+            "differing_fields": differing_fields,
+        }
+
+    @classmethod
     def build(cls, imported_product: ImportedProduct) -> Dict[str, Any]:
         if not isinstance(imported_product, ImportedProduct):
             raise MarketplaceFactPackError(

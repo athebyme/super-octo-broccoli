@@ -212,6 +212,15 @@ class MarketplaceDraftRoutesTest(unittest.TestCase):
                     "save_mapping": "false",
                 },
             )
+            loose_validate = self.client.post(
+                "/marketplaces/drafts/",
+                json={
+                    "account_id": self.account1_id,
+                    "imported_product_id": self.own_source_id,
+                    "save_mapping": False,
+                    "validate": "true",
+                },
+            )
             unknown = self.client.post(
                 "/marketplaces/drafts/",
                 json={
@@ -230,6 +239,7 @@ class MarketplaceDraftRoutesTest(unittest.TestCase):
                 },
             )
         self.assertEqual(loose.status_code, 400)
+        self.assertEqual(loose_validate.status_code, 400)
         self.assertEqual(unknown.status_code, 400)
         self.assertEqual(valid.status_code, 201)
         create.assert_called_once_with(
@@ -240,6 +250,60 @@ class MarketplaceDraftRoutesTest(unittest.TestCase):
             offer_id=None,
             save_mapping=False,
             corrected_by_user_id=self.user1_id,
+        )
+
+    def test_create_can_run_local_validation_immediately(self):
+        created = SimpleNamespace(
+            id=99,
+            version=4,
+            to_public_dict=lambda detail=False: {
+                "id": 99,
+                "validation": {"publishable": False},
+            },
+        )
+        validated = SimpleNamespace(
+            id=99,
+            version=5,
+            to_public_dict=lambda detail=False: {
+                "id": 99,
+                "validation": {"publishable": True},
+            },
+        )
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch, patch.object(
+            MarketplaceDraftService,
+            "create_draft",
+            return_value=created,
+        ) as create, patch.object(
+            MarketplaceDraftService,
+            "validate_draft",
+            return_value=validated,
+        ) as validate:
+            response = self.client.post(
+                "/marketplaces/drafts/",
+                json={
+                    "account_id": self.account1_id,
+                    "imported_product_id": self.own_source_id,
+                    "save_mapping": False,
+                    "validate": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.get_json()["draft"]["validation"]["publishable"])
+        create.assert_called_once_with(
+            seller_id=self.seller1_id,
+            account_id=self.account1_id,
+            imported_product_id=self.own_source_id,
+            product_type_id=None,
+            offer_id=None,
+            save_mapping=False,
+            corrected_by_user_id=self.user1_id,
+        )
+        validate.assert_called_once_with(
+            seller_id=self.seller1_id,
+            draft_id=99,
+            expected_version=4,
         )
 
     def test_update_json_contract_and_authenticated_scope(self):
