@@ -65,7 +65,7 @@
             searchProducts() {
                 const q = (this.query || '').trim();
                 if (this._timer) clearTimeout(this._timer);
-                if (q.length < 2) { this.clearProducts(); this.collect(); return; }
+                if (q.length < 2) { this._seq++; this.clearProducts(); this.collect(); return; }
                 const self = this;
                 const seq = ++this._seq;
                 this._timer = setTimeout(function () {
