@@ -1,6 +1,15 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
 
 {% block title %}Отзывы Ozon — Seller Hub{% endblock %}
+
+{% block topbar_left %}
+<nav class="sh-crumbs" aria-label="Хлебные крошки">
+  <a href="{{ url_for('marketplace_listings.index') }}">Ozon</a>
+  <span aria-hidden="true">/</span>
+  <span>Отзывы и вопросы</span>
+</nav>
+{% endblock %}
 
 {% block content %}
 <div x-data="ozonInboxPage()" x-init="init()">
@@ -31,8 +40,8 @@
           </select>
         </label>
       </div>
-      <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border:1px solid #bfdbfe;border-radius:9px;background:#eff6ff;color:#1e40af;font-size:13px;line-height:1.5">
-        <span aria-hidden="true">🛡️</span>
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border:1px solid var(--info-border);border-radius:var(--r-md);background:var(--info-bg);color:var(--info);font-size:13px;line-height:1.5">
+        <span aria-hidden="true">{{ icon('shield', size=18) }}</span>
         <span><strong>Ничего не отправляется в Ozon.</strong> Синхронизация вызывает только read endpoints. AI и быстрый шаблон сохраняют локальный черновик для проверки человеком; кнопки публикации в этом контуре нет.</span>
       </div>
       <div style="margin-top:9px;color:var(--text-muted);font-size:12px;line-height:1.5">
@@ -41,11 +50,11 @@
     </div>
 
     <template x-if="error">
-      <div style="padding:14px 16px;margin-bottom:20px;border:1px solid #fecaca;background:#fef2f2;border-radius:10px;color:#b91c1c" x-text="error"></div>
+      <div style="padding:14px 16px;margin-bottom:20px;border:1px solid var(--danger-border);background:var(--danger-bg);border-radius:var(--r-md);color:var(--danger)" x-text="error"></div>
     </template>
 
     <template x-if="capability && (!capability.available || !capability.account_ready)">
-      <div style="padding:15px 17px;margin-bottom:20px;border:1px solid #fed7aa;background:#fff7ed;border-radius:10px;color:#9a3412;line-height:1.5">
+      <div style="padding:15px 17px;margin-bottom:20px;border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:var(--r-md);color:var(--warn);line-height:1.5">
         <strong x-text="!capability.account_ready ? 'Кабинет не готов к синхронизации.' : 'Метод недоступен для этого API key.'"></strong>
         <span x-text="!capability.account_ready ? ' Активируйте кабинет, сохраните credentials и повторно проверьте подключение.' : (sourceKind==='review' ? ' Перепроверьте подключение кабинета: Ozon Reviews API может требовать Premium Plus.' : ' Перепроверьте подключение кабинета: Ozon Questions API может требовать Premium Plus.')"></span>
       </div>
@@ -70,15 +79,15 @@
     </div>
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px">
-      <div class="sh-card" style="padding:17px;border-left:4px solid #2563eb">
+      <div class="sh-card" style="padding:17px;border-left:4px solid var(--info)">
         <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Новые</div>
         <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.NEW||0"></div>
       </div>
-      <div class="sh-card" style="padding:17px;border-left:4px solid #f59e0b">
+      <div class="sh-card" style="padding:17px;border-left:4px solid var(--warn)">
         <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Просмотренные</div>
         <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.VIEWED||0"></div>
       </div>
-      <div class="sh-card" style="padding:17px;border-left:4px solid #16a34a">
+      <div class="sh-card" style="padding:17px;border-left:4px solid var(--ok)">
         <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Обработанные</div>
         <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.PROCESSED||0"></div>
       </div>
@@ -104,8 +113,8 @@
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
                 <strong x-text="item.listing ? (item.listing.title || item.listing.offer_id) : ('SKU '+item.external_sku)"></strong>
                 <span class="sh-badge" x-text="statusLabel(item.provider_status)"></span>
-                <span x-show="item.match_status!=='matched'" class="sh-badge" style="background:#fff7ed;color:#9a3412" x-text="matchLabel(item.match_status)"></span>
-                <span x-show="item.source_kind==='review'" style="color:#d97706;font-size:14px" x-text="'★'.repeat(item.rating||0)+'☆'.repeat(5-(item.rating||0))"></span>
+                <span x-show="item.match_status!=='matched'" class="sh-badge" style="background:var(--warn-bg);color:var(--warn)" x-text="matchLabel(item.match_status)"></span>
+                <span x-show="item.source_kind==='review'" style="color:var(--warn);font-size:14px" x-text="'★'.repeat(item.rating||0)+'☆'.repeat(5-(item.rating||0))"></span>
               </div>
               <div style="font-size:12px;color:var(--text-muted)">
                 <span x-text="dateTime(item.published_at)"></span>
@@ -120,16 +129,16 @@
             </div>
           </div>
 
-          <div style="margin-top:14px;white-space:pre-wrap;line-height:1.55;color:var(--text-primary)" x-text="item.text || 'Отзыв без текста'"></div>
+          <div style="margin-top:14px;white-space:pre-wrap;line-height:1.55;color:var(--text)" x-text="item.text || 'Отзыв без текста'"></div>
 
           <template x-if="!item.reply_eligible">
-            <div style="margin-top:14px;padding:10px 12px;border-radius:8px;background:#f3f4f6;color:var(--text-muted);font-size:12px">Ozon не принимает комментарий к отзыву без текста, фото или видео.</div>
+            <div style="margin-top:14px;padding:10px 12px;border-radius:var(--r-md);background:var(--bg-hover);color:var(--text-muted);font-size:12px">Ozon не принимает комментарий к отзыву без текста, фото или видео.</div>
           </template>
 
           <template x-if="item.draft">
-            <div style="margin-top:16px;padding:14px;border:1px solid #bbf7d0;border-radius:9px;background:#f0fdf4">
+            <div style="margin-top:16px;padding:14px;border:1px solid var(--ok-border);border-radius:var(--r-md);background:var(--ok-bg)">
               <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:7px">
-                <strong style="font-size:13px;color:#166534" x-text="item.draft.generation_mode==='ai' ? 'AI-черновик · требует проверки' : 'Безопасный шаблон · требует проверки'"></strong>
+                <strong style="font-size:13px;color:var(--ok)" x-text="item.draft.generation_mode==='ai' ? 'AI-черновик · требует проверки' : 'Безопасный шаблон · требует проверки'"></strong>
                 <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="copyDraft(item.draft.text)">Копировать</button>
               </div>
               <div style="white-space:pre-wrap;line-height:1.5;font-size:14px" x-text="item.draft.text"></div>

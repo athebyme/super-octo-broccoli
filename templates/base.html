@@ -2195,13 +2195,9 @@
             {% set reviews_active = request.endpoint == 'reviews_page' or (request.endpoint and request.endpoint.startswith('marketplace_inbox.')) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if reviews_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if reviews_active else 'false' }} }" :aria-expanded="open" aria-label="Отзывы">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
+                    {{ icon('chat', size=18, stroke=1.5) }}
                     <span x-show="sidebarOpen" x-cloak style="flex:1;text-align:left">Отзывы</span>
-                    <svg x-show="sidebarOpen" x-cloak class="sidebar-chevron" :class="{ 'rotated': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                    </svg>
+                    <span x-show="sidebarOpen" x-cloak class="sidebar-chevron" style="display:inline-flex" :class="{ 'rotated': open }">{{ icon('chevron-down', size=14) }}</span>
                 </button>
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('reviews_page') }}" class="sidebar-sublink {% if request.endpoint == 'reviews_page' %}active{% endif %}">Wildberries</a>
@@ -2210,9 +2206,7 @@
             </div>
             {% else %}
             <a href="{{ url_for('reviews_page') }}" class="sidebar-link {% if request.endpoint == 'reviews_page' %}active{% endif %}" style="position:relative">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                </svg>
+                {{ icon('chat', size=18, stroke=1.5) }}
                 <span x-show="sidebarOpen" x-cloak>Отзывы</span>
             </a>
             {% endif %}
@@ -2658,12 +2652,12 @@
         <span class="sh-cmdpal-item-label">Объединение карточек</span>
     </a>
     <a href="{{ url_for('reviews_page') }}" class="sh-cmdpal-item">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+        {{ icon('chat', size=20, stroke=1.5) }}
         <span class="sh-cmdpal-item-label">Отзывы</span>
     </a>
     {% if config.get('MARKETPLACE_OZON_ENABLED', false) %}
     <a href="{{ url_for('marketplace_inbox.page') }}" class="sh-cmdpal-item">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+        {{ icon('chat', size=20, stroke=1.5) }}
         <span class="sh-cmdpal-item-label">Отзывы и вопросы Ozon</span>
     </a>
     {% endif %}
