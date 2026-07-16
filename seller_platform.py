@@ -88,6 +88,40 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('DISABLE_SECURE_COOKIE', '').lower() not in ('1', 'true')
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 час
 
+# Marketplace capabilities are rolled out independently. Ozon starts dark and
+# must be enabled explicitly after its migration is applied.
+app.config['MARKETPLACE_OZON_ENABLED'] = (
+    os.environ.get('MARKETPLACE_OZON_ENABLED', '').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+app.config['MARKETPLACE_OZON_PUBLICATION_ENABLED'] = (
+    os.environ.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', '').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+app.config['MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED'] = (
+    os.environ.get('MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED', '').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+app.config['MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED'] = (
+    os.environ.get('MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED', '').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+# WB projection maintenance is local/read-only and safe by default.  The
+# visible catalog cutover stays dark until an operator explicitly requests it;
+# runtime still falls back to Product if the latest parity sweep is not exact.
+app.config['MARKETPLACE_WB_PROJECTION_ENABLED'] = (
+    os.environ.get('MARKETPLACE_WB_PROJECTION_ENABLED', '1').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+app.config['MARKETPLACE_WB_DUAL_READ_ENABLED'] = (
+    os.environ.get('MARKETPLACE_WB_DUAL_READ_ENABLED', '1').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+app.config['MARKETPLACE_WB_COMMON_READ_ENABLED'] = (
+    os.environ.get('MARKETPLACE_WB_COMMON_READ_ENABLED', '0').strip().lower()
+    in ('1', 'true', 'yes', 'on')
+)
+
 # Публичный URL сервера для внешнего доступа (WB media/save, превью)
 # Пример: http://176.123.45.230:5000  или  https://myshop.example.com
 # Если не задан — url_for(_external=True) генерит localhost, и WB не сможет забрать фото
@@ -1437,13 +1471,44 @@ def products_list():
         sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
         sort_order = request.args.get('order', 'desc')  # 'asc' или 'desc'
 
-        # Построение запроса
-        query = Product.query.filter_by(seller_id=current_user.seller.id)
+        # Построение запроса.  P11 can use MarketplaceListing as the WB catalog
+        # membership source only after a completed exact parity sweep.  A
+        # requested-but-not-ready cutover falls back to the legacy query.
+        try:
+            from services.marketplace_rollout import MarketplaceRolloutService
+            base_catalog_query, marketplace_read_state = (
+                MarketplaceRolloutService.wb_product_query(
+                    seller_id=current_user.seller.id,
+                    common_read_requested=bool(app.config.get(
+                        'MARKETPLACE_WB_COMMON_READ_ENABLED',
+                        False,
+                    )),
+                )
+            )
+        except Exception as rollout_error:
+            app.logger.warning(
+                'WB common-read readiness unavailable for seller_id=%s: %s',
+                current_user.seller.id,
+                type(rollout_error).__name__,
+            )
+            base_catalog_query = Product.query.filter_by(
+                seller_id=current_user.seller.id,
+            )
+            marketplace_read_state = {
+                'read_mode': 'legacy_fallback',
+                'common_read_requested': bool(app.config.get(
+                    'MARKETPLACE_WB_COMMON_READ_ENABLED',
+                    False,
+                )),
+                'cutover_ready': False,
+                'blockers': ['rollout_readiness_unavailable'],
+            }
+        query = base_catalog_query
 
         if active_only:
-            query = query.filter_by(is_active=True)
+            query = query.filter(Product.is_active.is_(True))
         elif disabled_only:
-            query = query.filter_by(is_active=False)
+            query = query.filter(Product.is_active.is_(False))
 
         if search:
             # Поиск по артикулу, названию или бренду
@@ -1579,8 +1644,8 @@ def products_list():
         total_products = pagination.total  # Количество товаров после применения всех фильтров
 
         # Для активных товаров - всегда показываем общее количество активных (без фильтров)
-        active_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=True).count()
-        disabled_products = Product.query.filter_by(seller_id=current_user.seller.id, is_active=False).count()
+        active_products = base_catalog_query.filter(Product.is_active.is_(True)).count()
+        disabled_products = base_catalog_query.filter(Product.is_active.is_(False)).count()
 
         # Уникальные бренды/категории/поставщики для фильтров: три DISTINCT-скана
         # по каталогу на каждый показ страницы — кешируем бандл на 120с
@@ -1689,6 +1754,7 @@ def products_list():
             suppliers_for_filter=suppliers_for_filter,
             product_supplier_map=product_supplier_map,
             filter_supplier=filter_supplier,
+            marketplace_read_state=marketplace_read_state,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
@@ -6407,6 +6473,36 @@ register_docs_routes(app)
 from routes.marketplaces import register_marketplaces_routes
 register_marketplaces_routes(app)
 
+from routes.marketplace_accounts import register_marketplace_account_routes
+register_marketplace_account_routes(app)
+
+from routes.marketplace_listings import register_marketplace_listing_routes
+register_marketplace_listing_routes(app)
+
+from routes.marketplace_readiness import register_marketplace_readiness_routes
+register_marketplace_readiness_routes(app)
+
+from routes.marketplace_drafts import register_marketplace_draft_routes
+register_marketplace_draft_routes(app)
+
+from routes.marketplace_operations import register_marketplace_operation_routes
+register_marketplace_operation_routes(app)
+
+from routes.marketplace_commercial import register_marketplace_commercial_routes
+register_marketplace_commercial_routes(app)
+
+from routes.marketplace_insights import register_marketplace_insight_routes
+register_marketplace_insight_routes(app)
+
+from routes.marketplace_fulfillment import register_marketplace_fulfillment_routes
+register_marketplace_fulfillment_routes(app)
+
+from routes.marketplace_finance import register_marketplace_finance_routes
+register_marketplace_finance_routes(app)
+
+from routes.marketplace_inbox import register_marketplace_inbox_routes
+register_marketplace_inbox_routes(app)
+
 # ============= РОУТЫ БРЕНДОВ =============
 from routes.brands import register_brand_routes
 register_brand_routes(app)
@@ -6487,6 +6583,57 @@ def _run_startup_migrations():
     from sqlalchemy import inspect as sa_inspect
 
     bind = db.engine
+    # Auto-publish used to have a physical UNIQUE(seller_id), so adding
+    # account_id columns cannot produce the new marketplace scope correctly.
+    # Rebuild it through the same idempotent migration used by Docker. This
+    # keeps direct ``python seller_platform.py`` and ``scripts/init_platform``
+    # compatible with existing local SQLite databases.
+    if bind.dialect.name == 'sqlite':
+        sqlite_path = bind.url.database
+        if sqlite_path and sqlite_path != ':memory:':
+            db.session.remove()
+            from migrations.migrate_add_marketplace_auto_publish import (
+                migrate as migrate_marketplace_auto_publish,
+            )
+            migrate_marketplace_auto_publish(sqlite_path)
+            from migrations.migrate_add_marketplace_quality_analytics import (
+                migrate as migrate_marketplace_quality_analytics,
+            )
+            migrate_marketplace_quality_analytics(sqlite_path)
+            from migrations.migrate_add_marketplace_fulfillment import (
+                migrate as migrate_marketplace_fulfillment,
+            )
+            migrate_marketplace_fulfillment(sqlite_path)
+            from migrations.migrate_add_marketplace_finance import (
+                migrate as migrate_marketplace_finance,
+            )
+            migrate_marketplace_finance(sqlite_path)
+            from migrations.migrate_add_marketplace_inbox import (
+                migrate as migrate_marketplace_inbox,
+            )
+            migrate_marketplace_inbox(sqlite_path)
+            from migrations.migrate_add_marketplace_product_links import (
+                migrate as migrate_marketplace_product_links,
+            )
+            migrate_marketplace_product_links(sqlite_path)
+            from migrations.migrate_add_marketplace_canonical_content import (
+                migrate as migrate_marketplace_canonical_content,
+            )
+            migrate_marketplace_canonical_content(sqlite_path)
+            from migrations.migrate_add_marketplace_rollout import (
+                migrate as migrate_marketplace_rollout,
+            )
+            migrate_marketplace_rollout(sqlite_path)
+            from migrations.migrate_add_image_lab_marketplace_target import (
+                migrate as migrate_image_lab_marketplace_target,
+            )
+            migrate_image_lab_marketplace_target(sqlite_path)
+            from migrations.migrate_add_content_factory_marketplace_scope import (
+                migrate as migrate_content_factory_marketplace_scope,
+            )
+            migrate_content_factory_marketplace_scope(sqlite_path)
+            bind.dispose()
+            bind = db.engine
     insp = sa_inspect(bind)
 
     migrations = [
@@ -6530,6 +6677,14 @@ def _run_startup_migrations():
         ('products', 'wb_price_synced_at', 'DATETIME'),
         # Auto-publish atomic lock token
         ('auto_publish_settings', 'run_lock_token', 'VARCHAR(64)'),
+        # Marketplace-neutral adapter metadata. The standalone account
+        # migration remains fail-fast in Docker and creates account tables.
+        ('marketplaces', 'adapter_code', 'VARCHAR(50)'),
+        ('marketplaces', 'capability_versions_json', 'TEXT'),
+        ('marketplaces', 'categories_snapshot_hash', 'VARCHAR(64)'),
+        ('marketplaces', 'total_product_types', 'INTEGER DEFAULT 0'),
+        ('marketplace_attribute_definitions', 'restriction_value_ids_json', 'TEXT'),
+        ('marketplace_attribute_definitions', 'is_filterable', 'BOOLEAN DEFAULT 0 NOT NULL'),
         # Standard photos — минимальный порог фото для глобального правила продавца
         ('product_defaults', 'min_photos', 'INTEGER'),
         # Provenance and freshness for category-scoped WB dictionaries.

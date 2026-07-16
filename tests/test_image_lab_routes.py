@@ -14,7 +14,10 @@ from flask_login import LoginManager
 from models import (
     ImageGenerationExperiment,
     ImportedProduct,
+    Marketplace,
+    MarketplaceListing,
     Seller,
+    SellerMarketplaceAccount,
     User,
     db,
 )
@@ -33,6 +36,7 @@ class ImageLabRouteTests(unittest.TestCase):
             SQLALCHEMY_DATABASE_URI="sqlite:///:memory:",
             SQLALCHEMY_TRACK_MODIFICATIONS=False,
             IMAGE_LAB_DATA_DIR=self.temp.name,
+            MARKETPLACE_OZON_ENABLED=True,
         )
         db.init_app(self.app)
         login = LoginManager(self.app)
@@ -64,7 +68,77 @@ class ImageLabRouteTests(unittest.TestCase):
             title="Товар 2",
             photo_urls=json.dumps(["https://cdn.example.test/2.png"]),
         )
-        db.session.add_all([product1, product2])
+        product3 = ImportedProduct(
+            seller_id=seller1.id,
+            title="Товар 3",
+            photo_urls=json.dumps(["https://cdn.example.test/3.png"]),
+        )
+        db.session.add_all([product1, product2, product3])
+        db.session.flush()
+        ozon = Marketplace(
+            name="Ozon",
+            code="ozon",
+            adapter_code="ozon",
+            is_active=True,
+        )
+        db.session.add(ozon)
+        db.session.flush()
+        account1 = SellerMarketplaceAccount(
+            seller_id=seller1.id,
+            marketplace_id=ozon.id,
+            external_account_id="synthetic-one",
+            label="Ozon One",
+            is_active=True,
+            connection_status="connected",
+        )
+        account2 = SellerMarketplaceAccount(
+            seller_id=seller2.id,
+            marketplace_id=ozon.id,
+            external_account_id="synthetic-two",
+            label="Ozon Two",
+            is_active=True,
+            connection_status="connected",
+        )
+        db.session.add_all([account1, account2])
+        db.session.flush()
+        listing1 = MarketplaceListing(
+            seller_id=seller1.id,
+            marketplace_id=ozon.id,
+            account_id=account1.id,
+            imported_product_id=product1.id,
+            offer_id="offer-one",
+            external_product_id="101",
+            title="Ozon Товар 1",
+            normalized_status="active",
+            media_json=json.dumps({
+                "primary_image": "https://ozon.example.test/one.png",
+                "images": ["https://ozon.example.test/one.png"],
+            }),
+            sync_fingerprint="1" * 64,
+        )
+        listing3 = MarketplaceListing(
+            seller_id=seller1.id,
+            marketplace_id=ozon.id,
+            account_id=account1.id,
+            imported_product_id=product3.id,
+            offer_id="offer-three",
+            external_product_id="303",
+            title="Ozon Товар 3",
+            normalized_status="active",
+            sync_fingerprint="3" * 64,
+        )
+        foreign_listing = MarketplaceListing(
+            seller_id=seller2.id,
+            marketplace_id=ozon.id,
+            account_id=account2.id,
+            imported_product_id=product2.id,
+            offer_id="offer-two",
+            external_product_id="202",
+            title="Ozon Товар 2",
+            normalized_status="active",
+            sync_fingerprint="2" * 64,
+        )
+        db.session.add_all([listing1, listing3, foreign_listing])
         db.session.flush()
         foreign = ImageGenerationExperiment(
             seller_id=seller2.id,
@@ -83,6 +157,11 @@ class ImageLabRouteTests(unittest.TestCase):
         self.seller1_id = seller1.id
         self.seller2_id = seller2.id
         self.product1_id = product1.id
+        self.product3_id = product3.id
+        self.account1_id = account1.id
+        self.listing1_id = listing1.id
+        self.listing3_id = listing3.id
+        self.foreign_listing_id = foreign_listing.id
         self.foreign_experiment_id = foreign.id
         self.client = self.app.test_client()
         with self.client.session_transaction() as session:
@@ -123,6 +202,144 @@ class ImageLabRouteTests(unittest.TestCase):
         product = next(item for item in products if item["id"] == self.product1_id)
         self.assertEqual(product["photo_count"], 3)
         self.assertEqual(product["photos"][-1], {"index": 2, "label": "Фото 3"})
+        self.assertEqual(
+            [target["listing_id"] for target in product["marketplace_targets"]],
+            [self.listing1_id],
+        )
+        self.assertNotIn("ozon.example.test", json.dumps(product))
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    def test_exact_marketplace_target_is_persisted_without_attachment(self, launch):
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.product1_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+            "marketplace_target": {
+                "entity_kind": "marketplace_listing",
+                "listing_id": self.listing1_id,
+                "marketplace_code": "ozon",
+                "account_id": self.account1_id,
+            },
+        })
+        self.assertEqual(response.status_code, 202, response.get_json())
+        result = response.get_json()["experiments"][0]
+        experiment = db.session.get(ImageGenerationExperiment, result["id"])
+        self.assertEqual(experiment.marketplace_listing_id, self.listing1_id)
+        self.assertEqual(result["marketplace_target"]["listing_id"], self.listing1_id)
+        self.assertFalse(
+            result["marketplace_target"]["constraints"]["automatic_attachment"]
+        )
+        self.assertNotIn("ozon.example.test", json.dumps(result))
+        launch.assert_called_once()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    def test_foreign_or_wrong_product_target_is_rejected_before_launch(self, launch):
+        for listing_id in (self.foreign_listing_id, self.listing3_id):
+            with self.subTest(listing_id=listing_id):
+                response = self.client.post("/image-lab/api/experiments", json={
+                    "product_id": self.product1_id,
+                    "scene_key": "luxury",
+                    "custom_scene": "",
+                    "targets": [{
+                        "backend": "openrouter",
+                        "model": "google/gemini-3.1-flash-lite-image",
+                    }],
+                    "marketplace_target": {
+                        "entity_kind": "marketplace_listing",
+                        "listing_id": listing_id,
+                        "marketplace_code": "ozon",
+                        "account_id": self.account1_id,
+                    },
+                })
+                self.assertEqual(response.status_code, 400, response.get_json())
+        launch.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    def test_bare_listing_target_is_rejected_before_launch(self, launch):
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.product1_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+            "marketplace_target": {
+                "entity_kind": "marketplace_listing",
+                "listing_id": self.listing1_id,
+            },
+        })
+        self.assertEqual(response.status_code, 400, response.get_json())
+        launch.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    def test_disabled_feature_rejects_target_but_keeps_legacy_lab(self, launch):
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+        target_response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.product1_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+            "marketplace_target": {
+                "entity_kind": "marketplace_listing",
+                "listing_id": self.listing1_id,
+            },
+        })
+        self.assertEqual(target_response.status_code, 404)
+        legacy_response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.product1_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+        })
+        self.assertEqual(legacy_response.status_code, 202, legacy_response.get_json())
+        launch.assert_called_once()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    def test_target_is_revalidated_before_any_provider_work(self):
+        with mock.patch("routes.image_lab.lab.launch_experiments"):
+            response = self.client.post("/image-lab/api/experiments", json={
+                "product_id": self.product1_id,
+                "scene_key": "luxury",
+                "custom_scene": "",
+                "targets": [{
+                    "backend": "openrouter",
+                    "model": "google/gemini-3.1-flash-lite-image",
+                }],
+                "marketplace_target": {
+                    "entity_kind": "marketplace_listing",
+                    "listing_id": self.listing1_id,
+                    "marketplace_code": "ozon",
+                    "account_id": self.account1_id,
+                },
+            })
+        self.assertEqual(response.status_code, 202, response.get_json())
+        experiment_id = response.get_json()["experiments"][0]["id"]
+        account = db.session.get(SellerMarketplaceAccount, self.account1_id)
+        account.is_active = False
+        db.session.commit()
+        with mock.patch(
+            "services.image_lab_service._generate_provider_output"
+        ) as generate:
+            image_lab_service._run_experiment(self.app, experiment_id)
+        generate.assert_not_called()
+        experiment = db.session.get(ImageGenerationExperiment, experiment_id)
+        self.assertEqual(experiment.status, "failed")
+        self.assertIn("Неактивный кабинет", experiment.error)
 
     def test_bool_product_id_is_rejected(self):
         response = self.client.post("/image-lab/api/experiments", json={
@@ -132,6 +349,16 @@ class ImageLabRouteTests(unittest.TestCase):
             "targets": [],
         })
         self.assertEqual(response.status_code, 400)
+
+    def test_non_string_target_is_json_validation_error(self):
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.product1_id,
+            "scene_key": "luxury",
+            "targets": [{"backend": ["openrouter"], "model": True}],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.get_json()["success"])
+        self.assertIn("строками", response.get_json()["error"])
 
     @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
     @mock.patch("routes.image_lab.lab.launch_experiments")

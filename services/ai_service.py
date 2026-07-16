@@ -1223,9 +1223,9 @@ Rich-контент на WB - это визуальные блоки (слайд
 
     "full_product_parsing": {
         "name": "Полный AI парсинг товара",
-        "description": "Комплексное извлечение ВСЕХ характеристик товара для маркетплейса",
+        "description": "Комплексное извлечение подтверждённых характеристик товара с provenance",
         "template": """Ты ведущий эксперт по товарным карточкам для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
-Твоя задача — извлечь АБСОЛЮТНО ВСЕ возможные характеристики и атрибуты товара из предоставленных данных.
+Твоя задача — извлечь ВСЕ явно подтверждённые характеристики из предоставленных данных и сохранить источник каждого непустого значения.
 
 ══════════════════════════════════════════════════════════════
 КАТЕГОРИИ ХАРАКТЕРИСТИК ДЛЯ ИЗВЛЕЧЕНИЯ:
@@ -1353,13 +1353,10 @@ Rich-контент на WB - это визуальные блоки (слайд
 3. СПИСКИ — массив строк: "materials_list": ["силикон", "ABS пластик"]
 4. БУЛЕВЫ — true/false: "waterproof": true
 5. Запятые → точки: 7,5 → 7.5
-6. Извлекай данные из текста. Если точного значения нет — ВЫВЕДИ ЛОГИЧЕСКИ из контекста.
-   Примеры логического вывода:
-   - Вес: по типу товара и материалу (силиконовая пробка ~80-150г, вибратор ~150-300г)
-   - Ширина: по диаметру или типу изделия
-   - Особенности: по материалу, форме, назначению (бархатистая поверхность, компактный размер и т.д.)
-   - Комплектация: обычно "1 шт." если не указано иное
-   Цель — заполнить МАКСИМУМ полей для полной карточки товара
+6. Извлекай только явно указанное значение. Если точного значения нет — ставь null или [].
+   ЗАПРЕЩЕНО оценивать или выводить по типу товара вес, габариты, комплектацию,
+   материалы, страну, сертификаты, гарантию, срок годности и иные факты.
+   Не подменяй отсутствие факта типичным/вероятным значением.
 7. Вес ВСЕГДА в граммах, длины в см, объём в мл
 8a. ДОПОЛНИТЕЛЬНЫЕ ХАРАКТЕРИСТИКИ: если в тексте есть данные, которые не вписываются
     ни в одну из 16 категорий выше — добавь их в секцию "extra" с понятными ключами.
@@ -1496,14 +1493,18 @@ Rich-контент на WB - это визуальные блоки (слайд
         "fill_percentage": 0.0,
         "confidence": 0.0,
         "data_sources_used": ["title", "description", "original_data"],
+        "field_provenance": {
+            "physical.length_cm": {"source": "description", "evidence": "явный короткий фрагмент"}
+        },
         "notes": "<заметки о парсинге>"
     }
 }
 
 ══════════════════════════════════════════════════════════════
 ВАЖНО:
-- Заполни МАКСИМУМ полей из всех доступных данных
+- Извлеки максимум ПОДТВЕРЖДЁННЫХ полей, не увеличивай заполненность догадками
 - Если данных недостаточно — поставь null, не придумывай
+- Для каждого непустого фактического поля добавь field_provenance с source и коротким evidence
 - Верни ТОЛЬКО валидный JSON
 - marketplace_ready — обязательно заполни, это ключевые данные для продавца
 ══════════════════════════════════════════════════════════════"""
@@ -1546,6 +1547,10 @@ class AIConfig:
     proxy_enabled: bool = False
     # Для логирования
     seller_id: int = 0
+    # Privacy-sensitive tasks can suppress prompt/response/provider-body logs.
+    log_payloads: bool = True
+    # Physical provider attempts for one chat_completion call.
+    max_retries: int = 3
 
     @staticmethod
     def _central_provider_base_model(central: dict):
@@ -1861,7 +1866,10 @@ class AIClient:
             token = self._token_manager.get_access_token()
             if token:
                 auth_header = f'Bearer {token}'
-                logger.info(f"🔐 Auth header: Bearer {token[:20]}... (длина токена: {len(token)})")
+                if self.config.log_payloads:
+                    logger.info(
+                        f"🔐 Auth header configured (token length: {len(token)})"
+                    )
                 return auth_header
             return None
         else:
@@ -1912,7 +1920,13 @@ class AIClient:
             payload["response_format"] = response_format
 
         self.last_error = None
-        max_retries = 3
+        max_retries = self.config.max_retries
+        if (
+            not isinstance(max_retries, int)
+            or isinstance(max_retries, bool)
+            or not 1 <= max_retries <= 5
+        ):
+            max_retries = 3
         retryable_statuses = {429, 500, 502, 503, 504}
 
         # Получаем актуальный Authorization header
@@ -1931,7 +1945,10 @@ class AIClient:
                 else:
                     logger.info(f"🔄 AI retry {attempt}/{max_retries} к {self.config.provider.value}")
                 logger.info(f"📍 URL: {url}")
-                logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
+                if self.config.log_payloads:
+                    logger.debug(
+                        f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}"
+                    )
 
                 # Разделяем таймаут: connect быстро, read — по настройке.
                 # Tuple (connect_timeout, read_timeout) предотвращает зависание
@@ -1947,7 +1964,12 @@ class AIClient:
 
                 # Логируем ответ для отладки
                 if response.status_code != 200:
-                    logger.error(f"❌ AI HTTP {response.status_code}: {response.text[:500]}")
+                    if self.config.log_payloads:
+                        logger.error(
+                            f"❌ AI HTTP {response.status_code}: {response.text[:500]}"
+                        )
+                    else:
+                        logger.error(f"❌ AI HTTP {response.status_code}")
 
                 # Retryable HTTP errors
                 if response.status_code in retryable_statuses:
@@ -1988,7 +2010,10 @@ class AIClient:
                         f"AI вернул пустой ответ (модель: {self.config.model}, "
                         f"провайдер: {self.config.provider.value})"
                     )
-                    logger.error(f"❌ {self.last_error}: {data}")
+                    if self.config.log_payloads:
+                        logger.error(f"❌ {self.last_error}: {data}")
+                    else:
+                        logger.error(f"❌ {self.last_error}")
                     return None
 
                 # Если ответ обрезан по max_tokens — ретраим с увеличенным лимитом
@@ -2011,7 +2036,8 @@ class AIClient:
                     )
 
                 logger.info(f"✅ AI ответ получен ({len(content)} символов, finish_reason={finish_reason})")
-                logger.debug(f"Response: {content[:500]}...")
+                if self.config.log_payloads:
+                    logger.debug(f"Response: {content[:500]}...")
 
                 return content
 
@@ -2025,9 +2051,10 @@ class AIClient:
                 # Лучше быстро вернуть ошибку и перейти к следующему товару.
                 return None
             except requests.exceptions.ConnectionError as e:
+                detail = str(e)[:150] if self.config.log_payloads else type(e).__name__
                 self.last_error = (
                     f"Нет соединения с AI API ({self.config.provider.value}): "
-                    f"{str(e)[:150]} (попытка {attempt}/{max_retries})"
+                    f"{detail} (попытка {attempt}/{max_retries})"
                 )
                 logger.error(f"❌ {self.last_error}")
                 if attempt < max_retries:
@@ -2037,7 +2064,7 @@ class AIClient:
                 return None
             except requests.exceptions.HTTPError as e:
                 status = e.response.status_code
-                body = e.response.text[:300]
+                body = e.response.text[:300] if self.config.log_payloads else ""
                 if status in (401, 403):
                     # Для Cloud.ru пробуем сбросить токен и повторить (токен мог протухнуть)
                     if self._token_manager and attempt < max_retries:
@@ -2076,10 +2103,14 @@ class AIClient:
                 logger.error(f"❌ {self.last_error}")
                 return None
             except Exception as e:
-                self.last_error = f"Непредвиденная ошибка AI: {type(e).__name__}: {str(e)[:200]}"
+                detail = f": {str(e)[:200]}" if self.config.log_payloads else ""
+                self.last_error = (
+                    f"Непредвиденная ошибка AI: {type(e).__name__}{detail}"
+                )
                 logger.error(f"❌ {self.last_error}")
-                import traceback
-                logger.error(traceback.format_exc())
+                if self.config.log_payloads:
+                    import traceback
+                    logger.error(traceback.format_exc())
                 return None
 
         return None
@@ -3353,9 +3384,10 @@ class FullProductParsingTask(AITask):
         parts.append(f"\nФОТОГРАФИЙ: {product_data.get('photos_count', 0)}")
 
         parts.append("\n" + "=" * 60)
-        parts.append("ЗАДАНИЕ: Извлеки ВСЕ характеристики из данных выше. Заполни МАКСИМУМ полей.")
-        parts.append("Если точного значения нет — ВЫВЕДИ ЛОГИЧЕСКИ: оцени вес по материалу и типу,")
-        parts.append("ширину по диаметру, особенности по описанию. Чем больше полей заполнено — тем лучше.")
+        parts.append("ЗАДАНИЕ: Извлеки ВСЕ явно подтверждённые характеристики из данных выше.")
+        parts.append("Если точного значения нет — поставь null или []. Не оценивай вес, габариты,")
+        parts.append("комплектацию, материалы, страну, сертификаты или гарантию по типу товара.")
+        parts.append("Для каждого непустого факта укажи source и короткий evidence в parsing_meta.field_provenance.")
         parts.append("Верни результат строго в JSON формате.")
         parts.append("=" * 60)
 
@@ -3374,7 +3406,7 @@ class FullProductParsingTask(AITask):
                 nonlocal filled, total
                 if isinstance(obj, dict):
                     for k, v in obj.items():
-                        if k in ('parsing_meta', 'marketplace_ready'):
+                        if k in ('parsing_meta', 'marketplace_ready', 'field_provenance'):
                             continue
                         if isinstance(v, (dict, list)):
                             count_fields(v, f"{prefix}.{k}")
@@ -3390,8 +3422,12 @@ class FullProductParsingTask(AITask):
             count_fields(data)
 
             # Обновляем parsing_meta
-            if 'parsing_meta' not in data:
+            if not isinstance(data.get('parsing_meta'), dict):
                 data['parsing_meta'] = {}
+            provenance = data['parsing_meta'].get('field_provenance')
+            if not isinstance(provenance, dict):
+                data['parsing_meta']['field_provenance'] = {}
+            data['parsing_meta']['extraction_policy'] = 'explicit_only'
             data['parsing_meta']['total_fields_found'] = filled
             data['parsing_meta']['total_fields_possible'] = total
             data['parsing_meta']['fill_percentage'] = round(filled / total * 100, 1) if total > 0 else 0

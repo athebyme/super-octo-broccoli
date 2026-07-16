@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Ozon commercial — Seller Hub{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 sm:px-6 py-10">
+    <div class="sh-card p-6">
+        <p class="text-xs" style="color:var(--danger, #b42318)">{{ code or 'marketplace_commercial_error' }}</p>
+        <h1 class="mt-2 text-xl font-semibold" style="color:var(--text)">Операция не выполнена</h1>
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">{{ error }}</p>
+        <a class="sh-btn sh-btn--secondary mt-5" href="{{ url_for('marketplace_commercial.index') }}">К commercial proposals</a>
+    </div>
+</div>
+{% endblock %}

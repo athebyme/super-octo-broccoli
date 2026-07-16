@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product_type.name }} — атрибуты Ozon{% endblock %}
+
+{% block content %}
+<style>
+    .ozon-schema-page { max-width:1280px; margin:0 auto; }
+    .ozon-schema-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; }
+    .ozon-schema-title { margin:0; color:var(--text); font-family:var(--font-display); font-size:29px; font-weight:400; }
+    .ozon-schema-meta { margin-top:6px; color:var(--text-secondary); font-size:12px; line-height:1.5; }
+    .ozon-attribute-name { color:var(--text); font-size:13px; font-weight:600; }
+    .ozon-attribute-note { margin-top:4px; color:var(--text-muted); font-size:11px; line-height:1.45; }
+    .ozon-instruction { width:100%; min-height:58px; resize:vertical; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text); font-size:12px; }
+    .ozon-instruction:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--focus-ring); }
+    .ozon-row-disabled { opacity:.55; }
+    .ozon-toggle { width:16px; height:16px; accent-color:var(--accent); }
+    @media (max-width:720px) { .ozon-schema-head { flex-direction:column; } }
+</style>
+
+<div class="ozon-schema-page" x-data="ozonAttributeEditor()">
+    <nav class="sh-breadcrumb" aria-label="Навигационная цепочка">
+        <a href="{{ url_for('marketplaces.index') }}">Маркетплейсы</a><span> / </span>
+        <a href="{{ url_for('marketplaces.ozon_categories', marketplace_id=product_type.marketplace_id) }}">Ozon taxonomy</a><span> / </span>
+        <span>{{ product_type.name }}</span>
+    </nav>
+
+    <div class="ozon-schema-head">
+        <div>
+            <h1 class="ozon-schema-title">{{ product_type.name }}</h1>
+            <p class="ozon-schema-meta">
+                {{ product_type.category.full_path }}<br>
+                description_category_id={{ product_type.category.external_category_id }} · type_id={{ product_type.external_type_id }} ·
+                schema v{{ product_type.attributes_version or 0 }} · {{ 'fresh' if schema_fresh else 'stale/absent' }}
+            </p>
+        </div>
+        <form method="POST" action="{{ url_for('marketplaces.sync_ozon_type_attributes', product_type_id=product_type.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="sh-btn sh-btn--secondary sh-btn--md" type="submit" {% if not product_type.is_available or not product_type.category.is_available %}disabled{% endif %}>Обновить схему</button>
+        </form>
+    </div>
+
+    {% if not product_type.is_available or not product_type.category.is_available %}
+    <div class="sh-alert sh-alert--warning">Тип недоступен в актуальном дереве Ozon. Настройки read-only.</div>
+    {% elif not schema_fresh %}
+    <div class="sh-alert sh-alert--warning">Схема старше hard TTL 48 часов или не была полностью синхронизирована. Публикация по этому типу должна быть заблокирована.</div>
+    {% endif %}
+    {% if product_type.attributes_sync_error %}<div class="sh-alert sh-alert--error">{{ product_type.attributes_sync_error }}</div>{% endif %}
+
+    <div class="sh-table-wrap">
+        <table class="sh-table" style="min-width:1120px;table-layout:fixed">
+            <thead>
+                <tr>
+                    <th style="width:54px;text-align:center">Вкл.</th>
+                    <th style="width:25%">Атрибут</th>
+                    <th style="width:160px">Контракт</th>
+                    <th style="width:220px">Словарь / complex</th>
+                    <th>AI-инструкция</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for attribute in attributes %}
+                <tr :class="{'ozon-row-disabled': !enabled[{{ attribute.id }}] || {{ 'true' if not attribute.is_available else 'false' }}}">
+                    <td style="text-align:center">
+                        <input class="ozon-toggle" type="checkbox" :checked="enabled[{{ attribute.id }}]"
+                               @change="toggle({{ attribute.id }}, $event.target.checked)"
+                               {% if attribute.is_required or not attribute.is_available or not product_type.is_available %}disabled{% endif %}
+                               aria-label="Включить {{ attribute.name }}">
+                    </td>
+                    <td>
+                        <div class="ozon-attribute-name">{{ attribute.name }}</div>
+                        <div class="ozon-attribute-note">attribute_id={{ attribute.external_attribute_id }} · {{ attribute.group_name or 'Без группы' }}</div>
+                        {% if attribute.description %}<div class="ozon-attribute-note">{{ attribute.description }}</div>{% endif %}
+                        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">
+                            {% if attribute.is_required %}<span class="sh-badge sh-badge--sm sh-badge--red">Обязательный</span>{% endif %}
+                            {% if attribute.category_dependent %}<span class="sh-badge sh-badge--sm sh-badge--yellow">Category scoped</span>{% endif %}
+                            {% if not attribute.is_available %}<span class="sh-badge sh-badge--sm sh-badge--gray">Недоступен</span>{% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <span class="sh-badge sh-badge--sm sh-badge--blue">{{ attribute.data_type }}</span>
+                        <div class="ozon-attribute-note">max values: {{ attribute.max_value_count or 'без лимита' }}</div>
+                        {% if attribute.is_collection %}<div class="ozon-attribute-note">collection</div>{% endif %}
+                    </td>
+                    <td>
+                        {% if attribute.dictionary_id %}
+                        <a class="sh-btn sh-btn--ghost sh-btn--sm" href="{{ url_for('marketplaces.ozon_attribute_detail', attribute_id=attribute.id) }}">{{ attribute.values_count or 0 }} значений →</a>
+                        <div class="ozon-attribute-note">dictionary_id={{ attribute.dictionary_id }} · {{ attribute.values_sync_status or 'не загружен' }}</div>
+                        {% else %}<span class="ozon-attribute-note">Свободное значение</span>{% endif %}
+                        {% if attribute.attribute_complex_id %}<div class="ozon-attribute-note">complex={{ attribute.attribute_complex_id }}{% if attribute.complex_is_collection %} · collection{% endif %}</div>{% endif %}
+                    </td>
+                    <td>
+                        <textarea class="ozon-instruction" rows="2" x-model="instructions[{{ attribute.id }}]"
+                                  @blur="saveInstruction({{ attribute.id }})"
+                                  {% if not attribute.is_available or not product_type.is_available %}disabled{% endif %}
+                                  aria-label="AI-инструкция для {{ attribute.name }}"></textarea>
+                        <div class="ozon-attribute-note">source: <span x-text="sources[{{ attribute.id }}]"></span></div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" style="padding:40px;text-align:center;color:var(--text-muted)">Схема ещё не загружена.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function ozonAttributeEditor() {
+    return {
+        enabled: { {% for attribute in attributes %}{{ attribute.id }}: {{ 'true' if attribute.is_enabled or attribute.is_required else 'false' }},{% endfor %} },
+        instructions: { {% for attribute in attributes %}{{ attribute.id }}: {{ (attribute.ai_instruction or '')|tojson }},{% endfor %} },
+        sources: { {% for attribute in attributes %}{{ attribute.id }}: {{ (attribute.ai_instruction_source or 'generated')|tojson }},{% endfor %} },
+        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content || ''; },
+        toast(type, message) { Alpine.store('toasts')[type](message); },
+        async update(id, payload) {
+            const response = await fetch(`/admin/marketplaces/ozon/attributes/${id}/update`, {
+                method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':this.csrf()}, body:JSON.stringify(payload),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось сохранить атрибут');
+            return data;
+        },
+        async toggle(id, state) {
+            const previous = this.enabled[id]; this.enabled[id] = state;
+            try { const data = await this.update(id, {is_enabled:state}); this.enabled[id] = data.is_enabled; this.toast('success','Настройка сохранена'); }
+            catch (error) { this.enabled[id] = previous; this.toast('error',error.message); }
+        },
+        async saveInstruction(id) {
+            try { const data = await this.update(id, {ai_instruction:this.instructions[id]}); this.instructions[id] = data.ai_instruction; this.sources[id] = data.ai_instruction_source; this.toast('success','AI-инструкция сохранена'); }
+            catch (error) { this.toast('error',error.message); }
+        },
+    };
+}
+</script>
+{% endblock %}

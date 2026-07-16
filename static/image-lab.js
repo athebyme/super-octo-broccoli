@@ -71,7 +71,8 @@ function imageLab() {
     experiments: boot.experiments || [],
     analytics: boot.analytics || {total: 0, variants: []},
     ratingTags: boot.ratingTags || [],
-    variants: [], selectedTargetKeys: [], productId: '', sceneKey: 'luxury', customScene: '',
+    variants: [], selectedTargetKeys: [], productId: '', marketplaceTargetListingId: '',
+    sceneKey: 'luxury', customScene: '',
     additionalPrompt: '', generationMode: 'single', generationStrategy: 'native_scene',
     angleViews: boot.capabilities?.angle_views || [],
     requestedViews: ['front', 'back', 'three_quarter_right'],
@@ -96,9 +97,17 @@ function imageLab() {
         }))
       );
       this.selectedTargetKeys = this.defaultTargetKeys();
-      const requestedProduct = Number(new URLSearchParams(window.location.search).get('product_id'));
+      const query = new URLSearchParams(window.location.search);
+      const requestedListing = Number(query.get('listing_id'));
+      const listingProduct = this.products.find(product =>
+        (product.marketplace_targets || []).some(target => Number(target.listing_id) === requestedListing)
+      );
+      const requestedProduct = Number(query.get('product_id'));
       const requestedExists = this.products.some(item => Number(item.id) === requestedProduct);
-      if (requestedExists) this.productId = requestedProduct;
+      if (listingProduct) {
+        this.productId = listingProduct.id;
+        this.marketplaceTargetListingId = String(requestedListing);
+      } else if (requestedExists) this.productId = requestedProduct;
       else if (this.products.length) this.productId = this.products[0].id;
       this.onProductChange();
       this.experiments = this.shuffle(this.experiments);
@@ -116,6 +125,12 @@ function imageLab() {
     },
     get currentProduct() {
       return this.products.find(item => Number(item.id) === Number(this.productId)) || null;
+    },
+    get currentMarketplaceTargets() { return this.currentProduct?.marketplace_targets || []; },
+    get currentMarketplaceTarget() {
+      return this.currentMarketplaceTargets.find(
+        item => Number(item.listing_id) === Number(this.marketplaceTargetListingId)
+      ) || null;
     },
     get currentPhotos() { return this.currentProduct?.photos || []; },
     get photoSelectionValid() {
@@ -184,6 +199,7 @@ function imageLab() {
         .filter(Boolean).map(item => ({backend: item.backend, model: item.model}));
     },
     onProductChange() {
+      if (!this.currentMarketplaceTarget) this.marketplaceTargetListingId = '';
       const first = Number(this.currentPhotos[0]?.index || 0);
       this.activePhotoIndex = first;
       this.photoRoles = Object.fromEntries(
@@ -323,6 +339,12 @@ function imageLab() {
               id:this.watermark.id, position:this.watermarkPosition,
               scale_percent:Number(this.watermarkScale),
               opacity_percent:Number(this.watermarkOpacity)
+            } : null,
+            marketplace_target: this.currentMarketplaceTarget ? {
+              entity_kind:'marketplace_listing',
+              listing_id:Number(this.currentMarketplaceTarget.listing_id),
+              marketplace_code:this.currentMarketplaceTarget.marketplace_code,
+              account_id:Number(this.currentMarketplaceTarget.account_id)
             } : null
           })
         });
@@ -359,10 +381,15 @@ function imageLab() {
     },
     sourceLabel(item) {
       const values = item.photo_indices || [0];
-      if (item.composition_mode === 'angles') return `Ракурс: ${this.angleViewLabel(item.requested_view)} · ${values.length} реф.`;
-      if (item.composition_mode === 'collage') return `Общий макет · ${values.length} фото`;
-      if (item.composition_mode === 'reference_set') return `Герой: фото ${Number(item.primary_photo_index ?? values[0]) + 1} · ${values.length - 1} реф.`;
-      return `Фото ${Number(values[0] || 0) + 1}`;
+      let label = '';
+      if (item.composition_mode === 'angles') label = `Ракурс: ${this.angleViewLabel(item.requested_view)} · ${values.length} реф.`;
+      else if (item.composition_mode === 'collage') label = `Общий макет · ${values.length} фото`;
+      else if (item.composition_mode === 'reference_set') label = `Герой: фото ${Number(item.primary_photo_index ?? values[0]) + 1} · ${values.length - 1} реф.`;
+      else label = `Фото ${Number(values[0] || 0) + 1}`;
+      if (item.marketplace_target) {
+        label += ` · Ozon: ${item.marketplace_target.account_label || ('кабинет ' + item.marketplace_target.account_id)}`;
+      }
+      return label;
     },
     angleViewLabel(value) {
       return this.angleViews.find(item => item.id === value)?.label || value || '—';

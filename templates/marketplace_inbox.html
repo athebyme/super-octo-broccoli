@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title %}Отзывы Ozon — Seller Hub{% endblock %}
+
+{% block topbar_left %}
+<nav class="sh-crumbs" aria-label="Хлебные крошки">
+  <a href="{{ url_for('marketplace_listings.index') }}">Ozon</a>
+  <span aria-hidden="true">/</span>
+  <span>Отзывы и вопросы</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div x-data="ozonInboxPage()" x-init="init()">
+  <div class="sh-page-header">
+    <div class="sh-page-header-content">
+      <div>
+        <h1 class="sh-page-title">Отзывы и вопросы Ozon</h1>
+        <p class="sh-page-subtitle">Входящие выбранного кабинета и локальные черновики для проверки</p>
+      </div>
+      <div class="sh-page-actions" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="sync()" :disabled="loading || syncing || (capability && (!capability.available || !capability.account_ready))">
+          <span x-text="syncing ? 'Читаем Ozon…' : (syncState && syncState.status==='running' ? 'Продолжить sync' : 'Обновить из Ozon')"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:1320px;margin:0 auto;padding:0 24px 40px">
+    <div class="sh-card" style="padding:16px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <a href="{{ url_for('reviews_page') }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы WB</a>
+        <span class="sh-btn sh-btn--primary sh-btn--sm" aria-current="page">Отзывы Ozon</span>
+        <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:14px">Кабинет
+          <select class="sh-input" style="min-width:220px;max-width:100%" @change="switchAccount($event.target.value)">
+            {% for account in ozon_accounts %}
+            <option value="{{ account.id }}" {% if account.id == selected_account.id %}selected{% endif %}>{{ account.label }} · {{ account.external_account_id }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border:1px solid var(--info-border);border-radius:var(--r-md);background:var(--info-bg);color:var(--info);font-size:13px;line-height:1.5">
+        <span aria-hidden="true">{{ icon('shield', size=18) }}</span>
+        <span><strong>Ничего не отправляется в Ozon.</strong> Синхронизация вызывает только read endpoints. AI и быстрый шаблон сохраняют локальный черновик для проверки человеком; кнопки публикации в этом контуре нет.</span>
+      </div>
+      <div style="margin-top:9px;color:var(--text-muted);font-size:12px;line-height:1.5">
+        «Черновик с ИИ» передаёт текст входящего и ограниченные факты карточки настроенному AI-провайдеру. «Быстрый шаблон» работает полностью локально и не вызывает AI.
+      </div>
+    </div>
+
+    <template x-if="error">
+      <div style="padding:14px 16px;margin-bottom:20px;border:1px solid var(--danger-border);background:var(--danger-bg);border-radius:var(--r-md);color:var(--danger)" x-text="error"></div>
+    </template>
+
+    <template x-if="capability && (!capability.available || !capability.account_ready)">
+      <div style="padding:15px 17px;margin-bottom:20px;border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:var(--r-md);color:var(--warn);line-height:1.5">
+        <strong x-text="!capability.account_ready ? 'Кабинет не готов к синхронизации.' : 'Метод недоступен для этого API key.'"></strong>
+        <span x-text="!capability.account_ready ? ' Активируйте кабинет, сохраните credentials и повторно проверьте подключение.' : (sourceKind==='review' ? ' Перепроверьте подключение кабинета: Ozon Reviews API может требовать Premium Plus.' : ' Перепроверьте подключение кабинета: Ozon Questions API может требовать Premium Plus.')"></span>
+      </div>
+    </template>
+
+    <div class="sh-card" style="padding:16px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <button class="sh-btn sh-btn--sm" :class="sourceKind==='review'?'sh-btn--primary':'sh-btn--secondary'" @click="changeKind('review')">Отзывы</button>
+        <button class="sh-btn sh-btn--sm" :class="sourceKind==='question'?'sh-btn--primary':'sh-btn--secondary'" @click="changeKind('question')">Вопросы</button>
+        <span style="margin-left:auto;color:var(--text-muted);font-size:12px" x-text="syncLabel"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+        <input class="sh-input" x-model="search" @keyup.enter="applyFilters()" placeholder="Текст, ID, SKU или карточка">
+        <select class="sh-input" x-model="status" @change="applyFilters()">
+          <option value="">Все статусы</option>
+          <option value="NEW">Новые</option>
+          <option value="VIEWED">Просмотренные</option>
+          <option value="PROCESSED">Обработанные</option>
+        </select>
+        <button class="sh-btn sh-btn--secondary" @click="applyFilters()">Найти</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px">
+      <div class="sh-card" style="padding:17px;border-left:4px solid var(--info)">
+        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Новые</div>
+        <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.NEW||0"></div>
+      </div>
+      <div class="sh-card" style="padding:17px;border-left:4px solid var(--warn)">
+        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Просмотренные</div>
+        <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.VIEWED||0"></div>
+      </div>
+      <div class="sh-card" style="padding:17px;border-left:4px solid var(--ok)">
+        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Обработанные</div>
+        <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.PROCESSED||0"></div>
+      </div>
+      <div class="sh-card" style="padding:17px">
+        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">За 90 дней</div>
+        <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.total||0"></div>
+      </div>
+    </div>
+
+    <div x-show="loading" class="sh-card" style="padding:54px;text-align:center;color:var(--text-muted)">Загрузка…</div>
+
+    <div x-show="!loading && !items.length" class="sh-card" style="padding:54px 24px;text-align:center">
+      <div style="font-size:18px;font-weight:700;margin-bottom:7px" x-text="capability && (!capability.available || !capability.account_ready) ? 'Нет подтверждённого доступа' : 'Входящих пока нет'"></div>
+      <div style="color:var(--text-muted);font-size:14px;margin-bottom:18px" x-text="capability && !capability.account_ready ? 'Сначала восстановите подключение выбранного кабинета.' : (capability && !capability.available ? 'Проверка кабинета должна увидеть точный read-метод в роли API key.' : 'Запустите безопасную read-only синхронизацию выбранного раздела.')"></div>
+      <button class="sh-btn sh-btn--primary" @click="sync()" :disabled="loading || syncing || (capability && (!capability.available || !capability.account_ready))">Получить из Ozon</button>
+    </div>
+
+    <div x-show="!loading && items.length" style="display:flex;flex-direction:column;gap:12px">
+      <template x-for="item in items" :key="item.id">
+        <article class="sh-card" style="padding:18px">
+          <div style="display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
+            <div style="min-width:0;flex:1">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+                <strong x-text="item.listing ? (item.listing.title || item.listing.offer_id) : ('SKU '+item.external_sku)"></strong>
+                <span class="sh-badge" x-text="statusLabel(item.provider_status)"></span>
+                <span x-show="item.match_status!=='matched'" class="sh-badge" style="background:var(--warn-bg);color:var(--warn)" x-text="matchLabel(item.match_status)"></span>
+                <span x-show="item.source_kind==='review'" style="color:var(--warn);font-size:14px" x-text="'★'.repeat(item.rating||0)+'☆'.repeat(5-(item.rating||0))"></span>
+              </div>
+              <div style="font-size:12px;color:var(--text-muted)">
+                <span x-text="dateTime(item.published_at)"></span>
+                <span> · SKU </span><span x-text="item.external_sku"></span>
+                <span x-show="item.order_status"> · </span><span x-show="item.order_status" x-text="item.order_status"></span>
+              </div>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);white-space:nowrap">
+              <span x-show="item.photos_count" x-text="item.photos_count+' фото · '"></span>
+              <span x-show="item.videos_count" x-text="item.videos_count+' видео · '"></span>
+              <span x-text="item.source_kind==='review' ? item.comments_count+' комментариев' : item.answers_count+' ответов'"></span>
+            </div>
+          </div>
+
+          <div style="margin-top:14px;white-space:pre-wrap;line-height:1.55;color:var(--text)" x-text="item.text || 'Отзыв без текста'"></div>
+
+          <template x-if="!item.reply_eligible">
+            <div style="margin-top:14px;padding:10px 12px;border-radius:var(--r-md);background:var(--bg-hover);color:var(--text-muted);font-size:12px">Ozon не принимает комментарий к отзыву без текста, фото или видео.</div>
+          </template>
+
+          <template x-if="item.draft">
+            <div style="margin-top:16px;padding:14px;border:1px solid var(--ok-border);border-radius:var(--r-md);background:var(--ok-bg)">
+              <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:7px">
+                <strong style="font-size:13px;color:var(--ok)" x-text="item.draft.generation_mode==='ai' ? 'AI-черновик · требует проверки' : 'Безопасный шаблон · требует проверки'"></strong>
+                <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="copyDraft(item.draft.text)">Копировать</button>
+              </div>
+              <div style="white-space:pre-wrap;line-height:1.5;font-size:14px" x-text="item.draft.text"></div>
+            </div>
+          </template>
+
+          <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:15px">
+            <button class="sh-btn sh-btn--primary sh-btn--sm" @click="draft(item,'ai')" :disabled="item._drafting || !item.reply_eligible">
+              <span x-text="item._drafting ? 'Готовим…' : (item.draft ? 'Перегенерировать с ИИ' : 'Черновик с ИИ')"></span>
+            </button>
+            <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="draft(item,'template')" :disabled="item._drafting || !item.reply_eligible">Быстрый шаблон</button>
+            <span style="font-size:11px;color:var(--text-muted)">Только локально — отправка отключена</span>
+          </div>
+        </article>
+      </template>
+    </div>
+
+    <div x-show="pages>1" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:18px">
+      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="page--;load()">Назад</button>
+      <span style="font-size:13px;color:var(--text-muted)" x-text="page+' / '+pages"></span>
+      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="page++;load()">Далее</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function ozonInboxPage() {
+  const accountId={{ selected_account.id|tojson }};
+  return {
+    accountId, sourceKind:'review', status:'', search:'', page:1, pages:0,
+    items:[], stats:{NEW:0,VIEWED:0,PROCESSED:0,total:0}, capability:null,
+    syncState:null, loading:true, syncing:false, error:'',
+    get syncLabel() {
+      if (!this.syncState) return 'Ещё не синхронизировано';
+      if (this.syncState.status==='running') return 'Продолжаем '+this.syncState.current_status+' · '+this.syncState.page_count+' стр.';
+      if (this.syncState.status==='failed') return 'Последняя попытка завершилась ошибкой';
+      return this.syncState.completed_at ? 'Обновлено '+new Date(this.syncState.completed_at).toLocaleString('ru-RU') : 'Синхронизировано';
+    },
+    async init() {
+      const q=new URLSearchParams(location.search);
+      if(['review','question'].includes(q.get('source_kind'))) this.sourceKind=q.get('source_kind');
+      await this.load();
+    },
+    switchAccount(id) { location.href='/marketplaces/reviews?account_id='+encodeURIComponent(id)+'&source_kind='+this.sourceKind; },
+    changeKind(kind) {
+      this.sourceKind=kind; this.status=''; this.search=''; this.page=1;
+      const u=new URL(location); u.searchParams.set('source_kind',kind); history.replaceState(null,'',u);
+      this.load();
+    },
+    applyFilters() { this.page=1; this.load(); },
+    async load() {
+      this.loading=true; this.error='';
+      try {
+        let u='/marketplaces/api/reviews?account_id='+this.accountId+'&source_kind='+this.sourceKind+'&page='+this.page+'&per_page=30';
+        if(this.status) u+='&status='+encodeURIComponent(this.status);
+        if(this.search.trim()) u+='&search='+encodeURIComponent(this.search.trim());
+        const r=await fetch(u); const d=await r.json();
+        if(!r.ok) throw new Error(d.error||'Не удалось загрузить входящие Ozon');
+        const data=d.data||{}; this.items=(data.items||[]).map(i=>({...i,_drafting:false}));
+        this.stats=data.stats||this.stats; this.pages=(data.pagination&&data.pagination.pages)||0;
+        this.syncState=data.sync||null; this.capability=data.capability||null;
+      } catch(e) { this.error=e.message; }
+      finally { this.loading=false; }
+    },
+    async sync() {
+      this.syncing=true; this.error='';
+      try {
+        let force=!(this.syncState&&this.syncState.status==='running');
+        for(let attempt=0;attempt<2;attempt++) {
+          const r=await fetch('/marketplaces/api/reviews/sync?account_id='+this.accountId,{
+            method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
+            body:JSON.stringify({source_kind:this.sourceKind,force:force,max_pages:5})
+          });
+          const d=await r.json(); if(!r.ok) throw new Error(d.error||'Ошибка синхронизации');
+          this.syncState=d.data; force=false;
+          if(this.syncState.status!=='running') break;
+        }
+        await this.load();
+        if(this.syncState&&this.syncState.status==='running') this.$store.toasts.info('Большая лента сохранена и продолжится с текущего места');
+        else this.$store.toasts.success('Входящие Ozon обновлены');
+      } catch(e) { this.error=e.message; }
+      finally { this.syncing=false; }
+    },
+    async draft(item,mode) {
+      item._drafting=true; this.error='';
+      try {
+        const r=await fetch('/marketplaces/api/reviews/'+item.id+'/draft?account_id='+this.accountId,{
+          method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
+          body:JSON.stringify({generation_mode:mode})
+        });
+        const d=await r.json(); if(!r.ok) throw new Error(d.error||'Не удалось создать черновик');
+        item.draft=d.data; this.$store.toasts.success('Черновик сохранён локально');
+      } catch(e) { this.error=e.message; }
+      finally { item._drafting=false; }
+    },
+    async copyDraft(text) {
+      try { await navigator.clipboard.writeText(text); this.$store.toasts.success('Черновик скопирован'); }
+      catch(e) { this.error='Браузер не разрешил копирование'; }
+    },
+    dateTime(value) { return value ? new Date(value+'Z').toLocaleString('ru-RU') : '—'; },
+    statusLabel(value) { return {NEW:'Новый',VIEWED:'Просмотрен',PROCESSED:'Обработан'}[value]||value; },
+    matchLabel(value) { return {unmatched:'Карточка не найдена',ambiguous:'SKU неоднозначен'}[value]||value; }
+  };
+}
+</script>
+{% endblock %}

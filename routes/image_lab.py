@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from functools import wraps
 
@@ -22,6 +23,10 @@ from sqlalchemy.orm import joinedload
 
 from models import ImageGenerationExperiment, ImportedProduct, db
 from services import image_lab_service as lab
+from services.marketplace_listing_media import (
+    MarketplaceListingMediaError,
+    MarketplaceListingMediaService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +84,16 @@ def register_image_lab_routes(app):
         experiments = ImageGenerationExperiment.query.filter_by(
             seller_id=current_user.seller.id,
         ).order_by(ImageGenerationExperiment.created_at.desc()).limit(60).all()
+        product_ids = [product.id for product in products]
+        marketplace_targets = {}
+        if current_app.config.get("MARKETPLACE_OZON_ENABLED", False):
+            try:
+                marketplace_targets = MarketplaceListingMediaService.targets_for_products(
+                    seller_id=current_user.seller.id,
+                    imported_product_ids=product_ids,
+                )
+            except MarketplaceListingMediaError as exc:
+                logger.warning("Image Lab marketplace targets unavailable: %s", exc)
         lab_products = []
         for product in products:
             count = lab.photo_count(product.photo_urls)
@@ -95,6 +110,7 @@ def register_image_lab_routes(app):
                     for index in range(count)
                 ],
                 "visual_context": visual_context,
+                "marketplace_targets": marketplace_targets.get(product.id, []),
                 "suggested_overlay": {
                     "title": (product.title or f"Товар {product.id}")[:120],
                     "subtitle": lab.visual_context_summary(visual_context),
@@ -126,6 +142,14 @@ def register_image_lab_routes(app):
             return jsonify({"success": False, "error": "Некорректный prompt"}), 400
         if not isinstance(targets, list):
             return jsonify({"success": False, "error": "targets должен быть array"}), 400
+        if (
+            data.get("marketplace_target") is not None
+            and not current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+        ):
+            return jsonify({
+                "success": False,
+                "error": "Ozon-интеграция выключена",
+            }), 404
         try:
             experiments = lab.create_experiments(
                 seller_id=current_user.seller.id,
@@ -143,6 +167,7 @@ def register_image_lab_routes(app):
                 overlay=data.get("overlay"),
                 additional_prompt=data.get("additional_prompt", ""),
                 requested_views=data.get("requested_views"),
+                marketplace_target=data.get("marketplace_target"),
             )
             ids = [item.id for item in experiments]
             lab.launch_experiments(current_app._get_current_object(), ids)
@@ -172,6 +197,11 @@ def register_image_lab_routes(app):
             except ValueError:
                 return jsonify({"success": False, "error": "Некорректный product_id"}), 400
             query = query.filter_by(imported_product_id=product_id)
+        listing_raw = request.args.get('listing_id')
+        if listing_raw:
+            if not listing_raw.isascii() or not listing_raw.isdigit() or int(listing_raw) <= 0:
+                return jsonify({"success": False, "error": "Некорректный listing_id"}), 400
+            query = query.filter_by(marketplace_listing_id=int(listing_raw))
         items = query.order_by(ImageGenerationExperiment.created_at.desc()).limit(limit).all()
         return jsonify({
             "success": True,
@@ -244,9 +274,34 @@ def register_image_lab_routes(app):
             strategy = source.generation_strategy or 'background_only'
             cost = lab.validate_target(backend, model, strategy)
             lab.enforce_budget(source.seller_id, cost, 1)
+            target_context = None
+            if source.marketplace_listing_id is not None:
+                stored_target = lab.json_load(source.target_context_json, {})
+                target_context = lab.validate_marketplace_target(
+                    seller_id=source.seller_id,
+                    product_id=source.imported_product_id,
+                    value={
+                        "entity_kind": "marketplace_listing",
+                        "listing_id": source.marketplace_listing_id,
+                        "marketplace_code": stored_target.get("marketplace_code"),
+                        "account_id": stored_target.get("account_id"),
+                    },
+                )
             clone = ImageGenerationExperiment(
                 seller_id=source.seller_id,
                 imported_product_id=source.imported_product_id,
+                marketplace_listing_id=(
+                    target_context["listing_id"] if target_context else None
+                ),
+                target_context_json=(
+                    json.dumps(
+                        target_context,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    if target_context else None
+                ),
                 backend=backend,
                 model=model,
                 scene_key=source.scene_key,
@@ -352,7 +407,8 @@ def register_image_lab_routes(app):
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow([
-            'id', 'product_id', 'backend', 'model', 'scene_key',
+            'id', 'product_id', 'marketplace_listing_id', 'marketplace_code',
+            'marketplace_account_id', 'backend', 'model', 'scene_key',
             'generation_strategy', 'composition_mode', 'primary_photo_index',
             'requested_view',
             'photo_indices', 'photo_roles', 'watermark', 'overlay', 'prompt_sha256',
@@ -361,8 +417,11 @@ def register_image_lab_routes(app):
         ])
         for item in items:
             quality = lab.json_load(item.quality_json, {})
+            target = lab.json_load(item.target_context_json, {})
             writer.writerow([
-                item.id, item.imported_product_id, item.backend, item.model,
+                item.id, item.imported_product_id, item.marketplace_listing_id,
+                target.get('marketplace_code', ''), target.get('account_id', ''),
+                item.backend, item.model,
                 item.scene_key or '', item.generation_strategy or 'background_only',
                 item.composition_mode or 'single', item.primary_photo_index,
                 item.requested_view or '',

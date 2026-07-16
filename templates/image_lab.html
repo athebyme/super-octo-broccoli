@@ -91,6 +91,28 @@
             <option :value="product.id" x-text="`${product.id} · ${product.title}`"></option>
           </template>
         </select>
+        <div x-show="currentMarketplaceTargets.length" x-cloak class="mt-3">
+          <label class="block text-xs text-gray-500 mb-1" for="image-lab-marketplace-target">Целевой канал</label>
+          <select id="image-lab-marketplace-target"
+                  class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                  x-model="marketplaceTargetListingId">
+            <option value="">Без канала · только общий результат</option>
+            <template x-for="target in currentMarketplaceTargets" :key="target.listing_id">
+              <option :value="String(target.listing_id)"
+                      x-text="`Ozon · ${target.account_label} · ${target.offer_id}`"></option>
+            </template>
+          </select>
+        </div>
+        <div x-show="currentMarketplaceTarget" x-cloak class="sh-alert sh-alert--info mt-3 text-xs" role="status">
+          <div>
+            <strong class="block">Результат помечен для Ozon</strong>
+            <span class="block mt-1">
+              Исходные фото и AI-контекст остаются у общей карточки. Финал 900×1200 сохраняется локально;
+              он не прикрепляется к Ozon автоматически и сначала требует проверки и публичного hosting URL.
+            </span>
+            <span class="block mt-1" x-text="currentMarketplaceTarget ? `Сейчас ${currentMarketplaceTarget.observed_media.main_image_count} из ${currentMarketplaceTarget.constraints.max_main_images} основных изображений; свободно ${currentMarketplaceTarget.observed_media.available_main_slots}. images360 не поддерживается.` : ''"></span>
+          </div>
+        </div>
         <div class="grid grid-cols-2 gap-2 mt-3">
           <label class="lab-mode" :class="{'active':generationMode==='single'}">
             <input type="radio" value="single" x-model="generationMode" @change="onModeChange()" class="mr-1"> <strong class="text-xs">Одно</strong>
@@ -298,6 +320,7 @@
                   <strong class="block text-sm" x-text="blindName(item,index)"></strong>
                   <span class="lab-provider" x-show="!blindMode || item.rating" x-text="`${item.backend} · ${item.model}`"></span>
                   <span class="block text-[11px] text-gray-500" x-text="sourceLabel(item)"></span>
+                  <span x-show="item.marketplace_target" class="sh-badge sh-badge--blue sh-badge--sm mt-1">Ozon target · review only</span>
                 </div>
                 <span class="sh-badge sh-badge--sm" :class="qualityClass(item)" x-text="qualityLabel(item)"></span>
               </div>
@@ -347,5 +370,5 @@ window.IMAGE_LAB_BOOTSTRAP = {
   ratingTags: {{ rating_tags|tojson }}
 };
 </script>
-<script src="{{ url_for('static', filename='image-lab.js', v='20260716-openrouter1') }}"></script>
+<script src="{{ url_for('static', filename='image-lab.js', v='20260716-openrouter-ozon1') }}"></script>
 {% endblock %}

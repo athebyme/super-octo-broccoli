@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Ozon proposal #{{ proposal.id }} — Seller Hub{% endblock %}
+
+{% block extra_head %}
+{% if proposal.status in ['approved','applying','uncertain'] %}<meta http-equiv="refresh" content="15">{% endif %}
+{% endblock %}
+
+{% block content %}
+{% set before = proposal_data.baseline_state %}
+{% set proposed = proposal_data.proposed_state %}
+{% set guardrails = proposal_data.guardrails %}
+{% set is_price = proposal.proposal_kind == 'price' %}
+{% set status_labels = {
+    'pending_review': 'Ждёт вашего решения',
+    'approved': 'Подтверждено, готовится отправка',
+    'applying': 'Отправлено, проверяем результат',
+    'applied': 'Изменение подтверждено Ozon',
+    'rejected': 'Отклонено без write',
+    'failed': 'Ozon отклонил изменение',
+    'conflict': 'Live-данные изменились',
+    'uncertain': 'Результат требует сверки',
+    'cancelled': 'Отменено'
+} %}
+{% set success_status = proposal.status == 'applied' %}
+{% set danger_status = proposal.status in ['failed','conflict'] %}
+
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+    <a href="{{ url_for('marketplace_commercial.index', account_id=proposal.account_id) }}" class="text-sm" style="color:var(--accent)">← Цены и остатки Ozon</a>
+
+    <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+            <div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)">
+                <span style="color:var(--accent)">{{ 'Цена' if is_price else 'Остаток' }}</span>
+                <span>proposal #{{ proposal.id }}</span>
+                <span>{{ proposal.account.label if proposal.account else 'кабинет удалён' }}</span>
+                {% if proposal.source == 'rollback' %}<span>rollback</span>{% endif %}
+            </div>
+            <h1 class="mt-2 text-2xl font-semibold break-all" style="color:var(--text)">{{ proposal.listing.offer_id if proposal.listing else 'Листинг удалён' }}</h1>
+            <p class="mt-1 text-sm" style="color:var(--text-secondary)">{{ status_labels.get(proposal.status, proposal.status) }} · версия {{ proposal.version }}</p>
+        </div>
+        {% if proposal.operation %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id) }}">Открыть журнал операции</a>{% endif %}
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}<div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>{% endfor %}
+    {% endwith %}
+
+    <section class="mt-5 rounded-lg border p-4" style="border-color:{{ 'var(--danger, #b42318)' if danger_status else 'var(--border)' }};background:var(--bg-card)">
+        <div class="flex items-start gap-3">
+            <div class="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full" style="background:{{ 'var(--success, #15803d)' if success_status else 'var(--danger, #b42318)' if danger_status else 'var(--accent)' }}"></div>
+            <div>
+                <h2 class="font-semibold" style="color:var(--text)">{{ status_labels.get(proposal.status, proposal.status) }}</h2>
+                {% if proposal.status == 'pending_review' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Ozon write ещё не выполнялся. При подтверждении платформа сначала повторно прочитает live state и остановится без write при любом расхождении.</p>
+                {% elif proposal.status == 'conflict' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Proposal больше нельзя применять: данные Ozon изменились после его создания. Обновите карточку и создайте новый proposal.</p>
+                {% elif proposal.status == 'uncertain' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Платформа не повторяет write. Scheduler выполняет только live-сверку до доказуемого результата.</p>
+                {% elif proposal.status == 'applied' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Read-after-write вернул точное предлагаемое состояние; rollback доступен через журнал операции.</p>
+                {% elif proposal.status == 'rejected' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Proposal закрыт локально, запрос изменения в Ozon не отправлялся.</p>{% endif %}
+            </div>
+        </div>
+    </section>
+
+    {% if proposal.source == 'rollback' %}
+    <div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--border);color:var(--text-secondary)">Это восстановление exact before-state операции #{{ proposal.rollback_of_operation_id }}. Оно является новым write и поэтому требует отдельного подтверждения.</div>
+    {% endif %}
+
+    <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <section class="sh-card p-4">
+            <div class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">Сейчас в Ozon</div>
+            <div class="mt-3 text-3xl font-semibold" style="color:var(--text)">{% if is_price %}{{ before.get('price', '—') }} <span class="text-base">{{ before.get('currency_code','RUB') }}</span>{% else %}{{ before.get('stock', '—') }} <span class="text-base">шт.</span>{% endif %}</div>
+            {% if not is_price %}<p class="mt-2 text-xs" style="color:var(--text-muted)">Точный free_stock выбранного склада</p>{% endif %}
+        </section>
+        <section class="sh-card p-4">
+            <div class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">{{ 'Восстановить' if proposal.source == 'rollback' else 'Предлагается' }}</div>
+            <div class="mt-3 text-3xl font-semibold" style="color:var(--accent)">{% if is_price %}{{ proposed.get('price', '—') }} <span class="text-base">{{ proposed.get('currency_code','RUB') }}</span>{% else %}{{ proposed.get('stock', '—') }} <span class="text-base">шт.</span>{% endif %}</div>
+            {% if guardrails.get('direction') %}<p class="mt-2 text-xs" style="color:var(--text-muted)">{{ 'Повышение' if guardrails.direction == 'increase' else 'Снижение' }}{% if guardrails.get('change_pct') %} на {{ guardrails.change_pct }}%{% endif %}</p>{% endif %}
+            {% if not is_price and proposed.get('stock') == 0 %}<p class="mt-2 text-xs" style="color:var(--danger, #b42318)">После применения товар станет недоступен на этом складе.</p>{% endif %}
+        </section>
+        <section class="sh-card p-4">
+            <div class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">Scope</div>
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Offer</dt><dd class="break-all" style="color:var(--text)">{{ proposed.get('offer_id', '—') }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Product ID</dt><dd style="color:var(--text)">{{ proposed.get('product_id', '—') }}</dd></div>
+                {% if not is_price %}<div><dt class="text-xs" style="color:var(--text-muted)">Склад</dt><dd style="color:var(--text)">{{ proposal.warehouse.name if proposal.warehouse else 'удалён' }} · {{ proposed.get('warehouse_id','—') }}</dd></div>{% endif %}
+            </dl>
+        </section>
+    </div>
+
+    {% if proposal.status == 'pending_review' %}
+    <section class="sh-card p-4 mt-4">
+        <h2 class="font-semibold" style="color:var(--text)">Решение</h2>
+        <p class="mt-1 text-sm" style="color:var(--text-secondary)">Подтверждение и отклонение используют optimistic version: устаревшая вкладка не сможет изменить уже обработанный proposal.</p>
+        <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {% if write_enabled %}
+            <form method="post" action="{{ url_for('marketplace_commercial.approve', proposal_id=proposal.id) }}" class="rounded border p-4" style="border-color:var(--border)">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="expected_version" value="{{ proposal.version }}">
+                <div class="text-sm font-medium" style="color:var(--text)">Применить в Ozon</div>
+                <label class="mt-3 flex items-start gap-2 text-xs" style="color:var(--text-secondary)"><input class="mt-0.5" type="checkbox" name="confirm_write" value="1" required><span>Я сверил «сейчас» и «предлагается» и подтверждаю один write в Ozon.</span></label>
+                <button class="sh-btn sh-btn--primary mt-4" type="submit">Подтвердить один write</button>
+            </form>
+            {% else %}
+            <div class="rounded border p-4" style="border-color:var(--border)"><div class="text-sm font-medium" style="color:var(--text)">Применение временно выключено</div><p class="mt-2 text-xs" style="color:var(--text-secondary)">Proposal сохранён. Для approve нужен отдельный commercial write flag.</p></div>
+            {% endif %}
+            <form method="post" action="{{ url_for('marketplace_commercial.reject', proposal_id=proposal.id) }}" class="rounded border p-4" style="border-color:var(--border)">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="expected_version" value="{{ proposal.version }}">
+                <div class="text-sm font-medium" style="color:var(--text)">Отклонить без write</div>
+                <label class="mt-3 block text-xs" style="color:var(--text-muted)">Комментарий (необязательно)<textarea name="note" maxlength="1000" rows="2" class="mt-1 w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></textarea></label>
+                <button class="sh-btn sh-btn--secondary mt-3" type="submit">Закрыть proposal</button>
+            </form>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if proposal.error_message %}<section class="sh-card p-4 mt-4"><div class="text-xs" style="color:var(--danger, #b42318)">{{ proposal.error_code }}</div><p class="mt-2 text-sm" style="color:var(--text)">{{ proposal.error_message }}</p></section>{% endif %}
+
+    {% if proposal.operation %}
+    <section class="sh-card p-4 mt-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div><h2 class="font-semibold" style="color:var(--text)">Durable operation #{{ proposal.operation.id }}</h2><p class="mt-1 text-sm" style="color:var(--text-secondary)">{{ proposal.operation.operation_kind }} · {{ proposal.operation.status }} · write attempts {{ proposal.operation.attempt_count }} · live checks {{ proposal.operation.reconcile_count }}</p></div>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id) }}">Открыть полный аудит</a>
+        </div>
+    </section>
+    {% endif %}
+
+    <details class="sh-card p-4 mt-4">
+        <summary class="cursor-pointer font-semibold" style="color:var(--text)">Технические данные и fingerprints</summary>
+        <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Live before-state</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ before | tojson(indent=2) }}</pre><p class="mt-2 break-all text-xs" style="color:var(--text-muted)">{{ proposal.baseline_fingerprint }}</p></div>
+            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Proposed state</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ proposed | tojson(indent=2) }}</pre><p class="mt-2 break-all text-xs" style="color:var(--text-muted)">{{ proposal.proposed_fingerprint }}</p></div>
+        </div>
+        <div class="mt-4"><div class="text-xs mb-2" style="color:var(--text-muted)">Guardrails</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ guardrails | tojson(indent=2) }}</pre></div>
+    </details>
+</div>
+{% endblock %}

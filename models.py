@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from typing import Optional
+from typing import Any, Dict, Mapping, Optional
 import os
 import json
 from cryptography.fernet import Fernet
@@ -1229,6 +1229,13 @@ class ImageGenerationExperiment(db.Model):
         nullable=True,
         index=True,
     )
+    marketplace_listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    target_context_json = db.Column(db.Text, nullable=True)
     backend = db.Column(db.String(32), nullable=False)
     model = db.Column(db.String(120), nullable=False)
     scene_key = db.Column(db.String(32), nullable=True)
@@ -1268,10 +1275,20 @@ class ImageGenerationExperiment(db.Model):
             'image_generation_experiments', lazy='dynamic', cascade='all, delete-orphan'))
     imported_product = db.relationship(
         'ImportedProduct', backref=db.backref('image_generation_experiments', lazy='dynamic'))
+    marketplace_listing = db.relationship(
+        'MarketplaceListing',
+        backref=db.backref('image_generation_experiments', lazy='dynamic'),
+    )
 
     __table_args__ = (
         db.Index('idx_image_exp_seller_created', 'seller_id', 'created_at'),
         db.Index('idx_image_exp_seller_status', 'seller_id', 'status'),
+        db.Index(
+            'idx_image_exp_seller_listing',
+            'seller_id',
+            'marketplace_listing_id',
+            'created_at',
+        ),
     )
 
 
@@ -3018,13 +3035,19 @@ class Marketplace(db.Model):
     api_base_url = db.Column(db.String(500))                  # base URL
     _api_key_encrypted = db.Column('api_key', db.String(500)) # encrypted key
     api_version = db.Column(db.String(20), default='v2')      # v2 / v3
+    # Marketplace-neutral runtime metadata. api_version remains the legacy WB
+    # field; new adapters version every capability independently.
+    adapter_code = db.Column(db.String(50))
+    capability_versions_json = db.Column(db.Text)
 
     # Category sync state
     categories_synced_at = db.Column(db.DateTime)
     categories_sync_status = db.Column(db.String(50))         # success/failed/running
     categories_sync_error = db.Column(db.Text)
     categories_version = db.Column(db.Integer, default=0, nullable=False)
+    categories_snapshot_hash = db.Column(db.String(64))
     total_categories = db.Column(db.Integer, default=0)
+    total_product_types = db.Column(db.Integer, default=0)
     total_characteristics = db.Column(db.Integer, default=0)
 
     # Directories sync
@@ -3077,6 +3100,4639 @@ class Marketplace(db.Model):
 
     def __repr__(self) -> str:
         return f'<Marketplace {self.code} ({self.name})>'
+
+    @property
+    def capability_versions(self) -> Dict[str, str]:
+        try:
+            value = json.loads(self.capability_versions_json or '{}')
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(key): str(endpoint)
+            for key, endpoint in value.items()
+            if isinstance(key, str) and isinstance(endpoint, str)
+        }
+
+
+class MarketplaceCredentialEncryptionError(RuntimeError):
+    """Marketplace account credentials cannot be encrypted or decrypted."""
+
+
+def _marketplace_credential_cipher() -> Fernet:
+    """Return a strict cipher for new marketplace account credentials.
+
+    Legacy WB fields retain their compatibility behavior. New multi-marketplace
+    credentials fail closed instead of ever being stored as plaintext.
+    """
+    encryption_key = os.environ.get('ENCRYPTION_KEY', '').strip()
+    if not encryption_key:
+        raise MarketplaceCredentialEncryptionError(
+            'ENCRYPTION_KEY is required for marketplace accounts'
+        )
+    try:
+        return Fernet(encryption_key.encode('ascii'))
+    except (TypeError, ValueError):
+        raise MarketplaceCredentialEncryptionError(
+            'ENCRYPTION_KEY is not a valid Fernet key'
+        ) from None
+
+
+class SellerMarketplaceAccount(db.Model):
+    """Seller-scoped operational account for WB, Ozon and future adapters."""
+    __tablename__ = 'seller_marketplace_accounts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    external_account_id = db.Column(db.String(200), nullable=False)
+    label = db.Column(db.String(120), nullable=False)
+
+    _credentials_encrypted = db.Column(
+        'credentials_encrypted',
+        db.Text,
+        nullable=True,
+    )
+    credential_version = db.Column(db.Integer, default=1, nullable=False)
+    credentials_updated_at = db.Column(db.DateTime)
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_default = db.Column(db.Boolean, default=False, nullable=False)
+    settings_json = db.Column(db.Text, default='{}', nullable=False)
+
+    connection_status = db.Column(
+        db.String(30),
+        default='unchecked',
+        nullable=False,
+    )
+    capabilities_json = db.Column(db.Text, default='[]', nullable=False)
+    roles_json = db.Column(db.Text, default='[]', nullable=False)
+    credential_expires_at = db.Column(db.DateTime)
+    connection_checked_at = db.Column(db.DateTime)
+    provider_request_id = db.Column(db.String(200))
+    last_error_code = db.Column(db.String(100))
+    last_error_message = db.Column(db.String(1000))
+
+    version = db.Column(db.Integer, default=1, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship(
+        'Seller',
+        backref=db.backref(
+            'marketplace_accounts',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    marketplace = db.relationship(
+        'Marketplace',
+        backref=db.backref(
+            'seller_accounts',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'seller_id',
+            'marketplace_id',
+            'external_account_id',
+            name='uq_seller_marketplace_external_account',
+        ),
+        db.Index(
+            'idx_seller_mp_account_active',
+            'seller_id',
+            'marketplace_id',
+            'is_active',
+        ),
+        db.Index(
+            'idx_seller_mp_account_default',
+            'seller_id',
+            'marketplace_id',
+            'is_default',
+        ),
+        db.Index(
+            'uq_seller_mp_account_one_default',
+            'seller_id',
+            'marketplace_id',
+            unique=True,
+            sqlite_where=db.text('is_default = 1'),
+        ),
+        db.CheckConstraint(
+            "connection_status IN ('unchecked','connected','invalid','limited',"
+            "'error','disconnected')",
+            name='ck_seller_marketplace_connection_status',
+        ),
+    )
+
+    @staticmethod
+    def _normalize_credentials(credentials: Mapping[str, Any]) -> Dict[str, str]:
+        if not isinstance(credentials, Mapping) or not credentials:
+            raise ValueError('Marketplace credentials must be a non-empty mapping')
+        normalized: Dict[str, str] = {}
+        for raw_key, raw_value in credentials.items():
+            if not isinstance(raw_key, str):
+                raise ValueError('Marketplace credential names must be strings')
+            key = raw_key.strip()
+            if (
+                not key
+                or len(key) > 80
+                or not key.replace('_', '').isalnum()
+            ):
+                raise ValueError('Marketplace credential name is invalid')
+            if not isinstance(raw_value, str):
+                raise ValueError('Marketplace credential values must be strings')
+            value = raw_value.strip()
+            if not value or len(value) > 2000:
+                raise ValueError('Marketplace credential value is invalid')
+            if any(ord(character) < 32 or ord(character) == 127 for character in value):
+                raise ValueError('Marketplace credential contains control characters')
+            normalized[key] = value
+        return normalized
+
+    def set_credentials(self, credentials: Mapping[str, Any]) -> None:
+        normalized = self._normalize_credentials(credentials)
+        payload = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode('utf-8')
+        self._credentials_encrypted = (
+            _marketplace_credential_cipher().encrypt(payload).decode('ascii')
+        )
+        self.credential_version = 1
+        self.credentials_updated_at = datetime.utcnow()
+
+    def get_credentials(self) -> Dict[str, str]:
+        if not self._credentials_encrypted:
+            raise MarketplaceCredentialEncryptionError(
+                'Marketplace account has no credentials'
+            )
+        try:
+            raw = _marketplace_credential_cipher().decrypt(
+                self._credentials_encrypted.encode('ascii')
+            )
+            payload = json.loads(raw.decode('utf-8'))
+            return self._normalize_credentials(payload)
+        except MarketplaceCredentialEncryptionError:
+            raise
+        except Exception:
+            raise MarketplaceCredentialEncryptionError(
+                'Marketplace account credentials cannot be decrypted'
+            ) from None
+
+    def clear_credentials(self) -> None:
+        self._credentials_encrypted = None
+        self.credentials_updated_at = datetime.utcnow()
+
+    @property
+    def has_credentials(self) -> bool:
+        return bool(self._credentials_encrypted)
+
+    @staticmethod
+    def _string_list(raw_value: Optional[str]) -> list:
+        try:
+            value = json.loads(raw_value or '[]')
+        except (TypeError, json.JSONDecodeError):
+            return []
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, str)]
+
+    @property
+    def capabilities(self) -> list:
+        return self._string_list(self.capabilities_json)
+
+    @property
+    def roles(self) -> list:
+        return self._string_list(self.roles_json)
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'marketplace_code': self.marketplace.code if self.marketplace else None,
+            'marketplace_name': self.marketplace.name if self.marketplace else None,
+            'external_account_id': self.external_account_id,
+            'label': self.label,
+            'has_credentials': self.has_credentials,
+            'is_active': bool(self.is_active),
+            'is_default': bool(self.is_default),
+            'connection_status': self.connection_status,
+            'capabilities': self.capabilities,
+            'roles': self.roles,
+            'credential_expires_at': (
+                self.credential_expires_at.isoformat()
+                if self.credential_expires_at else None
+            ),
+            'connection_checked_at': (
+                self.connection_checked_at.isoformat()
+                if self.connection_checked_at else None
+            ),
+            'provider_request_id': self.provider_request_id,
+            'last_error_code': self.last_error_code,
+            'last_error_message': self.last_error_message,
+            'version': self.version,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            '<SellerMarketplaceAccount '
+            f'id={self.id} seller={self.seller_id} marketplace={self.marketplace_id}>'
+        )
+
+
+class MarketplaceReferenceAccount(db.Model):
+    """Admin-owned credential used only for global provider reference data."""
+    __tablename__ = 'marketplace_reference_accounts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    external_account_id = db.Column(db.String(200), nullable=False)
+    _credentials_encrypted = db.Column('credentials_encrypted', db.Text)
+    credential_version = db.Column(db.Integer, default=1, nullable=False)
+    credentials_updated_at = db.Column(db.DateTime)
+    connection_status = db.Column(
+        db.String(30),
+        default='unchecked',
+        nullable=False,
+    )
+    connection_checked_at = db.Column(db.DateTime)
+    credential_expires_at = db.Column(db.DateTime)
+    roles_json = db.Column(db.Text, default='[]', nullable=False)
+    provider_request_id = db.Column(db.String(200))
+    last_error_code = db.Column(db.String(100))
+    last_error_message = db.Column(db.String(1000))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    marketplace = db.relationship(
+        'Marketplace',
+        backref=db.backref(
+            'reference_account',
+            uselist=False,
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "connection_status IN ('unchecked','connected','invalid','error')",
+            name='ck_marketplace_reference_connection_status',
+        ),
+    )
+
+    def set_credentials(self, credentials: Mapping[str, Any]) -> None:
+        normalized = SellerMarketplaceAccount._normalize_credentials(credentials)
+        payload = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode('utf-8')
+        self._credentials_encrypted = (
+            _marketplace_credential_cipher().encrypt(payload).decode('ascii')
+        )
+        self.credential_version = 1
+        self.credentials_updated_at = datetime.utcnow()
+
+    def get_credentials(self) -> Dict[str, str]:
+        if not self._credentials_encrypted:
+            raise MarketplaceCredentialEncryptionError(
+                'Marketplace reference account has no credentials'
+            )
+        try:
+            raw = _marketplace_credential_cipher().decrypt(
+                self._credentials_encrypted.encode('ascii')
+            )
+            payload = json.loads(raw.decode('utf-8'))
+            return SellerMarketplaceAccount._normalize_credentials(payload)
+        except MarketplaceCredentialEncryptionError:
+            raise
+        except Exception:
+            raise MarketplaceCredentialEncryptionError(
+                'Marketplace reference credentials cannot be decrypted'
+            ) from None
+
+    @property
+    def has_credentials(self) -> bool:
+        return bool(self._credentials_encrypted)
+
+    def clear_credentials(self) -> None:
+        self._credentials_encrypted = None
+        self.credentials_updated_at = datetime.utcnow()
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'marketplace_code': self.marketplace.code if self.marketplace else None,
+            'external_account_id': self.external_account_id,
+            'has_credentials': self.has_credentials,
+            'connection_status': self.connection_status,
+            'connection_checked_at': (
+                self.connection_checked_at.isoformat()
+                if self.connection_checked_at else None
+            ),
+            'credential_expires_at': (
+                self.credential_expires_at.isoformat()
+                if self.credential_expires_at else None
+            ),
+            'last_error_code': self.last_error_code,
+            'last_error_message': self.last_error_message,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            '<MarketplaceReferenceAccount '
+            f'id={self.id} marketplace={self.marketplace_id}>'
+        )
+
+
+class MarketplaceTaxonomyCategory(db.Model):
+    """Provider category hierarchy; Ozon IDs stay opaque strings."""
+    __tablename__ = 'marketplace_taxonomy_categories'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    external_category_id = db.Column(db.String(100), nullable=False)
+    parent_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_taxonomy_categories.id'),
+    )
+    name = db.Column(db.String(500), nullable=False)
+    full_path = db.Column(db.String(2000), nullable=False)
+    depth = db.Column(db.Integer, default=0, nullable=False)
+    is_disabled_upstream = db.Column(db.Boolean, default=False, nullable=False)
+    is_available = db.Column(db.Boolean, default=True, nullable=False)
+    last_seen_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    marketplace = db.relationship(
+        'Marketplace',
+        backref=db.backref(
+            'taxonomy_categories',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    parent = db.relationship(
+        'MarketplaceTaxonomyCategory',
+        remote_side=[id],
+        backref=db.backref('children', lazy='dynamic'),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'marketplace_id',
+            'external_category_id',
+            name='uq_marketplace_taxonomy_category',
+        ),
+        db.Index(
+            'idx_marketplace_taxonomy_parent',
+            'marketplace_id',
+            'parent_id',
+        ),
+        db.Index(
+            'idx_marketplace_taxonomy_available',
+            'marketplace_id',
+            'is_available',
+        ),
+    )
+
+
+class MarketplaceProductType(db.Model):
+    """Exact provider product type bound to one taxonomy category."""
+    __tablename__ = 'marketplace_product_types'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    category_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_taxonomy_categories.id'),
+        nullable=False,
+        index=True,
+    )
+    external_type_id = db.Column(db.String(100), nullable=False)
+    name = db.Column(db.String(500), nullable=False)
+    is_disabled_upstream = db.Column(db.Boolean, default=False, nullable=False)
+    is_available = db.Column(db.Boolean, default=True, nullable=False)
+    is_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    last_seen_at = db.Column(db.DateTime)
+
+    attributes_synced_at = db.Column(db.DateTime)
+    attributes_sync_status = db.Column(db.String(30))
+    attributes_sync_error = db.Column(db.String(1000))
+    attributes_schema_hash = db.Column(db.String(64))
+    attributes_version = db.Column(db.Integer, default=0, nullable=False)
+    attributes_count = db.Column(db.Integer, default=0, nullable=False)
+    required_attributes_count = db.Column(db.Integer, default=0, nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    marketplace = db.relationship(
+        'Marketplace',
+        backref=db.backref(
+            'product_types',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    category = db.relationship(
+        'MarketplaceTaxonomyCategory',
+        backref=db.backref(
+            'product_types',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'category_id',
+            'external_type_id',
+            name='uq_marketplace_category_product_type',
+        ),
+        db.Index(
+            'idx_marketplace_product_type_enabled',
+            'marketplace_id',
+            'is_enabled',
+            'is_available',
+        ),
+    )
+
+
+class MarketplaceAttributeDefinition(db.Model):
+    """Typed attribute schema for one exact marketplace product type."""
+    __tablename__ = 'marketplace_attribute_definitions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    product_type_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_types.id'),
+        nullable=False,
+        index=True,
+    )
+    external_attribute_id = db.Column(db.String(100), nullable=False)
+    name = db.Column(db.String(500), nullable=False)
+    description = db.Column(db.Text)
+    data_type = db.Column(db.String(100), nullable=False)
+    is_required = db.Column(db.Boolean, default=False, nullable=False)
+    dictionary_id = db.Column(db.String(100))
+    max_value_count = db.Column(db.Integer, default=0, nullable=False)
+    attribute_complex_id = db.Column(db.String(100))
+    complex_is_collection = db.Column(db.Boolean, default=False, nullable=False)
+    is_collection = db.Column(db.Boolean, default=False, nullable=False)
+    category_dependent = db.Column(db.Boolean, default=False, nullable=False)
+    # Ozon ``is_aspect``: the attribute participates in catalog/search filters.
+    # Keep the provider name out of higher layers; quality uses this normalized
+    # flag together with ``is_required``.
+    is_filterable = db.Column(db.Boolean, default=False, nullable=False)
+    group_id = db.Column(db.String(100))
+    group_name = db.Column(db.String(500))
+    sort_order = db.Column(db.Integer, default=0, nullable=False)
+
+    is_enabled = db.Column(db.Boolean, default=True, nullable=False)
+    is_available = db.Column(db.Boolean, default=True, nullable=False)
+    last_seen_at = db.Column(db.DateTime)
+    ai_instruction = db.Column(db.Text)
+    ai_instruction_source = db.Column(
+        db.String(20),
+        default='generated',
+        nullable=False,
+    )
+    ai_example_value = db.Column(db.String(500))
+    # Optional admin allowlist over the official, type-scoped Ozon dictionary.
+    # Opaque value IDs are retained separately from provider reference rows.
+    restriction_value_ids_json = db.Column(db.Text)
+
+    values_synced_at = db.Column(db.DateTime)
+    values_sync_status = db.Column(db.String(30))
+    values_sync_error = db.Column(db.String(1000))
+    values_snapshot_hash = db.Column(db.String(64))
+    values_version = db.Column(db.Integer, default=0, nullable=False)
+    values_count = db.Column(db.Integer, default=0, nullable=False)
+    values_sync_checkpoint = db.Column(db.String(200))
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    marketplace = db.relationship('Marketplace')
+    product_type = db.relationship(
+        'MarketplaceProductType',
+        backref=db.backref(
+            'attributes',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'product_type_id',
+            'external_attribute_id',
+            name='uq_marketplace_product_type_attribute',
+        ),
+        db.Index(
+            'idx_marketplace_attribute_required',
+            'product_type_id',
+            'is_required',
+            'is_available',
+        ),
+        db.Index(
+            'idx_marketplace_attribute_dictionary',
+            'product_type_id',
+            'dictionary_id',
+        ),
+    )
+
+    @property
+    def restriction_value_ids(self) -> list:
+        try:
+            value = json.loads(self.restriction_value_ids_json or '[]')
+        except (TypeError, json.JSONDecodeError):
+            return []
+        if not isinstance(value, list):
+            return []
+        result = []
+        seen = set()
+        for item in value:
+            if not isinstance(item, str) or not item or item in seen:
+                continue
+            seen.add(item)
+            result.append(item)
+        return result
+
+
+class MarketplaceAttributeValue(db.Model):
+    """Dictionary value scoped to one exact product type and attribute."""
+    __tablename__ = 'marketplace_attribute_values'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    product_type_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_types.id'),
+        nullable=False,
+        index=True,
+    )
+    attribute_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_attribute_definitions.id'),
+        nullable=False,
+        index=True,
+    )
+    external_value_id = db.Column(db.String(100), nullable=False)
+    value = db.Column(db.String(1000), nullable=False)
+    value_normalized = db.Column(db.String(1000), nullable=False)
+    info = db.Column(db.Text)
+    picture_url = db.Column(db.String(2000))
+    is_available = db.Column(db.Boolean, default=True, nullable=False)
+    last_seen_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    marketplace = db.relationship('Marketplace')
+    product_type = db.relationship('MarketplaceProductType')
+    attribute = db.relationship(
+        'MarketplaceAttributeDefinition',
+        backref=db.backref(
+            'values',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'attribute_id',
+            'external_value_id',
+            name='uq_marketplace_attribute_value',
+        ),
+        db.Index(
+            'idx_marketplace_attribute_value_lookup',
+            'attribute_id',
+            'value_normalized',
+            'is_available',
+        ),
+    )
+
+
+class MarketplaceCategoryMapping(db.Model):
+    """Seller-scoped source category binding to one exact product type.
+
+    ``scope_key`` makes the nullable supplier boundary explicit and keeps the
+    SQLite uniqueness semantics deterministic.  Only ``active`` rows may be
+    applied automatically; AI/fuzzy candidates remain suggestions until a
+    seller confirms them.
+    """
+    __tablename__ = 'marketplace_category_mappings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    supplier_id = db.Column(
+        db.Integer,
+        db.ForeignKey('suppliers.id', ondelete='CASCADE'),
+        nullable=True,
+        index=True,
+    )
+    product_type_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_types.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    scope_key = db.Column(db.String(220), nullable=False)
+    source_type = db.Column(db.String(80), nullable=False)
+    source_category = db.Column(db.String(500), nullable=False)
+    source_category_normalized = db.Column(db.String(500), nullable=False)
+    external_category_id = db.Column(db.String(100), nullable=False)
+    external_type_id = db.Column(db.String(100), nullable=False)
+    mapping_source = db.Column(db.String(30), nullable=False, default='manual')
+    mapping_status = db.Column(db.String(20), nullable=False, default='active')
+    confidence = db.Column(db.Float, nullable=False, default=1.0)
+    evidence_json = db.Column(db.Text, nullable=False, default='{}')
+    corrected_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    supplier = db.relationship('Supplier')
+    product_type = db.relationship('MarketplaceProductType')
+    corrected_by = db.relationship('User')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'seller_id',
+            'marketplace_id',
+            'scope_key',
+            'source_category_normalized',
+            name='uq_marketplace_category_mapping_scope',
+        ),
+        db.CheckConstraint(
+            "mapping_source IN ('manual','deterministic','ai')",
+            name='ck_marketplace_category_mapping_source',
+        ),
+        db.CheckConstraint(
+            "mapping_status IN ('suggested','active','rejected','stale')",
+            name='ck_marketplace_category_mapping_status',
+        ),
+        db.CheckConstraint(
+            'confidence >= 0 AND confidence <= 1',
+            name='ck_marketplace_category_mapping_confidence',
+        ),
+        db.Index(
+            'idx_marketplace_category_mapping_lookup',
+            'seller_id',
+            'marketplace_id',
+            'scope_key',
+            'source_category_normalized',
+            'mapping_status',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        try:
+            evidence = json.loads(self.evidence_json or '{}')
+        except (TypeError, json.JSONDecodeError):
+            evidence = {}
+        if not isinstance(evidence, dict):
+            evidence = {}
+        return {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'supplier_id': self.supplier_id,
+            'source_type': self.source_type,
+            'source_category': self.source_category,
+            'product_type_id': self.product_type_id,
+            'external_category_id': self.external_category_id,
+            'external_type_id': self.external_type_id,
+            'product_type_name': (
+                self.product_type.name if self.product_type else None
+            ),
+            'category_path': (
+                self.product_type.category.full_path
+                if self.product_type and self.product_type.category else None
+            ),
+            'mapping_source': self.mapping_source,
+            'mapping_status': self.mapping_status,
+            'confidence': self.confidence,
+            'evidence': evidence,
+            'corrected_by_user_id': self.corrected_by_user_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class MarketplaceProductDraft(db.Model):
+    """Seller-owned, marketplace-specific projection before publication.
+
+    The draft contains normalized values only.  It is not an Ozon HTTP
+    request: the P5 payload builder must revalidate the complete state against
+    the recorded fresh schema before creating a side effect.
+    """
+    __tablename__ = 'marketplace_product_drafts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    imported_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('imported_products.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    supplier_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('supplier_products.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    product_type_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_types.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    category_mapping_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_category_mappings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    published_listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+
+    offer_id = db.Column(db.String(200), nullable=False)
+    external_category_id = db.Column(db.String(100))
+    external_type_id = db.Column(db.String(100))
+    status = db.Column(db.String(30), nullable=False, default='needs_category')
+
+    source_fact_hash = db.Column(db.String(64), nullable=False)
+    source_facts_json = db.Column(db.Text, nullable=False, default='{}')
+    provenance_json = db.Column(db.Text, nullable=False, default='{}')
+    content_json = db.Column(db.Text, nullable=False, default='{}')
+    attributes_json = db.Column(db.Text, nullable=False, default='[]')
+    complex_attributes_json = db.Column(db.Text, nullable=False, default='[]')
+    media_json = db.Column(db.Text, nullable=False, default='{}')
+    dimensions_json = db.Column(db.Text, nullable=False, default='{}')
+    barcodes_json = db.Column(db.Text, nullable=False, default='[]')
+    commercial_json = db.Column(db.Text, nullable=False, default='{}')
+
+    schema_version = db.Column(db.Integer)
+    schema_hash = db.Column(db.String(64))
+    validation_status = db.Column(
+        db.String(30),
+        nullable=False,
+        default='never_validated',
+    )
+    validation_result_json = db.Column(db.Text, nullable=False, default='{}')
+    validated_at = db.Column(db.DateTime)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    imported_product = db.relationship('ImportedProduct')
+    supplier_product = db.relationship('SupplierProduct')
+    product_type = db.relationship('MarketplaceProductType')
+    category_mapping = db.relationship('MarketplaceCategoryMapping')
+    published_listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'imported_product_id',
+            name='uq_marketplace_draft_account_imported',
+        ),
+        db.UniqueConstraint(
+            'account_id',
+            'offer_id',
+            name='uq_marketplace_draft_account_offer',
+        ),
+        db.CheckConstraint(
+            "status IN ('needs_category','draft','blocked','ready',"
+            "'published','archived')",
+            name='ck_marketplace_product_draft_status',
+        ),
+        db.CheckConstraint(
+            "validation_status IN ('never_validated','invalid','valid','stale')",
+            name='ck_marketplace_product_draft_validation_status',
+        ),
+        db.Index(
+            'idx_marketplace_draft_seller_status',
+            'seller_id',
+            'marketplace_id',
+            'status',
+            'updated_at',
+        ),
+        db.Index(
+            'idx_marketplace_draft_account_type',
+            'account_id',
+            'product_type_id',
+        ),
+    )
+    __mapper_args__ = {'version_id_col': version}
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        validation = self._json_value(self.validation_result_json, {})
+        data = {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'imported_product_id': self.imported_product_id,
+            'supplier_product_id': self.supplier_product_id,
+            'product_type_id': self.product_type_id,
+            'category_mapping_id': self.category_mapping_id,
+            'published_listing_id': self.published_listing_id,
+            'offer_id': self.offer_id,
+            'external_category_id': self.external_category_id,
+            'external_type_id': self.external_type_id,
+            'product_type_name': (
+                self.product_type.name if self.product_type else None
+            ),
+            'category_path': (
+                self.product_type.category.full_path
+                if self.product_type and self.product_type.category else None
+            ),
+            'status': self.status,
+            'source_fact_hash': self.source_fact_hash,
+            'schema_version': self.schema_version,
+            'schema_hash': self.schema_hash,
+            'validation_status': self.validation_status,
+            'validation_summary': {
+                'publishable': bool(validation.get('publishable', False)),
+                'error_count': len(validation.get('errors', []))
+                if isinstance(validation.get('errors'), list) else 0,
+                'warning_count': len(validation.get('warnings', []))
+                if isinstance(validation.get('warnings'), list) else 0,
+            },
+            'validated_at': (
+                self.validated_at.isoformat() if self.validated_at else None
+            ),
+            'version': self.version,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data.update({
+                'source_facts': self._json_value(self.source_facts_json, {}),
+                'provenance': self._json_value(self.provenance_json, {}),
+                'content': self._json_value(self.content_json, {}),
+                'attributes': self._json_value(self.attributes_json, []),
+                'complex_attributes': self._json_value(
+                    self.complex_attributes_json,
+                    [],
+                ),
+                'media': self._json_value(self.media_json, {}),
+                'dimensions': self._json_value(self.dimensions_json, {}),
+                'barcodes': self._json_value(self.barcodes_json, []),
+                'commercial': self._json_value(self.commercial_json, {}),
+                'validation': validation,
+            })
+        return data
+
+
+class MarketplaceOperation(db.Model):
+    """Durable seller-scoped journal for marketplace side effects.
+
+    Provider writes are never represented only by an in-memory request.  The
+    operation row is committed before HTTP submission and remains the source
+    of truth when a transport failure makes the upstream result ambiguous.
+    Raw provider responses and credentials are deliberately not stored here.
+    """
+    __tablename__ = 'marketplace_operations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    draft_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_drafts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    parent_operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+
+    operation_kind = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(30), nullable=False, default='queued')
+    idempotency_key = db.Column(db.String(128), nullable=False)
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    contract_version = db.Column(db.String(80), nullable=False)
+    draft_version = db.Column(db.Integer)
+    request_summary_json = db.Column(db.Text, nullable=False, default='{}')
+
+    quota_snapshot_json = db.Column(db.Text, nullable=False, default='{}')
+    quota_reserved = db.Column(db.Integer, nullable=False, default=0)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    poll_count = db.Column(db.Integer, nullable=False, default=0)
+    reconcile_count = db.Column(db.Integer, nullable=False, default=0)
+
+    external_task_id = db.Column(db.String(100))
+    provider_request_ids_json = db.Column(db.Text, nullable=False, default='[]')
+    item_results_json = db.Column(db.Text, nullable=False, default='[]')
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+
+    submitted_at = db.Column(db.DateTime)
+    last_polled_at = db.Column(db.DateTime)
+    next_poll_at = db.Column(db.DateTime)
+    deadline_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    draft = db.relationship('MarketplaceProductDraft')
+    listing = db.relationship('MarketplaceListing')
+    created_by = db.relationship('User')
+    parent_operation = db.relationship(
+        'MarketplaceOperation',
+        remote_side=[id],
+        backref=db.backref('child_operations', lazy='dynamic'),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'operation_kind',
+            'idempotency_key',
+            name='uq_marketplace_operation_idempotency',
+        ),
+        db.CheckConstraint(
+            "operation_kind IN ('product_import','product_import_rollback',"
+            "'product_update','product_update_rollback',"
+            "'price_update','stock_update','price_rollback','stock_rollback')",
+            name='ck_marketplace_operation_kind',
+        ),
+        db.CheckConstraint(
+            "status IN ('queued','submitting','submitted','polling',"
+            "'succeeded','partial','failed','uncertain','cancelled')",
+            name='ck_marketplace_operation_status',
+        ),
+        db.CheckConstraint(
+            'quota_reserved >= 0 AND quota_reserved <= 100',
+            name='ck_marketplace_operation_quota_reserved',
+        ),
+        db.Index(
+            'idx_marketplace_operation_due',
+            'status',
+            'next_poll_at',
+        ),
+        db.Index(
+            'idx_marketplace_operation_seller_status',
+            'seller_id',
+            'marketplace_id',
+            'status',
+            'updated_at',
+        ),
+        db.Index(
+            'uq_marketplace_operation_active_draft',
+            'draft_id',
+            unique=True,
+            sqlite_where=db.text(
+                "draft_id IS NOT NULL AND status IN ("
+                "'queued','submitting','submitted','polling','uncertain')"
+            ),
+        ),
+    )
+    __mapper_args__ = {'version_id_col': version}
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in {'succeeded', 'partial', 'failed', 'cancelled'}
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        data = {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'draft_id': self.draft_id,
+            'listing_id': self.listing_id,
+            'parent_operation_id': self.parent_operation_id,
+            'operation_kind': self.operation_kind,
+            'status': self.status,
+            'request_fingerprint': self.request_fingerprint,
+            'contract_version': self.contract_version,
+            'draft_version': self.draft_version,
+            'quota_reserved': self.quota_reserved,
+            'attempt_count': self.attempt_count,
+            'poll_count': self.poll_count,
+            'reconcile_count': self.reconcile_count,
+            'external_task_id': self.external_task_id,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'submitted_at': (
+                self.submitted_at.isoformat() if self.submitted_at else None
+            ),
+            'last_polled_at': (
+                self.last_polled_at.isoformat() if self.last_polled_at else None
+            ),
+            'next_poll_at': (
+                self.next_poll_at.isoformat() if self.next_poll_at else None
+            ),
+            'deadline_at': (
+                self.deadline_at.isoformat() if self.deadline_at else None
+            ),
+            'completed_at': (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+            'created_by_user_id': self.created_by_user_id,
+            'version': self.version,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data.update({
+                'request_summary': self._json_value(
+                    self.request_summary_json,
+                    {},
+                ),
+                'quota_snapshot': self._json_value(
+                    self.quota_snapshot_json,
+                    {},
+                ),
+                'provider_request_ids': self._json_value(
+                    self.provider_request_ids_json,
+                    [],
+                ),
+                'item_results': self._json_value(
+                    self.item_results_json,
+                    [],
+                ),
+            })
+        return data
+
+
+class MarketplaceListingSnapshot(db.Model):
+    """Exact before/submitted/confirmed state owned by one operation.
+
+    Snapshot payloads are whitelist-normalized internal data.  Public
+    serializers expose only fingerprints and rollback metadata so a route can
+    never accidentally echo a full product payload or a provider response.
+    """
+    __tablename__ = 'marketplace_listing_snapshots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='CASCADE'),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    draft_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_drafts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    rollback_operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+
+    snapshot_kind = db.Column(db.String(50), nullable=False)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    before_fingerprint = db.Column(db.String(64))
+    submitted_fingerprint = db.Column(db.String(64), nullable=False)
+    confirmed_fingerprint = db.Column(db.String(64))
+    before_state_json = db.Column(db.Text, nullable=False, default='{}')
+    submitted_state_json = db.Column(db.Text, nullable=False)
+    confirmed_state_json = db.Column(db.Text, nullable=False, default='{}')
+    rollback_state_json = db.Column(db.Text, nullable=False, default='{}')
+    rollback_status = db.Column(
+        db.String(30),
+        nullable=False,
+        default='not_requested',
+    )
+    rollback_error_code = db.Column(db.String(100))
+    rollback_error_message = db.Column(db.String(1000))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    operation = db.relationship(
+        'MarketplaceOperation',
+        foreign_keys=[operation_id],
+        backref=db.backref('snapshot', uselist=False),
+    )
+    draft = db.relationship('MarketplaceProductDraft')
+    listing = db.relationship('MarketplaceListing')
+    rollback_operation = db.relationship(
+        'MarketplaceOperation',
+        foreign_keys=[rollback_operation_id],
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "snapshot_kind IN ('product_import','product_update','price','stock')",
+            name='ck_marketplace_listing_snapshot_kind',
+        ),
+        db.CheckConstraint(
+            "rollback_status IN ('not_requested','unavailable','available',"
+            "'pending','succeeded','failed','conflict')",
+            name='ck_marketplace_listing_snapshot_rollback_status',
+        ),
+        db.Index(
+            'idx_marketplace_snapshot_seller_listing',
+            'seller_id',
+            'listing_id',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'operation_id': self.operation_id,
+            'draft_id': self.draft_id,
+            'listing_id': self.listing_id,
+            'rollback_operation_id': self.rollback_operation_id,
+            'snapshot_kind': self.snapshot_kind,
+            'source_fingerprint': self.source_fingerprint,
+            'before_fingerprint': self.before_fingerprint,
+            'submitted_fingerprint': self.submitted_fingerprint,
+            'confirmed_fingerprint': self.confirmed_fingerprint,
+            'rollback_status': self.rollback_status,
+            'rollback_error_code': self.rollback_error_code,
+            'rollback_error_message': self.rollback_error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class MarketplaceCatalogSync(db.Model):
+    """Durable, seller/account-scoped full catalog reconciliation run.
+
+    A run advances only after one provider page and all of its enrichment
+    responses have been validated and committed.  Missing listings are marked
+    unavailable only by the finalizer of a complete run.
+    """
+    __tablename__ = 'marketplace_catalog_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    status = db.Column(db.String(20), default='running', nullable=False)
+    phase = db.Column(db.String(20), default='active', nullable=False)
+    visibility = db.Column(db.String(30), default='ALL', nullable=False)
+    cursor = db.Column(db.String(1000), default='', nullable=False)
+    phase_seen_count = db.Column(db.Integer, default=0, nullable=False)
+    phase_expected_total = db.Column(db.Integer)
+    page_count = db.Column(db.Integer, default=0, nullable=False)
+    seen_count = db.Column(db.Integer, default=0, nullable=False)
+    created_count = db.Column(db.Integer, default=0, nullable=False)
+    updated_count = db.Column(db.Integer, default=0, nullable=False)
+    missing_count = db.Column(db.Integer, default=0, nullable=False)
+    warning_count = db.Column(db.Integer, default=0, nullable=False)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    heartbeat_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship(
+        'SellerMarketplaceAccount',
+        backref=db.backref(
+            'catalog_syncs',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('running','paused','completed','failed')",
+            name='ck_marketplace_catalog_sync_status',
+        ),
+        db.CheckConstraint(
+            "phase IN ('active','archived','finalize','completed')",
+            name='ck_marketplace_catalog_sync_phase',
+        ),
+        db.Index(
+            'idx_marketplace_catalog_sync_account_status',
+            'seller_id',
+            'account_id',
+            'status',
+            'updated_at',
+        ),
+        db.Index(
+            'uq_marketplace_catalog_sync_running',
+            'account_id',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'status': self.status,
+            'phase': self.phase,
+            'visibility': self.visibility,
+            'phase_seen_count': self.phase_seen_count,
+            'phase_expected_total': self.phase_expected_total,
+            'page_count': self.page_count,
+            'seen_count': self.seen_count,
+            'created_count': self.created_count,
+            'updated_count': self.updated_count,
+            'missing_count': self.missing_count,
+            'warning_count': self.warning_count,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'heartbeat_at': (
+                self.heartbeat_at.isoformat() if self.heartbeat_at else None
+            ),
+            'completed_at': (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+        }
+
+
+class MarketplaceListing(db.Model):
+    """Marketplace-neutral projection of one published seller listing.
+
+    Ozon listings always have an account.  ``account_id`` remains nullable only
+    for the temporary WB compatibility projection, whose one-to-one identity is
+    enforced by ``legacy_product_id``.
+    """
+    __tablename__ = 'marketplace_listings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=True,
+        index=True,
+    )
+    legacy_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('products.id', ondelete='CASCADE'),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    imported_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('imported_products.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    product_type_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_types.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    last_catalog_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_catalog_syncs.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    # Detect provider identities repeated across cursor pages of one phase.
+    # Repetition between ALL and ARCHIVED is expected and remains valid.
+    last_catalog_sync_phase = db.Column(db.String(20))
+
+    offer_id = db.Column(db.String(200), nullable=False)
+    external_product_id = db.Column(db.String(100), nullable=False)
+    primary_sku = db.Column(db.String(100))
+    identifiers_json = db.Column(db.Text, default='{}', nullable=False)
+    external_category_id = db.Column(db.String(100))
+    external_type_id = db.Column(db.String(100))
+
+    title = db.Column(db.String(500))
+    description = db.Column(db.Text)
+    normalized_status = db.Column(
+        db.String(30),
+        default='unknown',
+        nullable=False,
+    )
+    provider_status = db.Column(db.String(200))
+    visibility = db.Column(db.String(100))
+    is_archived = db.Column(db.Boolean, default=False, nullable=False)
+    is_available = db.Column(db.Boolean, default=True, nullable=False)
+    has_fbo_stocks = db.Column(db.Boolean, default=False, nullable=False)
+    has_fbs_stocks = db.Column(db.Boolean, default=False, nullable=False)
+
+    statuses_json = db.Column(db.Text, default='{}', nullable=False)
+    moderation_errors_json = db.Column(db.Text, default='[]', nullable=False)
+    attributes_json = db.Column(db.Text, default='[]', nullable=False)
+    complex_attributes_json = db.Column(db.Text, default='[]', nullable=False)
+    media_json = db.Column(db.Text, default='{}', nullable=False)
+    dimensions_json = db.Column(db.Text, default='{}', nullable=False)
+    barcodes_json = db.Column(db.Text, default='[]', nullable=False)
+    price_summary_json = db.Column(db.Text, default='{}', nullable=False)
+    stock_summary_json = db.Column(db.Text, default='{}', nullable=False)
+
+    # ``ImportedProduct`` is the seller-owned canonical product/content source.
+    # Marketplace listings are channel/account projections and must never own a
+    # second copy of AI parsing results.  These fields make the existing FK an
+    # explicit, reviewable and optimistically versioned relationship.
+    link_status = db.Column(
+        db.String(20),
+        default='unlinked',
+        nullable=False,
+    )
+    link_source = db.Column(db.String(40))
+    link_evidence_json = db.Column(db.Text, default='{}', nullable=False)
+    link_version = db.Column(db.Integer, default=1, nullable=False)
+    linked_at = db.Column(db.DateTime)
+    linked_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+
+    upstream_created_at = db.Column(db.DateTime)
+    upstream_updated_at = db.Column(db.DateTime)
+    list_synced_at = db.Column(db.DateTime)
+    info_synced_at = db.Column(db.DateTime)
+    attributes_synced_at = db.Column(db.DateTime)
+    prices_synced_at = db.Column(db.DateTime)
+    stocks_synced_at = db.Column(db.DateTime)
+    last_seen_at = db.Column(db.DateTime)
+    sync_fingerprint = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship(
+        'Marketplace',
+        backref=db.backref(
+            'listings',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    account = db.relationship(
+        'SellerMarketplaceAccount',
+        backref=db.backref(
+            'listings',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    legacy_product = db.relationship('Product')
+    imported_product = db.relationship('ImportedProduct')
+    linked_by_user = db.relationship(
+        'User',
+        foreign_keys=[linked_by_user_id],
+    )
+    product_type = db.relationship('MarketplaceProductType')
+    last_catalog_sync = db.relationship(
+        'MarketplaceCatalogSync',
+        foreign_keys=[last_catalog_sync_id],
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'offer_id',
+            name='uq_marketplace_listing_account_offer',
+        ),
+        db.UniqueConstraint(
+            'account_id',
+            'external_product_id',
+            name='uq_marketplace_listing_account_product',
+        ),
+        db.CheckConstraint(
+            "normalized_status IN ('active','moderation','creating','error',"
+            "'archived','inactive','unknown')",
+            name='ck_marketplace_listing_normalized_status',
+        ),
+        db.CheckConstraint(
+            "link_status IN ('unlinked','linked','ambiguous')",
+            name='ck_marketplace_listing_link_status',
+        ),
+        db.CheckConstraint(
+            'link_version >= 1',
+            name='ck_marketplace_listing_link_version',
+        ),
+        db.Index(
+            'idx_marketplace_listing_seller_scope',
+            'seller_id',
+            'marketplace_id',
+            'is_available',
+        ),
+        db.Index(
+            'idx_marketplace_listing_account_status',
+            'account_id',
+            'normalized_status',
+            'is_available',
+        ),
+        db.Index(
+            'idx_marketplace_listing_category_type',
+            'marketplace_id',
+            'external_category_id',
+            'external_type_id',
+        ),
+        db.Index(
+            'uq_marketplace_listing_account_canonical',
+            'account_id',
+            'imported_product_id',
+            unique=True,
+            sqlite_where=db.text(
+                'account_id IS NOT NULL AND imported_product_id IS NOT NULL'
+            ),
+        ),
+    )
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    @property
+    def canonical_link_status(self) -> str:
+        """Return a safe status for rows created before link metadata existed."""
+        if self.imported_product_id is not None:
+            return 'linked'
+        return self.link_status if self.link_status == 'ambiguous' else 'unlinked'
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        data = {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'marketplace_name': (
+                self.marketplace.name if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'legacy_product_id': self.legacy_product_id,
+            'imported_product_id': self.imported_product_id,
+            'link_status': self.canonical_link_status,
+            'link_source': self.link_source,
+            'link_version': self.link_version,
+            'linked_at': self.linked_at.isoformat() if self.linked_at else None,
+            'offer_id': self.offer_id,
+            'external_product_id': self.external_product_id,
+            'primary_sku': self.primary_sku,
+            'external_category_id': self.external_category_id,
+            'external_type_id': self.external_type_id,
+            'title': self.title,
+            'normalized_status': self.normalized_status,
+            'provider_status': self.provider_status,
+            'visibility': self.visibility,
+            'is_archived': bool(self.is_archived),
+            'is_available': bool(self.is_available),
+            'has_fbo_stocks': bool(self.has_fbo_stocks),
+            'has_fbs_stocks': bool(self.has_fbs_stocks),
+            'price_summary': self._json_value(self.price_summary_json, {}),
+            'stock_summary': self._json_value(self.stock_summary_json, {}),
+            'list_synced_at': (
+                self.list_synced_at.isoformat() if self.list_synced_at else None
+            ),
+            'last_seen_at': (
+                self.last_seen_at.isoformat() if self.last_seen_at else None
+            ),
+            'sync_fingerprint': self.sync_fingerprint,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data.update({
+                'link_evidence': self._json_value(
+                    self.link_evidence_json,
+                    {},
+                ),
+                'identifiers': self._json_value(self.identifiers_json, {}),
+                'description': self.description,
+                'statuses': self._json_value(self.statuses_json, {}),
+                'moderation_errors': self._json_value(
+                    self.moderation_errors_json,
+                    [],
+                ),
+                'attributes': self._json_value(self.attributes_json, []),
+                'complex_attributes': self._json_value(
+                    self.complex_attributes_json,
+                    [],
+                ),
+                'media': self._json_value(self.media_json, {}),
+                'dimensions': self._json_value(self.dimensions_json, {}),
+                'barcodes': self._json_value(self.barcodes_json, []),
+                'upstream_created_at': (
+                    self.upstream_created_at.isoformat()
+                    if self.upstream_created_at else None
+                ),
+                'upstream_updated_at': (
+                    self.upstream_updated_at.isoformat()
+                    if self.upstream_updated_at else None
+                ),
+                'info_synced_at': (
+                    self.info_synced_at.isoformat()
+                    if self.info_synced_at else None
+                ),
+                'attributes_synced_at': (
+                    self.attributes_synced_at.isoformat()
+                    if self.attributes_synced_at else None
+                ),
+                'prices_synced_at': (
+                    self.prices_synced_at.isoformat()
+                    if self.prices_synced_at else None
+                ),
+                'stocks_synced_at': (
+                    self.stocks_synced_at.isoformat()
+                    if self.stocks_synced_at else None
+                ),
+            })
+        return data
+
+
+class MarketplaceListingLinkEvent(db.Model):
+    """Append-only audit of canonical-product/listing relationship changes."""
+    __tablename__ = 'marketplace_listing_link_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    previous_imported_product_id = db.Column(db.Integer)
+    imported_product_id = db.Column(db.Integer)
+    action = db.Column(db.String(20), nullable=False)
+    source = db.Column(db.String(40), nullable=False)
+    evidence_json = db.Column(db.Text, default='{}', nullable=False)
+    actor_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    link_version = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship(
+        'MarketplaceListing',
+        backref=db.backref(
+            'link_events',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    actor_user = db.relationship('User', foreign_keys=[actor_user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'listing_id',
+            'link_version',
+            name='uq_marketplace_listing_link_event_version',
+        ),
+        db.CheckConstraint(
+            "action IN ('auto_link','manual_link','unlink','ambiguous','bootstrap')",
+            name='ck_marketplace_listing_link_event_action',
+        ),
+        db.CheckConstraint(
+            'link_version >= 1',
+            name='ck_marketplace_listing_link_event_version',
+        ),
+        db.Index(
+            'idx_marketplace_listing_link_event_scope',
+            'seller_id',
+            'listing_id',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'listing_id': self.listing_id,
+            'previous_imported_product_id': self.previous_imported_product_id,
+            'imported_product_id': self.imported_product_id,
+            'action': self.action,
+            'source': self.source,
+            'link_version': self.link_version,
+            'actor_user_id': self.actor_user_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class MarketplaceProjectionRun(db.Model):
+    """Bounded WB projection/backfill or dual-read parity sweep.
+
+    A run owns a stable ``target_product_id`` watermark and advances by the
+    legacy ``Product.id`` keyset.  ``lease_owner`` is deliberately omitted from
+    public serialization; it only provides a short database-backed execution
+    claim so two web/worker processes cannot process the same batch.
+    """
+    __tablename__ = 'marketplace_projection_runs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    run_kind = db.Column(db.String(30), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    cursor_product_id = db.Column(db.Integer, nullable=False, default=0)
+    target_product_id = db.Column(db.Integer, nullable=False, default=0)
+
+    scanned_count = db.Column(db.Integer, nullable=False, default=0)
+    inserted_count = db.Column(db.Integer, nullable=False, default=0)
+    updated_count = db.Column(db.Integer, nullable=False, default=0)
+    unchanged_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_count = db.Column(db.Integer, nullable=False, default=0)
+    missing_count = db.Column(db.Integer, nullable=False, default=0)
+    mismatched_count = db.Column(db.Integer, nullable=False, default=0)
+    mismatch_fields_json = db.Column(db.Text, nullable=False, default='{}')
+    mismatch_sample_json = db.Column(db.Text, nullable=False, default='[]')
+
+    lease_owner = db.Column(db.String(64))
+    lease_expires_at = db.Column(db.DateTime)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    heartbeat_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "run_kind IN ('wb_backfill','wb_parity')",
+            name='ck_marketplace_projection_run_kind',
+        ),
+        db.CheckConstraint(
+            "status IN ('pending','running','paused','completed','failed')",
+            name='ck_marketplace_projection_run_status',
+        ),
+        db.CheckConstraint(
+            'cursor_product_id >= 0 AND target_product_id >= 0',
+            name='ck_marketplace_projection_run_cursor',
+        ),
+        db.CheckConstraint(
+            'scanned_count >= 0 AND inserted_count >= 0 '
+            'AND updated_count >= 0 AND unchanged_count >= 0 '
+            'AND matched_count >= 0 AND missing_count >= 0 '
+            'AND mismatched_count >= 0',
+            name='ck_marketplace_projection_run_counts',
+        ),
+        db.Index(
+            'idx_marketplace_projection_run_scope',
+            'seller_id',
+            'marketplace_id',
+            'run_kind',
+            'created_at',
+        ),
+        db.Index(
+            'idx_marketplace_projection_run_status',
+            'status',
+            'heartbeat_at',
+        ),
+        db.Index(
+            'uq_marketplace_projection_run_active',
+            'seller_id',
+            'marketplace_id',
+            'run_kind',
+            unique=True,
+            sqlite_where=db.text(
+                "status IN ('pending','running','paused')"
+            ),
+        ),
+    )
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    def to_public_dict(self) -> dict:
+        parity_ratio = None
+        if self.run_kind == 'wb_parity' and self.scanned_count:
+            parity_ratio = round(self.matched_count / self.scanned_count, 6)
+        return {
+            'id': self.id,
+            'seller_id': self.seller_id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'run_kind': self.run_kind,
+            'status': self.status,
+            'cursor_product_id': self.cursor_product_id,
+            'target_product_id': self.target_product_id,
+            'scanned_count': self.scanned_count,
+            'inserted_count': self.inserted_count,
+            'updated_count': self.updated_count,
+            'unchanged_count': self.unchanged_count,
+            'matched_count': self.matched_count,
+            'missing_count': self.missing_count,
+            'mismatched_count': self.mismatched_count,
+            'parity_ratio': parity_ratio,
+            'mismatch_fields': self._json_value(
+                self.mismatch_fields_json,
+                {},
+            ),
+            'mismatch_sample': self._json_value(
+                self.mismatch_sample_json,
+                [],
+            ),
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'heartbeat_at': (
+                self.heartbeat_at.isoformat() if self.heartbeat_at else None
+            ),
+            'completed_at': (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class MarketplaceCanonicalContentProposal(db.Model):
+    """Reviewed Ozon observation -> canonical common-content mutation.
+
+    Marketplace-specific IDs, dictionaries, commercial fields and media are
+    intentionally absent.  The exact before/after state also provides the
+    conflict-aware local rollback contract.
+    """
+    __tablename__ = 'marketplace_canonical_content_proposals'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    imported_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('imported_products.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    snapshot_id = db.Column(
+        db.Integer,
+        db.ForeignKey('agent_change_snapshots.id', ondelete='SET NULL'),
+        nullable=True,
+        unique=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    reviewed_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    rolled_back_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+
+    status = db.Column(
+        db.String(30),
+        nullable=False,
+        default='pending_review',
+    )
+    fields_json = db.Column(db.Text, nullable=False)
+    baseline_state_json = db.Column(db.Text, nullable=False)
+    proposed_state_json = db.Column(db.Text, nullable=False)
+    baseline_fingerprint = db.Column(db.String(64), nullable=False)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-canonical-common-content-v1',
+    )
+    source_observed_at = db.Column(db.DateTime, nullable=False)
+    review_note = db.Column(db.String(1000))
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    version = db.Column(db.Integer, nullable=False, default=1)
+    reviewed_at = db.Column(db.DateTime)
+    applied_at = db.Column(db.DateTime)
+    rolled_back_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship('MarketplaceListing')
+    imported_product = db.relationship('ImportedProduct')
+    snapshot = db.relationship('AgentChangeSnapshot')
+    created_by = db.relationship('User', foreign_keys=[created_by_user_id])
+    reviewed_by = db.relationship('User', foreign_keys=[reviewed_by_user_id])
+    rolled_back_by = db.relationship(
+        'User',
+        foreign_keys=[rolled_back_by_user_id],
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('pending_review','applied','rejected','conflict','rolled_back')",
+            name='ck_marketplace_canonical_content_status',
+        ),
+        db.CheckConstraint(
+            'version >= 1',
+            name='ck_marketplace_canonical_content_version',
+        ),
+        db.Index(
+            'idx_marketplace_canonical_content_scope',
+            'seller_id',
+            'account_id',
+            'listing_id',
+            'created_at',
+        ),
+        db.Index(
+            'uq_marketplace_canonical_content_pending',
+            'seller_id',
+            'listing_id',
+            unique=True,
+            sqlite_where=db.text("status = 'pending_review'"),
+            postgresql_where=db.text("status = 'pending_review'"),
+        ),
+    )
+    __mapper_args__ = {'version_id_col': version}
+
+    @staticmethod
+    def _json_object(raw_value: Optional[str]) -> dict:
+        try:
+            value = json.loads(raw_value or '{}')
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _json_fields(raw_value: Optional[str]) -> list:
+        try:
+            value = json.loads(raw_value or '[]')
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return [item for item in value if item in ('title', 'description')]
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        fields = self._json_fields(self.fields_json)
+        baseline = self._json_object(self.baseline_state_json)
+        proposed = self._json_object(self.proposed_state_json)
+
+        def preview(value):
+            if value is None:
+                return None
+            text = str(value)
+            return text if len(text) <= 500 else text[:497] + '...'
+
+        data = {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'listing_id': self.listing_id,
+            'imported_product_id': self.imported_product_id,
+            'snapshot_id': self.snapshot_id,
+            'status': self.status,
+            'fields': fields,
+            'changes': [
+                {
+                    'field': field,
+                    'before': preview(baseline.get(field)),
+                    'after': preview(proposed.get(field)),
+                }
+                for field in fields
+            ],
+            'contract_version': self.contract_version,
+            'source_observed_at': (
+                self.source_observed_at.isoformat()
+                if self.source_observed_at else None
+            ),
+            'review_note': self.review_note,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'version': self.version,
+            'reviewed_at': (
+                self.reviewed_at.isoformat() if self.reviewed_at else None
+            ),
+            'applied_at': self.applied_at.isoformat() if self.applied_at else None,
+            'rolled_back_at': (
+                self.rolled_back_at.isoformat() if self.rolled_back_at else None
+            ),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data['baseline_state'] = baseline
+            data['proposed_state'] = proposed
+        return data
+
+
+class MarketplaceQualityAssessment(db.Model):
+    """Current marketplace-scoped quality projection for one listing.
+
+    WB quality remains on ``Product``.  This projection deliberately carries
+    the full seller/account/listing scope so a future common UI cannot infer
+    ownership from a bare listing id.
+    """
+    __tablename__ = 'marketplace_quality_assessments'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    analytics_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_analytics_syncs.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+
+    status = db.Column(db.String(30), nullable=False, default='unscorable')
+    severity = db.Column(db.String(20), nullable=False, default='critical')
+    score = db.Column(db.Float)
+    impact = db.Column(db.Float, nullable=False, default=0)
+    schema_hash = db.Column(db.String(64))
+    listing_fingerprint = db.Column(db.String(64), nullable=False)
+    definition_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='marketplace-quality-v1',
+    )
+    breakdown_json = db.Column(db.Text, nullable=False, default='{}')
+    reasons_json = db.Column(db.Text, nullable=False, default='[]')
+    metrics_json = db.Column(db.Text, nullable=False, default='{}')
+    evaluated_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship(
+        'MarketplaceListing',
+        backref=db.backref(
+            'quality_assessment',
+            uselist=False,
+            cascade='all, delete-orphan',
+        ),
+    )
+    analytics_sync = db.relationship('MarketplaceAnalyticsSync')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'listing_id',
+            name='uq_marketplace_quality_listing',
+        ),
+        db.CheckConstraint(
+            "status IN ('scored','schema_stale','unscorable')",
+            name='ck_marketplace_quality_status',
+        ),
+        db.CheckConstraint(
+            "severity IN ('critical','warning','good','excellent')",
+            name='ck_marketplace_quality_severity',
+        ),
+        db.CheckConstraint(
+            'score IS NULL OR (score >= 0 AND score <= 100)',
+            name='ck_marketplace_quality_score',
+        ),
+        db.CheckConstraint(
+            'impact >= 0',
+            name='ck_marketplace_quality_impact',
+        ),
+        db.Index(
+            'idx_marketplace_quality_scope',
+            'seller_id',
+            'account_id',
+            'status',
+            'severity',
+        ),
+    )
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    def to_public_dict(self) -> dict:
+        listing = self.listing
+        return {
+            'id': self.id,
+            'entity_kind': 'marketplace_listing',
+            'seller_id': self.seller_id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'listing_id': self.listing_id,
+            'offer_id': listing.offer_id if listing else None,
+            'external_product_id': (
+                listing.external_product_id if listing else None
+            ),
+            'primary_sku': listing.primary_sku if listing else None,
+            'title': listing.title if listing else None,
+            'status': self.status,
+            'severity': self.severity,
+            'score': self.score,
+            'impact': self.impact,
+            'definition_version': self.definition_version,
+            'schema_hash': self.schema_hash,
+            'breakdown': self._json_value(self.breakdown_json, {}),
+            'reasons': self._json_value(self.reasons_json, []),
+            'metrics': self._json_value(self.metrics_json, {}),
+            'analytics_sync_id': self.analytics_sync_id,
+            'evaluated_at': (
+                self.evaluated_at.isoformat() if self.evaluated_at else None
+            ),
+        }
+
+
+class MarketplaceAnalyticsSync(db.Model):
+    """Durable last-good analytics snapshot attempt for one account/period."""
+    __tablename__ = 'marketplace_analytics_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    period_code = db.Column(db.String(10), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='running')
+    phase = db.Column(db.String(20), nullable=False, default='product')
+    next_offset = db.Column(db.Integer, nullable=False, default=0)
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    row_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_rows = db.Column(db.Integer, nullable=False, default=0)
+    unmatched_rows = db.Column(db.Integer, nullable=False, default=0)
+    fact_count = db.Column(db.Integer, nullable=False, default=0)
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-analytics-v1',
+    )
+    metrics_json = db.Column(db.Text, nullable=False, default='[]')
+    totals_json = db.Column(db.Text, nullable=False, default='{}')
+    response_timestamp = db.Column(db.String(80))
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_page_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "period_code IN ('7d','30d')",
+            name='ck_marketplace_analytics_period_code',
+        ),
+        db.CheckConstraint(
+            "status IN ('running','completed','failed','cancelled')",
+            name='ck_marketplace_analytics_status',
+        ),
+        db.CheckConstraint(
+            "phase IN ('product','day','completed')",
+            name='ck_marketplace_analytics_phase',
+        ),
+        db.CheckConstraint(
+            'period_start <= period_end',
+            name='ck_marketplace_analytics_period',
+        ),
+        db.CheckConstraint(
+            'next_offset >= 0 AND page_count >= 0 AND row_count >= 0 '
+            'AND matched_rows >= 0 AND unmatched_rows >= 0 AND fact_count >= 0',
+            name='ck_marketplace_analytics_counters',
+        ),
+        db.Index(
+            'idx_marketplace_analytics_scope_period',
+            'seller_id',
+            'account_id',
+            'period_start',
+            'period_end',
+            'status',
+        ),
+        db.Index(
+            'uq_marketplace_analytics_active_scope',
+            'account_id',
+            'period_code',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+            postgresql_where=db.text("status = 'running'"),
+        ),
+    )
+
+    @staticmethod
+    def _json_value(raw_value: Optional[str], fallback: Any) -> Any:
+        try:
+            value = json.loads(raw_value or '')
+        except (TypeError, json.JSONDecodeError):
+            return fallback
+        return value if isinstance(value, type(fallback)) else fallback
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'period_code': self.period_code,
+            'period_start': (
+                self.period_start.isoformat() if self.period_start else None
+            ),
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'status': self.status,
+            'phase': self.phase,
+            'page_count': self.page_count,
+            'row_count': self.row_count,
+            'matched_rows': self.matched_rows,
+            'unmatched_rows': self.unmatched_rows,
+            'fact_count': self.fact_count,
+            'contract_version': self.contract_version,
+            'metrics': self._json_value(self.metrics_json, []),
+            'totals': self._json_value(self.totals_json, {}),
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'last_page_at': (
+                self.last_page_at.isoformat() if self.last_page_at else None
+            ),
+            'completed_at': (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+        }
+
+
+class MarketplaceMetricFact(db.Model):
+    """One normalized, definition-tagged metric inside a completed sync."""
+    __tablename__ = 'marketplace_metric_facts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_analytics_syncs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    dimension_kind = db.Column(db.String(20), nullable=False)
+    dimension_id = db.Column(db.String(100), nullable=False)
+    dimension_name = db.Column(db.String(500))
+    fact_date = db.Column(db.Date)
+    metric_code = db.Column(db.String(60), nullable=False)
+    provider_metric = db.Column(db.String(60), nullable=False)
+    metric_value = db.Column(db.Numeric(20, 4), nullable=False)
+    unit = db.Column(db.String(20), nullable=False)
+    definition_code = db.Column(db.String(120), nullable=False)
+    cross_marketplace_comparable = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False,
+    )
+    source_endpoint = db.Column(
+        db.String(100),
+        nullable=False,
+        default='/v1/analytics/data',
+    )
+    observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    sync = db.relationship(
+        'MarketplaceAnalyticsSync',
+        backref=db.backref('metric_facts', lazy='dynamic', cascade='all, delete-orphan'),
+    )
+    listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'sync_id',
+            'dimension_kind',
+            'dimension_id',
+            'metric_code',
+            name='uq_marketplace_metric_fact',
+        ),
+        db.CheckConstraint(
+            "dimension_kind IN ('listing','day')",
+            name='ck_marketplace_metric_dimension_kind',
+        ),
+        db.CheckConstraint(
+            "(dimension_kind = 'listing' AND fact_date IS NULL) OR "
+            "(dimension_kind = 'day' AND fact_date IS NOT NULL)",
+            name='ck_marketplace_metric_dimension_date',
+        ),
+        db.CheckConstraint(
+            "unit IN ('count','rub','percent')",
+            name='ck_marketplace_metric_unit',
+        ),
+        db.CheckConstraint(
+            'metric_value >= 0',
+            name='ck_marketplace_metric_nonnegative',
+        ),
+        db.Index(
+            'idx_marketplace_metric_listing',
+            'seller_id',
+            'account_id',
+            'listing_id',
+            'metric_code',
+        ),
+        db.Index(
+            'idx_marketplace_metric_day',
+            'sync_id',
+            'fact_date',
+            'metric_code',
+        ),
+    )
+
+
+class MarketplaceFulfillmentSync(db.Model):
+    """Durable account-scoped Ozon postings/returns reconciliation run."""
+    __tablename__ = 'marketplace_fulfillment_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    period_code = db.Column(db.String(10), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='running')
+    phase = db.Column(db.String(40), nullable=False, default='fbs_postings')
+    next_offset = db.Column(db.Integer, nullable=False, default=0)
+    next_cursor = db.Column(db.String(100), nullable=False, default='0')
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    posting_count = db.Column(db.Integer, nullable=False, default=0)
+    return_count = db.Column(db.Integer, nullable=False, default=0)
+    cancellation_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_item_count = db.Column(db.Integer, nullable=False, default=0)
+    unmatched_item_count = db.Column(db.Integer, nullable=False, default=0)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-fulfillment-v1',
+    )
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_page_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "period_code IN ('7d','30d')",
+            name='ck_marketplace_fulfillment_period_code',
+        ),
+        db.CheckConstraint(
+            "status IN ('running','completed','failed','cancelled')",
+            name='ck_marketplace_fulfillment_status',
+        ),
+        db.CheckConstraint(
+            "phase IN ('fbs_postings','fbo_postings','returns',"
+            "'rfbs_returns','conditional_cancellations','completed')",
+            name='ck_marketplace_fulfillment_phase',
+        ),
+        db.CheckConstraint(
+            'period_start <= period_end',
+            name='ck_marketplace_fulfillment_period',
+        ),
+        db.CheckConstraint(
+            'next_offset >= 0 AND page_count >= 0 AND posting_count >= 0 '
+            'AND return_count >= 0 AND cancellation_count >= 0 '
+            'AND matched_item_count >= 0 AND unmatched_item_count >= 0',
+            name='ck_marketplace_fulfillment_counters',
+        ),
+        db.Index(
+            'uq_marketplace_fulfillment_running',
+            'account_id',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+        ),
+        db.Index(
+            'idx_marketplace_fulfillment_scope',
+            'seller_id',
+            'account_id',
+            'period_start',
+            'period_end',
+            'status',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'period_code': self.period_code,
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'status': self.status,
+            'phase': self.phase,
+            'page_count': self.page_count,
+            'posting_count': self.posting_count,
+            'return_count': self.return_count,
+            'cancellation_count': self.cancellation_count,
+            'matched_item_count': self.matched_item_count,
+            'unmatched_item_count': self.unmatched_item_count,
+            'contract_version': self.contract_version,
+            'request_fingerprint': self.request_fingerprint,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'last_page_at': self.last_page_at.isoformat() if self.last_page_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+
+class MarketplacePosting(db.Model):
+    """Safe Ozon order/posting projection without buyer personal data."""
+    __tablename__ = 'marketplace_postings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    last_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_fulfillment_syncs.id', ondelete='SET NULL'),
+        index=True,
+    )
+    posting_number = db.Column(db.String(200), nullable=False)
+    external_order_id = db.Column(db.String(200))
+    external_order_number = db.Column(db.String(200))
+    fulfillment_kind = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(120), nullable=False)
+    substatus = db.Column(db.String(120))
+    upstream_created_at = db.Column(db.DateTime)
+    shipment_at = db.Column(db.DateTime)
+    delivered_at = db.Column(db.DateTime)
+    cancelled_at = db.Column(db.DateTime)
+    cancellation_reason_code = db.Column(db.String(100))
+    cancellation_reason = db.Column(db.String(500))
+    source_endpoint = db.Column(db.String(100), nullable=False)
+    sync_fingerprint = db.Column(db.String(64), nullable=False)
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    last_sync = db.relationship('MarketplaceFulfillmentSync')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'posting_number',
+            name='uq_marketplace_posting_account_number',
+        ),
+        db.CheckConstraint(
+            "fulfillment_kind IN ('fbo','fbs')",
+            name='ck_marketplace_posting_fulfillment_kind',
+        ),
+        db.Index(
+            'idx_marketplace_posting_scope_status',
+            'seller_id',
+            'account_id',
+            'status',
+            'upstream_created_at',
+        ),
+    )
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        data = {
+            'id': self.id,
+            'account_id': self.account_id,
+            'posting_number': self.posting_number,
+            'external_order_id': self.external_order_id,
+            'external_order_number': self.external_order_number,
+            'fulfillment_kind': self.fulfillment_kind,
+            'status': self.status,
+            'substatus': self.substatus,
+            'upstream_created_at': (
+                self.upstream_created_at.isoformat()
+                if self.upstream_created_at else None
+            ),
+            'shipment_at': self.shipment_at.isoformat() if self.shipment_at else None,
+            'delivered_at': self.delivered_at.isoformat() if self.delivered_at else None,
+            'cancelled_at': self.cancelled_at.isoformat() if self.cancelled_at else None,
+            'cancellation_reason_code': self.cancellation_reason_code,
+            'cancellation_reason': self.cancellation_reason,
+            'source_endpoint': self.source_endpoint,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data['items'] = [
+                item.to_public_dict()
+                for item in self.items.order_by(MarketplacePostingItem.id.asc()).all()
+            ]
+            data['status_history'] = [
+                event.to_public_dict()
+                for event in self.status_events.order_by(
+                    MarketplacePostingStatusEvent.observed_at.desc(),
+                    MarketplacePostingStatusEvent.id.desc(),
+                ).limit(100).all()
+            ]
+        return data
+
+
+class MarketplacePostingItem(db.Model):
+    """One safe product line in an Ozon posting."""
+    __tablename__ = 'marketplace_posting_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    posting_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_postings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    identity_key = db.Column(db.String(64), nullable=False)
+    offer_id = db.Column(db.String(200))
+    external_sku = db.Column(db.String(100))
+    name = db.Column(db.String(500))
+    quantity = db.Column(db.Integer, nullable=False)
+    unit_price = db.Column(db.Numeric(20, 4))
+    currency = db.Column(db.String(3))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    posting = db.relationship(
+        'MarketplacePosting',
+        backref=db.backref('items', lazy='dynamic', cascade='all, delete-orphan'),
+    )
+    listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'posting_id',
+            'identity_key',
+            name='uq_marketplace_posting_item_identity',
+        ),
+        db.CheckConstraint(
+            'quantity > 0',
+            name='ck_marketplace_posting_item_quantity',
+        ),
+        db.CheckConstraint(
+            'unit_price IS NULL OR unit_price >= 0',
+            name='ck_marketplace_posting_item_price',
+        ),
+        db.Index(
+            'idx_marketplace_posting_item_listing',
+            'seller_id',
+            'account_id',
+            'listing_id',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'listing_id': self.listing_id,
+            'offer_id': self.offer_id,
+            'external_sku': self.external_sku,
+            'name': self.name,
+            'quantity': self.quantity,
+            'unit_price': str(self.unit_price) if self.unit_price is not None else None,
+            'currency': self.currency,
+        }
+
+
+class MarketplacePostingStatusEvent(db.Model):
+    """Append-only status transition observed for one posting."""
+    __tablename__ = 'marketplace_posting_status_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    posting_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_postings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    status = db.Column(db.String(120), nullable=False)
+    substatus = db.Column(db.String(120))
+    event_fingerprint = db.Column(db.String(64), nullable=False)
+    observed_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    posting = db.relationship(
+        'MarketplacePosting',
+        backref=db.backref(
+            'status_events',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'posting_id',
+            'event_fingerprint',
+            name='uq_marketplace_posting_status_event',
+        ),
+        db.Index(
+            'idx_marketplace_posting_status_event_scope',
+            'seller_id',
+            'account_id',
+            'observed_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'status': self.status,
+            'substatus': self.substatus,
+            'observed_at': self.observed_at.isoformat() if self.observed_at else None,
+        }
+
+
+class MarketplaceReturn(db.Model):
+    """Normalized Ozon return projection for FBO/FBS or rFBS."""
+    __tablename__ = 'marketplace_returns'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    last_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_fulfillment_syncs.id', ondelete='SET NULL'),
+        index=True,
+    )
+    posting_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_postings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    source_kind = db.Column(db.String(20), nullable=False)
+    external_return_id = db.Column(db.String(100), nullable=False)
+    posting_number = db.Column(db.String(200))
+    external_order_id = db.Column(db.String(200))
+    fulfillment_kind = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(120), nullable=False)
+    status_label = db.Column(db.String(300))
+    reason = db.Column(db.String(500))
+    upstream_created_at = db.Column(db.DateTime)
+    status_changed_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    offer_id = db.Column(db.String(200))
+    external_sku = db.Column(db.String(100))
+    product_name = db.Column(db.String(500))
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    unit_price = db.Column(db.Numeric(20, 4))
+    currency = db.Column(db.String(3))
+    source_endpoint = db.Column(db.String(100), nullable=False)
+    sync_fingerprint = db.Column(db.String(64), nullable=False)
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    posting = db.relationship('MarketplacePosting')
+    listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'source_kind',
+            'external_return_id',
+            name='uq_marketplace_return_account_source',
+        ),
+        db.CheckConstraint(
+            "source_kind IN ('fbo_fbs','rfbs')",
+            name='ck_marketplace_return_source_kind',
+        ),
+        db.CheckConstraint(
+            "fulfillment_kind IN ('fbo','fbs','rfbs','unknown')",
+            name='ck_marketplace_return_fulfillment_kind',
+        ),
+        db.CheckConstraint('quantity > 0', name='ck_marketplace_return_quantity'),
+        db.CheckConstraint(
+            'unit_price IS NULL OR unit_price >= 0',
+            name='ck_marketplace_return_price',
+        ),
+        db.Index(
+            'idx_marketplace_return_scope_status',
+            'seller_id',
+            'account_id',
+            'status',
+            'status_changed_at',
+        ),
+        db.Index(
+            'idx_marketplace_return_listing',
+            'seller_id',
+            'account_id',
+            'listing_id',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'listing_id': self.listing_id,
+            'source_kind': self.source_kind,
+            'external_return_id': self.external_return_id,
+            'posting_number': self.posting_number,
+            'fulfillment_kind': self.fulfillment_kind,
+            'status': self.status,
+            'status_label': self.status_label,
+            'reason': self.reason,
+            'upstream_created_at': (
+                self.upstream_created_at.isoformat()
+                if self.upstream_created_at else None
+            ),
+            'status_changed_at': (
+                self.status_changed_at.isoformat() if self.status_changed_at else None
+            ),
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'offer_id': self.offer_id,
+            'external_sku': self.external_sku,
+            'product_name': self.product_name,
+            'quantity': self.quantity,
+            'unit_price': str(self.unit_price) if self.unit_price is not None else None,
+            'currency': self.currency,
+            'source_endpoint': self.source_endpoint,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+        }
+
+
+class MarketplaceCancellation(db.Model):
+    """Provider-explicit posting or rFBS cancellation event."""
+    __tablename__ = 'marketplace_cancellations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    last_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_fulfillment_syncs.id', ondelete='SET NULL'),
+        index=True,
+    )
+    posting_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_postings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    source_kind = db.Column(db.String(30), nullable=False)
+    external_cancellation_id = db.Column(db.String(200), nullable=False)
+    posting_number = db.Column(db.String(200), nullable=False)
+    status = db.Column(db.String(120), nullable=False)
+    status_label = db.Column(db.String(300))
+    initiator = db.Column(db.String(80))
+    reason_code = db.Column(db.String(100))
+    reason = db.Column(db.String(500))
+    requested_at = db.Column(db.DateTime)
+    resolved_at = db.Column(db.DateTime)
+    source_endpoint = db.Column(db.String(100), nullable=False)
+    sync_fingerprint = db.Column(db.String(64), nullable=False)
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    posting = db.relationship('MarketplacePosting')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'source_kind',
+            'external_cancellation_id',
+            name='uq_marketplace_cancellation_account_source',
+        ),
+        db.CheckConstraint(
+            "source_kind IN ('posting_fbo','posting_fbs','rfbs_conditional')",
+            name='ck_marketplace_cancellation_source_kind',
+        ),
+        db.Index(
+            'idx_marketplace_cancellation_scope_status',
+            'seller_id',
+            'account_id',
+            'status',
+            'requested_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'source_kind': self.source_kind,
+            'external_cancellation_id': self.external_cancellation_id,
+            'posting_number': self.posting_number,
+            'status': self.status,
+            'status_label': self.status_label,
+            'initiator': self.initiator,
+            'reason_code': self.reason_code,
+            'reason': self.reason,
+            'requested_at': self.requested_at.isoformat() if self.requested_at else None,
+            'resolved_at': self.resolved_at.isoformat() if self.resolved_at else None,
+            'source_endpoint': self.source_endpoint,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+        }
+
+
+class MarketplaceFinanceSync(db.Model):
+    """Durable exact-account snapshot of current Ozon accrual feeds."""
+    __tablename__ = 'marketplace_finance_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    period_code = db.Column(db.String(10), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='running')
+    phase = db.Column(db.String(20), nullable=False, default='types')
+    current_date = db.Column(db.Date, nullable=False)
+    next_cursor = db.Column(db.String(100))
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    fact_count = db.Column(db.Integer, nullable=False, default=0)
+    item_count = db.Column(db.Integer, nullable=False, default=0)
+    component_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_item_count = db.Column(db.Integer, nullable=False, default=0)
+    unmatched_item_count = db.Column(db.Integer, nullable=False, default=0)
+    ambiguous_item_count = db.Column(db.Integer, nullable=False, default=0)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-finance-accrual-v1',
+    )
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_page_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "period_code IN ('7d','30d')",
+            name='ck_marketplace_finance_period_code',
+        ),
+        db.CheckConstraint(
+            "status IN ('running','completed','failed','cancelled')",
+            name='ck_marketplace_finance_status',
+        ),
+        db.CheckConstraint(
+            "phase IN ('types','accruals','completed')",
+            name='ck_marketplace_finance_phase',
+        ),
+        db.CheckConstraint(
+            'period_start <= period_end AND "current_date" >= period_start '
+            'AND "current_date" <= period_end',
+            name='ck_marketplace_finance_period',
+        ),
+        db.CheckConstraint(
+            'page_count >= 0 AND fact_count >= 0 AND item_count >= 0 '
+            'AND component_count >= 0 AND matched_item_count >= 0 '
+            'AND unmatched_item_count >= 0 AND ambiguous_item_count >= 0',
+            name='ck_marketplace_finance_counters',
+        ),
+        db.Index(
+            'uq_marketplace_finance_running',
+            'account_id',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+        ),
+        db.Index(
+            'idx_marketplace_finance_sync_scope',
+            'seller_id',
+            'account_id',
+            'period_start',
+            'period_end',
+            'status',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'period_code': self.period_code,
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'status': self.status,
+            'phase': self.phase,
+            'current_date': self.current_date.isoformat() if self.current_date else None,
+            'page_count': self.page_count,
+            'fact_count': self.fact_count,
+            'item_count': self.item_count,
+            'component_count': self.component_count,
+            'matched_item_count': self.matched_item_count,
+            'unmatched_item_count': self.unmatched_item_count,
+            'ambiguous_item_count': self.ambiguous_item_count,
+            'contract_version': self.contract_version,
+            'request_fingerprint': self.request_fingerprint,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'last_page_at': self.last_page_at.isoformat() if self.last_page_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+
+class MarketplaceFinanceAccrualType(db.Model):
+    """Account-scoped dictionary label for a nested Ozon fee type."""
+    __tablename__ = 'marketplace_finance_accrual_types'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    last_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_finance_syncs.id', ondelete='SET NULL'),
+        index=True,
+    )
+    external_type_id = db.Column(db.BigInteger, nullable=False)
+    name = db.Column(db.String(300), nullable=False)
+    description = db.Column(db.String(2000))
+    source_endpoint = db.Column(
+        db.String(100),
+        nullable=False,
+        default='/v1/finance/accrual/types',
+    )
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'external_type_id',
+            name='uq_marketplace_finance_type_account_external',
+        ),
+        db.CheckConstraint(
+            'external_type_id > 0',
+            name='ck_marketplace_finance_type_positive',
+        ),
+        db.Index(
+            'idx_marketplace_finance_type_scope',
+            'seller_id',
+            'account_id',
+            'name',
+        ),
+    )
+
+
+class MarketplaceFinanceFact(db.Model):
+    """One immutable normalized top-level accrual in a completed snapshot."""
+    __tablename__ = 'marketplace_finance_facts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_finance_syncs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    posting_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_postings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    accrual_id = db.Column(db.String(100), nullable=False)
+    fact_date = db.Column(db.Date, nullable=False)
+    unit_number = db.Column(db.String(200))
+    accrued_category = db.Column(db.String(25), nullable=False)
+    total_amount = db.Column(db.Numeric(20, 4), nullable=False)
+    currency = db.Column(db.String(3), nullable=False)
+    amount_sign = db.Column(db.String(10), nullable=False)
+    definition_code = db.Column(
+        db.String(120),
+        nullable=False,
+        default='ozon-accrual-total-amount-v1',
+    )
+    source_endpoint = db.Column(
+        db.String(100),
+        nullable=False,
+        default='/v1/finance/accrual/by-day',
+    )
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-finance-accrual-v1',
+    )
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    observed_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    sync = db.relationship(
+        'MarketplaceFinanceSync',
+        backref=db.backref('facts', lazy='dynamic', cascade='all, delete-orphan'),
+    )
+    posting = db.relationship('MarketplacePosting')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'sync_id',
+            'accrual_id',
+            name='uq_marketplace_finance_fact_sync_accrual',
+        ),
+        db.CheckConstraint(
+            "accrued_category IN ('UNSPECIFIED','POSTING','ITEM','NON_ITEM')",
+            name='ck_marketplace_finance_fact_category',
+        ),
+        db.CheckConstraint(
+            "amount_sign IN ('positive','negative','zero')",
+            name='ck_marketplace_finance_fact_sign',
+        ),
+        db.CheckConstraint(
+            "(total_amount > 0 AND amount_sign = 'positive') OR "
+            "(total_amount < 0 AND amount_sign = 'negative') OR "
+            "(total_amount = 0 AND amount_sign = 'zero')",
+            name='ck_marketplace_finance_fact_amount_sign',
+        ),
+        db.Index(
+            'idx_marketplace_finance_fact_scope_date',
+            'seller_id',
+            'account_id',
+            'fact_date',
+            'currency',
+        ),
+        db.Index(
+            'idx_marketplace_finance_fact_unit',
+            'seller_id',
+            'account_id',
+            'unit_number',
+        ),
+    )
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        data = {
+            'id': self.id,
+            'sync_id': self.sync_id,
+            'account_id': self.account_id,
+            'posting_id': self.posting_id,
+            'accrual_id': self.accrual_id,
+            'fact_date': self.fact_date.isoformat() if self.fact_date else None,
+            'unit_number': self.unit_number,
+            'accrued_category': self.accrued_category,
+            'total_amount': str(self.total_amount),
+            'currency': self.currency,
+            'amount_sign': self.amount_sign,
+            'definition_code': self.definition_code,
+            'source_endpoint': self.source_endpoint,
+            'contract_version': self.contract_version,
+            'observed_at': self.observed_at.isoformat() if self.observed_at else None,
+        }
+        if detail:
+            data['items'] = [
+                item.to_public_dict()
+                for item in self.items.order_by(MarketplaceFinanceFactItem.id.asc()).all()
+            ]
+            data['components'] = [
+                item.to_public_dict()
+                for item in self.components.order_by(
+                    MarketplaceFinanceComponent.component_kind.asc(),
+                    MarketplaceFinanceComponent.id.asc(),
+                ).all()
+            ]
+        return data
+
+
+class MarketplaceFinanceFactItem(db.Model):
+    """SKU-to-listing evidence attached to one finance fact."""
+    __tablename__ = 'marketplace_finance_fact_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    fact_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_finance_facts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    external_sku = db.Column(db.String(100), nullable=False)
+    match_status = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    fact = db.relationship(
+        'MarketplaceFinanceFact',
+        backref=db.backref('items', lazy='dynamic', cascade='all, delete-orphan'),
+    )
+    listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'fact_id',
+            'external_sku',
+            name='uq_marketplace_finance_fact_item_sku',
+        ),
+        db.CheckConstraint(
+            "match_status IN ('matched','unmatched','ambiguous')",
+            name='ck_marketplace_finance_fact_item_match',
+        ),
+        db.Index(
+            'idx_marketplace_finance_fact_item_listing',
+            'seller_id',
+            'account_id',
+            'listing_id',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'listing_id': self.listing_id,
+            'external_sku': self.external_sku,
+            'match_status': self.match_status,
+            'offer_id': self.listing.offer_id if self.listing else None,
+            'title': self.listing.title if self.listing else None,
+        }
+
+
+class MarketplaceFinanceComponent(db.Model):
+    """Explanatory nested fee; never independently rolled into account net."""
+    __tablename__ = 'marketplace_finance_components'
+
+    id = db.Column(db.Integer, primary_key=True)
+    fact_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_finance_facts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    component_key = db.Column(db.String(64), nullable=False)
+    component_kind = db.Column(db.String(30), nullable=False)
+    external_type_id = db.Column(db.BigInteger, nullable=False)
+    type_name = db.Column(db.String(300))
+    external_sku = db.Column(db.String(100))
+    amount = db.Column(db.Numeric(20, 4), nullable=False)
+    currency = db.Column(db.String(3), nullable=False)
+    rollup_role = db.Column(
+        db.String(30),
+        nullable=False,
+        default='explanatory_only',
+    )
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    fact = db.relationship(
+        'MarketplaceFinanceFact',
+        backref=db.backref(
+            'components',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    listing = db.relationship('MarketplaceListing')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'fact_id',
+            'component_key',
+            name='uq_marketplace_finance_component_key',
+        ),
+        db.CheckConstraint(
+            "component_kind IN ('item_fee','non_item_fee','delivery_service')",
+            name='ck_marketplace_finance_component_kind',
+        ),
+        db.CheckConstraint(
+            'external_type_id > 0',
+            name='ck_marketplace_finance_component_type',
+        ),
+        db.CheckConstraint(
+            "rollup_role = 'explanatory_only'",
+            name='ck_marketplace_finance_component_rollup',
+        ),
+        db.Index(
+            'idx_marketplace_finance_component_type',
+            'seller_id',
+            'account_id',
+            'external_type_id',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'component_kind': self.component_kind,
+            'external_type_id': self.external_type_id,
+            'type_name': self.type_name,
+            'external_sku': self.external_sku,
+            'listing_id': self.listing_id,
+            'amount': str(self.amount),
+            'currency': self.currency,
+            'rollup_role': self.rollup_role,
+        }
+
+
+class MarketplaceInboxSync(db.Model):
+    """Durable account/kind cursor sweep for Ozon reviews or questions."""
+    __tablename__ = 'marketplace_inbox_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    source_kind = db.Column(db.String(20), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='running')
+    current_status = db.Column(db.String(20), nullable=False, default='NEW')
+    next_cursor = db.Column(db.String(200))
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    seen_count = db.Column(db.Integer, nullable=False, default=0)
+    created_count = db.Column(db.Integer, nullable=False, default=0)
+    updated_count = db.Column(db.Integer, nullable=False, default=0)
+    matched_count = db.Column(db.Integer, nullable=False, default=0)
+    unmatched_count = db.Column(db.Integer, nullable=False, default=0)
+    ambiguous_count = db.Column(db.Integer, nullable=False, default=0)
+    contract_version = db.Column(
+        db.String(80),
+        nullable=False,
+        default='ozon-inbox-status-v1',
+    )
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_page_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "source_kind IN ('review','question')",
+            name='ck_marketplace_inbox_sync_kind',
+        ),
+        db.CheckConstraint(
+            "status IN ('running','completed','failed','cancelled')",
+            name='ck_marketplace_inbox_sync_status',
+        ),
+        db.CheckConstraint(
+            "current_status IN ('NEW','VIEWED','PROCESSED')",
+            name='ck_marketplace_inbox_sync_current_status',
+        ),
+        db.CheckConstraint(
+            'period_start <= period_end',
+            name='ck_marketplace_inbox_sync_period',
+        ),
+        db.CheckConstraint(
+            'page_count >= 0 AND seen_count >= 0 AND created_count >= 0 '
+            'AND updated_count >= 0 AND matched_count >= 0 '
+            'AND unmatched_count >= 0 AND ambiguous_count >= 0',
+            name='ck_marketplace_inbox_sync_counters',
+        ),
+        db.Index(
+            'uq_marketplace_inbox_running_kind',
+            'account_id',
+            'source_kind',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+        ),
+        db.Index(
+            'idx_marketplace_inbox_sync_scope',
+            'seller_id',
+            'account_id',
+            'source_kind',
+            'status',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'source_kind': self.source_kind,
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'status': self.status,
+            'current_status': self.current_status,
+            'page_count': self.page_count,
+            'seen_count': self.seen_count,
+            'created_count': self.created_count,
+            'updated_count': self.updated_count,
+            'matched_count': self.matched_count,
+            'unmatched_count': self.unmatched_count,
+            'ambiguous_count': self.ambiguous_count,
+            'contract_version': self.contract_version,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'last_page_at': self.last_page_at.isoformat() if self.last_page_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+
+class MarketplaceInboxItem(db.Model):
+    """PII-minimized customer review/question linked to an exact listing."""
+    __tablename__ = 'marketplace_inbox_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    last_sync_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_inbox_syncs.id', ondelete='SET NULL'),
+        index=True,
+    )
+    source_kind = db.Column(db.String(20), nullable=False)
+    external_id = db.Column(db.String(200), nullable=False)
+    external_sku = db.Column(db.String(100), nullable=False)
+    match_status = db.Column(db.String(20), nullable=False)
+    text = db.Column(db.Text)
+    rating = db.Column(db.Integer)
+    provider_status = db.Column(db.String(20), nullable=False)
+    order_status = db.Column(db.String(100))
+    published_at = db.Column(db.DateTime, nullable=False)
+    is_rating_participant = db.Column(db.Boolean)
+    comments_count = db.Column(db.Integer, nullable=False, default=0)
+    photos_count = db.Column(db.Integer, nullable=False, default=0)
+    videos_count = db.Column(db.Integer, nullable=False, default=0)
+    answers_count = db.Column(db.Integer, nullable=False, default=0)
+    reply_eligible = db.Column(db.Boolean, nullable=False, default=False)
+    source_endpoint = db.Column(db.String(100), nullable=False)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship('MarketplaceListing')
+    last_sync = db.relationship('MarketplaceInboxSync')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'source_kind',
+            'external_id',
+            name='uq_marketplace_inbox_item_external',
+        ),
+        db.CheckConstraint(
+            "source_kind IN ('review','question')",
+            name='ck_marketplace_inbox_item_kind',
+        ),
+        db.CheckConstraint(
+            "provider_status IN ('NEW','VIEWED','PROCESSED')",
+            name='ck_marketplace_inbox_item_status',
+        ),
+        db.CheckConstraint(
+            "match_status IN ('matched','unmatched','ambiguous')",
+            name='ck_marketplace_inbox_item_match',
+        ),
+        db.CheckConstraint(
+            "(source_kind = 'review' AND rating BETWEEN 1 AND 5) OR "
+            "(source_kind = 'question' AND rating IS NULL)",
+            name='ck_marketplace_inbox_item_rating',
+        ),
+        db.CheckConstraint(
+            'comments_count >= 0 AND photos_count >= 0 AND videos_count >= 0 '
+            'AND answers_count >= 0',
+            name='ck_marketplace_inbox_item_counts',
+        ),
+        db.Index(
+            'idx_marketplace_inbox_item_scope',
+            'seller_id',
+            'account_id',
+            'source_kind',
+            'provider_status',
+            'published_at',
+        ),
+        db.Index(
+            'idx_marketplace_inbox_item_listing',
+            'seller_id',
+            'account_id',
+            'listing_id',
+            'published_at',
+        ),
+    )
+
+    def to_public_dict(self, *, include_draft: bool = True) -> dict:
+        listing = None
+        if self.listing is not None:
+            # Inbox needs only a compact display reference. Reusing the full
+            # listing serializer would expose unrelated commercial summaries
+            # and lazily load marketplace/account relationships per row.
+            listing = {
+                'id': self.listing.id,
+                'offer_id': self.listing.offer_id,
+                'title': self.listing.title,
+                'normalized_status': self.listing.normalized_status,
+                'is_available': bool(self.listing.is_available),
+            }
+        data = {
+            'id': self.id,
+            'account_id': self.account_id,
+            'listing_id': self.listing_id,
+            'source_kind': self.source_kind,
+            'external_id': self.external_id,
+            'external_sku': self.external_sku,
+            'match_status': self.match_status,
+            'listing': listing,
+            'text': self.text,
+            'rating': self.rating,
+            'provider_status': self.provider_status,
+            'order_status': self.order_status,
+            'published_at': self.published_at.isoformat() if self.published_at else None,
+            'is_rating_participant': self.is_rating_participant,
+            'comments_count': self.comments_count,
+            'photos_count': self.photos_count,
+            'videos_count': self.videos_count,
+            'answers_count': self.answers_count,
+            'reply_eligible': bool(self.reply_eligible),
+            'reply_required': self.provider_status != 'PROCESSED',
+            'source_endpoint': self.source_endpoint,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+        }
+        if include_draft:
+            draft = self.reply_drafts.filter_by(status='draft').order_by(
+                MarketplaceReplyDraft.id.desc()
+            ).first()
+            data['draft'] = draft.to_public_dict() if draft else None
+        return data
+
+
+class MarketplaceReplyDraft(db.Model):
+    """Local-only reply draft; creation never invokes a marketplace write."""
+    __tablename__ = 'marketplace_reply_drafts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    inbox_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_inbox_items.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        index=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        index=True,
+    )
+    status = db.Column(db.String(20), nullable=False, default='draft')
+    generation_mode = db.Column(db.String(20), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    facts_fingerprint = db.Column(db.String(64), nullable=False)
+    content_hash = db.Column(db.String(64), nullable=False)
+    model_name = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    inbox_item = db.relationship(
+        'MarketplaceInboxItem',
+        backref=db.backref(
+            'reply_drafts',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    listing = db.relationship('MarketplaceListing')
+    created_by_user = db.relationship('User')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('draft','superseded')",
+            name='ck_marketplace_reply_draft_status',
+        ),
+        db.CheckConstraint(
+            "generation_mode IN ('ai','template')",
+            name='ck_marketplace_reply_draft_mode',
+        ),
+        db.Index(
+            'uq_marketplace_reply_active_item',
+            'inbox_item_id',
+            unique=True,
+            sqlite_where=db.text("status = 'draft'"),
+        ),
+        db.Index(
+            'idx_marketplace_reply_draft_scope',
+            'seller_id',
+            'account_id',
+            'status',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'inbox_item_id': self.inbox_item_id,
+            'listing_id': self.listing_id,
+            'status': self.status,
+            'generation_mode': self.generation_mode,
+            'text': self.text,
+            'model_name': self.model_name,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class MarketplaceWarehouseSync(db.Model):
+    """Audit row for one bounded, all-pages warehouse reconciliation."""
+    __tablename__ = 'marketplace_warehouse_syncs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    status = db.Column(db.String(20), nullable=False, default='running')
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    seen_count = db.Column(db.Integer, nullable=False, default=0)
+    created_count = db.Column(db.Integer, nullable=False, default=0)
+    updated_count = db.Column(db.Integer, nullable=False, default=0)
+    unavailable_count = db.Column(db.Integer, nullable=False, default=0)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('running','completed','failed')",
+            name='ck_marketplace_warehouse_sync_status',
+        ),
+        db.Index(
+            'uq_marketplace_warehouse_sync_running',
+            'account_id',
+            unique=True,
+            sqlite_where=db.text("status = 'running'"),
+        ),
+        db.Index(
+            'idx_marketplace_warehouse_sync_scope',
+            'seller_id',
+            'account_id',
+            'created_at',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'status': self.status,
+            'page_count': self.page_count,
+            'seen_count': self.seen_count,
+            'created_count': self.created_count,
+            'updated_count': self.updated_count,
+            'unavailable_count': self.unavailable_count,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'completed_at': (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+        }
+
+
+class MarketplaceWarehouse(db.Model):
+    """Seller/account-owned operational FBS or rFBS warehouse projection.
+
+    Contact details and addresses are intentionally not persisted: price/stock
+    workflows need provider identity and operational flags, not personal data.
+    """
+    __tablename__ = 'marketplace_warehouses'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    external_warehouse_id = db.Column(db.String(100), nullable=False)
+    name = db.Column(db.String(500), nullable=False)
+    status = db.Column(db.String(100))
+    warehouse_type = db.Column(db.String(100))
+    carriage_label_type = db.Column(db.String(100))
+    flags_json = db.Column(db.Text, nullable=False, default='{}')
+    limits_json = db.Column(db.Text, nullable=False, default='{}')
+    is_available = db.Column(db.Boolean, nullable=False, default=True)
+    sync_fingerprint = db.Column(db.String(64), nullable=False)
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    last_synced_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship(
+        'SellerMarketplaceAccount',
+        backref=db.backref(
+            'warehouses',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'external_warehouse_id',
+            name='uq_marketplace_warehouse_account_external',
+        ),
+        db.Index(
+            'idx_marketplace_warehouse_scope',
+            'seller_id',
+            'account_id',
+            'is_available',
+        ),
+    )
+
+    @staticmethod
+    def _json_object(raw_value: Optional[str]) -> dict:
+        try:
+            value = json.loads(raw_value or '{}')
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'account_id': self.account_id,
+            'external_warehouse_id': self.external_warehouse_id,
+            'name': self.name,
+            'status': self.status,
+            'warehouse_type': self.warehouse_type,
+            'carriage_label_type': self.carriage_label_type,
+            'flags': self._json_object(self.flags_json),
+            'limits': self._json_object(self.limits_json),
+            'is_available': bool(self.is_available),
+            'sync_fingerprint': self.sync_fingerprint,
+            'last_seen_at': (
+                self.last_seen_at.isoformat() if self.last_seen_at else None
+            ),
+            'last_synced_at': (
+                self.last_synced_at.isoformat() if self.last_synced_at else None
+            ),
+        }
+
+
+class MarketplaceWarehouseStock(db.Model):
+    """Exact listing-by-warehouse FBS/rFBS stock observation."""
+    __tablename__ = 'marketplace_warehouse_stocks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    warehouse_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_warehouses.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    offer_id = db.Column(db.String(200), nullable=False)
+    external_product_id = db.Column(db.String(100), nullable=False)
+    sku = db.Column(db.String(100), nullable=False)
+    present = db.Column(db.Integer, nullable=False)
+    reserved = db.Column(db.Integer, nullable=False)
+    free_stock = db.Column(db.Integer, nullable=False)
+    is_available = db.Column(db.Boolean, nullable=False, default=True)
+    sync_fingerprint = db.Column(db.String(64), nullable=False)
+    observed_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship(
+        'MarketplaceListing',
+        backref=db.backref(
+            'warehouse_stocks',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    warehouse = db.relationship(
+        'MarketplaceWarehouse',
+        backref=db.backref(
+            'listing_stocks',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'listing_id',
+            'warehouse_id',
+            name='uq_marketplace_stock_listing_warehouse',
+        ),
+        db.CheckConstraint(
+            'present >= 0 AND reserved >= 0 AND free_stock >= 0',
+            name='ck_marketplace_warehouse_stock_nonnegative',
+        ),
+        db.Index(
+            'idx_marketplace_stock_scope',
+            'seller_id',
+            'account_id',
+            'listing_id',
+            'is_available',
+        ),
+    )
+
+    def to_public_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'listing_id': self.listing_id,
+            'warehouse_id': self.warehouse_id,
+            'warehouse_external_id': (
+                self.warehouse.external_warehouse_id
+                if self.warehouse else None
+            ),
+            'warehouse_name': self.warehouse.name if self.warehouse else None,
+            'sku': self.sku,
+            'present': self.present,
+            'reserved': self.reserved,
+            'free_stock': self.free_stock,
+            'is_available': bool(self.is_available),
+            'sync_fingerprint': self.sync_fingerprint,
+            'observed_at': (
+                self.observed_at.isoformat() if self.observed_at else None
+            ),
+        }
+
+
+class MarketplaceCommercialProposal(db.Model):
+    """Human-review boundary for provider-side price and stock mutations."""
+    __tablename__ = 'marketplace_commercial_proposals'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    marketplace_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplaces.id'),
+        nullable=False,
+        index=True,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    warehouse_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_warehouses.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='SET NULL'),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    rollback_of_operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    agent_task_id = db.Column(
+        db.String(36),
+        db.ForeignKey('agent_tasks.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    reviewed_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+
+    proposal_kind = db.Column(db.String(20), nullable=False)
+    source = db.Column(db.String(20), nullable=False, default='user')
+    status = db.Column(db.String(30), nullable=False, default='pending_review')
+    idempotency_key = db.Column(db.String(128), nullable=False)
+    request_fingerprint = db.Column(db.String(64), nullable=False)
+    contract_version = db.Column(db.String(80), nullable=False)
+    baseline_fingerprint = db.Column(db.String(64), nullable=False)
+    proposed_fingerprint = db.Column(db.String(64), nullable=False)
+    baseline_state_json = db.Column(db.Text, nullable=False)
+    proposed_state_json = db.Column(db.Text, nullable=False)
+    guardrails_json = db.Column(db.Text, nullable=False, default='{}')
+    review_note = db.Column(db.String(1000))
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    version = db.Column(db.Integer, nullable=False, default=1)
+    reviewed_at = db.Column(db.DateTime)
+    applied_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    marketplace = db.relationship('Marketplace')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship('MarketplaceListing')
+    warehouse = db.relationship('MarketplaceWarehouse')
+    operation = db.relationship(
+        'MarketplaceOperation',
+        foreign_keys=[operation_id],
+    )
+    rollback_of_operation = db.relationship(
+        'MarketplaceOperation',
+        foreign_keys=[rollback_of_operation_id],
+    )
+    agent_task = db.relationship('AgentTask')
+    created_by = db.relationship('User', foreign_keys=[created_by_user_id])
+    reviewed_by = db.relationship('User', foreign_keys=[reviewed_by_user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            'proposal_kind',
+            'idempotency_key',
+            name='uq_marketplace_commercial_proposal_idempotency',
+        ),
+        db.CheckConstraint(
+            "proposal_kind IN ('price','stock')",
+            name='ck_marketplace_commercial_proposal_kind',
+        ),
+        db.CheckConstraint(
+            "source IN ('user','agent','system','rollback')",
+            name='ck_marketplace_commercial_proposal_source',
+        ),
+        db.CheckConstraint(
+            "status IN ('pending_review','approved','rejected','applying',"
+            "'applied','failed','conflict','uncertain','cancelled')",
+            name='ck_marketplace_commercial_proposal_status',
+        ),
+        db.CheckConstraint(
+            "(proposal_kind = 'price' AND warehouse_id IS NULL) OR "
+            "(proposal_kind = 'stock' AND warehouse_id IS NOT NULL)",
+            name='ck_marketplace_commercial_proposal_scope',
+        ),
+        db.Index(
+            'idx_marketplace_commercial_proposal_scope',
+            'seller_id',
+            'account_id',
+            'status',
+            'created_at',
+        ),
+        db.Index(
+            'uq_marketplace_commercial_proposal_active',
+            'account_id',
+            'listing_id',
+            'proposal_kind',
+            db.text('COALESCE(warehouse_id, 0)'),
+            unique=True,
+            sqlite_where=db.text(
+                "status IN ('pending_review','approved','applying','uncertain')"
+            ),
+        ),
+    )
+    __mapper_args__ = {'version_id_col': version}
+
+    @staticmethod
+    def _json_object(raw_value: Optional[str]) -> dict:
+        try:
+            value = json.loads(raw_value or '{}')
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def to_public_dict(self, *, detail: bool = False) -> dict:
+        data = {
+            'id': self.id,
+            'marketplace_code': (
+                self.marketplace.code if self.marketplace else None
+            ),
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'listing_id': self.listing_id,
+            'warehouse_id': self.warehouse_id,
+            'warehouse_name': self.warehouse.name if self.warehouse else None,
+            'operation_id': self.operation_id,
+            'rollback_of_operation_id': self.rollback_of_operation_id,
+            'agent_task_id': self.agent_task_id,
+            'proposal_kind': self.proposal_kind,
+            'source': self.source,
+            'status': self.status,
+            'request_fingerprint': self.request_fingerprint,
+            'contract_version': self.contract_version,
+            'baseline_fingerprint': self.baseline_fingerprint,
+            'proposed_fingerprint': self.proposed_fingerprint,
+            'created_by_user_id': self.created_by_user_id,
+            'reviewed_by_user_id': self.reviewed_by_user_id,
+            'review_note': self.review_note,
+            'error_code': self.error_code,
+            'error_message': self.error_message,
+            'version': self.version,
+            'reviewed_at': (
+                self.reviewed_at.isoformat() if self.reviewed_at else None
+            ),
+            'applied_at': self.applied_at.isoformat() if self.applied_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data.update({
+                'baseline_state': self._json_object(self.baseline_state_json),
+                'proposed_state': self._json_object(self.proposed_state_json),
+                'guardrails': self._json_object(self.guardrails_json),
+            })
+        return data
 
 
 class MarketplaceCategory(db.Model):
@@ -4531,6 +9187,16 @@ class ContentFactory(db.Model):
 
     product_selection_mode = db.Column(db.String(20), default='manual')
     product_selection_rules_json = db.Column(db.Text, default='{}')  # {category, brand, price_range}
+    # Existing factories keep the full legacy WB Product path.  A factory can
+    # opt into one exact seller-owned marketplace account without overloading
+    # Product IDs with MarketplaceListing IDs.
+    catalog_source = db.Column(db.String(30), nullable=False, default='legacy_wb')
+    marketplace_account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
 
     ai_provider = db.Column(db.String(20), default='openai')  # openai, claude, gigachat, gemini
     ai_model = db.Column(db.String(100))  # Конкретная модель (если пусто — дефолт провайдера)
@@ -4553,6 +9219,10 @@ class ContentFactory(db.Model):
     seller = db.relationship('Seller', backref=db.backref('content_factories', lazy='dynamic'))
     items = db.relationship('ContentItem', backref='factory', lazy='dynamic', cascade='all, delete-orphan')
     plans = db.relationship('ContentPlan', backref='factory', lazy='dynamic', cascade='all, delete-orphan')
+    marketplace_account = db.relationship(
+        'SellerMarketplaceAccount',
+        foreign_keys=[marketplace_account_id],
+    )
 
     def get_content_types(self):
         try:
@@ -4584,6 +9254,8 @@ class ContentFactory(db.Model):
             'style_guidelines': self.style_guidelines,
             'product_selection_mode': self.product_selection_mode,
             'product_selection_rules': self.get_selection_rules(),
+            'catalog_source': self.catalog_source or 'legacy_wb',
+            'marketplace_account_id': self.marketplace_account_id,
             'ai_provider': self.ai_provider,
             'schedule_cron': self.schedule_cron,
             'auto_approve': self.auto_approve,
@@ -4738,6 +9410,7 @@ class ContentItem(db.Model):
     content_type = db.Column(db.String(30), nullable=False)
 
     product_ids_json = db.Column(db.Text, default='[]')  # IDs товаров
+    entity_refs_json = db.Column(db.Text, nullable=False, default='[]')
     title = db.Column(db.String(500))
     body_text = db.Column(db.Text, nullable=False)
     hashtags_json = db.Column(db.Text, default='[]')
@@ -4779,6 +9452,42 @@ class ContentItem(db.Model):
     def set_product_ids(self, ids):
         self.product_ids_json = json.dumps(ids)
 
+    def get_entity_refs(self):
+        try:
+            values = json.loads(self.entity_refs_json or '[]')
+        except Exception:
+            return []
+        if not isinstance(values, list):
+            return []
+        result = []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            if value.get('entity_kind') != 'marketplace_listing':
+                continue
+            listing_id = value.get('id')
+            account_id = value.get('account_id')
+            if (
+                isinstance(listing_id, bool)
+                or not isinstance(listing_id, int)
+                or listing_id <= 0
+                or isinstance(account_id, bool)
+                or not isinstance(account_id, int)
+                or account_id <= 0
+                or value.get('marketplace_code') != 'ozon'
+            ):
+                continue
+            result.append({
+                'entity_kind': 'marketplace_listing',
+                'id': listing_id,
+                'marketplace_code': 'ozon',
+                'account_id': account_id,
+            })
+        return result
+
+    def set_entity_refs(self, refs):
+        self.entity_refs_json = json.dumps(refs, ensure_ascii=False)
+
     def get_hashtags(self):
         try:
             return json.loads(self.hashtags_json or '[]')
@@ -4795,6 +9504,24 @@ class ContentItem(db.Model):
             public_urls = [u for u in urls if isinstance(u, str) and u.startswith(('http', '/'))]
             if public_urls:
                 return public_urls
+        except Exception:
+            pass
+
+        # Фоллбэк для unified listing: только exact seller-owned link к общей
+        # ImportedProduct. Наблюдённый Ozon media snapshot не становится master.
+        try:
+            refs = self.get_entity_refs()
+            if refs:
+                listing = MarketplaceListing.query.filter_by(
+                    id=refs[0]['id'],
+                    seller_id=self.seller_id,
+                    account_id=refs[0]['account_id'],
+                ).first()
+                if listing and listing.imported_product:
+                    from routes.photos import generate_public_photo_urls
+                    local_urls = generate_public_photo_urls(listing.imported_product)
+                    if local_urls:
+                        return local_urls
         except Exception:
             pass
 
@@ -4840,6 +9567,7 @@ class ContentItem(db.Model):
             'platform': self.platform,
             'content_type': self.content_type,
             'product_ids': self.get_product_ids(),
+            'entity_refs': self.get_entity_refs(),
             'title': self.title,
             'body_text': self.body_text,
             'hashtags': self.get_hashtags(),
@@ -5203,12 +9931,19 @@ class AutoPublishSettings(db.Model):
     __tablename__ = 'auto_publish_settings'
 
     id = db.Column(db.Integer, primary_key=True)
-    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, unique=True, index=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id'),
+        nullable=True,
+        index=True,
+    )
 
     # Главный переключатель
     is_enabled = db.Column(db.Boolean, default=False, nullable=False)
 
-    # Целевой маркетплейс (пока только 'wb')
+    # WB использует legacy seller credential и account_id=NULL. Ozon всегда
+    # привязан к точному seller-owned operational account.
     marketplace_code = db.Column(db.String(50), default='wb', nullable=False)
 
     # Расписание
@@ -5252,7 +9987,37 @@ class AutoPublishSettings(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    seller = db.relationship('Seller', backref=db.backref('auto_publish_settings', uselist=False))
+    seller = db.relationship(
+        'Seller',
+        backref=db.backref('auto_publish_settings_rows', lazy='dynamic'),
+    )
+    account = db.relationship(
+        'SellerMarketplaceAccount',
+        backref=db.backref('auto_publish_settings', uselist=False),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'account_id',
+            name='uq_auto_publish_settings_account',
+        ),
+        db.Index(
+            'uq_auto_publish_settings_wb_seller',
+            'seller_id',
+            unique=True,
+            sqlite_where=db.text(
+                "marketplace_code = 'wb' AND account_id IS NULL"
+            ),
+            postgresql_where=db.text(
+                "marketplace_code = 'wb' AND account_id IS NULL"
+            ),
+        ),
+        db.CheckConstraint(
+            "(marketplace_code = 'wb' AND account_id IS NULL) OR "
+            "(marketplace_code = 'ozon' AND account_id IS NOT NULL)",
+            name='ck_auto_publish_settings_scope',
+        ),
+    )
 
     def get_supplier_ids(self):
         if not self.supplier_ids_json:
@@ -5266,6 +10031,8 @@ class AutoPublishSettings(db.Model):
         return {
             'id': self.id,
             'seller_id': self.seller_id,
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
             'is_enabled': self.is_enabled,
             'marketplace_code': self.marketplace_code,
             'check_interval_minutes': self.check_interval_minutes,
@@ -5289,7 +10056,10 @@ class AutoPublishSettings(db.Model):
 
     def __repr__(self):
         state = 'paused' if self.is_paused else ('enabled' if self.is_enabled else 'disabled')
-        return f'<AutoPublishSettings seller={self.seller_id} {state}>'
+        return (
+            f'<AutoPublishSettings seller={self.seller_id} '
+            f'{self.marketplace_code}:{self.account_id or "legacy"} {state}>'
+        )
 
 
 class AutoPublishRun(db.Model):
@@ -5297,15 +10067,37 @@ class AutoPublishRun(db.Model):
     __tablename__ = 'auto_publish_runs'
     __table_args__ = (
         db.Index('idx_apr_seller_status', 'seller_id', 'status'),
+        db.Index('idx_apr_settings_status', 'settings_id', 'status'),
+        db.Index('idx_apr_account_status', 'account_id', 'status'),
         db.Index('idx_apr_created', 'created_at'),
+        db.CheckConstraint(
+            "(marketplace_code = 'wb' AND account_id IS NULL) OR "
+            "(marketplace_code = 'ozon' AND account_id IS NOT NULL)",
+            name='ck_auto_publish_run_scope',
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    settings_id = db.Column(
+        db.Integer,
+        db.ForeignKey('auto_publish_settings.id'),
+        nullable=False,
+        index=True,
+    )
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    marketplace_code = db.Column(db.String(50), nullable=False, default='wb')
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id'),
+        nullable=True,
+        index=True,
+    )
     run_uid = db.Column(db.String(36), unique=True, nullable=False, index=True)
 
     status = db.Column(db.String(20), nullable=False, default='pending')
-    # pending → running → completed | failed | cancelled | paused
+    # WB: pending → running → completed|failed|cancelled|paused.
+    # Ozon async: running → waiting|cancelling → completed|failed|cancelled|
+    # deferred|attention|paused.
     triggered_by = db.Column(db.String(20), default='scheduler')  # scheduler | manual
 
     started_at = db.Column(db.DateTime, nullable=True)
@@ -5318,18 +10110,34 @@ class AutoPublishRun(db.Model):
     total_published = db.Column(db.Integer, default=0)
     total_failed = db.Column(db.Integer, default=0)
     total_skipped = db.Column(db.Integer, default=0)
+    total_deferred = db.Column(db.Integer, default=0)
 
     error_summary = db.Column(db.Text, nullable=True)  # JSON
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     seller = db.relationship('Seller', backref=db.backref('auto_publish_runs', lazy='dynamic'))
+    settings = db.relationship(
+        'AutoPublishSettings',
+        backref=db.backref('runs', lazy='dynamic'),
+    )
+    account = db.relationship('SellerMarketplaceAccount')
     items = db.relationship('AutoPublishItem', backref='run', lazy='dynamic', cascade='all, delete-orphan')
 
     def to_dict(self, include_items=False):
+        try:
+            error_summary = (
+                json.loads(self.error_summary) if self.error_summary else None
+            )
+        except (json.JSONDecodeError, TypeError):
+            error_summary = {'legacy_error': 'Некорректный формат error_summary'}
         d = {
             'id': self.id,
+            'settings_id': self.settings_id,
             'seller_id': self.seller_id,
+            'marketplace_code': self.marketplace_code,
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
             'run_uid': self.run_uid,
             'status': self.status,
             'triggered_by': self.triggered_by,
@@ -5341,7 +10149,8 @@ class AutoPublishRun(db.Model):
             'total_published': self.total_published,
             'total_failed': self.total_failed,
             'total_skipped': self.total_skipped,
-            'error_summary': json.loads(self.error_summary) if self.error_summary else None,
+            'total_deferred': self.total_deferred,
+            'error_summary': error_summary,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
         if include_items:
@@ -5349,7 +10158,10 @@ class AutoPublishRun(db.Model):
         return d
 
     def __repr__(self):
-        return f'<AutoPublishRun #{self.id} seller={self.seller_id} {self.status}>'
+        return (
+            f'<AutoPublishRun #{self.id} seller={self.seller_id} '
+            f'{self.marketplace_code}:{self.account_id or "legacy"} {self.status}>'
+        )
 
 
 class AutoPublishItem(db.Model):
@@ -5358,21 +10170,68 @@ class AutoPublishItem(db.Model):
     __table_args__ = (
         db.Index('idx_api_run_status', 'run_id', 'status'),
         db.Index('idx_api_seller_status', 'seller_id', 'status'),
+        db.Index('idx_api_account_status', 'account_id', 'status'),
         db.Index('idx_api_retry', 'status', 'next_retry_at'),
+        db.Index(
+            'uq_api_operation',
+            'operation_id',
+            unique=True,
+            sqlite_where=db.text('operation_id IS NOT NULL'),
+        ),
+        db.Index(
+            'uq_api_account_idempotency',
+            'account_id',
+            'idempotency_key',
+            unique=True,
+            sqlite_where=db.text('idempotency_key IS NOT NULL'),
+        ),
+        db.CheckConstraint(
+            "(marketplace_code = 'wb' AND account_id IS NULL) OR "
+            "(marketplace_code = 'ozon' AND account_id IS NOT NULL)",
+            name='ck_auto_publish_item_scope',
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)
     run_id = db.Column(db.Integer, db.ForeignKey('auto_publish_runs.id'), nullable=False, index=True)
     imported_product_id = db.Column(db.Integer, db.ForeignKey('imported_products.id'), nullable=False, index=True)
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False, index=True)
+    marketplace_code = db.Column(db.String(50), nullable=False, default='wb')
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id'),
+        nullable=True,
+        index=True,
+    )
+    draft_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_product_drafts.id'),
+        nullable=True,
+        index=True,
+    )
+    operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id'),
+        nullable=True,
+        index=True,
+    )
+    draft_version = db.Column(db.Integer, nullable=True)
+    idempotency_key = db.Column(db.String(128), nullable=True)
 
     # Текущий шаг pipeline
     step = db.Column(db.String(30), default='queued')
-    # queued → validating → uploading_card → card_created
-    # → uploading_photos → photos_done → setting_price
-    # → verifying → completed | failed | skipped
+    # WB сохраняет legacy step pipeline. Ozon использует validating →
+    # ready_to_submit → submitting → awaiting_ozon|reconciling_uncertain →
+    # published|failed|needs_review|quota_deferred|cancelled_before_write.
 
-    status = db.Column(db.String(20), default='pending')  # pending | processing | completed | failed | skipped
+    status = db.Column(db.String(20), default='pending')
+    # pending | processing | completed | failed | skipped | deferred | uncertain
 
     # Результат
     wb_nm_id = db.Column(db.Integer, nullable=True)
@@ -5396,6 +10255,10 @@ class AutoPublishItem(db.Model):
 
     imported_product = db.relationship('ImportedProduct', backref=db.backref('auto_publish_items', lazy='dynamic'))
     product = db.relationship('Product', backref=db.backref('auto_publish_items', lazy='dynamic'))
+    account = db.relationship('SellerMarketplaceAccount')
+    draft = db.relationship('MarketplaceProductDraft')
+    operation = db.relationship('MarketplaceOperation')
+    listing = db.relationship('MarketplaceListing')
 
     def add_error(self, step, error_msg, retryable=False):
         try:
@@ -5423,6 +10286,24 @@ class AutoPublishItem(db.Model):
             'run_id': self.run_id,
             'imported_product_id': self.imported_product_id,
             'product_title': product_title,
+            'marketplace_code': self.marketplace_code,
+            'account_id': self.account_id,
+            'account_label': self.account.label if self.account else None,
+            'draft_id': self.draft_id,
+            'draft_status': self.draft.status if self.draft else None,
+            'draft_validation_status': (
+                self.draft.validation_status if self.draft else None
+            ),
+            'draft_version': self.draft_version,
+            'operation_id': self.operation_id,
+            'operation_status': self.operation.status if self.operation else None,
+            'operation_kind': (
+                self.operation.operation_kind if self.operation else None
+            ),
+            'external_task_id': (
+                self.operation.external_task_id if self.operation else None
+            ),
+            'listing_id': self.listing_id,
             'step': self.step,
             'status': self.status,
             'wb_nm_id': self.wb_nm_id,

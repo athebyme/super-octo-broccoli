@@ -132,8 +132,24 @@ python migrations/migrate_add_unlimited_batch.py || echo "⚠️ Unlimited batch
 python migrations/migrate_add_blocked_cards.py || echo "⚠️ Blocked cards migration skipped (already applied or error)"
 python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db || echo "⚠️ Price stock sync migration skipped (already applied or error)"
 python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace tables migration skipped (already applied or error)"
+python migrations/migrate_add_marketplace_accounts.py /app/data/seller_platform.db
+python migrations/migrate_add_ozon_references.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_reference_freshness.py /app/data/seller_platform.db
 python migrations/migrate_add_wb_dictionary_provenance.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_listings.py \
+  /app/data/seller_platform.db --backfill-limit 200
+python migrations/migrate_add_marketplace_product_links.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_canonical_content.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_rollout.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_drafts.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_operations.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_commercial.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_product_updates.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_auto_publish.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_quality_analytics.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_fulfillment.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_finance.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_inbox.py /app/data/seller_platform.db
 python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
 python migrations/add_ai_job_heartbeat.py || echo "⚠️ AI job heartbeat migration skipped (already applied or error)"
 python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"
@@ -146,6 +162,8 @@ python migrations/migrate_add_imported_wb_nm_id.py /app/data/seller_platform.db 
 python migrations/migrate_add_image_generation_lab.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_reference_watermark.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_angle_synthesis.py /app/data/seller_platform.db
+python migrations/migrate_add_image_lab_marketplace_target.py /app/data/seller_platform.db
+python migrations/migrate_add_content_factory_marketplace_scope.py /app/data/seller_platform.db
 python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db || echo "⚠️ Sexopt supplier migration skipped (already applied or error)"
 DATABASE_PATH=/app/data/seller_platform.db python migrations/migrate_add_competitor_monitoring.py || echo "⚠️ Competitor monitoring migration skipped (already applied or error)"
 unset SKIP_SCHEDULER

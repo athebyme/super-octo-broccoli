@@ -12,8 +12,25 @@
                 <a href="{{ url_for('seller_my_products') }}" class="text-gray-400 hover:text-white text-sm">&larr; Мои товары</a>
             </div>
             <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Авто-публикация</h1>
-            <p class="text-gray-400 text-sm mt-1">Автоматическая отправка валидированных товаров на маркетплейс</p>
+            <p class="text-gray-400 text-sm mt-1">Независимые очереди, лимиты и circuit breaker для каждого marketplace scope</p>
         </div>
+    </div>
+
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
+        <p class="text-xs font-medium uppercase tracking-wide text-gray-400 mb-3">Куда публикуем</p>
+        <div class="flex flex-wrap gap-2">
+            {% for target in targets %}
+            {% set selected = target.marketplace_code == selected_marketplace and target.account_id == selected_account_id %}
+            <a href="{{ url_for('auto_publish_settings', marketplace=target.marketplace_code, account_id=target.account_id) }}"
+               class="px-3 py-2 rounded-lg border text-sm transition {{ 'border-[var(--accent)] bg-[var(--accent-light)] text-[var(--accent)]' if selected else 'border-gray-200 text-gray-600 hover:bg-gray-50' }}">
+                {{ target.label }}
+                <span class="ml-1 text-xs opacity-70">{{ target.connection_status }}</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% if selected_marketplace == 'ozon' and not ozon_auto_publish_enabled %}
+        <p class="mt-3 text-xs text-amber-700">Настройки можно просматривать, но Ozon auto-publish выключен отдельным rollout-флагом. Уже начатые операции продолжат только сверку.</p>
+        {% endif %}
     </div>
 
     <!-- Status banner -->
@@ -92,13 +109,17 @@
         <div x-show="settings.is_enabled" x-collapse>
             <hr class="border-gray-100 mb-6">
 
-            <!-- Marketplace -->
+            <!-- Fixed marketplace/account scope -->
             <div class="mb-6">
-                <label class="block text-sm font-medium text-gray-700 mb-1">Маркетплейс</label>
-                <select x-model="form.marketplace_code" class="w-full max-w-xs px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-[var(--accent)]/20 focus:border-[var(--accent)] outline-none">
-                    <option value="wb">Wildberries</option>
-                </select>
-                <p class="text-xs text-gray-400 mt-1">Другие маркетплейсы будут добавлены позже</p>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Активный scope</label>
+                <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                    {% if selected_marketplace == 'ozon' %}
+                    Ozon · {{ settings.account.label }} · отдельная очередь и квота
+                    {% else %}
+                    Wildberries · legacy seller API · отдельная очередь
+                    {% endif %}
+                </div>
+                <p class="text-xs text-gray-400 mt-1">Маркетплейс и кабинет меняются только selector-ом выше, а не полем API.</p>
             </div>
 
             <!-- Schedule -->
@@ -131,6 +152,12 @@
             <!-- Validation mode -->
             <div class="mb-6">
                 <label class="block text-sm font-medium text-gray-700 mb-2">Строгость валидации</label>
+                {% if selected_marketplace == 'ozon' %}
+                <div class="rounded-lg border border-[var(--accent)] bg-[var(--accent-light)] p-3">
+                    <p class="text-sm font-medium text-gray-800">Строгая · обязательна для Ozon</p>
+                    <p class="mt-1 text-xs text-gray-500">Категория, обязательные характеристики, identity, размеры, медиа и commercial contract должны пройти текущую schema validation. Смягчить блокирующие ошибки нельзя.</p>
+                </div>
+                {% else %}
                 <div class="space-y-2">
                     <label class="flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition"
                         :class="form.validation_mode === 'strict' ? 'border-[var(--accent)] bg-[var(--accent-light)]' : 'border-gray-200 hover:bg-gray-50'">
@@ -149,6 +176,7 @@
                         </div>
                     </label>
                 </div>
+                {% endif %}
             </div>
 
             <!-- Retry settings -->
@@ -266,16 +294,20 @@
                                         'bg-green-100 text-green-700': run.status === 'completed' && run.total_failed === 0,
                                         'bg-yellow-100 text-yellow-700': run.status === 'completed' && run.total_failed > 0,
                                         'bg-red-100 text-red-700': run.status === 'failed',
-                                        'bg-blue-100 text-blue-700': run.status === 'running',
+                                        'bg-blue-100 text-blue-700': run.status === 'running' || run.status === 'waiting' || run.status === 'cancelling',
                                         'bg-gray-100 text-gray-700': run.status === 'cancelled',
-                                        'bg-amber-100 text-amber-700': run.status === 'paused',
+                                        'bg-amber-100 text-amber-700': run.status === 'paused' || run.status === 'deferred' || run.status === 'attention',
                                     }"
                                     x-text="{
                                         completed: 'Завершён',
                                         failed: 'Ошибка',
                                         running: 'Выполняется',
+                                        waiting: 'Ждём Ozon',
+                                        cancelling: 'Отменяем безопасно',
                                         cancelled: 'Отменён',
                                         paused: 'Пауза',
+                                        deferred: 'Отложен',
+                                        attention: 'Нужна сверка',
                                         pending: 'Ожидание',
                                     }[run.status] || run.status">
                                 </span>
@@ -289,6 +321,7 @@
                                     <span class="text-red-500" x-text="run.total_failed"></span>
                                     <span class="text-gray-400">/</span>
                                     <span class="text-gray-500" x-text="run.total_candidates"></span>
+                                    <template x-if="run.total_deferred"><span class="ml-1 text-amber-600" x-text="'· отложено ' + run.total_deferred"></span></template>
                                 </div>
                                 <span class="text-xs text-gray-400" x-text="run.duration_seconds ? Math.round(run.duration_seconds) + 'с' : ''"></span>
                                 <svg class="w-4 h-4 text-gray-400 transition-transform" :class="run._expanded && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
@@ -298,6 +331,15 @@
                         <!-- Run items (expandable) -->
                         <div x-show="run._expanded" x-collapse>
                             <div class="border-t border-gray-100 p-4 bg-gray-50">
+                                <template x-if="['running','waiting'].includes(run.status)">
+                                    <div class="mb-3 flex flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                                        <p class="text-xs text-amber-800">Отмена остановит только новые writes. Уже созданная Ozon operation останется на безопасной read-only сверке.</p>
+                                        <button type="button" @click="cancelRun(run)" class="px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs text-amber-800 hover:bg-amber-100">Остановить запуск</button>
+                                    </div>
+                                </template>
+                                <template x-if="run.status === 'cancelling'">
+                                    <p class="mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">Новые writes остановлены. Ждём фактический результат операций, которые уже пересекли durable submit boundary.</p>
+                                </template>
                                 <template x-if="!run._items">
                                     <div class="text-center py-4">
                                         <button @click="loadRunItems(run)" class="text-sm text-[var(--accent)] hover:underline">Загрузить детали</button>
@@ -317,20 +359,30 @@
                                                             :class="{
                                                                 'bg-green-100 text-green-700': item.status === 'completed',
                                                                 'bg-red-100 text-red-700': item.status === 'failed',
-                                                                'bg-gray-100 text-gray-600': item.status === 'skipped',
-                                                                'bg-blue-100 text-blue-700': item.status === 'processing',
+                                                            'bg-gray-100 text-gray-600': item.status === 'skipped',
+                                                            'bg-blue-100 text-blue-700': item.status === 'processing',
+                                                            'bg-amber-100 text-amber-700': item.status === 'deferred' || item.status === 'uncertain',
                                                             }"
                                                             x-text="item.step">
                                                         </span>
                                                         <template x-if="item.wb_nm_id">
                                                             <span class="text-xs text-gray-400">nmID: <span x-text="item.wb_nm_id"></span></span>
                                                         </template>
+                                                        <template x-if="item.draft_id">
+                                                            <a class="text-xs text-[var(--accent)] hover:underline" :href="`/marketplaces/drafts/${item.draft_id}`">Черновик</a>
+                                                        </template>
+                                                        <template x-if="item.operation_id">
+                                                            <a class="text-xs text-[var(--accent)] hover:underline" :href="`/marketplaces/operations/${item.operation_id}`" x-text="'Операция · ' + (item.operation_status || '—')"></a>
+                                                        </template>
+                                                        <template x-if="item.external_task_id">
+                                                            <span class="text-xs text-gray-400" x-text="'task: ' + item.external_task_id"></span>
+                                                        </template>
                                                         <template x-if="item.error_message">
                                                             <span class="text-xs text-red-500 truncate max-w-xs" x-text="item.error_message"></span>
                                                         </template>
                                                     </div>
                                                 </div>
-                                                <template x-if="item.status === 'failed' || item.status === 'skipped'">
+                                                <template x-if="['failed','skipped','deferred','uncertain'].includes(item.status)">
                                                     <button @click="retryItem(item.id)" class="ml-3 text-xs px-3 py-1 border border-gray-200 rounded-lg hover:bg-gray-50 transition flex-shrink-0">
                                                         Retry
                                                     </button>
@@ -353,12 +405,12 @@
 function autoPublishPage() {
     return {
         settings: {{ settings.to_dict() | tojson }},
+        apiScope: {{ ('?marketplace=' ~ selected_marketplace ~ ('&account_id=' ~ selected_account_id if selected_account_id else '')) | tojson }},
         form: {
-            marketplace_code: '{{ settings.marketplace_code or "wb" }}',
             check_interval_minutes: {{ settings.check_interval_minutes or 30 }},
             batch_size: {{ settings.batch_size or 10 }},
             max_daily_publishes: {{ settings.max_daily_publishes or 100 }},
-            validation_mode: '{{ settings.validation_mode or "strict" }}',
+            validation_mode: '{{ "strict" if selected_marketplace == "ozon" else (settings.validation_mode or "strict") }}',
             max_retries_per_product: {{ settings.max_retries_per_product or 3 }},
             retry_delay_minutes: {{ settings.retry_delay_minutes or 60 }},
             failure_threshold: {{ settings.failure_threshold or 5 }},
@@ -383,7 +435,7 @@ function autoPublishPage() {
         },
 
         async toggle() {
-            const res = await fetch('/api/auto-publish/toggle', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
+            const res = await fetch('/api/auto-publish/toggle' + this.apiScope, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
             const data = await res.json();
             if (data.ok) {
                 this.settings.is_enabled = data.is_enabled;
@@ -400,7 +452,7 @@ function autoPublishPage() {
         async save() {
             this.saving = true;
             try {
-                const res = await fetch('/api/auto-publish/settings', {
+                const res = await fetch('/api/auto-publish/settings' + this.apiScope, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''},
                     body: JSON.stringify(this.form),
@@ -422,7 +474,7 @@ function autoPublishPage() {
         async triggerRun() {
             this.triggering = true;
             try {
-                const res = await fetch('/api/auto-publish/trigger', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
+                const res = await fetch('/api/auto-publish/trigger' + this.apiScope, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
                 const data = await res.json();
                 if (data.ok) {
                     this.$store?.toasts?.success('Запуск начат');
@@ -438,7 +490,7 @@ function autoPublishPage() {
         },
 
         async resume() {
-            const res = await fetch('/api/auto-publish/resume', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
+            const res = await fetch('/api/auto-publish/resume' + this.apiScope, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
             const data = await res.json();
             if (data.ok) {
                 this.settings.is_paused = false;
@@ -449,7 +501,7 @@ function autoPublishPage() {
 
         async loadRuns() {
             try {
-                const res = await fetch('/api/auto-publish/runs');
+                const res = await fetch('/api/auto-publish/runs' + this.apiScope);
                 const data = await res.json();
                 this.runs = data.runs.map(r => ({...r, _expanded: false, _items: null}));
             } catch (e) {}
@@ -457,7 +509,7 @@ function autoPublishPage() {
 
         async loadRunItems(run) {
             try {
-                const res = await fetch(`/api/auto-publish/runs/${run.id}/items`);
+                const res = await fetch(`/api/auto-publish/runs/${run.id}/items${this.apiScope}`);
                 const data = await res.json();
                 run._items = data.items;
             } catch (e) {
@@ -466,12 +518,23 @@ function autoPublishPage() {
         },
 
         async retryItem(itemId) {
-            const res = await fetch(`/api/auto-publish/items/${itemId}/retry`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
+            const res = await fetch(`/api/auto-publish/items/${itemId}/retry${this.apiScope}`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
             const data = await res.json();
             if (data.ok) {
                 this.$store?.toasts?.success(data.message || 'Retry запланирован');
             } else {
                 this.$store?.toasts?.error(data.error || 'Ошибка');
+            }
+        },
+
+        async cancelRun(run) {
+            const res = await fetch(`/api/auto-publish/runs/${run.id}/cancel${this.apiScope}`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name=csrf-token]')?.content || ''}});
+            const data = await res.json();
+            if (data.ok) {
+                this.$store?.toasts?.success('Новые публикации остановлены');
+                await this.loadRuns();
+            } else {
+                this.$store?.toasts?.error(data.error || 'Не удалось остановить запуск');
             }
         },
     }

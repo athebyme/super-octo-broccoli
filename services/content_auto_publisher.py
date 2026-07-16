@@ -64,8 +64,19 @@ def auto_generate_content(flask_app):
 
 def _auto_generate_for_factory(factory, now, db):
     """Генерирует один пост для фабрики, если прошло достаточно времени."""
+    from flask import current_app
     from models import ContentItem
     from services.content_factory_service import ContentFactoryService
+
+    if (
+        (factory.catalog_source or 'legacy_wb') == 'marketplace_listing'
+        and not current_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+    ):
+        logger.info(
+            "Auto-generate: Ozon source disabled for factory %s",
+            factory.id,
+        )
+        return
 
     interval = factory.generate_interval_minutes or 120
 
@@ -96,7 +107,10 @@ def _auto_generate_for_factory(factory, now, db):
         ContentItem.factory_id == factory.id,
         ContentItem.status.in_(['draft', 'approved', 'published']),
     ).order_by(ContentItem.created_at.desc()).first()
-    last_product_ids = set(last_item.get_product_ids()) if last_item else set()
+    last_product_ids = (
+        set(service.selection_ids_for_item(factory, last_item))
+        if last_item else set()
+    )
 
     # select_products теперь сам считает use_count и ротирует — берём топ-10 кандидатов
     products = service.select_products(factory, limit=10, exclude_product_ids=last_product_ids)
@@ -141,8 +155,9 @@ def _auto_generate_for_factory(factory, now, db):
     # Генерируем и сохраняем
     item, error = service.generate_and_save(
         factory=factory,
-        product_ids=[product_id],
+        product_ids=[] if product.get('entity_ref') else [product_id],
         content_type=content_type,
+        entity_refs=[product['entity_ref']] if product.get('entity_ref') else None,
     )
 
     if error:

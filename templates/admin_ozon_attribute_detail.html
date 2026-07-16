@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block title %}{{ attribute.name }} — словарь Ozon{% endblock %}
+
+{% block content %}
+<style>
+    .ozon-value-page { max-width:1120px; margin:0 auto; }
+    .ozon-value-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; }
+    .ozon-value-title { margin:0; color:var(--text); font-family:var(--font-display); font-size:29px; font-weight:400; }
+    .ozon-value-meta { margin-top:6px; color:var(--text-secondary); font-size:12px; line-height:1.55; }
+    .ozon-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(300px,380px); gap:18px; align-items:start; }
+    .ozon-panel { padding:16px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; }
+    .ozon-editor { width:100%; padding:9px 10px; border:1px solid var(--border); border-radius:6px; color:var(--text); background:var(--bg-card); font:12px/1.45 ui-monospace,monospace; resize:vertical; }
+    .ozon-editor:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--focus-ring); }
+    .ozon-search { display:flex; gap:8px; margin-bottom:12px; }
+    .ozon-search input { flex:1; min-width:0; padding:9px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text); }
+    .ozon-page-nav { display:flex; justify-content:center; align-items:center; gap:10px; margin-top:14px; color:var(--text-secondary); font-size:12px; }
+    @media (max-width:850px) { .ozon-grid { grid-template-columns:1fr; } .ozon-value-head { flex-direction:column; } }
+</style>
+
+<div class="ozon-value-page" x-data="ozonValueRestriction()">
+    <nav class="sh-breadcrumb" aria-label="Навигационная цепочка">
+        <a href="{{ url_for('marketplaces.index') }}">Маркетплейсы</a><span> / </span>
+        <a href="{{ url_for('marketplaces.ozon_categories', marketplace_id=attribute.marketplace_id) }}">Ozon taxonomy</a><span> / </span>
+        <a href="{{ url_for('marketplaces.ozon_type_detail', product_type_id=attribute.product_type_id) }}">{{ attribute.product_type.name }}</a><span> / </span>
+        <span>{{ attribute.name }}</span>
+    </nav>
+
+    <div class="ozon-value-head">
+        <div>
+            <h1 class="ozon-value-title">{{ attribute.name }}</h1>
+            <p class="ozon-value-meta">
+                attribute_id={{ attribute.external_attribute_id }} · dictionary_id={{ attribute.dictionary_id or 'нет' }} ·
+                {{ attribute.values_count or 0 }} значений · dictionary v{{ attribute.values_version or 0 }} ·
+                {{ 'fresh' if dictionary_fresh else 'stale/absent' }}
+            </p>
+        </div>
+        {% if attribute.dictionary_id %}
+        <form method="POST" action="{{ url_for('marketplaces.sync_ozon_attribute_values', attribute_id=attribute.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="sh-btn sh-btn--secondary sh-btn--md" type="submit">Обновить словарь</button>
+        </form>
+        {% endif %}
+    </div>
+
+    {% if not dictionary_fresh and attribute.dictionary_id %}<div class="sh-alert sh-alert--warning">Официальный словарь не fresh. Новое ручное ограничение нельзя сохранить до полной синхронизации.</div>{% endif %}
+    {% if attribute.values_sync_error %}<div class="sh-alert sh-alert--error">{{ attribute.values_sync_error }}</div>{% endif %}
+    {% if attribute.values_sync_checkpoint %}<div class="sh-alert sh-alert--warning">Последний полный sweep не завершён. Диагностический checkpoint: {{ attribute.values_sync_checkpoint }}</div>{% endif %}
+    {% if invalid_restriction_ids %}<div class="sh-alert sh-alert--error">Текущее ограничение содержит недоступные IDs: {{ invalid_restriction_ids|join(', ') }}. Публикация должна быть заблокирована до исправления.</div>{% endif %}
+
+    <div class="ozon-grid">
+        <section>
+            <form method="GET" class="ozon-search" role="search">
+                <input name="search" value="{{ search }}" maxlength="200" placeholder="Поиск по значению или ID">
+                <button class="sh-btn sh-btn--accent sh-btn--md" type="submit">Найти</button>
+                {% if search %}<a class="sh-btn sh-btn--ghost sh-btn--md" href="{{ url_for('marketplaces.ozon_attribute_detail', attribute_id=attribute.id) }}">Сбросить</a>{% endif %}
+            </form>
+            <div class="sh-table-wrap">
+                <table class="sh-table">
+                    <thead><tr><th style="width:150px">Value ID</th><th>Значение</th><th style="width:100px">Разрешено</th></tr></thead>
+                    <tbody>
+                        {% for item in values %}
+                        <tr>
+                            <td style="font-family:ui-monospace,monospace;font-size:11px">{{ item.external_value_id }}</td>
+                            <td>{{ item.value }}{% if item.info %}<div style="color:var(--text-muted);font-size:11px;margin-top:3px">{{ item.info }}</div>{% endif %}</td>
+                            <td><span class="sh-badge sh-badge--sm" :class="restricted.has({{ item.external_value_id|tojson }}) ? 'sh-badge--green' : 'sh-badge--gray'" x-text="restricted.has({{ item.external_value_id|tojson }}) ? 'Да' : (restricted.size ? 'Нет' : 'Все')"></span></td>
+                        </tr>
+                        {% else %}<tr><td colspan="3" style="padding:35px;text-align:center;color:var(--text-muted)">Нет значений.</td></tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% set pages = (values_total + per_page - 1) // per_page %}
+            {% if pages > 1 %}<nav class="ozon-page-nav">
+                {% if page > 1 %}<a class="sh-btn sh-btn--ghost sh-btn--sm" href="{{ url_for('marketplaces.ozon_attribute_detail', attribute_id=attribute.id, search=search, page=page-1) }}">← Назад</a>{% endif %}
+                <span>{{ page }} / {{ pages }}</span>
+                {% if page < pages %}<a class="sh-btn sh-btn--ghost sh-btn--sm" href="{{ url_for('marketplaces.ozon_attribute_detail', attribute_id=attribute.id, search=search, page=page+1) }}">Дальше →</a>{% endif %}
+            </nav>{% endif %}
+        </section>
+
+        <aside class="ozon-panel">
+            <h2 style="margin:0 0 7px;color:var(--text);font-size:15px">Platform allowlist</h2>
+            <p style="margin:0 0 10px;color:var(--text-secondary);font-size:11px;line-height:1.5">
+                Необязательное дополнительное ограничение поверх официального словаря. По одному Ozon value ID на строке. Пустой список разрешает весь fresh словарь.
+            </p>
+            <textarea class="ozon-editor" rows="12" x-model="restrictionText" aria-label="Разрешённые value IDs"></textarea>
+            <button type="button" class="sh-btn sh-btn--accent sh-btn--md" style="width:100%;justify-content:center;margin-top:9px" @click="save" :disabled="saving">
+                <span x-text="saving ? 'Сохранение…' : 'Сохранить ограничение'"></span>
+            </button>
+            <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" style="width:100%;justify-content:center;margin-top:7px" @click="clearRestriction" :disabled="saving || !restrictionText.trim()">Разрешить весь словарь</button>
+        </aside>
+    </div>
+</div>
+
+<script>
+function ozonValueRestriction() {
+    const initial = {{ restriction_ids|tojson }};
+    return {
+        restrictionText: initial.join('\n'), restricted: new Set(initial), saving:false,
+        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content || ''; },
+        toast(type,message) { Alpine.store('toasts')[type](message); },
+        parse() { return String(this.restrictionText || '').split(/\r?\n/).map(v => v.trim()).filter(Boolean); },
+        async save() {
+            this.saving = true;
+            try {
+                const response = await fetch(`/admin/marketplaces/ozon/attributes/{{ attribute.id }}/update`, {
+                    method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':this.csrf()},
+                    body:JSON.stringify({restriction_value_ids:this.parse()}),
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось сохранить ограничение');
+                this.restrictionText = data.restriction_value_ids.join('\n');
+                this.restricted = new Set(data.restriction_value_ids);
+                this.toast('success','Ограничение словаря сохранено');
+            } catch (error) { this.toast('error',error.message); }
+            finally { this.saving = false; }
+        },
+        clearRestriction() { this.restrictionText = ''; this.save(); },
+    };
+}
+</script>
+{% endblock %}

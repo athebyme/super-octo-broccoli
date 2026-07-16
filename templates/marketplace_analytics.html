@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}Аналитика Ozon — Seller Hub{% endblock %}
+
+{% block content %}
+<div x-data="ozonAnalyticsPage()" x-init="init()">
+  <div class="sh-page-header">
+    <div class="sh-page-header-content">
+      <div>
+        <h1 class="sh-page-title">Аналитика Ozon</h1>
+        <p class="sh-page-subtitle">Read-only снимок выбранного кабинета с явными определениями метрик</p>
+      </div>
+      <div class="sh-page-actions" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="refreshData()" :disabled="refreshing">
+          <span x-text="refreshing ? 'Синхронизация…' : 'Обновить из Ozon'"></span>
+        </button>
+        <div style="display:flex;background:rgba(255,255,255,.12);padding:3px;border-radius:7px">
+          <button @click="changePeriod('7d')" class="px-3 py-1.5 rounded text-sm" :class="period==='7d'?'bg-white text-gray-900 shadow':'text-white'">7 дней</button>
+          <button @click="changePeriod('30d')" class="px-3 py-1.5 rounded text-sm" :class="period==='30d'?'bg-white text-gray-900 shadow':'text-white'">30 дней</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:1280px;margin:0 auto;padding:0 24px 40px">
+    <div class="sh-card" style="padding:16px;margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <a href="{{ url_for('analytics_page') }}" class="sh-btn sh-btn--secondary sh-btn--sm">Аналитика WB</a>
+        <span class="sh-btn sh-btn--primary sh-btn--sm" style="pointer-events:none">Аналитика Ozon</span>
+        <a href="{{ url_for('marketplace_quality_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Качество Ozon</a>
+        <a href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы</a>
+        <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:14px">Кабинет
+          <select class="sh-input" style="min-width:220px" @change="switchAccount($event.target.value)">
+            {% for account in ozon_accounts %}
+            <option value="{{ account.id }}" {% if account.id == selected_account.id %}selected{% endif %}>{{ account.label }} · {{ account.external_account_id }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div style="margin-top:12px;padding:10px 12px;border-radius:8px;background:#eff6ff;color:#1d4ed8;font-size:13px">
+        `views`, `orders` и конверсии здесь определены контрактом Ozon `/v1/analytics/data`. Они не объединяются с WB-воронкой: comparison scope — только этот Ozon account.
+      </div>
+    </div>
+
+    <template x-if="error"><div style="padding:14px 16px;margin-bottom:20px;border:1px solid #fecaca;background:#fef2f2;border-radius:10px;color:#b91c1c" x-text="error"></div></template>
+    <template x-if="data.status === 'stale'"><div style="padding:12px 14px;margin-bottom:20px;border:1px solid #fde68a;background:#fffbeb;border-radius:10px;color:#92400e">Показан последний завершённый снимок. Обновите данные, чтобы получить текущий период.</div></template>
+    <template x-if="data.status === 'no_data' || data.status === 'syncing'">
+      <div class="sh-card" style="padding:40px;text-align:center;margin-bottom:24px">
+        <div style="font-size:18px;font-weight:700" x-text="data.status === 'syncing' ? 'Снимок собирается' : 'Снимка аналитики ещё нет'"></div>
+        <div style="color:var(--text-muted);margin:8px 0 18px">Синхронизация читает только Ozon analytics API и сохраняет результат после полного прохода.</div>
+        <button class="sh-btn sh-btn--primary" @click="refreshData()" :disabled="refreshing" x-text="refreshing?'Синхронизация…':'Получить данные'"></button>
+      </div>
+    </template>
+
+    <div class="sh-stat-grid sh-stat-grid--4" style="margin-bottom:24px">
+      <div class="sh-stat-card"><div class="sh-stat-label">Заказы, ₽</div><div class="sh-stat-value" x-text="money(kpi.revenue)"></div></div>
+      <div class="sh-stat-card"><div class="sh-stat-label">Заказано, шт.</div><div class="sh-stat-value" x-text="number(kpi.orders)"></div></div>
+      <div class="sh-stat-card"><div class="sh-stat-label">Средний чек</div><div class="sh-stat-value" x-text="money(kpi.avgCheck)"></div></div>
+      <div class="sh-stat-card"><div class="sh-stat-label">Просмотры Ozon</div><div class="sh-stat-value" x-text="number(kpi.views)"></div></div>
+    </div>
+    <div class="sh-stat-grid sh-stat-grid--4" style="margin-bottom:24px">
+      <div class="sh-stat-card"><div class="sh-stat-label">В корзину</div><div class="sh-stat-value" x-text="number(kpi.cartAdditions)"></div><div class="sh-stat-footnote" x-text="number(kpi.cartConversionPercent,1)+'% конверсия'"></div></div>
+      <div class="sh-stat-card"><div class="sh-stat-label">Доставлено</div><div class="sh-stat-value" x-text="number(kpi.delivered)"></div></div>
+      <div class="sh-stat-card"><div class="sh-stat-label">Отменено</div><div class="sh-stat-value" x-text="number(kpi.cancellations)"></div></div>
+      <div class="sh-stat-card"><div class="sh-stat-label">Возвращено</div><div class="sh-stat-value" x-text="number(kpi.returns)"></div></div>
+    </div>
+
+    <div class="sh-card" style="padding:20px;margin-bottom:24px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px">
+        <h2 style="font-size:18px;font-weight:700">Динамика по дням</h2>
+        <span style="font-size:12px;color:var(--text-muted)" x-text="syncLabel"></span>
+      </div>
+      <div style="height:300px"><canvas x-ref="dailyChart"></canvas></div>
+    </div>
+
+    <div class="sh-card" style="overflow:hidden">
+      <div style="padding:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+        <h2 style="font-size:18px;font-weight:700">Товары</h2>
+        <input class="sh-input" style="margin-left:auto;min-width:260px" x-model="search" @keyup.enter="loadProducts()" placeholder="Название, offer ID или SKU">
+        <select class="sh-input" x-model="sortBy" @change="loadProducts()">
+          <option value="ordered_revenue_rub">По сумме заказов</option>
+          <option value="ordered_units">По количеству заказов</option>
+          <option value="views">По просмотрам</option>
+          <option value="cart_conversion_percent">По конверсии</option>
+          <option value="returned_units">По возвратам</option>
+        </select>
+      </div>
+      <div x-show="productsLoading" style="padding:40px;text-align:center;color:var(--text-muted)">Загрузка товаров…</div>
+      <div x-show="!productsLoading && !products.length" style="padding:40px;text-align:center;color:var(--text-muted)">Нет товарных строк в завершённом снимке.</div>
+      <div x-show="!productsLoading && products.length" style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--surface-subtle);font-size:12px;color:var(--text-muted);text-align:left">
+            <th style="padding:12px 14px">Товар</th><th style="padding:12px 14px">Заказы, ₽</th><th style="padding:12px 14px">Шт.</th><th style="padding:12px 14px">Просмотры</th><th style="padding:12px 14px">В корзину</th><th style="padding:12px 14px">Статус связи</th>
+          </tr></thead>
+          <tbody><template x-for="item in products" :key="item.sku"><tr style="border-top:1px solid var(--border)">
+            <td style="padding:14px;min-width:260px"><div style="font-weight:600" x-text="item.title || ('SKU '+item.sku)"></div><div style="font-size:12px;color:var(--text-muted)" x-text="'SKU '+item.sku+(item.offer_id?' · '+item.offer_id:'')"></div></td>
+            <td style="padding:14px" x-text="money(item.metrics.ordered_revenue_rub)"></td>
+            <td style="padding:14px" x-text="number(item.metrics.ordered_units)"></td>
+            <td style="padding:14px" x-text="number(item.metrics.views)"></td>
+            <td style="padding:14px" x-text="number(item.metrics.cart_additions)+' · '+number(item.metrics.cart_conversion_percent,1)+'%'"></td>
+            <td style="padding:14px"><span :style="'color:'+(item.matched?'#15803d':'#b45309')" x-text="item.matched?'Карточка найдена':'SKU не сопоставлен'"></span></td>
+          </tr></template></tbody>
+        </table>
+      </div>
+      <div x-show="productPages > 1" style="padding:14px;display:flex;justify-content:center;gap:10px;border-top:1px solid var(--border)">
+        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="productPage<=1" @click="productPage--;loadProducts()">Назад</button>
+        <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="productPage+' / '+productPages"></span>
+        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="productPage>=productPages" @click="productPage++;loadProducts()">Далее</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+function ozonAnalyticsPage() {
+  const accountId = {{ selected_account.id|tojson }};
+  return {
+    accountId, period:'30d', data:{status:'loading'}, kpi:{}, error:'', loading:true, refreshing:false,
+    products:[], productsLoading:false, productPage:1, productPages:0, search:'', sortBy:'ordered_revenue_rub', chart:null,
+    get syncLabel() { const s=this.data.sync||{}; return s.completed_at ? ('Снимок '+new Date(s.completed_at).toLocaleString('ru-RU')) : ''; },
+    async init(){ const p=new URLSearchParams(location.search).get('period'); if(['7d','30d'].includes(p))this.period=p; await this.loadSummary(); await this.loadProducts(); },
+    switchAccount(id){ location.href='/marketplaces/analytics?account_id='+encodeURIComponent(id)+'&period='+this.period; },
+    changePeriod(p){ this.period=p; this.productPage=1; const u=new URL(location);u.searchParams.set('period',p);history.replaceState(null,'',u);this.loadSummary();this.loadProducts(); },
+    async loadSummary(){ this.loading=true;this.error='';try{const r=await fetch('/marketplaces/api/analytics/summary?account_id='+this.accountId+'&period='+this.period);const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка аналитики');this.data=d.data||{};this.kpi=this.data.kpi||{};this.$nextTick(()=>this.renderChart());}catch(e){this.error=e.message;}finally{this.loading=false;} },
+    async loadProducts(){ this.productsLoading=true;try{let u='/marketplaces/api/analytics/products?account_id='+this.accountId+'&period='+this.period+'&page='+this.productPage+'&per_page=20&sort_by='+encodeURIComponent(this.sortBy)+'&sort_dir=desc';if(this.search.trim())u+='&search='+encodeURIComponent(this.search.trim());const r=await fetch(u);const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка товаров');this.products=(d.data&&d.data.items)||[];this.productPages=(d.data&&d.data.pages)||0;}catch(e){this.error=e.message;}finally{this.productsLoading=false;} },
+    async refreshData(){ this.refreshing=true;this.error='';try{let force=true;for(let i=0;i<12;i++){const r=await fetch('/marketplaces/api/analytics/sync?account_id='+this.accountId,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},body:JSON.stringify({period:this.period,force})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка синхронизации');force=false;if(d.data.status!=='running')break;}await this.loadSummary();await this.loadProducts();this.$store.toasts.success('Снимок аналитики Ozon обновлён');}catch(e){this.error=e.message;}finally{this.refreshing=false;} },
+    renderChart(){const el=this.$refs.dailyChart;if(!el||typeof Chart==='undefined')return;if(this.chart){this.chart.destroy();this.chart=null;}const rows=this.data.dailyData||[];this.chart=new Chart(el,{type:'line',data:{labels:rows.map(r=>new Date(r.date).toLocaleDateString('ru-RU',{day:'2-digit',month:'short'})),datasets:[{label:'Заказы, ₽',data:rows.map(r=>r.ordered_revenue_rub||0),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.08)',fill:true,tension:.35,yAxisID:'y'},{label:'Заказы, шт.',data:rows.map(r=>r.ordered_units||0),borderColor:'#10b981',tension:.35,yAxisID:'y1'}]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},scales:{y:{beginAtZero:true},y1:{beginAtZero:true,position:'right',grid:{display:false}}}}});},
+    money(v){return new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:0}).format(Number(v||0));},
+    number(v,d=0){return Number(v||0).toLocaleString('ru-RU',{maximumFractionDigits:d,minimumFractionDigits:d});},
+  };
+}
+</script>
+{% endblock %}

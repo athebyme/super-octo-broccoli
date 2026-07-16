@@ -45,7 +45,9 @@ _NON_RETRYABLE_PATTERNS = [
 ]
 
 
-FINAL_ITEM_STATUSES = ('completed', 'failed', 'skipped')
+FINAL_ITEM_STATUSES = (
+    'completed', 'failed', 'skipped', 'deferred', 'uncertain',
+)
 
 
 def _is_retryable_error(error_msg: str) -> bool:
@@ -69,6 +71,12 @@ class AutoPublishService:
     """
 
     def __init__(self, seller: Seller, settings: AutoPublishSettings):
+        if (
+            settings.seller_id != seller.id
+            or settings.marketplace_code != 'wb'
+            or settings.account_id is not None
+        ):
+            raise ValueError('Legacy AutoPublishService accepts only owned WB scope')
         self.seller = seller
         self.settings = settings
         self.logger = logging.getLogger(f'auto_publish.seller_{seller.id}')
@@ -105,7 +113,10 @@ class AutoPublishService:
 
             # Создаём запуск
             run = AutoPublishRun(
+                settings_id=self.settings.id,
                 seller_id=self.seller.id,
+                marketplace_code='wb',
+                account_id=None,
                 run_uid=str(uuid.uuid4()),
                 status='running',
                 triggered_by=triggered_by,
@@ -225,6 +236,8 @@ class AutoPublishService:
             # Подзапрос: ID товаров с исчерпанными retry из прошлых запусков
             exhausted_subq = db.session.query(AutoPublishItem.imported_product_id).filter(
                 AutoPublishItem.seller_id == self.seller.id,
+                AutoPublishItem.marketplace_code == 'wb',
+                AutoPublishItem.account_id.is_(None),
                 AutoPublishItem.status == 'failed',
                 AutoPublishItem.retry_count >= self.settings.max_retries_per_product,
             ).subquery()
@@ -236,6 +249,8 @@ class AutoPublishService:
         now = datetime.utcnow()
         pending_retry_subq = db.session.query(AutoPublishItem.imported_product_id).filter(
             AutoPublishItem.seller_id == self.seller.id,
+            AutoPublishItem.marketplace_code == 'wb',
+            AutoPublishItem.account_id.is_(None),
             AutoPublishItem.status.in_(('failed', 'skipped')),
             AutoPublishItem.next_retry_at.isnot(None),
             AutoPublishItem.next_retry_at > now,
@@ -257,6 +272,8 @@ class AutoPublishService:
                 run_id=run.id,
                 imported_product_id=product.id,
                 seller_id=self.seller.id,
+                marketplace_code='wb',
+                account_id=None,
                 step='queued',
                 status='pending',
                 retry_count=previous_retry_count,
@@ -313,6 +330,8 @@ class AutoPublishService:
         """Возвращает retry_count последней failed/skipped попытки товара."""
         previous = AutoPublishItem.query.filter(
             AutoPublishItem.seller_id == self.seller.id,
+            AutoPublishItem.marketplace_code == 'wb',
+            AutoPublishItem.account_id.is_(None),
             AutoPublishItem.imported_product_id == imported_product_id,
             AutoPublishItem.status.in_(('failed', 'skipped')),
         ).order_by(AutoPublishItem.id.desc()).first()
@@ -489,6 +508,8 @@ class AutoPublishService:
         base = max(self.settings.retry_delay_minutes, 15)
         previous_skips = AutoPublishItem.query.filter(
             AutoPublishItem.seller_id == self.seller.id,
+            AutoPublishItem.marketplace_code == 'wb',
+            AutoPublishItem.account_id.is_(None),
             AutoPublishItem.imported_product_id == current_item.imported_product_id,
             AutoPublishItem.status == 'skipped',
             AutoPublishItem.error_step == 'validating',
@@ -619,7 +640,11 @@ class AutoPublishService:
         для ручного исправления, а не для повторной публикации.
         """
         completed_items = AutoPublishItem.query.filter_by(
-            run_id=run.id, status='completed'
+            run_id=run.id,
+            seller_id=self.seller.id,
+            marketplace_code='wb',
+            account_id=None,
+            status='completed',
         ).all()
         if not completed_items:
             return 0
@@ -707,7 +732,13 @@ class AutoPublishService:
                 run.status = 'completed'
 
         # Error summary
-        error_items = AutoPublishItem.query.filter_by(run_id=run.id, status='failed').all()
+        error_items = AutoPublishItem.query.filter_by(
+            run_id=run.id,
+            seller_id=self.seller.id,
+            marketplace_code='wb',
+            account_id=None,
+            status='failed',
+        ).all()
         if error_items:
             error_categories = {}
             for ei in error_items:
@@ -745,8 +776,17 @@ class AutoPublishService:
         """Проверяет статус запуска напрямую из БД, обходя cache текущей session."""
         try:
             status = db.session.execute(
-                text("SELECT status FROM auto_publish_runs WHERE id = :rid"),
-                {'rid': run_id}
+                text(
+                    "SELECT status FROM auto_publish_runs "
+                    "WHERE id=:rid AND settings_id=:settings_id "
+                    "AND seller_id=:seller_id AND marketplace_code='wb' "
+                    "AND account_id IS NULL"
+                ),
+                {
+                    'rid': run_id,
+                    'settings_id': self.settings.id,
+                    'seller_id': self.seller.id,
+                }
             ).scalar()
             return status == 'cancelled'
         except Exception as exc:
@@ -755,13 +795,22 @@ class AutoPublishService:
 
     def _mark_pending_items_skipped(self, run: AutoPublishRun, reason: str):
         """Пропускает pending items и разблокирует их товары."""
-        remaining = AutoPublishItem.query.filter_by(run_id=run.id, status='pending').all()
+        remaining = AutoPublishItem.query.filter_by(
+            run_id=run.id,
+            seller_id=self.seller.id,
+            marketplace_code='wb',
+            account_id=None,
+            status='pending',
+        ).all()
         for item in remaining:
             item.status = 'skipped'
             item.step = 'skipped'
             item.error_message = reason
             item.completed_at = datetime.utcnow()
-            product = ImportedProduct.query.get(item.imported_product_id)
+            product = ImportedProduct.query.filter_by(
+                id=item.imported_product_id,
+                seller_id=self.seller.id,
+            ).first()
             if product and product.import_status == 'publishing':
                 product.import_status = 'validated'
             run.total_skipped += 1
@@ -769,14 +818,22 @@ class AutoPublishService:
 
     def _unlock_publishing_products(self, run: AutoPublishRun):
         """Разблокирует товары, застрявшие в 'publishing' при критической ошибке запуска."""
-        items = AutoPublishItem.query.filter_by(run_id=run.id).all()
+        items = AutoPublishItem.query.filter_by(
+            run_id=run.id,
+            seller_id=self.seller.id,
+            marketplace_code='wb',
+            account_id=None,
+        ).all()
         for item in items:
             if item.status not in FINAL_ITEM_STATUSES:
                 item.status = 'failed'
                 item.step = 'failed'
                 item.error_message = 'Запуск прерван критической ошибкой'
                 item.completed_at = datetime.utcnow()
-                product = ImportedProduct.query.get(item.imported_product_id)
+                product = ImportedProduct.query.filter_by(
+                    id=item.imported_product_id,
+                    seller_id=self.seller.id,
+                ).first()
                 if product and product.import_status == 'publishing':
                     product.import_status = 'validated'
 
@@ -796,9 +853,15 @@ class AutoPublishService:
                 text(
                     "UPDATE auto_publish_settings "
                     "SET run_lock_token = :tok "
-                    "WHERE id = :sid AND run_lock_token IS NULL"
+                    "WHERE id = :sid AND seller_id = :seller_id "
+                    "AND marketplace_code = 'wb' AND account_id IS NULL "
+                    "AND run_lock_token IS NULL"
                 ),
-                {'tok': lock_token, 'sid': self.settings.id}
+                {
+                    'tok': lock_token,
+                    'sid': self.settings.id,
+                    'seller_id': self.seller.id,
+                }
             )
             db.session.commit()
         except Exception as e:
@@ -818,9 +881,15 @@ class AutoPublishService:
                 text(
                     "UPDATE auto_publish_settings "
                     "SET run_lock_token = NULL "
-                    "WHERE id = :sid AND run_lock_token = :tok"
+                    "WHERE id = :sid AND seller_id = :seller_id "
+                    "AND marketplace_code = 'wb' AND account_id IS NULL "
+                    "AND run_lock_token = :tok"
                 ),
-                {'tok': lock_token, 'sid': self.settings.id}
+                {
+                    'tok': lock_token,
+                    'sid': self.settings.id,
+                    'seller_id': self.seller.id,
+                }
             )
             db.session.commit()
         except Exception as e:
@@ -896,21 +965,53 @@ def check_and_auto_publish_all_sellers(flask_app):
                     continue
 
                 seller = Seller.query.get(settings.seller_id)
-                if not seller or not seller.wb_api_key:
+                if not seller:
+                    continue
+                if settings.marketplace_code == 'wb':
+                    if settings.account_id is not None or not seller.wb_api_key:
+                        continue
+                elif settings.marketplace_code == 'ozon':
+                    if (
+                        settings.account_id is None
+                        or not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+                        or not flask_app.config.get(
+                            'MARKETPLACE_OZON_PUBLICATION_ENABLED', False
+                        )
+                        or not flask_app.config.get(
+                            'MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED', False
+                        )
+                    ):
+                        continue
+                else:
+                    logger.error(
+                        'Неизвестный marketplace scope auto-publish settings=%s',
+                        settings.id,
+                    )
                     continue
 
                 # Запускаем в отдельном потоке
                 thread = threading.Thread(
                     target=_run_auto_publish_for_seller,
                     args=(flask_app, seller.id, settings.id),
-                    name=f'auto-publish-seller-{seller.id}',
+                    name=(
+                        f'auto-publish-{settings.marketplace_code}-'
+                        f'seller-{seller.id}-settings-{settings.id}'
+                    ),
                     daemon=True,
                 )
                 thread.start()
-                logger.info(f"Запущена автопубликация для seller {seller.id}")
+                logger.info(
+                    'Запущена автопубликация seller=%s scope=%s settings=%s',
+                    seller.id,
+                    settings.marketplace_code,
+                    settings.id,
+                )
 
-        except Exception as e:
-            logger.error(f"Ошибка в check_and_auto_publish_all_sellers: {e}", exc_info=True)
+        except Exception as exc:
+            logger.error(
+                "Ошибка в check_and_auto_publish_all_sellers (%s)",
+                type(exc).__name__,
+            )
 
 
 def _run_auto_publish_for_seller(flask_app, seller_id: int, settings_id: int):
@@ -922,19 +1023,35 @@ def _run_auto_publish_for_seller(flask_app, seller_id: int, settings_id: int):
             if not seller or not settings:
                 return
 
-            service = AutoPublishService(seller, settings)
+            if settings.marketplace_code == 'ozon':
+                from services.marketplace_auto_publish import (
+                    OzonAutoPublishService,
+                )
+
+                service = OzonAutoPublishService(seller, settings)
+            else:
+                service = AutoPublishService(seller, settings)
             service.execute_run(triggered_by='scheduler')
-        except Exception as e:
-            logger.error(f"Ошибка автопубликации для seller {seller_id}: {e}", exc_info=True)
+        except Exception as exc:
+            logger.error(
+                "Ошибка автопубликации для seller %s (%s)",
+                seller_id,
+                type(exc).__name__,
+            )
 
 
 def reset_stuck_auto_publish(flask_app):
     """Сбрасывает зависшие запуски после рестарта сервера."""
     with flask_app.app_context():
         try:
-            # Сбрасываем running запуски
-            stuck_runs = AutoPublishRun.query.filter_by(status='running').all()
-            for run in stuck_runs:
+            # WB side effect не имеет durable provider operation, поэтому его
+            # legacy running rows завершаются failure. Ozon rows переводятся в
+            # waiting: committed item idempotency/operation будет сверена без
+            # слепого повторного write.
+            stuck_wb_runs = AutoPublishRun.query.filter_by(
+                status='running', marketplace_code='wb'
+            ).all()
+            for run in stuck_wb_runs:
                 run.status = 'failed'
                 run.error_summary = json.dumps(
                     {'critical_error': 'Запуск прерван перезапуском сервера'},
@@ -943,9 +1060,20 @@ def reset_stuck_auto_publish(flask_app):
                 run.completed_at = datetime.utcnow()
                 logger.warning(f"Сброшен зависший запуск автопубликации #{run.id}")
 
+            stuck_ozon_runs = AutoPublishRun.query.filter_by(
+                status='running', marketplace_code='ozon'
+            ).all()
+            for run in stuck_ozon_runs:
+                run.status = 'waiting'
+                logger.warning(
+                    'Ozon auto-publish run #%s переведён в safe reconciliation',
+                    run.id,
+                )
+
             # Сбрасываем items в processing/pending (висящие после краша)
             stuck_items = AutoPublishItem.query.filter(
-                AutoPublishItem.status.in_(('pending', 'processing'))
+                AutoPublishItem.marketplace_code == 'wb',
+                AutoPublishItem.status.in_(('pending', 'processing')),
             ).all()
             for it in stuck_items:
                 original_step = it.step or 'unknown'
@@ -968,10 +1096,11 @@ def reset_stuck_auto_publish(flask_app):
                 )
             )
 
-            if stuck_runs or stuck_products or stuck_items:
+            if stuck_wb_runs or stuck_ozon_runs or stuck_products or stuck_items:
                 db.session.commit()
                 logger.info(
-                    f"Сброшено: {len(stuck_runs)} запусков, "
+                    f"Сброшено: {len(stuck_wb_runs)} WB запусков, "
+                    f"{len(stuck_ozon_runs)} Ozon запусков на сверку, "
                     f"{len(stuck_items)} items, "
                     f"{len(stuck_products)} товаров в 'publishing'"
                 )

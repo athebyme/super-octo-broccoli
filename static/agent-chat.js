@@ -33,6 +33,7 @@
             draft: '',
             productIds: [],
             productIdsInput: '',
+            marketplaceScope: null,
             selectedEntityKind: 'imported_product',
             scopeMode: 'all',
             scopeOpen: false,
@@ -62,6 +63,7 @@
             init() {
                 this.normalizePayload();
                 this.hydrateScope(this.activeScope);
+                this.consumeMarketplaceCollection();
                 this.$nextTick(() => this.scrollToBottom(false));
                 this.schedulePoll(this.isRunActive() ? 1400 : 0);
                 document.addEventListener('visibilitychange', () => {
@@ -80,6 +82,62 @@
                 }));
                 this.runSteps = this.runSteps || [];
                 this.subtasks = this.subtasks || [];
+            },
+
+            consumeMarketplaceCollection() {
+                let raw = null;
+                try {
+                    raw = sessionStorage.getItem('seller_hub_marketplace_collection');
+                    sessionStorage.removeItem('seller_hub_marketplace_collection');
+                } catch (_) { return; }
+                if (!raw) return;
+                let value = null;
+                try { value = JSON.parse(raw); } catch (_) { return; }
+                const accountId = Number(value && value.account_id);
+                const code = String((value && value.marketplace_code) || '').trim().toLowerCase();
+                const rawIds = value && value.listing_ids;
+                if (
+                    !value || value.entity_kind !== 'marketplace_listing'
+                    || !/^[a-z][a-z0-9_-]{1,49}$/.test(code)
+                    || !Number.isSafeInteger(accountId) || accountId <= 0
+                    || !Array.isArray(rawIds) || !rawIds.length || rawIds.length > 200
+                    || rawIds.some(id => !Number.isSafeInteger(id) || id <= 0)
+                    || new Set(rawIds).size !== rawIds.length
+                ) return;
+                this.marketplaceScope = {
+                    kind: 'marketplace_listing',
+                    ids: rawIds.slice(),
+                    marketplace_code: code,
+                    account_id: accountId,
+                    scope_mode: 'selected',
+                };
+                this.productIds = [];
+                this.productIdsInput = '';
+                this.selectedEntityKind = 'marketplace_listing';
+                this.scopeMode = 'selected';
+                this.setBanner(
+                    `Выбрано ${rawIds.length} карточек ${code.toUpperCase()} · кабинет #${accountId}`,
+                    'success',
+                );
+            },
+
+            currentEntityScope() {
+                if (this.marketplaceScope) return { ...this.marketplaceScope, ids: this.marketplaceScope.ids.slice() };
+                return {
+                    kind: this.selectedEntityKind,
+                    ids: this.productIds.slice(),
+                };
+            },
+
+            scopeCount() {
+                return this.marketplaceScope ? this.marketplaceScope.ids.length : this.productIds.length;
+            },
+
+            scopeLabel() {
+                if (this.marketplaceScope) {
+                    return `${this.marketplaceScope.ids.length} ${this.marketplaceScope.marketplace_code.toUpperCase()}`;
+                }
+                return this.productIds.length ? `${this.productIds.length} товаров` : 'Весь каталог';
             },
 
             async api(path, options) {
@@ -185,6 +243,7 @@
                 if (this.scopeMode === 'all') {
                     this.resetScope();
                 } else {
+                    this.marketplaceScope = null;
                     const matches = this.productIdsInput.match(/\d+/g) || [];
                     this.productIds = Array.from(new Set(matches.map(Number).filter(id => id > 0))).slice(0, 500);
                     this.productIdsInput = this.productIds.join(', ');
@@ -200,6 +259,7 @@
             resetScope() {
                 this.productIds = [];
                 this.productIdsInput = '';
+                this.marketplaceScope = null;
                 this.scopeMode = 'all';
                 this.selectedEntityKind = 'imported_product';
             },
@@ -212,6 +272,33 @@
                     this.resetScope();
                     return;
                 }
+                if (scope.kind === 'marketplace_listing') {
+                    const accountId = Number(scope.account_id);
+                    const code = String(scope.marketplace_code || '').trim().toLowerCase();
+                    if (
+                        ids.length > 200
+                        || new Set(ids).size !== ids.length
+                        || !Number.isSafeInteger(accountId)
+                        || accountId <= 0
+                        || !/^[a-z][a-z0-9_-]{1,49}$/.test(code)
+                    ) {
+                        this.resetScope();
+                        return;
+                    }
+                    this.marketplaceScope = {
+                        kind: 'marketplace_listing',
+                        ids: ids.slice(),
+                        marketplace_code: code,
+                        account_id: accountId,
+                        scope_mode: 'selected',
+                    };
+                    this.productIds = [];
+                    this.productIdsInput = '';
+                    this.selectedEntityKind = 'marketplace_listing';
+                    this.scopeMode = 'selected';
+                    return;
+                }
+                this.marketplaceScope = null;
                 this.productIds = Array.from(new Set(ids));
                 this.productIdsInput = this.productIds.join(', ');
                 this.selectedEntityKind = this.normalizedEntityKind(scope.kind);
@@ -222,15 +309,16 @@
                 const text = this.draft.trim();
                 if (!text || this.busy) return;
                 const optimisticId = `pending-${Date.now()}`;
+                const entityScope = this.currentEntityScope();
+                const legacyProductIds = this.marketplaceScope ? [] : this.productIds.slice();
                 const optimistic = {
                     id: optimisticId,
                     role: 'user', kind: 'text', content: text,
                     metadata: {
-                        product_ids: this.productIds.slice(),
-                        entity_scope: {
-                            kind: this.selectedEntityKind,
-                            ids: this.productIds.slice(),
-                        },
+                        product_ids: legacyProductIds,
+                        marketplace_listing_ids: this.marketplaceScope
+                            ? this.marketplaceScope.ids.slice() : [],
+                        entity_scope: entityScope,
                     },
                     created_at: new Date().toISOString(),
                 };
@@ -249,9 +337,12 @@
                             method: 'POST',
                             body: JSON.stringify({
                                 message: text,
-                                product_ids: this.productIds,
-                                entity_kind: this.productIds.length ? this.selectedEntityKind : null,
-                                scope_mode: this.productIds.length ? 'selected' : 'global',
+                                product_ids: legacyProductIds,
+                                entity_kind: this.scopeCount() ? this.selectedEntityKind : null,
+                                entity_scope: this.marketplaceScope ? entityScope : null,
+                                scope_mode: this.marketplaceScope
+                                    ? null
+                                    : (legacyProductIds.length ? 'selected' : 'global'),
                             }),
                         },
                     );
@@ -486,6 +577,8 @@
                     'photo-optimizer': 'Фотографии', 'supplier-audit': 'Аудит поставщика',
                     'image-generator': 'AI-фотостудия',
                     'batch-audit': 'Пакетный аудит', 'catalog-query': 'Поиск по каталогу', 'card-insight': 'Анализ карточки',
+                    'marketplace-listing-audit': 'Аудит карточек маркетплейса',
+                    'marketplace-listing-insight': 'Анализ карточки маркетплейса',
                     'content-writer': 'Редактор карточки', 'description-writer': 'Редактор описания',
                     'wb-content-publisher': 'Отправка в WB', 'system-query': 'Данные системы',
                 })[name] || 'Внутренний навык';
@@ -522,6 +615,8 @@
                             .filter(Boolean);
                         artifacts.push({
                             type: 'collection', collection_kind: 'changes', entity_kind: entityKind,
+                            marketplace_code: stepResult.marketplace_code || null,
+                            account_id: stepResult.account_id || null,
                             id: `${message.task_id || message.id}-${step.skill}-${stepIndex}-changes`,
                             title: 'Изменения контента',
                             total: Number(stepResult.saved || sourceItems.length),
@@ -541,8 +636,11 @@
                             .filter(Boolean);
                         artifacts.push({
                             type: 'collection',
-                            collection_kind: step.skill === 'batch-audit' ? 'audit' : 'results',
+                            collection_kind: ['batch-audit', 'marketplace-listing-audit'].includes(step.skill)
+                                ? 'audit' : 'results',
                             entity_kind: entityKind,
+                            marketplace_code: stepResult.marketplace_code || null,
+                            account_id: stepResult.account_id || null,
                             id: `${message.task_id || message.id}-${step.skill || 'step'}-${stepIndex}`,
                             title: stepResult.collection_title || stepResult.condition || 'Результаты поиска',
                             total: Number(stepResult.total || stepProducts.length),
@@ -595,7 +693,9 @@
                 return node.value;
             },
             normalizedEntityKind(value) {
-                return value === 'product' ? 'product' : 'imported_product';
+                if (value === 'product') return 'product';
+                if (value === 'marketplace_listing') return 'marketplace_listing';
+                return 'imported_product';
             },
             collectionItem(item, entityKind) {
                 const id = Number(item.id);
@@ -607,9 +707,11 @@
                     id,
                     entity_kind: kind,
                     title: this.decodeText(item.title || `Карточка #${id}`),
-                    url: item.url || (kind === 'product'
-                        ? `/products/${id}`
-                        : `/my-products/${id}/wb-preview`),
+                    url: item.url || (
+                        kind === 'product' ? `/products/${id}`
+                            : kind === 'marketplace_listing' ? `/marketplaces/listings/${id}`
+                                : `/my-products/${id}/wb-preview`
+                    ),
                     issue_labels: Array.isArray(item.issue_labels) ? item.issue_labels.slice(0, 5) : [],
                     change_fields: Array.isArray(item.change_fields)
                         ? item.change_fields.slice(0, 4)
@@ -617,7 +719,11 @@
                 };
             },
             collectionEyebrow(artifact) {
-                const kind = artifact.entity_kind === 'product' ? 'Карточки WB' : 'Импортированные карточки';
+                const kind = artifact.entity_kind === 'product'
+                    ? 'Карточки WB'
+                    : artifact.entity_kind === 'marketplace_listing'
+                        ? `Карточки ${(artifact.marketplace_code || 'маркетплейса').toUpperCase()}`
+                        : 'Импортированные карточки';
                 if (artifact.collection_kind === 'audit') return `Аудит · ${kind}`;
                 if (artifact.collection_kind === 'changes') return `Изменения · ${kind}`;
                 return `Подборка · ${kind}`;
@@ -679,10 +785,35 @@
                     this.setBanner('Сначала отметьте хотя бы одну карточку');
                     return;
                 }
-                this.productIds = ids.slice(0, 100);
-                this.productIdsInput = this.productIds.join(', ');
+                const entityKind = this.normalizedEntityKind(artifact.entity_kind);
+                if (entityKind === 'marketplace_listing') {
+                    const accountId = Number(artifact.account_id);
+                    const code = String(artifact.marketplace_code || '').trim().toLowerCase();
+                    if (
+                        !Number.isSafeInteger(accountId) || accountId <= 0
+                        || !/^[a-z][a-z0-9_-]{1,49}$/.test(code)
+                    ) {
+                        this.setBanner('В результате нет точного marketplace/account scope');
+                        return;
+                    }
+                    if (action !== 'audit') {
+                        this.setBanner('Для карточек маркетплейса сейчас доступен только read-only аудит');
+                        return;
+                    }
+                    this.marketplaceScope = {
+                        kind: 'marketplace_listing', ids: ids.slice(0, 100),
+                        marketplace_code: code, account_id: accountId,
+                        scope_mode: 'selected',
+                    };
+                    this.productIds = [];
+                    this.productIdsInput = '';
+                } else {
+                    this.marketplaceScope = null;
+                    this.productIds = ids.slice(0, 100);
+                    this.productIdsInput = this.productIds.join(', ');
+                }
                 this.scopeMode = 'selected';
-                this.selectedEntityKind = this.normalizedEntityKind(artifact.entity_kind);
+                this.selectedEntityKind = entityKind;
                 this.draft = ({
                     audit: 'Проведи аудит выбранных карточек и найди основные проблемы',
                     content: 'Улучши название и описание выбранных карточек',

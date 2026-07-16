@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}Операция Ozon #{{ operation.id }} — Seller Hub{% endblock %}
+
+{% block extra_head %}
+{% if operation.status in ['queued', 'submitting', 'submitted', 'polling', 'uncertain'] and operation.next_poll_at %}
+<meta http-equiv="refresh" content="15">
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% set summary = operation_data.request_summary %}
+{% set quota = operation_data.quota_snapshot %}
+{% set is_commercial = operation.operation_kind in ['price_update', 'stock_update', 'price_rollback', 'stock_rollback'] %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+    <a href="{{ url_for('marketplace_operations.index') }}" class="text-sm" style="color:var(--accent)">← Операции Ozon</a>
+    <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+            <div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)">
+                <span style="color:var(--accent)">Ozon</span>
+                <span>{{ operation.account.label if operation.account else 'кабинет удалён' }}</span>
+                <span>#{{ operation.id }}</span>
+                <span>{{ operation.operation_kind }}</span>
+            </div>
+            <h1 class="mt-2 text-2xl font-semibold break-all" style="color:var(--text)">{{ summary.get('offer_id', 'Операция без offer_id') }}</h1>
+            <p class="mt-1 text-sm" style="color:var(--text-secondary)">Статус: <strong>{{ operation.status }}</strong> · попыток write: {{ operation.attempt_count }} · polls: {{ operation.poll_count }} · сверок: {{ operation.reconcile_count }}</p>
+        </div>
+        {% if not operation.is_terminal and (operation.status != 'queued' or can_submit_queued) %}
+        <form method="post" action="{{ url_for('marketplace_operations.poll', operation_id=operation.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="sh-btn sh-btn--secondary" type="submit">Проверить сейчас</button>
+        </form>
+        {% endif %}
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <div class="mt-4 rounded-md border px-4 py-3 text-sm"
+         style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>
+    {% endfor %}
+    {% endwith %}
+
+    {% if operation.status == 'queued' and not can_submit_queued %}
+    <div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--border);color:var(--text-secondary)">
+        Операция ещё не отправлялась. Новые Ozon write выключены; включение флага продолжит её с сохранённого snapshot.
+    </div>
+    {% elif operation.status == 'uncertain' %}
+    <div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--danger, #b42318);color:var(--text)">
+        Результат upstream нельзя доказать. Платформа не повторяет write; выполняется только task/live-сверка.
+    </div>
+    {% if operation.operation_kind in ['product_import', 'product_import_rollback', 'product_update', 'product_update_rollback'] and operation.next_poll_at %}
+    <details class="sh-card p-4 mt-3">
+        <summary class="cursor-pointer text-sm font-medium" style="color:var(--text)">Остановить автоматическую сверку вручную</summary>
+        <p class="mt-2 text-xs" style="color:var(--text-muted)">Это не объявит write успешным или неуспешным. Outcome останется uncertain, повтор write останется запрещён, local quota reservation будет освобождена.</p>
+        <form class="mt-3 space-y-3" method="post" action="{{ url_for('marketplace_operations.resolve_uncertain', operation_id=operation.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="expected_version" value="{{ operation.version }}">
+            <label class="block"><span class="block text-xs mb-1" style="color:var(--text-muted)">Причина и результат ручной проверки в Ozon Seller</span><textarea name="reason" minlength="10" maxlength="1000" required rows="3" class="w-full rounded-md border p-3 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></textarea></label>
+            <label class="flex items-start gap-2 text-sm" style="color:var(--text-secondary)"><input type="checkbox" name="confirm_stop" value="1" required><span>Понимаю, что автоматическая сверка остановится, но неизвестный upstream outcome не станет подтверждённым.</span></label>
+            <button class="sh-btn sh-btn--secondary" type="submit">Остановить сверку и освободить local quota</button>
+        </form>
+    </details>
+    {% endif %}
+    {% endif %}
+
+    {% if operation.error_message %}
+    <section class="sh-card p-4 mt-4">
+        <div class="text-xs" style="color:var(--danger, #b42318)">{{ operation.error_code or 'operation_error' }}</div>
+        <p class="mt-2 text-sm" style="color:var(--text)">{{ operation.error_message }}</p>
+    </section>
+    {% endif %}
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-5">
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Контракт</h2>
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Версия</dt><dd style="color:var(--text)">{{ operation.contract_version }}</dd></div>
+                {% if is_commercial %}<div><dt class="text-xs" style="color:var(--text-muted)">Proposal</dt><dd style="color:var(--text)">{% if summary.get('proposal_id') %}<a style="color:var(--accent)" href="{{ url_for('marketplace_commercial.detail', proposal_id=summary.proposal_id) }}">#{{ summary.proposal_id }}</a>{% else %}—{% endif %}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Listing / warehouse</dt><dd style="color:var(--text)">{{ operation.listing_id or '—' }} / {{ summary.get('warehouse_id', '—') }}</dd></div>
+                {% else %}<div><dt class="text-xs" style="color:var(--text-muted)">Draft / version</dt><dd style="color:var(--text)">{% if operation.draft_id %}<a style="color:var(--accent)" href="{{ url_for('marketplace_drafts.detail', draft_id=operation.draft_id) }}">#{{ operation.draft_id }}</a>{% else %}удалён{% endif %} / {{ operation.draft_version or '—' }}</dd></div>{% endif %}
+                <div><dt class="text-xs" style="color:var(--text-muted)">Task ID</dt><dd class="break-all" style="color:var(--text)">{{ operation.external_task_id or '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Fingerprint</dt><dd class="break-all text-xs" style="color:var(--text)">{{ operation.request_fingerprint }}</dd></div>
+            </dl>
+        </section>
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">{{ 'Safety boundary' if is_commercial else 'Квота' }}</h2>
+            {% if is_commercial %}
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Scope</dt><dd style="color:var(--text)">ровно один listing{% if summary.get('warehouse_id') %} / склад{% endif %}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Write retry</dt><dd style="color:var(--text)">запрещён после первой попытки</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Подтверждение</dt><dd style="color:var(--text)">live read-after-write</dd></div>
+            </dl>
+            {% elif quota %}
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Источник</dt><dd style="color:var(--text)">{{ quota.get('source', '—') }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Остаток upstream</dt><dd style="color:var(--text)">{{ quota.get('remaining', '—') }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Доступно после local reservations</dt><dd style="color:var(--text)">{{ quota.get('available_after_local_reservations', '—') }}</dd></div>
+            </dl>
+            {% else %}<p class="mt-3 text-sm" style="color:var(--text-muted)">Preflight ещё не выполнен.</p>{% endif %}
+        </section>
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Время</h2>
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Создана</dt><dd style="color:var(--text)">{{ operation.created_at.strftime('%d.%m.%Y %H:%M:%S') if operation.created_at else '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Отправлена</dt><dd style="color:var(--text)">{{ operation.submitted_at.strftime('%d.%m.%Y %H:%M:%S') if operation.submitted_at else '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Следующая сверка</dt><dd style="color:var(--text)">{{ operation.next_poll_at.strftime('%d.%m.%Y %H:%M:%S') if operation.next_poll_at else '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Завершена</dt><dd style="color:var(--text)">{{ operation.completed_at.strftime('%d.%m.%Y %H:%M:%S') if operation.completed_at else '—' }}</dd></div>
+            </dl>
+        </section>
+    </div>
+
+    <section class="sh-card p-4 mt-4">
+        <h2 class="font-semibold" style="color:var(--text)">{{ 'Before / proposed' if is_commercial else 'Состав запроса' }}</h2>
+        {% if is_commercial %}
+        <div class="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Live before-state</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ summary.get('before', {}) | tojson(indent=2) }}</pre></div>
+            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Submitted state</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ summary.get('proposed', {}) | tojson(indent=2) }}</pre></div>
+        </div>
+        {% else %}
+        <dl class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+            <div><dt class="text-xs" style="color:var(--text-muted)">Атрибутов</dt><dd style="color:var(--text)">{{ summary.get('attribute_count', '—') }}</dd></div>
+            <div><dt class="text-xs" style="color:var(--text-muted)">Complex groups</dt><dd style="color:var(--text)">{{ summary.get('complex_group_count', '—') }}</dd></div>
+            <div><dt class="text-xs" style="color:var(--text-muted)">Изображений</dt><dd style="color:var(--text)">{{ summary.get('image_count', '—') }}</dd></div>
+            <div><dt class="text-xs" style="color:var(--text-muted)">Barcode</dt><dd style="color:var(--text)">{{ 'да' if summary.get('has_barcode') else 'нет' }}</dd></div>
+        </dl>
+        {% endif %}
+    </section>
+
+    {% if operation_data.item_results %}
+    <section class="sh-card p-4 mt-4">
+        <h2 class="font-semibold" style="color:var(--text)">Результаты по товарам</h2>
+        <div class="mt-3 space-y-3">
+            {% for item in operation_data.item_results %}
+            <article class="rounded border p-3" style="border-color:var(--border)">
+                <div class="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span class="break-all" style="color:var(--text)">{{ item.get('offer_id', '—') }}</span>
+                    <span style="color:var(--text-secondary)">{{ item.get('status', 'unknown') }}</span>
+                </div>
+                {% if item.get('product_id') %}<p class="mt-1 text-xs" style="color:var(--text-muted)">product_id {{ item.product_id }}</p>{% endif %}
+                {% if item.get('errors') %}<pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--danger, #b42318)">{{ item.errors | tojson(indent=2) }}</pre>{% endif %}
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    {% if operation_data.snapshot %}
+    <section class="sh-card p-4 mt-4">
+        <div class="flex flex-wrap items-start justify-between gap-3"><h2 class="font-semibold" style="color:var(--text)">Snapshot и rollback</h2>
+        {% if is_commercial and operation.operation_kind in ['price_update', 'stock_update'] and operation.status == 'succeeded' and operation_data.snapshot.rollback_status == 'available' %}<form method="post" action="{{ url_for('marketplace_commercial.create_rollback', operation_id=operation.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary" type="submit">Создать rollback proposal</button></form>{% endif %}</div>
+        <p class="mt-2 text-sm" style="color:var(--text-secondary)">Статус rollback: {{ operation_data.snapshot.rollback_status }}{% if operation_data.snapshot.rollback_error_message %} · {{ operation_data.snapshot.rollback_error_message }}{% endif %}</p>
+        <p class="mt-2 text-xs break-all" style="color:var(--text-muted)">before {{ operation_data.snapshot.before_fingerprint or '—' }} · submitted {{ operation_data.snapshot.submitted_fingerprint }} · confirmed {{ operation_data.snapshot.confirmed_fingerprint or '—' }}</p>
+        {% if not is_commercial and operation.operation_kind in ['product_import', 'product_update'] and operation.status == 'succeeded' and operation_data.snapshot.rollback_status == 'available' %}
+        <form class="mt-4 rounded border p-3" style="border-color:var(--border)" method="post" action="{{ url_for('marketplace_operations.rollback', operation_id=operation.id) }}" onsubmit="return confirm('Создать отдельный Ozon rollback write? Перед отправкой live-state будет проверен ещё раз.')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="expected_version" value="{{ operation.version }}">
+            <input type="hidden" name="idempotency_key" value="{{ rollback_idempotency_key }}">
+            <label class="flex items-start gap-2 text-sm" style="color:var(--text-secondary)"><input type="checkbox" name="confirm_write" value="1" required><span>{% if operation.operation_kind == 'product_import' %}Понимаю: созданная этой операцией карточка будет перемещена в архив, если её полный state не менялся.{% else %}Понимаю: текущая карточка будет полностью заменена точным prior-state из snapshot.{% endif %}</span></label>
+            <button class="sh-btn sh-btn--secondary mt-3" type="submit">{{ 'Архивировать созданную карточку' if operation.operation_kind == 'product_import' else 'Восстановить prior-state' }}</button>
+        </form>
+        {% endif %}
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

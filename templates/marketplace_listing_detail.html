@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title %}{{ listing.title or listing.offer_id }} — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6"
+     data-listing-id="{{ listing.id }}"
+     data-account-id="{{ listing.account_id }}"
+     data-marketplace-code="{{ listing.marketplace.code }}">
+    <nav class="sh-breadcrumb" aria-label="Навигационная цепочка">
+        <a href="{{ url_for('marketplace_listings.index') }}">Каталог маркетплейсов</a>
+        <span aria-hidden="true"> / </span>
+        <span>{{ listing.title or listing.offer_id }}</span>
+    </nav>
+    <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2 text-xs" style="color:var(--text-muted)">
+                <span class="uppercase font-medium" style="color:var(--accent)">{{ listing.marketplace.code }}</span>
+                {% if listing.account %}<span>{{ listing.account.label }}</span>{% endif %}
+                <span>{{ listing.normalized_status }}</span>
+                {% if not listing.is_available %}<span style="color:var(--danger)">не найден upstream</span>{% endif %}
+            </div>
+            <h1 class="mt-2 text-2xl font-semibold" style="color:var(--text)">{{ listing.title or 'Без названия' }}</h1>
+            <p class="mt-1 text-sm break-all" style="color:var(--text-secondary)">offer_id: {{ listing.offer_id }} · product_id: {{ listing.external_product_id }}{% if listing.primary_sku %} · sku: {{ listing.primary_sku }}{% endif %}</p>
+        </div>
+    </div>
+
+    {% if listing.marketplace.code == 'ozon' %}
+    <section class="sh-card p-4 mt-6" aria-labelledby="canonical-product-title">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="flex min-w-0 items-start gap-3">
+                <span class="mt-0.5" style="color:{{ 'var(--ok)' if product_link.canonical_product else 'var(--warn)' }}">
+                    {{ icon('check-circle' if product_link.canonical_product else 'warning', size=22) }}
+                </span>
+                <div>
+                    <h2 id="canonical-product-title" class="font-semibold" style="color:var(--text)">Общая внутренняя карточка</h2>
+                    <p class="mt-1 text-xs" style="color:var(--text-muted)">
+                        Контент и AI-парсинг хранятся один раз во внутренней карточке. WB и Ozon используют её как общий источник, сохраняя только свои статусы и overrides.
+                    </p>
+                </div>
+            </div>
+            <span class="sh-badge sh-badge--{{ 'green' if product_link.canonical_product else ('yellow' if listing.canonical_link_status == 'ambiguous' else 'gray') }} sh-badge--sm">
+                {{ 'связана' if product_link.canonical_product else ('нужно выбрать' if listing.canonical_link_status == 'ambiguous' else 'не связана') }}
+            </span>
+        </div>
+
+        {% if product_link.canonical_product %}
+        {% set canonical = product_link.canonical_product %}
+        <div class="mt-4 rounded-md border p-4" style="border-color:var(--border);background:var(--bg-subtle)">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div class="min-w-0">
+                    <div class="font-medium" style="color:var(--text)">{{ canonical.title or 'Внутренняя карточка #' ~ canonical.id }}</div>
+                    <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">
+                        ID {{ canonical.id }}{% if canonical.external_vendor_code %} · артикул {{ canonical.external_vendor_code }}{% endif %}{% if canonical.wb_nm_id %} · WB nmID {{ canonical.wb_nm_id }}{% endif %}
+                    </p>
+                    <p class="mt-2 text-xs" style="color:{{ 'var(--ok)' if canonical.ai_cache_available else 'var(--text-muted)' }}">
+                        {% if canonical.ai_cache_available %}AI-кэш найден ({{ canonical.ai_source }}): повторный парсинг для Ozon не нужен.{% else %}AI-кэша пока нет; будущий результат будет общим для WB и Ozon.{% endif %}
+                    </p>
+                </div>
+                <div class="flex flex-wrap gap-2 shrink-0">
+                    <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('seller_product_wb_preview', product_id=canonical.id) }}">
+                        {{ icon('eye', size=16) }} <span>Открыть карточку</span>
+                    </a>
+                    {% if canonical.has_source_photos %}
+                    <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('image_lab_page', listing_id=listing.id) }}">
+                        {{ icon('image', size=16) }} <span>Фотостудия для Ozon</span>
+                    </a>
+                    {% endif %}
+                    {% if commercial_feature_enabled %}
+                    <form method="post" action="{{ url_for('marketplace_drafts.create') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="account_id" value="{{ listing.account_id }}">
+                        <input type="hidden" name="imported_product_id" value="{{ canonical.id }}">
+                        <input type="hidden" name="offer_id" value="{{ listing.offer_id }}">
+                        <input type="hidden" name="validate" value="1">
+                        <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">
+                            {{ icon('document', size=16) }} <span>Подготовить Ozon</span>
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <p class="text-xs" style="color:var(--text-muted)">Источник связи: {{ listing.link_source or 'legacy' }} · версия {{ listing.link_version }}</p>
+            <form method="post" action="{{ url_for('marketplace_listings.unlink_product', listing_id=listing.id) }}"
+                  onsubmit="return confirm('Удалить только локальную связь? Карточки WB и Ozon и их данные не удаляются.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="expected_link_version" value="{{ listing.link_version }}">
+                <button class="sh-btn sh-btn--ghost sh-btn--sm" type="submit" style="color:var(--danger)">
+                    {{ icon('minus', size=16) }} <span>Отвязать</span>
+                </button>
+            </form>
+        </div>
+        {% else %}
+        {% if listing.canonical_link_status == 'ambiguous' %}
+        <div class="sh-alert sh-alert--warning mt-4" role="alert">
+            Найдено несколько точных внутренних идентичностей. Автоматическая связь намеренно не создана: выберите карточку вручную.
+        </div>
+        {% endif %}
+        <div class="mt-4 flex flex-col gap-2 sm:flex-row">
+            <form method="get" class="flex min-w-0 flex-1 gap-2" role="search">
+                <label class="sr-only" for="canonical-product-search">Поиск внутренней карточки</label>
+                <input id="canonical-product-search" name="link_search" maxlength="200" value="{{ link_search }}"
+                       placeholder="Название, внутренний ID, артикул или WB nmID"
+                       class="min-w-0 flex-1 rounded-md border px-3 py-2 text-sm bg-transparent"
+                       style="border-color:var(--border);color:var(--text)">
+                <button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">
+                    {{ icon('search', size=16) }} <span>Найти</span>
+                </button>
+            </form>
+            <form method="post" action="{{ url_for('marketplace_listings.reconcile_product_link', listing_id=listing.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">
+                    {{ icon('refresh', size=16) }} <span>Точное совпадение</span>
+                </button>
+            </form>
+        </div>
+        {% if product_link.candidates %}
+        <div class="mt-4 space-y-2">
+            {% for candidate in product_link.candidates %}
+            <article class="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between" style="border-color:var(--border)">
+                <div class="min-w-0">
+                    <div class="text-sm font-medium truncate" style="color:var(--text)">{{ candidate.title or 'Внутренняя карточка #' ~ candidate.id }}</div>
+                    <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">ID {{ candidate.id }}{% if candidate.external_vendor_code %} · {{ candidate.external_vendor_code }}{% endif %}{% if candidate.wb_nm_id %} · WB {{ candidate.wb_nm_id }}{% endif %}</p>
+                    {% if candidate.ai_cache_available %}<p class="mt-1 text-xs" style="color:var(--ok)">AI-кэш будет переиспользован</p>{% endif %}
+                </div>
+                <form method="post" action="{{ url_for('marketplace_listings.link_product', listing_id=listing.id) }}" class="shrink-0">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="imported_product_id" value="{{ candidate.id }}">
+                    <input type="hidden" name="expected_link_version" value="{{ listing.link_version }}">
+                    <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">Связать</button>
+                </form>
+            </article>
+            {% endfor %}
+        </div>
+        {% elif link_search %}
+        <p class="mt-4 text-sm" style="color:var(--text-muted)">Внутренние карточки по запросу не найдены.</p>
+        {% else %}
+        <p class="mt-4 text-sm" style="color:var(--text-muted)">Точного совпадения offer/vendor ID нет. Найдите карточку вручную — Ozon при этом не вызывается и данные не перезаписываются.</p>
+        {% endif %}
+        {% endif %}
+
+        {% if product_link.events %}
+        <details class="mt-4 border-t pt-3" style="border-color:var(--border)">
+            <summary class="cursor-pointer text-xs" style="color:var(--text-secondary)">История связи ({{ product_link.events | length }})</summary>
+            <ol class="mt-2 space-y-1 text-xs" style="color:var(--text-muted)">
+                {% for event in product_link.events %}
+                <li>{{ event.created_at or '—' }} · {{ event.action }} · {{ event.source }} · версия {{ event.link_version }}</li>
+                {% endfor %}
+            </ol>
+        </details>
+        {% endif %}
+    </section>
+    {% endif %}
+
+    {% if listing.marketplace.code == 'ozon' and canonical_content %}
+    {% set pending_canonical_proposals = canonical_content_proposal_data | selectattr('status', 'equalto', 'pending_review') | list %}
+    <section class="sh-card p-4 mt-4" aria-labelledby="ozon-canonical-content-title">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="flex min-w-0 items-start gap-3">
+                <span class="mt-0.5" style="color:var(--accent)">{{ icon('refresh', size=22) }}</span>
+                <div>
+                    <h2 id="ozon-canonical-content-title" class="font-semibold" style="color:var(--text)">Ozon → общая карточка</h2>
+                    <p class="mt-1 text-xs" style="color:var(--text-muted)">
+                        Сверка только общих фактов: название и описание. Категории, характеристики, ID справочников, цены, остатки и фото между маркетплейсами не копируются.
+                    </p>
+                </div>
+            </div>
+            {% if canonical_content.error %}
+            <span class="sh-badge sh-badge--red sh-badge--sm">действие заблокировано</span>
+            {% elif canonical_content.source_fresh %}
+            <span class="sh-badge sh-badge--green sh-badge--sm">снимок свежий</span>
+            {% else %}
+            <span class="sh-badge sh-badge--yellow sh-badge--sm">нужна синхронизация</span>
+            {% endif %}
+        </div>
+
+        {% if canonical_content.error %}
+        <div class="sh-alert sh-alert--warning mt-4" role="alert">{{ canonical_content.error }}</div>
+        {% else %}
+        <div class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style="color:var(--text-muted)">
+            <span>Самая старая часть Ozon-снимка: {{ canonical_content.source_observed_at or 'нет полного снимка' }}</span>
+            <span>Hard TTL: {{ canonical_content.hard_ttl_hours }} ч</span>
+            <span>Публикаций при сверке: 0</span>
+        </div>
+
+        <div class="mt-4 space-y-3">
+            {% for row in canonical_content.fields %}
+            <article class="rounded-md border p-3" style="border-color:var(--border)">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="text-sm font-medium" style="color:var(--text)">{{ 'Название' if row.field == 'title' else 'Описание' }}</h3>
+                    {% if row.differs %}
+                    <span class="sh-badge sh-badge--yellow sh-badge--sm">есть различие</span>
+                    {% elif row.eligible %}
+                    <span class="sh-badge sh-badge--green sh-badge--sm">совпадает</span>
+                    {% else %}
+                    <span class="sh-badge sh-badge--gray sh-badge--sm">не переносится</span>
+                    {% endif %}
+                </div>
+                <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div class="min-w-0 rounded p-3" style="background:var(--bg-subtle)">
+                        <div class="text-xs font-medium" style="color:var(--text-muted)">Сейчас в общей карточке</div>
+                        <p class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-sm" style="color:var(--text-secondary)">{{ (row.canonical_value or '—') | truncate(1200, True, '…') }}</p>
+                    </div>
+                    <div class="min-w-0 rounded p-3" style="background:var(--bg-subtle)">
+                        <div class="text-xs font-medium" style="color:var(--text-muted)">Прочитано из Ozon</div>
+                        <p class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-sm" style="color:var(--text-secondary)">{{ (row.ozon_value or '—') | truncate(1200, True, '…') }}</p>
+                    </div>
+                </div>
+                {% if row.reason %}<p class="mt-2 text-xs" style="color:var(--warn)">Причина блокировки поля: {{ row.reason }}</p>{% endif %}
+            </article>
+            {% endfor %}
+        </div>
+
+        <div class="sh-alert sh-alert--info mt-4 text-xs" role="status">
+            Применение меняет только внутренний master. Оно не вызывает Ozon API и не публикует WB; после review обе канальные проекции валидируются и публикуются отдельно.
+        </div>
+
+        {% if canonical_content.proposal_allowed and not pending_canonical_proposals %}
+        <form method="post" action="{{ url_for('marketplace_listings.create_canonical_content_proposal', listing_id=listing.id) }}" class="mt-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="sh-btn sh-btn--secondary" type="submit">
+                {{ icon('document', size=16) }} <span>Создать diff на проверку</span>
+            </button>
+        </form>
+        {% elif pending_canonical_proposals %}
+        <p class="mt-4 text-sm" style="color:var(--warn)">Уже есть актуальный proposal. Сначала примените или отклоните его.</p>
+        {% else %}
+        <div class="sh-alert sh-alert--warning mt-4" role="alert">
+            {% if 'ozon_content_snapshot_stale' in canonical_content.blocked_reasons %}Сначала выполните полную синхронизацию Ozon: нужны свежие info и attributes.{% elif 'no_common_content_diff' in canonical_content.blocked_reasons %}Переносить нечего: допустимые общие поля совпадают или пусты.{% else %}Создание proposal сейчас заблокировано.{% endif %}
+        </div>
+        {% endif %}
+        {% endif %}
+
+        {% if canonical_content_proposal_data %}
+        <div class="mt-5 border-t pt-4" style="border-color:var(--border)">
+            <h3 class="text-sm font-semibold" style="color:var(--text)">История review</h3>
+            <div class="mt-3 space-y-3">
+                {% for proposal in canonical_content_proposal_data %}
+                <article class="rounded-md border p-3" style="border-color:var(--border)">
+                    <div class="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                            <div class="text-sm font-medium" style="color:var(--text)">Proposal #{{ proposal.id }} · {{ proposal.fields | join(', ') }}</div>
+                            <p class="mt-1 text-xs" style="color:var(--text-muted)">Ozon snapshot {{ proposal.source_observed_at or '—' }} · версия {{ proposal.version }}</p>
+                        </div>
+                        <span class="sh-badge sh-badge--{{ 'yellow' if proposal.status == 'pending_review' else ('green' if proposal.status in ['applied', 'rolled_back'] else ('red' if proposal.status == 'conflict' else 'gray')) }} sh-badge--sm">{{ proposal.status }}</span>
+                    </div>
+                    <div class="mt-3 space-y-2">
+                        {% for change in proposal.changes %}
+                        <details class="rounded border px-3 py-2" style="border-color:var(--border)">
+                            <summary class="cursor-pointer text-xs font-medium" style="color:var(--text-secondary)">{{ 'Название' if change.field == 'title' else 'Описание' }}: посмотреть diff</summary>
+                            <div class="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 text-xs">
+                                <p class="max-h-32 overflow-auto whitespace-pre-wrap break-words" style="color:var(--text-muted)"><span class="font-medium">Было:</span> {{ change.before or '—' }}</p>
+                                <p class="max-h-32 overflow-auto whitespace-pre-wrap break-words" style="color:var(--text-secondary)"><span class="font-medium">Будет:</span> {{ change.after or '—' }}</p>
+                            </div>
+                        </details>
+                        {% endfor %}
+                    </div>
+                    {% if proposal.error_message %}<p class="mt-3 text-xs" style="color:var(--danger)">{{ proposal.error_message }}</p>{% endif %}
+                    {% if proposal.status == 'pending_review' %}
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <form method="post" action="{{ url_for('marketplace_listings.apply_canonical_content_proposal', proposal_id=proposal.id) }}" onsubmit="return confirm('Применить выбранные поля только к общей внутренней карточке? WB и Ozon автоматически не публикуются.')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="expected_version" value="{{ proposal.version }}">
+                            <input type="hidden" name="confirm_apply" value="1">
+                            <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">Применить к master</button>
+                        </form>
+                        <form method="post" action="{{ url_for('marketplace_listings.reject_canonical_content_proposal', proposal_id=proposal.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="expected_version" value="{{ proposal.version }}">
+                            <button class="sh-btn sh-btn--ghost sh-btn--sm" type="submit">Отклонить</button>
+                        </form>
+                    </div>
+                    {% elif proposal.status == 'applied' %}
+                    <form method="post" action="{{ url_for('marketplace_listings.rollback_canonical_content_proposal', proposal_id=proposal.id) }}" class="mt-3" onsubmit="return confirm('Откатить только этот локальный diff? Более новые изменения общей карточки заблокируют автоматический rollback.')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="expected_version" value="{{ proposal.version }}">
+                        <input type="hidden" name="confirm_rollback" value="1">
+                        <button class="sh-btn sh-btn--ghost sh-btn--sm" type="submit" style="color:var(--danger)">Откатить локально</button>
+                    </form>
+                    {% endif %}
+                </article>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </section>
+    {% endif %}
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Идентичность и статус</h2>
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Категория / тип</dt><dd style="color:var(--text)">{{ listing.external_category_id or '—' }} / {{ listing.external_type_id or '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Provider status</dt><dd style="color:var(--text)">{{ listing.provider_status or '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Visibility</dt><dd style="color:var(--text)">{{ listing.visibility or '—' }}</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">Последний полный read</dt><dd style="color:var(--text)">{{ listing.last_seen_at.strftime('%d.%m.%Y %H:%M:%S') if listing.last_seen_at else '—' }}</dd></div>
+            </dl>
+        </section>
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Цена</h2>
+            <pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.price_summary | tojson(indent=2) }}</pre>
+        </section>
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Остатки</h2>
+            <pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.stock_summary | tojson(indent=2) }}</pre>
+        </section>
+    </div>
+
+    {% if commercial_feature_enabled and listing.marketplace.code == 'ozon' and listing.is_available and not listing.is_archived %}
+    <section class="sh-card p-4 mt-4">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <h2 class="font-semibold" style="color:var(--text)">Безопасное изменение цены Ozon</h2>
+                <p class="mt-1 text-xs" style="color:var(--text-muted)">Введите новое значение осознанно: форма ничего не применяет, а только создаёт proposal для отдельной сверки и подтверждения.</p>
+            </div>
+            <a class="text-sm" style="color:var(--accent)" href="{{ url_for('marketplace_commercial.index', account_id=listing.account_id) }}">Все proposals</a>
+        </div>
+        <form method="post" action="{{ url_for('marketplace_commercial.create_price_proposal', listing_id=listing.id) }}" class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label><span class="block text-xs mb-1" style="color:var(--text-muted)">Новая базовая цена, RUB</span><input name="price" required inputmode="decimal" autocomplete="off" placeholder="Сейчас {{ listing_data.price_summary.get('values', {}).get('price', '—') }}" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></label>
+            <label class="flex items-center gap-2 text-sm mt-5" style="color:var(--text-secondary)"><input type="checkbox" name="allow_price_decrease" value="1"> Разрешить снижение</label>
+            <label class="flex items-center gap-2 text-sm mt-5" style="color:var(--text-secondary)"><input type="checkbox" name="allow_large_change" value="1"> Разрешить &gt;50%</label>
+            <div class="flex items-end"><button class="sh-btn sh-btn--secondary" type="submit">Сохранить на проверку</button></div>
+            <label class="md:col-span-4"><span class="block text-xs mb-1" style="color:var(--text-muted)">Обоснование для override (обязательно при включённом флаге)</span><input name="guardrail_note" maxlength="1000" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></label>
+        </form>
+        {% if not commercial_write_enabled %}<p class="mt-3 text-xs" style="color:var(--text-muted)">Approve/write сейчас выключен; proposal останется pending_review.</p>{% endif %}
+    </section>
+
+    <section class="sh-card p-4 mt-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div><h2 class="font-semibold" style="color:var(--text)">Точные FBS/rFBS остатки по складам</h2><p class="mt-1 text-xs" style="color:var(--text-muted)">В write уходит free_stock ровно одного owned warehouse; агрегат карточки не используется.</p></div>
+            <form method="post" action="{{ url_for('marketplace_commercial.refresh_stocks', listing_id=listing.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary" type="submit">Обновить live остатки</button></form>
+        </div>
+        {% if warehouse_stocks %}<div class="mt-4 space-y-3">
+            {% for stock in warehouse_stocks %}<article class="rounded border p-3" style="border-color:var(--border)">
+                <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                    <div><div class="text-sm font-medium" style="color:var(--text)">{{ stock.warehouse.name if stock.warehouse else 'Склад удалён' }}</div><p class="mt-1 text-xs" style="color:var(--text-secondary)">free {{ stock.free_stock }} · present {{ stock.present }} · reserved {{ stock.reserved }} · warehouse {{ stock.warehouse.external_warehouse_id if stock.warehouse else '—' }}{% if not stock.is_available %} · unavailable{% endif %}</p></div>
+                    {% if stock.is_available %}<form method="post" action="{{ url_for('marketplace_commercial.create_stock_proposal', listing_id=listing.id) }}" class="flex flex-wrap items-end gap-2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="warehouse_id" value="{{ stock.warehouse_id }}"><label><span class="block text-xs mb-1" style="color:var(--text-muted)">Новый free_stock</span><input type="number" min="0" step="1" name="stock" required autocomplete="off" placeholder="Сейчас {{ stock.free_stock }}" class="w-32 rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></label><button class="sh-btn sh-btn--secondary" type="submit">На проверку</button></form>{% endif %}
+                </div>
+            </article>{% endfor %}
+        </div>{% else %}<p class="mt-4 text-sm" style="color:var(--text-muted)">Нет точного warehouse snapshot. Сначала синхронизируйте склады в разделе «Цены и остатки Ozon», затем обновите live остатки.</p>{% endif %}
+    </section>
+
+    {% if commercial_proposals %}<section class="sh-card p-4 mt-4"><h2 class="font-semibold" style="color:var(--text)">Последние commercial proposals</h2><div class="mt-3 space-y-2">{% for proposal in commercial_proposals %}<a class="flex items-center justify-between gap-3 rounded border px-3 py-2 text-sm" style="border-color:var(--border);color:var(--text)" href="{{ url_for('marketplace_commercial.detail', proposal_id=proposal.id) }}"><span>#{{ proposal.id }} · {{ proposal.proposal_kind }} · {{ proposal.source }}</span><span>{{ proposal.status }}</span></a>{% endfor %}</div></section>{% endif %}
+    {% endif %}
+
+    {% if listing.description %}
+    <section class="sh-card p-4 mt-4">
+        <h2 class="font-semibold" style="color:var(--text)">Описание</h2>
+        <p class="mt-3 text-sm whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing.description }}</p>
+    </section>
+    {% endif %}
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Атрибуты ({{ listing_data.attributes | length }})</h2>
+            <pre class="mt-3 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.attributes | tojson(indent=2) }}</pre>
+        </section>
+        <section class="sh-card p-4">
+            <h2 class="font-semibold" style="color:var(--text)">Media / dimensions / barcodes</h2>
+            <pre class="mt-3 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ {'media': listing_data.media, 'dimensions': listing_data.dimensions, 'barcodes': listing_data.barcodes} | tojson(indent=2) }}</pre>
+        </section>
+    </div>
+
+    {% if listing_data.moderation_errors %}
+    <section class="sh-card p-4 mt-4">
+        <h2 class="font-semibold" style="color:var(--danger)">Ошибки и модерация</h2>
+        <pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.moderation_errors | tojson(indent=2) }}</pre>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

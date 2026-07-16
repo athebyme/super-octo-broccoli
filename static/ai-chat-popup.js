@@ -14,6 +14,8 @@
         ['data-marketplace-id', 'marketplace_id'],
         ['data-factory-id', 'factory_id'],
         ['data-account-id', 'account_id'],
+        ['data-listing-id', 'listing_id'],
+        ['data-marketplace-code', 'marketplace_code'],
         ['data-category-id', 'category_id'],
         ['data-task-id', 'task_id'],
     ];
@@ -42,7 +44,10 @@
                 if (total >= 24 || values.size >= 12) return;
                 const value = compactText(element.getAttribute(attribute), 64);
                 if (!/^[A-Za-z0-9_-]{1,64}$/.test(value)) return;
-                if (key === 'product_id' && (!/^\d+$/.test(value) || Number(value) <= 0)) return;
+                if (
+                    ['product_id', 'listing_id', 'account_id'].includes(key)
+                    && (!/^\d+$/.test(value) || Number(value) <= 0)
+                ) return;
                 if (!values.has(value)) total += 1;
                 values.add(value);
             });
@@ -106,6 +111,11 @@
                 const entities = this.pageContext && this.pageContext.entities ? this.pageContext.entities : {};
                 const products = entities.product_id || [];
                 if (products.length === 1) return `Товар #${products[0]} · ${this.pageName()}`;
+                const listings = entities.listing_id || [];
+                const codes = entities.marketplace_code || [];
+                if (listings.length === 1 && codes.length === 1) {
+                    return `${codes[0].toUpperCase()} #${listings[0]} · ${this.pageName()}`;
+                }
                 const count = Object.values(entities).reduce((sum, values) => sum + values.length, 0);
                 if (count) return `${this.pageName()} · ${count} объектов`;
                 return this.pageName();
@@ -208,6 +218,34 @@
                 return Number.isSafeInteger(id) && id > 0 ? [id] : [];
             },
 
+            marketplaceEntityScope() {
+                if (!this.contextAttached || !this.pageContext) return null;
+                const entities = this.pageContext.entities || {};
+                const listingValues = entities.listing_id || [];
+                const accountValues = entities.account_id || [];
+                const codeValues = entities.marketplace_code || [];
+                if (
+                    listingValues.length !== 1
+                    || accountValues.length !== 1
+                    || codeValues.length !== 1
+                ) return null;
+                const listingId = Number(listingValues[0]);
+                const accountId = Number(accountValues[0]);
+                const code = String(codeValues[0]).trim().toLowerCase();
+                if (
+                    !Number.isSafeInteger(listingId) || listingId <= 0
+                    || !Number.isSafeInteger(accountId) || accountId <= 0
+                    || !/^[a-z][a-z0-9_-]{1,49}$/.test(code)
+                ) return null;
+                return {
+                    kind: 'marketplace_listing',
+                    ids: [listingId],
+                    marketplace_code: code,
+                    account_id: accountId,
+                    scope_mode: 'selected',
+                };
+            },
+
             async sendMessage() {
                 const text = this.draft.trim();
                 if (!text || this.sending) return;
@@ -226,15 +264,20 @@
 
                 const send = async (allowRetry) => {
                     const conversationId = await this.ensureConversation();
-                    const productIds = this.scopedProductIds();
+                    const marketplaceScope = this.marketplaceEntityScope();
+                    const productIds = marketplaceScope ? [] : this.scopedProductIds();
                     try {
                         return await this.api(`/agents/api/conversations/${conversationId}/messages`, {
                             method: 'POST',
                             body: JSON.stringify({
                                 message: text,
                                 product_ids: productIds,
+                                entity_kind: marketplaceScope ? 'marketplace_listing' : null,
+                                entity_scope: marketplaceScope,
                                 page_context: this.contextAttached ? this.pageContext : null,
-                                scope_mode: productIds.length ? 'page' : 'global',
+                                scope_mode: marketplaceScope
+                                    ? null
+                                    : (productIds.length ? 'page' : 'global'),
                             }),
                         });
                     } catch (error) {

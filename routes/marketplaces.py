@@ -5,15 +5,92 @@ Marketplaces and integration routes
 import json
 from datetime import datetime, timedelta
 from functools import wraps
-from flask import Blueprint, render_template, request, flash, redirect, url_for, jsonify, current_app
+from flask import Blueprint, render_template, request, flash, redirect, url_for, jsonify, current_app, abort
 from flask_login import login_required, current_user
+from sqlalchemy.orm import joinedload
 
-from models import db, Marketplace, MarketplaceCategory, MarketplaceCategoryCharacteristic, SupplierProduct
+from models import (
+    db,
+    Marketplace,
+    MarketplaceAttributeDefinition,
+    MarketplaceAttributeValue,
+    MarketplaceCategory,
+    MarketplaceCategoryCharacteristic,
+    MarketplaceProductType,
+    MarketplaceReferenceAccount,
+    MarketplaceTaxonomyCategory,
+    SupplierProduct,
+)
 from services.marketplace_service import MarketplaceService
 from services.marketplace_ai_parser import MarketplaceAwareParsingTask
+from services.marketplace_reference_accounts import (
+    MarketplaceReferenceAccountError,
+    MarketplaceReferenceAccountService,
+)
+from services.ozon_reference_service import (
+    OzonReferenceService,
+    OzonReferenceValidationError,
+)
 from services.ai_service import AIClient
 
 marketplaces_bp = Blueprint('marketplaces', __name__, url_prefix='/admin/marketplaces')
+
+
+def _legacy_wb_only(marketplace):
+    """Guard WB-shaped reference models/routes from other adapters."""
+    if marketplace and marketplace.code == 'wb':
+        return None
+    return jsonify({
+        'success': False,
+        'error': 'Этот экран пока поддерживает только WB reference data',
+    }), 409
+
+
+def _ozon_feature_enabled():
+    return bool(current_app.config.get('MARKETPLACE_OZON_ENABLED', False))
+
+
+def _require_ozon_feature():
+    if not _ozon_feature_enabled():
+        abort(404)
+
+
+def _ozon_marketplace_or_404(marketplace_id):
+    return Marketplace.query.filter_by(
+        id=marketplace_id,
+        code='ozon',
+        is_active=True,
+    ).first_or_404()
+
+
+def _ozon_product_type_or_404(product_type_id):
+    product_type = MarketplaceProductType.query.filter_by(
+        id=product_type_id,
+    ).first_or_404()
+    if product_type.marketplace.code != 'ozon':
+        abort(404)
+    return product_type
+
+
+def _ozon_attribute_or_404(attribute_id):
+    attribute = MarketplaceAttributeDefinition.query.filter_by(
+        id=attribute_id,
+    ).first_or_404()
+    if attribute.marketplace.code != 'ozon':
+        abort(404)
+    return attribute
+
+
+def _positive_page(raw_value):
+    try:
+        page = int(raw_value)
+    except (TypeError, ValueError):
+        return 1
+    return page if page > 0 else 1
+
+
+def _like_pattern(value):
+    return '%' + value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
 
 def admin_required(f):
     """Keep the blueprint importable when seller_platform.py is __main__."""
@@ -47,7 +124,21 @@ def index():
             db.session.commit()
             marketplaces = [wb]
 
-    return render_template('admin_marketplaces.html', marketplaces=marketplaces)
+    reference_accounts = {
+        account.marketplace_id: account
+        for account in MarketplaceReferenceAccount.query.filter(
+            MarketplaceReferenceAccount.marketplace_id.in_(
+                [marketplace.id for marketplace in marketplaces]
+            )
+        ).all()
+    } if marketplaces else {}
+
+    return render_template(
+        'admin_marketplaces.html',
+        marketplaces=marketplaces,
+        reference_accounts=reference_accounts,
+        ozon_enabled=_ozon_feature_enabled(),
+    )
 
 
 @marketplaces_bp.route('/<int:marketplace_id>/categories')
@@ -57,6 +148,9 @@ def categories(marketplace_id):
     """Browse categories for a marketplace with hierarchy grouping."""
     from collections import OrderedDict
     marketplace = Marketplace.query.get_or_404(marketplace_id)
+    unsupported = _legacy_wb_only(marketplace)
+    if unsupported:
+        return unsupported
     search = request.args.get('search', '')
 
     query = MarketplaceCategory.query.filter_by(marketplace_id=marketplace_id)
@@ -99,6 +193,9 @@ def categories(marketplace_id):
 def category_detail(category_id):
     """View and edit characteristics for a category."""
     category = MarketplaceCategory.query.get_or_404(category_id)
+    unsupported = _legacy_wb_only(category.marketplace)
+    if unsupported:
+        return unsupported
     characteristics = MarketplaceCategoryCharacteristic.query.filter_by(category_id=category_id).order_by(MarketplaceCategoryCharacteristic.required.desc(), MarketplaceCategoryCharacteristic.name).all()
     characteristic_allowlists = {
         str(charc.id): MarketplaceService.characteristic_allowlist_values(
@@ -137,6 +234,332 @@ def category_detail(category_id):
     )
 
 
+@marketplaces_bp.route('/<int:marketplace_id>/ozon/reference-account', methods=['POST'])
+@login_required
+@admin_required
+def save_ozon_reference_account(marketplace_id):
+    """Save the one explicit global credential used only for Ozon references."""
+    _require_ozon_feature()
+    _ozon_marketplace_or_404(marketplace_id)
+    try:
+        MarketplaceReferenceAccountService.save(
+            marketplace_id=marketplace_id,
+            external_account_id=request.form.get('external_account_id'),
+            api_key=request.form.get('api_key'),
+        )
+    except MarketplaceReferenceAccountError as exc:
+        flash(str(exc), 'danger')
+    except Exception:
+        current_app.logger.exception(
+            'Failed to save Ozon reference account marketplace_id=%s',
+            marketplace_id,
+        )
+        flash('Не удалось сохранить Ozon reference account', 'danger')
+    else:
+        flash('Ozon reference account сохранён. Выполните проверку подключения.', 'success')
+    return redirect(url_for('marketplaces.index'))
+
+
+@marketplaces_bp.route('/<int:marketplace_id>/ozon/reference-account/check', methods=['POST'])
+@login_required
+@admin_required
+def check_ozon_reference_account(marketplace_id):
+    _require_ozon_feature()
+    _ozon_marketplace_or_404(marketplace_id)
+    try:
+        checked, result = MarketplaceReferenceAccountService.check(
+            marketplace_id=marketplace_id,
+        )
+    except MarketplaceReferenceAccountError as exc:
+        flash(str(exc), 'danger')
+    except Exception:
+        current_app.logger.exception(
+            'Failed to check Ozon reference account marketplace_id=%s',
+            marketplace_id,
+        )
+        flash('Не удалось проверить Ozon reference account', 'danger')
+    else:
+        if result.ok:
+            flash('Подключение reference account к Ozon подтверждено.', 'success')
+        else:
+            flash(
+                checked.last_error_message or 'Ozon отклонил проверку подключения',
+                'danger',
+            )
+    return redirect(url_for('marketplaces.index'))
+
+
+@marketplaces_bp.route('/<int:marketplace_id>/ozon/reference-account/disconnect', methods=['POST'])
+@login_required
+@admin_required
+def disconnect_ozon_reference_account(marketplace_id):
+    # Secret removal remains available during a feature rollback.
+    _ozon_marketplace_or_404(marketplace_id)
+    try:
+        MarketplaceReferenceAccountService.disconnect(
+            marketplace_id=marketplace_id,
+        )
+    except MarketplaceReferenceAccountError as exc:
+        flash(str(exc), 'danger')
+    except Exception:
+        current_app.logger.exception(
+            'Failed to disconnect Ozon reference account marketplace_id=%s',
+            marketplace_id,
+        )
+        flash('Не удалось удалить Ozon reference credential', 'danger')
+    else:
+        flash('Ozon reference credential удалён.', 'success')
+    return redirect(url_for('marketplaces.index'))
+
+
+@marketplaces_bp.route('/<int:marketplace_id>/ozon/sync-tree', methods=['POST'])
+@login_required
+@admin_required
+def sync_ozon_tree(marketplace_id):
+    _require_ozon_feature()
+    _ozon_marketplace_or_404(marketplace_id)
+    result = OzonReferenceService.sync_tree(marketplace_id)
+    if result.get('success'):
+        flash(
+            'Справочник Ozon синхронизирован: '
+            f"{result.get('available_categories', 0)} категорий, "
+            f"{result.get('available_types', 0)} типов.",
+            'success',
+        )
+    else:
+        flash(result.get('error') or 'Не удалось синхронизировать Ozon', 'danger')
+    return redirect(url_for('marketplaces.index'))
+
+
+@marketplaces_bp.route('/<int:marketplace_id>/ozon/categories')
+@login_required
+@admin_required
+def ozon_categories(marketplace_id):
+    _require_ozon_feature()
+    marketplace = _ozon_marketplace_or_404(marketplace_id)
+    search = str(request.args.get('search', '') or '').strip()[:200]
+    page = _positive_page(request.args.get('page', '1'))
+    per_page = 100
+    query = MarketplaceProductType.query.options(
+        joinedload(MarketplaceProductType.category),
+    ).join(
+        MarketplaceTaxonomyCategory,
+        MarketplaceProductType.category_id == MarketplaceTaxonomyCategory.id,
+    ).filter(
+        MarketplaceProductType.marketplace_id == marketplace.id,
+    )
+    if search:
+        pattern = _like_pattern(search)
+        query = query.filter(
+            MarketplaceProductType.name.ilike(pattern, escape='\\')
+            | MarketplaceProductType.external_type_id.ilike(pattern, escape='\\')
+            | MarketplaceTaxonomyCategory.full_path.ilike(pattern, escape='\\')
+            | MarketplaceTaxonomyCategory.external_category_id.ilike(
+                pattern,
+                escape='\\',
+            )
+        )
+    total = query.count()
+    product_types = query.order_by(
+        MarketplaceTaxonomyCategory.full_path.asc(),
+        MarketplaceProductType.name.asc(),
+        MarketplaceProductType.id.asc(),
+    ).offset((page - 1) * per_page).limit(per_page).all()
+    enabled_count = MarketplaceProductType.query.filter_by(
+        marketplace_id=marketplace.id,
+        is_enabled=True,
+        is_available=True,
+    ).count()
+    return render_template(
+        'admin_ozon_categories.html',
+        marketplace=marketplace,
+        product_types=product_types,
+        search=search,
+        page=page,
+        per_page=per_page,
+        total=total,
+        enabled_count=enabled_count,
+    )
+
+
+@marketplaces_bp.route('/ozon/types/<int:product_type_id>')
+@login_required
+@admin_required
+def ozon_type_detail(product_type_id):
+    _require_ozon_feature()
+    product_type = _ozon_product_type_or_404(product_type_id)
+    attributes = MarketplaceAttributeDefinition.query.filter_by(
+        product_type_id=product_type.id,
+    ).order_by(
+        MarketplaceAttributeDefinition.is_required.desc(),
+        MarketplaceAttributeDefinition.group_name.asc(),
+        MarketplaceAttributeDefinition.sort_order.asc(),
+        MarketplaceAttributeDefinition.id.asc(),
+    ).all()
+    return render_template(
+        'admin_ozon_type_detail.html',
+        product_type=product_type,
+        attributes=attributes,
+        schema_fresh=OzonReferenceService.reference_is_fresh(product_type),
+    )
+
+
+@marketplaces_bp.route('/ozon/types/<int:product_type_id>/sync', methods=['POST'])
+@login_required
+@admin_required
+def sync_ozon_type_attributes(product_type_id):
+    _require_ozon_feature()
+    _ozon_product_type_or_404(product_type_id)
+    result = OzonReferenceService.sync_attributes(product_type_id)
+    if result.get('success'):
+        flash(
+            f"Схема Ozon обновлена: {result.get('total', 0)} атрибутов.",
+            'success',
+        )
+    else:
+        flash(result.get('error') or 'Не удалось обновить схему Ozon', 'danger')
+    return redirect(
+        url_for('marketplaces.ozon_type_detail', product_type_id=product_type_id)
+    )
+
+
+@marketplaces_bp.route('/ozon/types/<int:product_type_id>/toggle', methods=['POST'])
+@login_required
+@admin_required
+def toggle_ozon_type(product_type_id):
+    _require_ozon_feature()
+    _ozon_product_type_or_404(product_type_id)
+    payload = request.get_json(silent=True)
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {'is_enabled'}
+        or not isinstance(payload.get('is_enabled'), bool)
+    ):
+        return jsonify({
+            'success': False,
+            'error': 'Ожидается только boolean is_enabled',
+        }), 400
+    result = OzonReferenceService.set_product_type_enabled(
+        product_type_id,
+        payload['is_enabled'],
+    )
+    return jsonify(result), (200 if result.get('success') else 409)
+
+
+@marketplaces_bp.route('/ozon/attributes/<int:attribute_id>')
+@login_required
+@admin_required
+def ozon_attribute_detail(attribute_id):
+    _require_ozon_feature()
+    attribute = _ozon_attribute_or_404(attribute_id)
+    search = str(request.args.get('search', '') or '').strip()[:200]
+    page = _positive_page(request.args.get('page', '1'))
+    per_page = 100
+    values_query = MarketplaceAttributeValue.query.filter_by(
+        attribute_id=attribute.id,
+        is_available=True,
+    )
+    if search:
+        pattern = _like_pattern(search)
+        values_query = values_query.filter(
+            MarketplaceAttributeValue.value.ilike(pattern, escape='\\')
+            | MarketplaceAttributeValue.external_value_id.ilike(
+                pattern,
+                escape='\\',
+            )
+        )
+    values_total = values_query.count()
+    values = values_query.order_by(
+        MarketplaceAttributeValue.value_normalized.asc(),
+        MarketplaceAttributeValue.external_value_id.asc(),
+    ).offset((page - 1) * per_page).limit(per_page).all()
+
+    restriction_ids = attribute.restriction_value_ids
+    available_restriction_ids = set()
+    for offset in range(0, len(restriction_ids), 500):
+        chunk = restriction_ids[offset:offset + 500]
+        available_restriction_ids.update(
+            row.external_value_id
+            for row in MarketplaceAttributeValue.query.filter(
+                MarketplaceAttributeValue.attribute_id == attribute.id,
+                MarketplaceAttributeValue.is_available.is_(True),
+                MarketplaceAttributeValue.external_value_id.in_(chunk),
+            ).all()
+        )
+    return render_template(
+        'admin_ozon_attribute_detail.html',
+        attribute=attribute,
+        values=values,
+        values_total=values_total,
+        search=search,
+        page=page,
+        per_page=per_page,
+        restriction_ids=restriction_ids,
+        invalid_restriction_ids=sorted(
+            set(restriction_ids) - available_restriction_ids,
+            key=lambda value: (
+                (0, int(value)) if value.isdigit() else (1, value)
+            ),
+        ),
+        dictionary_fresh=OzonReferenceService.dictionary_is_fresh(attribute),
+    )
+
+
+@marketplaces_bp.route('/ozon/attributes/<int:attribute_id>/sync-values', methods=['POST'])
+@login_required
+@admin_required
+def sync_ozon_attribute_values(attribute_id):
+    _require_ozon_feature()
+    _ozon_attribute_or_404(attribute_id)
+    result = OzonReferenceService.sync_attribute_values(attribute_id)
+    if result.get('success'):
+        flash(
+            f"Словарь Ozon обновлён: {result.get('total', 0)} значений.",
+            'success',
+        )
+    else:
+        flash(result.get('error') or 'Не удалось обновить словарь Ozon', 'danger')
+    return redirect(
+        url_for('marketplaces.ozon_attribute_detail', attribute_id=attribute_id)
+    )
+
+
+@marketplaces_bp.route('/ozon/attributes/<int:attribute_id>/update', methods=['POST'])
+@login_required
+@admin_required
+def update_ozon_attribute(attribute_id):
+    _require_ozon_feature()
+    _ozon_attribute_or_404(attribute_id)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'success': False, 'error': 'Ожидается JSON-объект'}), 400
+    allowed = {'is_enabled', 'ai_instruction', 'restriction_value_ids'}
+    if len(payload) != 1 or not set(payload).issubset(allowed):
+        return jsonify({
+            'success': False,
+            'error': 'Изменяйте ровно одну настройку Ozon за запрос',
+        }), 400
+    try:
+        result = OzonReferenceService.update_attribute_configuration(
+            attribute_id,
+            **payload,
+        )
+    except OzonReferenceValidationError as exc:
+        status = 409 if 'cannot be disabled' in str(exc) else 400
+        return jsonify({'success': False, 'error': str(exc)}), status
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            'Failed to update Ozon attribute configuration attribute_id=%s',
+            attribute_id,
+        )
+        return jsonify({
+            'success': False,
+            'error': 'Не удалось сохранить настройку атрибута Ozon',
+        }), 500
+    return jsonify(result)
+
+
 @marketplaces_bp.route('/prompt_tester')
 @login_required
 @admin_required
@@ -156,6 +579,9 @@ def prompt_tester():
 def update_settings(marketplace_id):
     """Save marketplace settings (API key, etc.)."""
     marketplace = Marketplace.query.get_or_404(marketplace_id)
+    unsupported = _legacy_wb_only(marketplace)
+    if unsupported:
+        return unsupported
 
     api_key = request.form.get('api_key', '').strip()
     if api_key:
@@ -173,6 +599,10 @@ def update_settings(marketplace_id):
 @admin_required
 def sync_categories(marketplace_id):
     """Sync categories hierarchy."""
+    marketplace = Marketplace.query.get_or_404(marketplace_id)
+    unsupported = _legacy_wb_only(marketplace)
+    if unsupported:
+        return unsupported
     result = MarketplaceService.sync_categories(marketplace_id)
     if result.get('success'):
         flash(f"Категории успешно синхронизированы. Добавлено: {result.get('added')}, Обновлено: {result.get('updated')}", 'success')
@@ -186,6 +616,10 @@ def sync_categories(marketplace_id):
 @admin_required
 def sync_directories(marketplace_id):
     """Sync base directories like colors, materials, etc."""
+    marketplace = Marketplace.query.get_or_404(marketplace_id)
+    unsupported = _legacy_wb_only(marketplace)
+    if unsupported:
+        return unsupported
     result = MarketplaceService.sync_directories(marketplace_id)
     if result.get('success'):
         flash("Справочники успешно синхронизированы.", 'success')
@@ -199,6 +633,10 @@ def sync_directories(marketplace_id):
 @admin_required
 def sync_characteristics(category_id):
     """Sync characteristics for specific category."""
+    category = MarketplaceCategory.query.get_or_404(category_id)
+    unsupported = _legacy_wb_only(category.marketplace)
+    if unsupported:
+        return unsupported
     result = MarketplaceService.sync_category_characteristics(category_id)
     if result.get('success'):
         flash(f"Характеристики синхронизированы. Добавлено: {result.get('added')}, Обновлено: {result.get('updated')}", 'success')
@@ -213,6 +651,9 @@ def sync_characteristics(category_id):
 def toggle_category(category_id):
     """Toggle is_enabled for a single category. Auto-syncs characteristics if enabling and none exist."""
     category = MarketplaceCategory.query.get_or_404(category_id)
+    unsupported = _legacy_wb_only(category.marketplace)
+    if unsupported:
+        return unsupported
     data = request.json
     new_state = bool(data.get('is_enabled', not category.is_enabled))
     if new_state and not category.is_available:
@@ -251,6 +692,10 @@ def toggle_category(category_id):
 @admin_required
 def toggle_category_group(marketplace_id):
     """Toggle is_enabled for all categories in a parent group."""
+    marketplace = Marketplace.query.get_or_404(marketplace_id)
+    unsupported = _legacy_wb_only(marketplace)
+    if unsupported:
+        return unsupported
     data = request.json
     parent_name = data.get('parent_name')
     is_enabled = bool(data.get('is_enabled', True))
@@ -276,6 +721,10 @@ def toggle_category_group(marketplace_id):
 @admin_required
 def sync_enabled_categories(marketplace_id):
     """Refresh a bounded batch of stale enabled category schemas."""
+    marketplace = Marketplace.query.get_or_404(marketplace_id)
+    unsupported = _legacy_wb_only(marketplace)
+    if unsupported:
+        return unsupported
     payload = request.get_json(silent=True) or {}
     try:
         limit = int(payload.get('limit', 50))
@@ -294,6 +743,9 @@ def sync_enabled_categories(marketplace_id):
 def update_characteristic(charc_id):
     """Update characteristic properties and its manual WB allowlist."""
     charc = MarketplaceCategoryCharacteristic.query.get_or_404(charc_id)
+    unsupported = _legacy_wb_only(charc.category.marketplace)
+    if unsupported:
+        return unsupported
 
     data = request.get_json(silent=True)
     if not isinstance(data, dict):

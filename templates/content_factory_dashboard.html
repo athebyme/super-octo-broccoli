@@ -92,6 +92,11 @@
                         {% if not f.is_active %}
                             {{ badge('Неактивна', color='yellow', size='sm') }}
                         {% endif %}
+                        {% if f.catalog_source == 'marketplace_listing' %}
+                            {{ badge('Ozon · ' ~ (f.marketplace_account.label if f.marketplace_account else 'нет кабинета'), color='blue', size='sm') }}
+                        {% else %}
+                            {{ badge('WB-каталог', color='gray', size='sm') }}
+                        {% endif %}
                     </div>
                     <div style="display:flex; align-items:center; gap:4px;">
                         <a href="{{ url_for('content_factory_edit', factory_id=f.id) }}"

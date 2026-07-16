@@ -1194,6 +1194,70 @@ def main():
     success = migrate(db_path)
     if success:
         try:
+            from migrate_add_marketplace_accounts import (
+                migrate as migrate_marketplace_accounts,
+            )
+            migrate_marketplace_accounts(db_path)
+            from migrate_add_ozon_references import (
+                migrate as migrate_ozon_references,
+            )
+            migrate_ozon_references(db_path)
+            from migrate_add_marketplace_listings import (
+                STARTUP_BACKFILL_LIMIT,
+                migrate as migrate_marketplace_listings,
+            )
+            migrate_marketplace_listings(
+                db_path,
+                backfill_limit=STARTUP_BACKFILL_LIMIT,
+            )
+            from migrate_add_marketplace_product_links import (
+                migrate as migrate_marketplace_product_links,
+            )
+            migrate_marketplace_product_links(db_path)
+            from migrate_add_marketplace_canonical_content import (
+                migrate as migrate_marketplace_canonical_content,
+            )
+            migrate_marketplace_canonical_content(db_path)
+            from migrate_add_marketplace_rollout import (
+                migrate as migrate_marketplace_rollout,
+            )
+            migrate_marketplace_rollout(db_path)
+            from migrate_add_marketplace_drafts import (
+                migrate as migrate_marketplace_drafts,
+            )
+            migrate_marketplace_drafts(db_path)
+            from migrate_add_marketplace_operations import (
+                migrate as migrate_marketplace_operations,
+            )
+            migrate_marketplace_operations(db_path)
+            from migrate_add_marketplace_commercial import (
+                migrate as migrate_marketplace_commercial,
+            )
+            migrate_marketplace_commercial(db_path)
+            from migrate_add_marketplace_product_updates import (
+                migrate as migrate_marketplace_product_updates,
+            )
+            migrate_marketplace_product_updates(db_path)
+            from migrate_add_marketplace_auto_publish import (
+                migrate as migrate_marketplace_auto_publish,
+            )
+            migrate_marketplace_auto_publish(db_path)
+            from migrate_add_marketplace_quality_analytics import (
+                migrate as migrate_marketplace_quality_analytics,
+            )
+            migrate_marketplace_quality_analytics(db_path)
+            from migrate_add_marketplace_fulfillment import (
+                migrate as migrate_marketplace_fulfillment,
+            )
+            migrate_marketplace_fulfillment(db_path)
+            from migrate_add_marketplace_finance import (
+                migrate as migrate_marketplace_finance,
+            )
+            migrate_marketplace_finance(db_path)
+            from migrate_add_marketplace_inbox import (
+                migrate as migrate_marketplace_inbox,
+            )
+            migrate_marketplace_inbox(db_path)
             from migrate_add_image_generation_lab import migrate as migrate_image_lab
             migrate_image_lab(db_path)
             from migrate_add_image_lab_reference_watermark import (
@@ -1204,8 +1268,16 @@ def main():
                 migrate as migrate_image_lab_angle_synthesis,
             )
             migrate_image_lab_angle_synthesis(db_path)
+            from migrate_add_image_lab_marketplace_target import (
+                migrate as migrate_image_lab_marketplace_target,
+            )
+            migrate_image_lab_marketplace_target(db_path)
+            from migrate_add_content_factory_marketplace_scope import (
+                migrate as migrate_content_factory_marketplace_scope,
+            )
+            migrate_content_factory_marketplace_scope(db_path)
         except Exception as exc:
-            print(f"❌ Image Lab migration failed: {exc}")
+            print(f"❌ Post-schema migration failed: {exc}")
             success = False
     sys.exit(0 if success else 1)
 

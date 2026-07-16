@@ -138,6 +138,24 @@
         </div>
     </div>
 
+    {% if marketplace_read_state is defined and marketplace_read_state.common_read_requested %}
+    {% if marketplace_read_state.read_mode == 'marketplace_listing' %}
+    <div class="sh-alert sh-alert--success mb-5" role="status">
+        <div>
+            <strong>Общий read-path активен</strong>
+            <div class="text-xs mt-1">Состав WB-каталога читается через MarketplaceListing; данные карточки остаются в проверенной legacy-модели.</div>
+        </div>
+    </div>
+    {% else %}
+    <div class="sh-alert sh-alert--warning mb-5" role="status">
+        <div>
+            <strong>Common read запрошен, но безопасно отложен</strong>
+            <div class="text-xs mt-1">Parity ещё не зелёный, поэтому каталог автоматически работает через legacy Product без потери карточек.</div>
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
     <!-- Статус последней синхронизации -->
     {% if seller.api_last_sync %}
     <a href="{{ url_for('product_sync_status_page') }}" class="mb-6 p-4 bg-gray-50 rounded-lg flex items-center gap-3 hover:bg-gray-100 transition-colors cursor-pointer block">

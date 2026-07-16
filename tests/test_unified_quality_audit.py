@@ -98,7 +98,7 @@ class TestProductKindChainingGuard(unittest.TestCase):
             _PRODUCT_KIND_SAFE_SKILLS,
             {
                 'content-writer', 'wb-content-publisher', 'batch-audit',
-                'card-insight', 'quality-audit',
+                'card-insight', 'quality-audit', 'image-generator',
             },
         )
 

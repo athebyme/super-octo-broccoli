@@ -47,6 +47,13 @@ def register_agents_routes(app):
             return redirect(url_for('dashboard'))
 
         seller_id = current_user.seller.id
+        if request.args.get('new') == '1':
+            conversation = agent_harness.create_conversation(
+                seller_id, current_user.id,
+            )
+            return redirect(url_for(
+                'agents_dashboard', conversation=conversation.id,
+            ))
         conversations = agent_harness.list_conversations(
             seller_id, current_user.id, limit=40,
         )
@@ -113,7 +120,8 @@ def register_agents_routes(app):
             result = agent_harness.submit_turn(
                 conversation, body.get('message', ''), body.get('product_ids'),
                 body.get('page_context'), body.get('entity_kind'),
-                body.get('scope_mode'),
+                scope_mode=body.get('scope_mode'),
+                entity_scope=body.get('entity_scope'),
             )
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400

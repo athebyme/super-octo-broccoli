@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}Каталог маркетплейсов — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    <nav class="sh-breadcrumb" aria-label="Навигационная цепочка">
+        <a href="{{ url_for('marketplaces.index') }}">Маркетплейсы</a>
+        <span aria-hidden="true"> / </span>
+        <span>Единый каталог</span>
+    </nav>
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-semibold" style="color:var(--text)">Каталог маркетплейсов</h1>
+            <p class="mt-1 text-sm" style="color:var(--text-secondary)">
+                Единая read-only проекция WB и Ozon. Цены и остатки здесь не изменяются.
+            </p>
+        </div>
+        <div class="flex flex-wrap gap-2 self-start">
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('seller_my_products') }}">Подготовка WB</a>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index') }}">Черновики Ozon</a>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <div class="mb-4 rounded-md border px-4 py-3 text-sm"
+         style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>
+    {% endfor %}
+    {% endwith %}
+
+    {% if ozon_enabled and accounts %}
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-6" aria-label="Синхронизация кабинетов">
+        {% for account in accounts if account.marketplace.code == 'ozon' %}
+        {% set sync = latest_syncs.get(account.id) %}
+        <article class="sh-card p-4">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h2 class="font-semibold truncate" style="color:var(--text)">{{ account.label }}</h2>
+                        <span class="text-xs uppercase" style="color:var(--accent)">Ozon</span>
+                    </div>
+                    <p class="mt-1 text-xs" style="color:var(--text-muted)">
+                        {% if sync %}
+                        Последний run: {{ sync.status }} · {{ sync.phase }} · страниц {{ sync.page_count }} · найдено {{ sync.seen_count }}
+                        {% else %}
+                        Каталог ещё не синхронизировался
+                        {% endif %}
+                    </p>
+                    {% if sync and sync.error_message %}
+                    <p class="mt-1 text-xs" style="color:var(--danger)">{{ sync.error_message }}</p>
+                    {% endif %}
+                </div>
+                {% if account.is_active and account.has_credentials and account.connection_status == 'connected' %}
+                <form method="post" action="{{ url_for('marketplace_listings.sync_account', account_id=account.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="max_pages" value="5">
+                    <button class="sh-btn sh-btn--primary" type="submit">
+                        {{ 'Продолжить' if sync and sync.status in ['paused', 'failed'] else 'Синхронизировать' }}
+                    </button>
+                </form>
+                {% if sync and sync.status == 'failed' %}
+                <form method="post" action="{{ url_for('marketplace_listings.sync_account', account_id=account.id) }}"
+                      onsubmit="return confirm('Начать новый полный sweep с первой страницы? Последний успешный read-model останется доступен.')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="max_pages" value="5">
+                    <input type="hidden" name="force_restart" value="1">
+                    <button class="sh-btn sh-btn--secondary" type="submit">Начать заново</button>
+                </form>
+                {% endif %}
+                {% else %}
+                <span class="text-xs" style="color:var(--text-muted)">Сначала проверьте подключение</span>
+                {% endif %}
+            </div>
+        </article>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    <form method="get" class="sh-card p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
+        <label class="block lg:col-span-2">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Поиск</span>
+            <input name="search" maxlength="200" value="{{ filters.search or '' }}"
+                   placeholder="Название, offer ID или product ID"
+                   class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                   style="border-color:var(--border);color:var(--text)">
+        </label>
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Маркетплейс</span>
+            <select name="marketplace" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                <option value="wb" {% if filters.marketplace_code == 'wb' %}selected{% endif %}>Wildberries</option>
+                <option value="ozon" {% if filters.marketplace_code == 'ozon' %}selected{% endif %}>Ozon</option>
+            </select>
+        </label>
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет</span>
+            <select name="account_id" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for account in accounts %}
+                <option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Статус</span>
+            <select name="status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for status in ['active', 'moderation', 'creating', 'error', 'archived', 'inactive', 'unknown'] %}
+                <option value="{{ status }}" {% if filters.normalized_status == status %}selected{% endif %}>{{ status }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Общая карточка</span>
+            <select name="link_status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                <option value="linked" {% if filters.link_status == 'linked' %}selected{% endif %}>Связана</option>
+                <option value="unlinked" {% if filters.link_status == 'unlinked' %}selected{% endif %}>Не связана</option>
+                <option value="ambiguous" {% if filters.link_status == 'ambiguous' %}selected{% endif %}>Нужно выбрать</option>
+            </select>
+        </label>
+        <div class="sm:col-span-2 lg:col-span-6 flex flex-wrap items-center justify-between gap-3">
+            <label class="inline-flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
+                <input type="checkbox" name="include_unavailable" value="1" {% if filters.include_unavailable %}checked{% endif %}>
+                Показывать отсутствующие после полного sweep
+            </label>
+            <button class="sh-btn sh-btn--secondary" type="submit">Применить</button>
+        </div>
+    </form>
+
+    <div class="flex items-center justify-between gap-3 mb-3">
+        <p class="text-sm" style="color:var(--text-secondary)">Найдено: {{ pagination.total }}</p>
+        <p class="text-xs" style="color:var(--text-muted)">Страница {{ pagination.page }} из {{ pagination.pages or 1 }}</p>
+    </div>
+
+    {% if listings %}
+    <div class="space-y-3">
+        {% for listing in listings %}
+        {% set price = listing._json_value(listing.price_summary_json, {}) %}
+        {% set stock = listing._json_value(listing.stock_summary_json, {}) %}
+        <a href="{{ url_for('marketplace_listings.detail', listing_id=listing.id) }}" class="sh-card block p-4 hover:border-current transition-colors">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-xs uppercase font-medium" style="color:var(--accent)">{{ listing.marketplace.code }}</span>
+                        {% if listing.account %}<span class="text-xs" style="color:var(--text-muted)">{{ listing.account.label }}</span>{% endif %}
+                        <span class="text-xs rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ listing.normalized_status }}</span>
+                        <span class="sh-badge sh-badge--{{ 'green' if listing.canonical_link_status == 'linked' else ('yellow' if listing.canonical_link_status == 'ambiguous' else 'gray') }} sh-badge--sm">
+                            {{ 'общая карточка' if listing.canonical_link_status == 'linked' else ('нужно выбрать связь' if listing.canonical_link_status == 'ambiguous' else 'без общей карточки') }}
+                        </span>
+                        {% if not listing.is_available %}<span class="text-xs" style="color:var(--danger)">не найден в полном sweep</span>{% endif %}
+                    </div>
+                    <h2 class="mt-2 font-semibold truncate" style="color:var(--text)">{{ listing.title or 'Без названия' }}</h2>
+                    <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">offer: {{ listing.offer_id }} · product: {{ listing.external_product_id }}</p>
+                </div>
+                <div class="grid grid-cols-2 gap-5 text-sm md:text-right shrink-0">
+                    <div>
+                        <div class="text-xs" style="color:var(--text-muted)">Цена</div>
+                        <div style="color:var(--text)">{{ price.get('values', {}).get('marketing_seller_price') or price.get('price') or '—' }}</div>
+                    </div>
+                    <div>
+                        <div class="text-xs" style="color:var(--text-muted)">Остаток</div>
+                        <div style="color:var(--text)">{{ stock.get('present', '—') }}</div>
+                    </div>
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="sh-card px-4 py-10 text-center text-sm" style="color:var(--text-muted)">По выбранным фильтрам листингов нет.</div>
+    {% endif %}
+
+    {% if pagination.pages > 1 %}
+    <nav class="mt-5 flex items-center justify-center gap-2" aria-label="Пагинация">
+        {% if pagination.has_prev %}
+        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', page=pagination.prev_num, marketplace=filters.marketplace_code, account_id=filters.account_id, status=filters.normalized_status, link_status=filters.link_status, search=filters.search, include_unavailable=1 if filters.include_unavailable else 0) }}">Назад</a>
+        {% endif %}
+        {% if pagination.has_next %}
+        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', page=pagination.next_num, marketplace=filters.marketplace_code, account_id=filters.account_id, status=filters.normalized_status, link_status=filters.link_status, search=filters.search, include_unavailable=1 if filters.include_unavailable else 0) }}">Дальше</a>
+        {% endif %}
+    </nav>
+    {% endif %}
+</div>
+{% endblock %}

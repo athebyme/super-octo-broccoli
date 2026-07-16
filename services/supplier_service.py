@@ -127,6 +127,9 @@ class ImportResult:
     errors: int = 0
     error_messages: list = field(default_factory=list)
     imported_product_ids: list = field(default_factory=list)
+    marketplace_drafts_created: int = 0
+    marketplace_drafts_existing: int = 0
+    marketplace_draft_errors: int = 0
 
 
 @dataclass
@@ -1635,7 +1638,7 @@ class SupplierService:
         """
         result = ImportResult(total_requested=len(supplier_product_ids))
 
-        seller = Seller.query.get(seller_id)
+        seller = db.session.get(Seller, seller_id)
         if not seller:
             result.success = False
             result.error_messages.append("Продавец не найден")
@@ -1670,6 +1673,10 @@ class SupplierService:
         for imp in existing_imports:
             existing_sp_ids.add(imp.supplier_product_id)
 
+        draft_source_ids = [
+            imp.id for imp in existing_imports if imp.id is not None
+        ]
+
         # Импортируем
         for sp in supplier_products:
             try:
@@ -1678,9 +1685,16 @@ class SupplierService:
                     continue
 
                 imported = _copy_to_imported_product(seller_id, sp)
-                db.session.add(imported)
+                # Per-item savepoint keeps one malformed supplier row from
+                # poisoning the whole exact seller import transaction. The
+                # flush is required before local marketplace drafts can use
+                # the durable ImportedProduct ID.
+                with db.session.begin_nested():
+                    db.session.add(imported)
+                    db.session.flush()
                 result.imported += 1
-                result.imported_product_ids.append(imported.id if imported.id else 0)
+                result.imported_product_ids.append(imported.id)
+                draft_source_ids.append(imported.id)
 
             except Exception as e:
                 result.errors += 1
@@ -1699,6 +1713,39 @@ class SupplierService:
                 conn.last_import_at = datetime.utcnow()
 
         db.session.commit()
+
+        # ImportedProduct остаётся WB-compatible source draft, а каждый
+        # включённый Ozon account получает отдельную локальную проекцию. Этот
+        # шаг не вызывает provider/LLM и не меняет результат supplier import.
+        if draft_source_ids:
+            try:
+                from services.marketplace_auto_publish import (
+                    MarketplaceDraftProvisioner,
+                )
+
+                provisioned = MarketplaceDraftProvisioner.provision_in_chunks(
+                    seller_id=seller_id,
+                    imported_product_ids=sorted(set(draft_source_ids)),
+                )
+                result.marketplace_drafts_created = provisioned["created"]
+                result.marketplace_drafts_existing = provisioned["existing"]
+                result.marketplace_draft_errors = provisioned["failed"]
+                if provisioned["failed"]:
+                    result.error_messages.append(
+                        "Не удалось подготовить часть Ozon-черновиков: "
+                        f"{provisioned['failed']}"
+                    )
+            except Exception as exc:
+                db.session.rollback()
+                result.marketplace_draft_errors = len(draft_source_ids)
+                result.error_messages.append(
+                    "Supplier import завершён, но Ozon-черновики требуют повторной подготовки"
+                )
+                logger.warning(
+                    "Не удалось provision Ozon drafts для seller %s (%s)",
+                    seller_id,
+                    type(exc).__name__,
+                )
 
         # Проверяем товары без фотографий и уведомляем продавца
         if result.imported > 0:
@@ -3449,27 +3496,18 @@ def _build_marketplace_data(product: SupplierProduct, parsed: dict) -> dict:
     identity = parsed.get('product_identity', {})
     origin = parsed.get('origin', {})
 
-    # --- Оценка веса, если AI не извлёк ---
-    estimated_weight_g = _estimate_weight_g(product, parsed)
-
     # Габариты товара
     dims_length = physical.get('length_cm')
     dims_width = physical.get('width_cm')
     dims_height = physical.get('height_cm')
     dims_weight_kg = round(physical.get('weight_g', 0) / 1000, 2) if physical.get('weight_g') else None
 
-    if not dims_weight_kg and estimated_weight_g:
-        dims_weight_kg = round(estimated_weight_g / 1000, 2)
-
-    # Габариты упаковки — fallback 20×20×30 если ничего нет
-    pkg_length = pkg.get('package_length_cm') or 20
-    pkg_width = pkg.get('package_width_cm') or 20
-    pkg_height = pkg.get('package_height_cm') or 30
+    # Только явно извлечённые габариты упаковки. Подстановка типичных размеров
+    # или веса создаёт ложный physical fact и запрещена для marketplace drafts.
+    pkg_length = pkg.get('package_length_cm')
+    pkg_width = pkg.get('package_width_cm')
+    pkg_height = pkg.get('package_height_cm')
     pkg_weight_kg = round(pkg.get('package_weight_g', 0) / 1000, 2) if pkg.get('package_weight_g') else None
-
-    if not pkg_weight_kg and dims_weight_kg:
-        # Упаковка ≈ товар + 50-100г на коробку/пакет
-        pkg_weight_kg = round(dims_weight_kg + 0.08, 2)
 
     wb_data = {
         'title': mp.get('wb_title_suggestion') or product.ai_seo_title or product.title or '',
@@ -4096,158 +4134,6 @@ def _post_fill_marketplace_fields_fallback(
             product.marketplace_fields_json = json.dumps(flat, ensure_ascii=False)
     except Exception as e:
         logger.debug(f"[PostFill fallback] Error: {e}")
-
-
-# ============================================================================
-# WEIGHT / DIMENSIONS ESTIMATION
-# ============================================================================
-
-# Оценка веса по категории / типу товара (граммы)
-# Ключ — подстрока в wb_subject, category или product_type (lowercase)
-_WEIGHT_ESTIMATES = {
-    # Белье и одежда
-    'белье': 120,
-    'бельё': 120,
-    'трусы': 60,
-    'стринг': 40,
-    'бюстгальтер': 80,
-    'лиф': 80,
-    'корсет': 250,
-    'корсаж': 200,
-    'боди': 150,
-    'комбинезон': 250,
-    'пеньюар': 150,
-    'халат': 300,
-    'сорочка': 120,
-    'чулки': 60,
-    'колготки': 80,
-    'носки': 40,
-    'перчатки': 50,
-    'маска': 60,
-    'повязка': 30,
-    'костюм': 350,
-    'платье': 250,
-    'юбка': 150,
-    'накидка': 150,
-    'плетка': 200,
-    'флоггер': 250,
-
-    # БДСМ аксессуары
-    'наручники': 200,
-    'кляп': 100,
-    'ошейник': 120,
-    'поводок': 80,
-    'привязь': 150,
-    'бондаж': 300,
-    'фиксатор': 200,
-    'зажим': 40,
-    'шлепалка': 120,
-    'стек': 150,
-    'кнут': 200,
-    'паддл': 180,
-    'веревка': 250,
-    'верёвка': 250,
-    'лента': 60,
-    'ремень': 150,
-
-    # Вибраторы и секс-игрушки
-    'вибратор': 180,
-    'массажер': 250,
-    'массажёр': 250,
-    'стимулятор': 120,
-    'фаллоимитатор': 300,
-    'дилдо': 300,
-    'анальн': 100,
-    'пробка': 100,
-    'plug': 100,
-    'кольцо': 50,
-    'насадка': 80,
-    'помпа': 250,
-    'мастурбатор': 350,
-    'вагина': 400,
-    'яйцо': 60,
-    'шарик': 80,
-    'бусы': 80,
-    'клитор': 80,
-
-    # Косметика и смазки
-    'смазка': 150,
-    'лубрикант': 150,
-    'гель': 120,
-    'крем': 100,
-    'масло': 200,
-    'спрей': 100,
-    'духи': 80,
-    'парфюм': 80,
-    'свеча': 250,
-
-    # Презервативы
-    'презерватив': 40,
-
-    # Прочее
-    'батарейк': 30,
-    'зарядк': 80,
-    'чехол': 60,
-    'сумка': 150,
-}
-
-
-def _estimate_weight_g(product, parsed: dict) -> Optional[int]:
-    """
-    Оценивает вес товара на основе категории, типа и материалов.
-    Возвращает вес в граммах или None если оценить невозможно.
-    """
-    physical = parsed.get('physical', {})
-
-    # Если AI уже извлёк вес — не трогаем
-    if physical.get('weight_g'):
-        return physical['weight_g']
-
-    # Собираем текстовые подсказки для определения типа
-    identity = parsed.get('product_identity', {})
-    hints = ' '.join(filter(None, [
-        (identity.get('wb_subject') or '').lower(),
-        (identity.get('product_type') or '').lower(),
-        (identity.get('product_subtype') or '').lower(),
-        (product.category or '').lower(),
-        (product.wb_subject_name or '').lower(),
-        (product.title or '').lower(),
-    ]))
-
-    # Ищем совпадение по таблице
-    best_weight = None
-    best_len = 0
-    for keyword, weight in _WEIGHT_ESTIMATES.items():
-        if keyword in hints and len(keyword) > best_len:
-            best_weight = weight
-            best_len = len(keyword)
-
-    if best_weight:
-        # Корректируем вес по материалу
-        materials = parsed.get('materials', {})
-        mat_hint = (materials.get('primary_material') or '').lower()
-        composition = (materials.get('composition') or '').lower()
-        mat_text = mat_hint + ' ' + composition
-
-        # Силикон / латекс тяжелее
-        if 'силикон' in mat_text or 'латекс' in mat_text:
-            best_weight = int(best_weight * 1.3)
-        # Металл значительно тяжелее
-        elif 'металл' in mat_text or 'нержав' in mat_text or 'сталь' in mat_text:
-            best_weight = int(best_weight * 2.0)
-        elif 'стекл' in mat_text:
-            best_weight = int(best_weight * 1.8)
-        # Кожа чуть тяжелее
-        elif 'кожа' in mat_text or 'кожан' in mat_text:
-            best_weight = int(best_weight * 1.15)
-        # Кружево / сетка легче
-        elif 'кружев' in mat_text or 'сетк' in mat_text or 'сетч' in mat_text:
-            best_weight = int(best_weight * 0.7)
-
-        return best_weight
-
-    # Если ничего не подошло — базовая оценка 150г
-    return 150
 
 
 # ============================================================================

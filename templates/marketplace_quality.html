@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}Качество Ozon — Seller Hub{% endblock %}
+
+{% block content %}
+<div x-data="ozonQualityPage()" x-init="init()">
+  <div class="sh-page-header">
+    <div class="sh-page-header-content">
+      <div>
+        <h1 class="sh-page-title">Качество карточек Ozon</h1>
+        <p class="sh-page-subtitle">Контент по свежей схеме категории и метрики только выбранного кабинета</p>
+      </div>
+      <div class="sh-page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="refreshAll()" :disabled="refreshing">
+          <span x-text="refreshing ? 'Пересчитываю…' : 'Пересчитать'"></span>
+        </button>
+        <a class="sh-btn sh-btn--white-outline sh-btn--sm" href="{{ url_for('marketplace_analytics_page', account_id=selected_account.id) }}">Аналитика Ozon</a>
+        <a class="sh-btn sh-btn--white-outline sh-btn--sm" href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}">Отзывы</a>
+      </div>
+    </div>
+  </div>
+
+  <div style="max-width:1280px;margin:0 auto;padding:0 24px 40px">
+    <div class="sh-card" style="padding:16px;margin-bottom:20px">
+      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <a href="{{ url_for('card_quality_page') }}" class="sh-btn sh-btn--secondary sh-btn--sm">Wildberries</a>
+          <span class="sh-btn sh-btn--primary sh-btn--sm" style="pointer-events:none">Ozon</span>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;margin-left:auto;color:var(--text-secondary);font-size:14px">
+          Кабинет
+          <select class="sh-input" style="min-width:220px" @change="switchAccount($event.target.value)">
+            {% for account in ozon_accounts %}
+            <option value="{{ account.id }}" {% if account.id == selected_account.id %}selected{% endif %}>
+              {{ account.label }} · {{ account.external_account_id }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div style="margin-top:12px;padding:10px 12px;border-radius:8px;background:#f5f3ff;color:#5b21b6;font-size:13px">
+        Баллы Ozon не сравниваются с WB напрямую. Каждая причина хранит собственный Ozon-код, общую severity и impact; устаревшая схема показывает «нет оценки», а не приблизительный балл.
+      </div>
+    </div>
+
+    <template x-if="error">
+      <div style="padding:14px 16px;margin-bottom:20px;border:1px solid #fecaca;background:#fef2f2;border-radius:10px;color:#b91c1c" x-text="error"></div>
+    </template>
+
+    <div class="sh-stat-grid sh-stat-grid--4" style="margin-bottom:24px">
+      <div class="sh-stat-card">
+        <div class="sh-stat-label">Средний Quality</div>
+        <div class="sh-stat-value" x-text="summary.avg_quality == null ? '—' : Math.round(summary.avg_quality)"></div>
+      </div>
+      <div class="sh-stat-card">
+        <div class="sh-stat-label">Карточек</div>
+        <div class="sh-stat-value" x-text="summary.total || 0"></div>
+        <div class="sh-stat-footnote" x-text="'Оценено: ' + (summary.assessed || 0)"></div>
+      </div>
+      <div class="sh-stat-card">
+        <div class="sh-stat-label">Требуют внимания</div>
+        <div class="sh-stat-value" style="color:#b91c1c" x-text="summary.need_attention || 0"></div>
+      </div>
+      <div class="sh-stat-card">
+        <div class="sh-stat-label">Выбрано</div>
+        <div class="sh-stat-value" x-text="selectedIds.length"></div>
+        <button x-show="selectedIds.length" @click="saveCollection()" class="sh-btn sh-btn--secondary sh-btn--sm" style="margin-top:8px">Открыть выбранное в ИИ-помощнике</button>
+      </div>
+    </div>
+
+    <div class="sh-card" style="padding:16px;margin-bottom:20px">
+      <div style="display:grid;grid-template-columns:minmax(220px,1fr) 180px 240px auto;gap:10px;align-items:end" class="max-md:grid-cols-1">
+        <label style="font-size:13px;color:var(--text-secondary)">Поиск
+          <input class="sh-input" style="width:100%;margin-top:5px" x-model="search" @keyup.enter="applyFilters()" placeholder="Название, offer ID или SKU">
+        </label>
+        <label style="font-size:13px;color:var(--text-secondary)">Severity
+          <select class="sh-input" style="width:100%;margin-top:5px" x-model="severity" @change="applyFilters()">
+            <option value="">Все</option>
+            <option value="critical">Критично</option>
+            <option value="warning">Нужно улучшить</option>
+            <option value="good">Хорошо</option>
+            <option value="excellent">Отлично</option>
+          </select>
+        </label>
+        <label style="font-size:13px;color:var(--text-secondary)">Причина
+          <select class="sh-input" style="width:100%;margin-top:5px" x-model="reason" @change="applyFilters()">
+            <option value="">Все причины</option>
+            <template x-for="item in reasonOptions" :key="item.code">
+              <option :value="item.code" x-text="item.label + ' · ' + item.count"></option>
+            </template>
+          </select>
+        </label>
+        <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="resetFilters()">Сбросить</button>
+      </div>
+    </div>
+
+    <div class="sh-card" style="overflow:hidden">
+      <div x-show="loading" style="padding:48px;text-align:center;color:var(--text-muted)">Загрузка оценок…</div>
+      <div x-show="!loading && !items.length" style="padding:48px;text-align:center;color:var(--text-muted)">
+        Нет карточек по выбранным условиям. Если каталог только что синхронизирован — нажмите «Пересчитать».
+      </div>
+      <div x-show="!loading && items.length" style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:var(--surface-subtle);text-align:left;color:var(--text-muted);font-size:12px">
+              <th style="padding:12px 14px"><input type="checkbox" @change="togglePage($event.target.checked)"></th>
+              <th style="padding:12px 14px">Карточка</th>
+              <th style="padding:12px 14px">Quality</th>
+              <th style="padding:12px 14px">Причины</th>
+              <th style="padding:12px 14px">Impact</th>
+              <th style="padding:12px 14px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="item in items" :key="item.listing_id">
+              <tr style="border-top:1px solid var(--border)">
+                <td style="padding:14px"><input type="checkbox" :checked="!!selected[item.listing_id]" @change="toggle(item.listing_id)"></td>
+                <td style="padding:14px;min-width:260px">
+                  <div style="font-weight:600;color:var(--text)" x-text="item.title || 'Без названия'"></div>
+                  <div style="font-size:12px;color:var(--text-muted);margin-top:4px" x-text="'Offer: ' + item.offer_id + (item.primary_sku ? ' · SKU ' + item.primary_sku : '')"></div>
+                </td>
+                <td style="padding:14px">
+                  <div style="font-size:22px;font-weight:700" :style="'color:' + severityColor(item.severity)" x-text="item.score == null ? '—' : Math.round(item.score)"></div>
+                  <div style="font-size:11px;color:var(--text-muted)" x-text="statusLabel(item.status)"></div>
+                </td>
+                <td style="padding:14px;min-width:300px">
+                  <div style="display:flex;gap:5px;flex-wrap:wrap">
+                    <template x-for="r in (item.reasons || []).slice(0,3)" :key="r.code">
+                      <span style="font-size:11px;padding:3px 7px;border-radius:999px;background:#f3f4f6;color:#4b5563" x-text="r.label"></span>
+                    </template>
+                    <span x-show="(item.reasons || []).length > 3" style="font-size:11px;color:var(--text-muted)" x-text="'+' + (item.reasons.length - 3)"></span>
+                  </div>
+                </td>
+                <td style="padding:14px;font-weight:600" x-text="item.impact"></td>
+                <td style="padding:14px"><button class="sh-btn sh-btn--secondary sh-btn--sm" @click="openDetail(item.listing_id)">Подробнее</button></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <div x-show="pages > 1" style="padding:14px;display:flex;justify-content:center;gap:10px;border-top:1px solid var(--border)">
+        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page <= 1" @click="goPage(page-1)">Назад</button>
+        <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="page + ' / ' + pages"></span>
+        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page >= pages" @click="goPage(page+1)">Далее</button>
+      </div>
+    </div>
+  </div>
+
+  <template x-if="detail">
+    <div style="position:fixed;inset:0;z-index:70;background:rgba(17,24,39,.45);display:flex;justify-content:flex-end" @click.self="detail=null">
+      <div style="width:min(620px,100%);height:100%;overflow:auto;background:#fff;padding:24px;box-shadow:-12px 0 30px rgba(0,0,0,.12)">
+        <div style="display:flex;justify-content:space-between;gap:16px;align-items:start">
+          <div>
+            <h2 style="font-size:20px;font-weight:700" x-text="detail.title || 'Карточка Ozon'"></h2>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px" x-text="'Offer ' + detail.offer_id + ' · кабинет ' + detail.account_label"></div>
+          </div>
+          <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="detail=null">Закрыть</button>
+        </div>
+        <div style="display:flex;gap:18px;align-items:center;margin:24px 0">
+          <div style="font-size:48px;font-weight:800" :style="'color:' + severityColor(detail.severity)" x-text="detail.score == null ? '—' : Math.round(detail.score)"></div>
+          <div><div style="font-weight:600" x-text="statusLabel(detail.status)"></div><div style="font-size:12px;color:var(--text-muted)" x-text="'Impact: ' + detail.impact"></div></div>
+        </div>
+        <h3 style="font-weight:700;margin:18px 0 10px">Измерения</h3>
+        <template x-for="(dim, code) in (detail.breakdown || {})" :key="code">
+          <div style="margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;font-size:13px"><span x-text="dimensionLabel(code)"></span><strong x-text="Math.round(dim.score) + ' / 100'"></strong></div>
+            <div style="height:7px;background:#eee;border-radius:999px;margin:5px 0;overflow:hidden"><div :style="'height:100%;width:' + dim.score + '%;background:' + (dim.score>=70?'#16a34a':dim.score>=50?'#d97706':'#dc2626')"></div></div>
+            <div style="font-size:12px;color:var(--text-muted)" x-text="dim.hint"></div>
+          </div>
+        </template>
+        <h3 style="font-weight:700;margin:22px 0 10px">Причины</h3>
+        <template x-for="r in (detail.reasons || [])" :key="r.code">
+          <div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;gap:8px"><strong x-text="r.label"></strong><span style="font-size:12px" :style="'color:' + severityColor(r.severity)" x-text="r.severity + ' · +' + r.impact"></span></div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:3px" x-text="r.code"></div>
+          </div>
+        </template>
+        <h3 style="font-weight:700;margin:22px 0 10px">Контекст аналитики</h3>
+        <pre style="white-space:pre-wrap;font-size:12px;background:#f8fafc;border-radius:8px;padding:12px" x-text="JSON.stringify((detail.metrics || {}).values || {}, null, 2)"></pre>
+      </div>
+    </div>
+  </template>
+</div>
+
+<script>
+function ozonQualityPage() {
+  const accountId = {{ selected_account.id|tojson }};
+  return {
+    accountId, items: [], summary: {}, page: 1, pages: 0, loading: true,
+    refreshing: false, error: '', severity: '', reason: '', search: '', detail: null,
+    selected: {},
+    get selectedIds() { return Object.keys(this.selected).filter(k => this.selected[k]).map(Number); },
+    get reasonOptions() {
+      const counts = this.summary.reason_counts || {};
+      const labels = this.summary.reason_labels || {};
+      return Object.entries(counts).filter(([, count]) => count > 0)
+        .sort((a,b) => b[1]-a[1]).map(([code,count]) => ({code,count,label:labels[code]||code}));
+    },
+    async init() { await this.load(); },
+    switchAccount(id) { window.location.href = '/marketplaces/quality?account_id=' + encodeURIComponent(id); },
+    query(extra='') {
+      let url = '/marketplaces/api/quality?account_id=' + this.accountId + '&page=' + this.page + '&per_page=50&sort_by=impact&sort_dir=desc';
+      if (this.severity) url += '&severity=' + encodeURIComponent(this.severity);
+      if (this.reason) url += '&reason=' + encodeURIComponent(this.reason);
+      if (this.search.trim()) url += '&search=' + encodeURIComponent(this.search.trim());
+      return url + extra;
+    },
+    async load() {
+      this.loading = true; this.error = '';
+      try {
+        const r = await fetch(this.query()); const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Не удалось загрузить данные');
+        this.items = d.items || []; this.summary = d.summary || {}; this.pages = d.pages || 0;
+      } catch (e) { this.error = e.message; }
+      finally { this.loading = false; }
+    },
+    applyFilters() { this.page = 1; this.selected = {}; this.load(); },
+    resetFilters() { this.severity=''; this.reason=''; this.search=''; this.applyFilters(); },
+    goPage(page) { this.page = page; this.load(); },
+    toggle(id) { this.selected[id] = !this.selected[id]; },
+    togglePage(on) { this.items.forEach(item => { this.selected[item.listing_id] = on; }); },
+    saveCollection() {
+      const value = {entity_kind:'marketplace_listing', marketplace_code:'ozon', account_id:this.accountId, listing_ids:this.selectedIds};
+      sessionStorage.setItem('seller_hub_marketplace_collection', JSON.stringify(value));
+      window.location.href = '/agents?new=1';
+    },
+    async refreshAll() {
+      this.refreshing = true; this.error = ''; let offset = 0; let loops = 0;
+      try {
+        while (offset !== null && loops < 50) {
+          const r = await fetch('/marketplaces/api/quality/recompute?account_id=' + this.accountId, {
+            method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
+            body:JSON.stringify({limit:200, offset:offset}),
+          });
+          const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Ошибка пересчёта');
+          offset = d.data.next_offset; loops += 1;
+        }
+        this.$store.toasts.success('Оценки Ozon пересчитаны'); await this.load();
+      } catch(e) { this.error=e.message; }
+      finally { this.refreshing=false; }
+    },
+    async openDetail(id) {
+      this.error='';
+      try { const r=await fetch('/marketplaces/api/quality/'+id+'?account_id='+this.accountId); const d=await r.json(); if(!r.ok) throw new Error(d.error||'Ошибка'); this.detail=d.data; }
+      catch(e){ this.error=e.message; }
+    },
+    statusLabel(v) { return ({scored:'Оценка рассчитана',schema_stale:'Схема устарела',unscorable:'Нельзя оценить'})[v] || v; },
+    severityColor(v) { return ({critical:'#b91c1c',warning:'#b45309',good:'#15803d',excellent:'#047857',info:'#4b5563'})[v] || '#4b5563'; },
+    dimensionLabel(v) { return ({attributes:'Характеристики',media:'Медиа',description:'Описание',title:'Заголовок',barcodes:'Штрихкоды',price:'Цена',publication_health:'Публикация'})[v] || v; },
+  };
+}
+</script>
+{% endblock %}

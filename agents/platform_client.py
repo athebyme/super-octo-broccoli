@@ -82,6 +82,24 @@ def _validated_product_ids(product_ids, limit: int = 200) -> list[int]:
     return result
 
 
+def _validated_marketplace_listing_ids(listing_ids, limit: int = 200) -> list[int]:
+    """Marketplace IDs are already canonical JSON integers; never coerce them."""
+    if not isinstance(listing_ids, (list, tuple)) or not listing_ids:
+        raise ValueError('listing_ids must be a non-empty list')
+    if len(listing_ids) > limit:
+        raise ValueError(f'Maximum {limit} listing_ids per request')
+    result = []
+    seen = set()
+    for index, raw in enumerate(listing_ids):
+        if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
+            raise ValueError(f'listing_ids[{index}] must be a positive integer')
+        if raw in seen:
+            raise ValueError(f'Duplicate listing_id: {raw}')
+        result.append(raw)
+        seen.add(raw)
+    return result
+
+
 class PlatformClient:
     """Клиент для Internal API v1."""
 
@@ -365,6 +383,35 @@ class PlatformClient:
                 'entity_kind': entity_kind,
                 'product_ids': product_ids,
                 'focus_limit': min(max(int(focus_limit), 1), 200),
+            },
+        )
+
+    def get_marketplace_listing_brief(
+        self,
+        seller_id: int,
+        marketplace_code: str,
+        account_id: int,
+        listing_ids: list[int],
+        focus_limit: int = 100,
+    ) -> dict:
+        listing_ids = _validated_marketplace_listing_ids(listing_ids)
+        if not isinstance(marketplace_code, str) or not marketplace_code.strip():
+            raise ValueError('marketplace_code is required')
+        if not isinstance(account_id, int) or isinstance(account_id, bool) or account_id <= 0:
+            raise ValueError('account_id must be a positive integer')
+        if (
+            not isinstance(focus_limit, int)
+            or isinstance(focus_limit, bool)
+            or not 1 <= focus_limit <= 200
+        ):
+            raise ValueError('focus_limit must be an integer from 1 to 200')
+        return self._request(
+            'POST', f'/sellers/{seller_id}/marketplace-listings/brief',
+            json={
+                'marketplace_code': marketplace_code.strip().lower(),
+                'account_id': account_id,
+                'listing_ids': listing_ids,
+                'focus_limit': focus_limit,
             },
         )
 

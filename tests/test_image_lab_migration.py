@@ -7,6 +7,9 @@ from pathlib import Path
 from migrations.migrate_add_image_generation_lab import migrate
 from migrations.migrate_add_image_lab_reference_watermark import migrate as migrate_reference
 from migrations.migrate_add_image_lab_angle_synthesis import migrate as migrate_angles
+from migrations.migrate_add_image_lab_marketplace_target import (
+    migrate as migrate_marketplace_target,
+)
 
 
 class ImageLabMigrationTests(unittest.TestCase):
@@ -28,6 +31,15 @@ class ImageLabMigrationTests(unittest.TestCase):
             migrate_reference(str(database))
             migrate_angles(str(database))
             migrate_angles(str(database))
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "CREATE TABLE marketplace_listings "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT)"
+            )
+            connection.commit()
+            connection.close()
+            migrate_marketplace_target(str(database))
+            migrate_marketplace_target(str(database))
             connection = sqlite3.connect(database)
             try:
                 columns = {
@@ -70,9 +82,11 @@ class ImageLabMigrationTests(unittest.TestCase):
             "watermark_json",
             "overlay_json",
             "requested_view",
+            "marketplace_listing_id", "target_context_json",
         }.issubset(columns))
         self.assertIn("idx_image_exp_seller_created", indexes)
         self.assertIn("idx_image_exp_seller_status", indexes)
+        self.assertIn("idx_image_exp_seller_listing", indexes)
         self.assertIsNone(detached_product_id)
 
 

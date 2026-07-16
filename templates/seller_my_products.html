@@ -97,6 +97,21 @@
         </div>
     </div>
 
+    <nav class="bg-white rounded-lg border border-gray-200 p-3 mb-6" aria-label="Маркетплейс и кабинет">
+        <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-medium uppercase tracking-wide text-gray-400 mr-1">Каталог</span>
+            <span class="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">Wildberries · подготовка</span>
+            {% for account in marketplace_accounts %}
+            <a href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=account.id) }}"
+               class="px-3 py-2 rounded-md border border-gray-200 text-gray-600 text-sm hover:bg-gray-50">
+                Ozon · {{ account.label }}
+            </a>
+            {% endfor %}
+            <a href="{{ url_for('marketplace_drafts.index') }}" class="ml-auto text-xs text-[var(--accent)] hover:underline">Ozon-черновики</a>
+        </div>
+        <p class="mt-2 text-xs text-gray-400">WB-статус этой страницы не используется как статус публикации Ozon: каждый кабинет имеет отдельный draft/listing.</p>
+    </nav>
+
     <!-- Stats -->
     <div class="my-stat-strip mb-6">
         <a href="{{ url_for('seller_my_products', **status_link_args) }}" class="my-stat-card {{ 'active' if not status else '' }}">
@@ -685,6 +700,19 @@
                            class="inline-flex items-center px-2.5 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium hover:bg-gray-200">
                             WB карточка
                         </a>
+                        {% if default_marketplace_account %}
+                        <form method="post" action="{{ url_for('marketplace_drafts.create') }}" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="account_id" value="{{ default_marketplace_account.id }}">
+                            <input type="hidden" name="imported_product_id" value="{{ p.id }}">
+                            <input type="hidden" name="validate" value="1">
+                            <button type="submit"
+                                    class="inline-flex items-center px-2.5 py-1 border border-blue-200 text-blue-700 rounded text-xs font-medium hover:bg-blue-50 ml-1"
+                                    title="Подготовить и локально проверить для {{ default_marketplace_account.label }}; публикации в Ozon не будет">
+                                Подготовить Ozon
+                            </button>
+                        </form>
+                        {% endif %}
                         {% if p.import_status == 'imported' and p.product_id %}
                         <div class="relative inline-flex items-center ml-1" x-data="{open: false}" @click.away="open = false">
                             <button @click="open = !open"
