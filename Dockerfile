@@ -42,7 +42,7 @@ RUN chmod +x /app/docker-entrypoint.sh \
 # исправляет владельца на смонтированных volumes, затем делает
 # gosu app для запуска приложения (fix-permissions pattern).
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=180s --retries=3 \
   CMD python -c "import urllib.request, ssl; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; response=urllib.request.urlopen('https://localhost:${PORT:-5001}/login', context=ctx, timeout=3); response.close()" || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

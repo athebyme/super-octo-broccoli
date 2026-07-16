@@ -59,6 +59,13 @@ def _wants_json() -> bool:
     )
 
 
+def _html_redirect_endpoint() -> str:
+    """Return only a known local endpoint; never accept an arbitrary URL."""
+    if request.form.get("return_to") == "api_settings":
+        return "api_settings"
+    return "marketplace_accounts.index"
+
+
 def _success_response(
     account,
     *,
@@ -76,7 +83,7 @@ def _success_response(
     if _wants_json():
         return jsonify(data), status_code
     flash(message, "success")
-    return redirect(url_for("marketplace_accounts.index"))
+    return redirect(url_for(_html_redirect_endpoint()))
 
 
 def _error_response(error: MarketplaceAccountError):
@@ -87,7 +94,7 @@ def _error_response(error: MarketplaceAccountError):
             "code": error.code,
         }), error.status_code
     flash(str(error), "danger")
-    return redirect(url_for("marketplace_accounts.index"))
+    return redirect(url_for(_html_redirect_endpoint()))
 
 
 def _feature_disabled_response():
@@ -98,7 +105,7 @@ def _feature_disabled_response():
             "code": "ozon_feature_disabled",
         }), 404
     flash("Подключение Ozon пока отключено", "warning")
-    return redirect(url_for("marketplace_accounts.index"))
+    return redirect(url_for(_html_redirect_endpoint()))
 
 
 @marketplace_accounts_bp.route("/")

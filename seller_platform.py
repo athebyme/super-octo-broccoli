@@ -1193,10 +1193,33 @@ def admin_api_debug_directories():
 
 # ============= НАСТРОЙКИ API =============
 
+
+def _render_api_settings(seller):
+    """Render marketplace credentials without exposing provider secrets."""
+    from services.marketplace_accounts import MarketplaceAccountService
+
+    ozon_accounts = MarketplaceAccountService.list_accounts(
+        seller_id=seller.id,
+        marketplace_code='ozon',
+    )
+    return render_template(
+        'api_settings.html',
+        seller=seller,
+        ozon_accounts=[account.to_public_dict() for account in ozon_accounts],
+        ozon_enabled=bool(app.config.get('MARKETPLACE_OZON_ENABLED', False)),
+        ozon_publication_enabled=bool(
+            app.config.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', False)
+        ),
+        ozon_commercial_writes_enabled=bool(
+            app.config.get('MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED', False)
+        ),
+    )
+
+
 @app.route('/api-settings', methods=['GET', 'POST'])
 @login_required
 def api_settings():
-    """Настройка API ключей Wildberries"""
+    """Настройка seller-scoped подключений Wildberries и Ozon."""
     if not current_user.seller:
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
@@ -1207,7 +1230,7 @@ def api_settings():
 
         if not wb_api_key:
             flash('Введите API ключ', 'warning')
-            return render_template('api_settings.html', seller=current_user.seller)
+            return _render_api_settings(current_user.seller)
 
         # Проверить валидность ключа (если не force_save)
         if not force_save:
@@ -1268,7 +1291,7 @@ def api_settings():
             flash('API ключ сохранен без проверки', 'info')
             return redirect(url_for('dashboard'))
 
-    return render_template('api_settings.html', seller=current_user.seller)
+    return _render_api_settings(current_user.seller)
 
 
 # ============= КАРТОЧКИ ТОВАРОВ =============

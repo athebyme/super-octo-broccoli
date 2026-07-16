@@ -23,6 +23,7 @@ mkdir -p uploads processed data
 
 # Run lightweight initialization depending on the application we serve.
 if [ "$APP_MODULE" = "seller_platform:app" ]; then
+python scripts/validate_runtime_config.py
 echo "🚀 Инициализация seller-platform..."
 
 # Сначала создаем базовую структуру БД через Flask/SQLAlchemy

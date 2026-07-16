@@ -52,6 +52,11 @@ class MarketplaceAccountsTest(unittest.TestCase):
         LoginManager(self.app)
         CSRFProtect(self.app)
         register_marketplace_account_routes(self.app)
+        self.app.add_url_rule(
+            "/api-settings",
+            endpoint="api_settings",
+            view_func=lambda: "api settings",
+        )
         self.client = self.app.test_client()
 
         with self.app.app_context():
@@ -428,6 +433,24 @@ class MarketplaceAccountsTest(unittest.TestCase):
         self.assertNotIn("route-secret-key", response.get_data(as_text=True))
         self.assertNotIn("route-secret-key", listed.get_data(as_text=True))
         self.assertEqual(len(listed.get_json()["accounts"]), 1)
+
+    def test_html_create_can_return_to_shared_api_settings(self):
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.post(
+                "/marketplaces/accounts/ozon",
+                data={
+                    "client_id": "778",
+                    "label": "Кабинет из API settings",
+                    "api_key": "html-route-secret-key",
+                    "is_default": "1",
+                    "return_to": "api_settings",
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.headers["Location"].endswith("/api-settings"))
+        self.assertNotIn("html-route-secret-key", response.get_data(as_text=True))
 
     def test_foreign_route_mutations_are_not_found_and_do_not_call_adapter(self):
         with self.app.app_context():

@@ -1,4 +1,44 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon, status_icon %}
+
+{% macro ozon_account_form() -%}
+<form method="post" action="{{ url_for('marketplace_accounts.create_ozon') }}"
+      class="grid grid-cols-1 gap-4 md:grid-cols-2">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="return_to" value="api_settings">
+    <label class="block">
+        <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Название подключения</span>
+        <input name="label" required maxlength="120" autocomplete="organization"
+               placeholder="Основной кабинет"
+               class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+               style="border-color:var(--border);color:var(--text)">
+    </label>
+    <label class="block">
+        <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Client-Id</span>
+        <input name="client_id" required maxlength="200" inputmode="numeric" autocomplete="off"
+               placeholder="123456"
+               class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+               style="border-color:var(--border);color:var(--text)">
+    </label>
+    <label class="block md:col-span-2">
+        <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">API key</span>
+        <input type="password" name="api_key" required maxlength="2000" autocomplete="new-password"
+               placeholder="Ключ нельзя будет посмотреть после сохранения"
+               class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+               style="border-color:var(--border);color:var(--text)">
+    </label>
+    <div class="md:col-span-2 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <label class="inline-flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
+            <input type="checkbox" name="is_default" value="1" class="rounded">
+            Сделать основным кабинетом Ozon
+        </label>
+        <button type="submit" class="sh-btn sh-btn--primary">
+            {{ icon('key', size=16) }}
+            Сохранить Ozon
+        </button>
+    </div>
+</form>
+{%- endmacro %}
 
 {% block title %}Настройки API - Seller Hub{% endblock %}
 
@@ -11,6 +51,110 @@
             <p class="mt-2 text-sm text-gray-400">
                 Настройте API ключи для синхронизации данных с маркетплейсами
             </p>
+        </div>
+    </div>
+
+    <section class="sh-card p-5 sm:p-6" aria-labelledby="ozon-api-settings-title">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="flex items-start gap-3">
+                <span class="sh-alert-icon mt-0.5" style="color:var(--accent)" aria-hidden="true">
+                    {{ icon('package', size=22) }}
+                </span>
+                <div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h2 id="ozon-api-settings-title" class="text-lg font-semibold" style="color:var(--text)">Ozon</h2>
+                        <span class="sh-badge sh-badge--yellow">Пилот</span>
+                    </div>
+                    <p class="mt-1 text-sm" style="color:var(--text-secondary)">
+                        Подключите кабинет для чтения каталога, справочников, аналитики, заказов и финансов.
+                    </p>
+                </div>
+            </div>
+            <a href="{{ url_for('marketplace_accounts.index') }}" class="sh-btn sh-btn--secondary self-start">
+                Управление кабинетами
+                {{ icon('arrow-right', size=16) }}
+            </a>
+        </div>
+
+        {% if not ozon_enabled %}
+        <div class="sh-alert sh-alert--warning mt-5" role="status">
+            <span class="sh-alert-icon">{{ status_icon('warning') }}</span>
+            <div class="sh-alert-content">Подключение Ozon временно выключено оператором. Сохранённые кабинеты не удалены.</div>
+        </div>
+        {% else %}
+            {% if not ozon_publication_enabled and not ozon_commercial_writes_enabled %}
+            <div class="sh-alert sh-alert--info mt-5" role="status">
+                <span class="sh-alert-icon">{{ status_icon('info') }}</span>
+                <div class="sh-alert-content">
+                    Пилот работает в безопасном режиме: проверка доступа и синхронизации выполняются только на чтение.
+                    Публикация карточек и изменение цен или остатков в Ozon выключены.
+                </div>
+            </div>
+            {% endif %}
+
+            {% if ozon_accounts %}
+            <div class="mt-5 border-y" style="border-color:var(--border)" aria-label="Подключённые кабинеты Ozon">
+                {% for account in ozon_accounts %}
+                {% set status = account.connection_status or 'unchecked' %}
+                <div class="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between {% if not loop.last %}border-b{% endif %}"
+                     style="border-color:var(--border)">
+                    <div class="min-w-0">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="font-medium truncate" style="color:var(--text)">{{ account.label }}</span>
+                            {% if account.is_default %}<span class="sh-badge sh-badge--gray">Основной</span>{% endif %}
+                            {% if status == 'connected' %}
+                                <span class="sh-badge sh-badge--green">Подключён</span>
+                            {% elif status == 'invalid' %}
+                                <span class="sh-badge sh-badge--red">Ключ отклонён</span>
+                            {% elif status == 'error' or status == 'limited' %}
+                                <span class="sh-badge sh-badge--yellow">Требует внимания</span>
+                            {% elif status == 'disconnected' %}
+                                <span class="sh-badge sh-badge--gray">Отключён</span>
+                            {% else %}
+                                <span class="sh-badge sh-badge--gray">Не проверен</span>
+                            {% endif %}
+                        </div>
+                        <p class="mt-1 text-xs" style="color:var(--text-muted)">
+                            Client-Id: {{ account.external_account_id }} · {{ 'API key сохранён' if account.has_credentials else 'API key не сохранён' }}
+                        </p>
+                        {% if account.last_error_message %}
+                        <p class="mt-1 text-xs" style="color:var(--danger)">{{ account.last_error_message }}</p>
+                        {% endif %}
+                    </div>
+                    {% if account.has_credentials %}
+                    <form method="post" action="{{ url_for('marketplace_accounts.check', account_id=account.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="return_to" value="api_settings">
+                        <button type="submit" class="sh-btn sh-btn--secondary">
+                            {{ icon('refresh', size=16) }}
+                            Проверить доступ
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            {% if ozon_accounts|length < 10 %}
+            <details class="mt-5">
+                <summary class="cursor-pointer text-sm font-medium" style="color:var(--accent)">Добавить ещё один кабинет Ozon</summary>
+                <div class="mt-4">{{ ozon_account_form() }}</div>
+            </details>
+            {% endif %}
+            {% else %}
+            <div class="mt-5">
+                <h3 class="text-sm font-semibold mb-3" style="color:var(--text)">Подключить кабинет Ozon</h3>
+                {{ ozon_account_form() }}
+            </div>
+            {% endif %}
+        {% endif %}
+    </section>
+
+    <div class="flex items-center gap-3 pt-2" aria-labelledby="wb-api-settings-title">
+        <span style="color:var(--accent)" aria-hidden="true">{{ icon('key', size=22) }}</span>
+        <div>
+            <h2 id="wb-api-settings-title" class="text-lg font-semibold" style="color:var(--text)">Wildberries</h2>
+            <p class="text-xs" style="color:var(--text-muted)">Основное подключение платформы</p>
         </div>
     </div>
 
