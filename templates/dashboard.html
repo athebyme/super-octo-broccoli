@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
 
 {% block title %}Дашборд - Seller Hub{% endblock %}
 
@@ -29,6 +30,89 @@
         font-style: italic;
     }
     .dash-greeting h1 em { color: var(--accent); font-style: italic; }
+
+    /* Temporary, dismissible Ozon pilot announcement. */
+    .ozon-pilot-notice {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: start;
+        gap: 14px;
+        padding: 18px 20px;
+        margin: -16px 0 40px;
+        color: var(--text);
+        background: var(--info-bg);
+        border: 1px solid var(--info-border);
+        border-radius: 8px;
+    }
+    .ozon-pilot-notice[hidden] { display: none; }
+    .ozon-pilot-icon { color: var(--info); padding-top: 1px; }
+    .ozon-pilot-heading {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 5px;
+    }
+    .ozon-pilot-title { font-size: 14px; font-weight: 700; }
+    .ozon-pilot-badge {
+        padding: 2px 7px;
+        color: var(--info);
+        background: var(--bg-card);
+        border: 1px solid var(--info-border);
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+    .ozon-pilot-copy {
+        max-width: 900px;
+        color: var(--text-secondary);
+        font-size: 13px;
+        line-height: 1.55;
+    }
+    .ozon-pilot-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 9px;
+        color: var(--accent);
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+    }
+    .ozon-pilot-link:hover { text-decoration: underline; }
+    .ozon-pilot-link:focus-visible,
+    .ozon-pilot-dismiss:focus-visible {
+        outline: 2px solid var(--focus-ring);
+        outline-offset: 2px;
+    }
+    .ozon-pilot-dismiss {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        color: var(--text-secondary);
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        cursor: pointer;
+    }
+    .ozon-pilot-dismiss:hover {
+        color: var(--text);
+        background: var(--bg-hover);
+        border-color: var(--border);
+    }
+    @media (max-width: 640px) {
+        .ozon-pilot-notice {
+            grid-template-columns: auto minmax(0, 1fr) auto;
+            padding: 16px;
+            margin-top: -20px;
+        }
+        .ozon-pilot-icon { display: none; }
+    }
 
     /* Section header */
     .dash-section-header {
@@ -273,6 +357,42 @@
         </div>
         <h1>Добро пожаловать, <em>{{ current_user.username }}</em></h1>
     </div>
+
+    {% if current_user.seller and request.cookies.get('ozon_pilot_notice_v1') != 'dismissed' %}
+    <section id="ozon-pilot-notice" class="ozon-pilot-notice"
+             role="status" aria-live="polite" aria-labelledby="ozon-pilot-title">
+        <div class="ozon-pilot-icon">{{ icon('sparkles', size=22, stroke=1.7) }}</div>
+        <div>
+            <div class="ozon-pilot-heading">
+                <strong id="ozon-pilot-title" class="ozon-pilot-title">Поддержка Ozon работает в пилотном режиме</strong>
+                <span class="ozon-pilot-badge">Пилот</span>
+            </div>
+            <div class="ozon-pilot-copy">
+                Уже можно подключить кабинет, импортировать каталог и готовить карточки Ozon.
+                Пока пилот идёт, внимательно проверяйте справочники, цены и остатки перед подтверждением операций.
+            </div>
+            <a class="ozon-pilot-link" href="{{ url_for('marketplace_accounts.index') }}">
+                Открыть подключение {{ icon('arrow-right', size=15, stroke=1.8) }}
+            </a>
+        </div>
+        <button id="ozon-pilot-dismiss" class="ozon-pilot-dismiss" type="button"
+                aria-label="Скрыть объявление о пилоте Ozon">
+            {{ icon('close', size=18, stroke=1.8) }}
+        </button>
+    </section>
+    <script>
+    (() => {
+        const notice = document.getElementById('ozon-pilot-notice');
+        const dismiss = document.getElementById('ozon-pilot-dismiss');
+        if (!notice || !dismiss) return;
+        dismiss.addEventListener('click', () => {
+            const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+            document.cookie = 'ozon_pilot_notice_v1=dismissed; Max-Age=31536000; Path=/; SameSite=Lax' + secure;
+            notice.hidden = true;
+        });
+    })();
+    </script>
+    {% endif %}
 
     {% if current_user.seller %}
     {# ── Seller Dashboard ── #}

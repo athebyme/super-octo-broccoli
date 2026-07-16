@@ -6,6 +6,17 @@ import os
 import sqlite3
 import sys
 
+if __package__:
+    from ._foreign_key_safety import (
+        assert_foreign_key_safety,
+        foreign_key_snapshot,
+    )
+else:
+    from _foreign_key_safety import (  # type: ignore[no-redef]
+        assert_foreign_key_safety,
+        foreign_key_snapshot,
+    )
+
 
 OPERATION_COLUMNS = (
     "id", "seller_id", "marketplace_id", "account_id", "draft_id",
@@ -27,6 +38,10 @@ SNAPSHOT_COLUMNS = (
     "rollback_error_code", "rollback_error_message", "created_at",
     "updated_at",
 )
+MANAGED_TABLES = {
+    "marketplace_operations",
+    "marketplace_listing_snapshots",
+}
 
 
 def _objects(connection):
@@ -253,12 +268,19 @@ def _expand(connection):
 
 
 def apply_migration(connection, *, verbose=True):
+    baseline_violations = foreign_key_snapshot(connection)
     before = _objects(connection)
     changed = _expand(connection)
     if "'product_update'" not in _table_sql(connection, "marketplace_operations"):
         raise sqlite3.OperationalError("Product update operation contract is missing")
     if "'product_update'" not in _table_sql(connection, "marketplace_listing_snapshots"):
         raise sqlite3.OperationalError("Product update snapshot contract is missing")
+    assert_foreign_key_safety(
+        connection,
+        baseline=baseline_violations,
+        managed_tables=MANAGED_TABLES,
+        label="Marketplace product update migration",
+    )
     if verbose:
         print("Marketplace product update migration completed successfully!")
     return int(changed) + len(_objects(connection) - before)
@@ -272,11 +294,6 @@ def migrate(db_path):
         connection.execute("PRAGMA foreign_keys=OFF")
         apply_migration(connection)
         connection.commit()
-        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
-        if violations:
-            raise sqlite3.IntegrityError(
-                f"Foreign key check failed after migration: {violations[:5]}"
-            )
     except Exception:
         connection.rollback()
         raise

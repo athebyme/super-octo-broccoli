@@ -15,6 +15,17 @@ import sqlite3
 import sys
 from typing import Any, Dict, Iterable
 
+if __package__:
+    from ._foreign_key_safety import (
+        assert_foreign_key_safety,
+        foreign_key_snapshot,
+    )
+else:
+    from _foreign_key_safety import (  # type: ignore[no-redef]
+        assert_foreign_key_safety,
+        foreign_key_snapshot,
+    )
+
 
 SETTINGS_COLUMNS = {
     "id", "seller_id", "account_id", "is_enabled", "marketplace_code",
@@ -40,6 +51,11 @@ ITEM_COLUMNS = {
     "error_message", "error_step", "error_history_json", "retry_count",
     "next_retry_at", "validation_result_json", "started_at",
     "completed_at", "created_at",
+}
+MANAGED_TABLES = {
+    "auto_publish_settings",
+    "auto_publish_runs",
+    "auto_publish_items",
 }
 
 
@@ -386,6 +402,7 @@ def migrate(db_path: str) -> None:
     connection = sqlite3.connect(db_path)
     cursor = connection.cursor()
     try:
+        baseline_violations = foreign_key_snapshot(connection)
         complete = (
             SETTINGS_COLUMNS <= _columns(cursor, "auto_publish_settings")
             and RUN_COLUMNS <= _columns(cursor, "auto_publish_runs")
@@ -394,6 +411,13 @@ def migrate(db_path: str) -> None:
         )
         if complete:
             _create_indexes(cursor)
+            assert_foreign_key_safety(
+                connection,
+                baseline=baseline_violations,
+                managed_tables=MANAGED_TABLES,
+                label="Marketplace auto-publish migration",
+                error_type=RuntimeError,
+            )
             connection.commit()
             print("Marketplace-scoped auto-publish schema is already current")
             return
@@ -432,11 +456,13 @@ def migrate(db_path: str) -> None:
             if _table_exists(cursor, table):
                 cursor.execute(f"DROP TABLE {table}")
         _create_indexes(cursor)
-        violations = cursor.execute("PRAGMA foreign_key_check").fetchall()
-        if violations:
-            raise RuntimeError(
-                "Marketplace auto-publish migration left foreign-key violations"
-            )
+        assert_foreign_key_safety(
+            connection,
+            baseline=baseline_violations,
+            managed_tables=MANAGED_TABLES,
+            label="Marketplace auto-publish migration",
+            error_type=RuntimeError,
+        )
         connection.commit()
         connection.execute("PRAGMA foreign_keys=ON")
         print(

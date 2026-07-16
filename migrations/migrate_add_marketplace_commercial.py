@@ -6,6 +6,17 @@ import os
 import sqlite3
 import sys
 
+if __package__:
+    from ._foreign_key_safety import (
+        assert_foreign_key_safety,
+        foreign_key_snapshot,
+    )
+else:
+    from _foreign_key_safety import (  # type: ignore[no-redef]
+        assert_foreign_key_safety,
+        foreign_key_snapshot,
+    )
+
 
 OPERATION_COLUMNS = (
     "id", "seller_id", "marketplace_id", "account_id", "draft_id",
@@ -27,6 +38,14 @@ SNAPSHOT_COLUMNS = (
     "rollback_error_code", "rollback_error_message", "created_at",
     "updated_at",
 )
+MANAGED_TABLES = {
+    "marketplace_operations",
+    "marketplace_listing_snapshots",
+    "marketplace_warehouse_syncs",
+    "marketplace_warehouses",
+    "marketplace_warehouse_stocks",
+    "marketplace_commercial_proposals",
+}
 
 
 def _schema_objects(connection: sqlite3.Connection) -> set:
@@ -516,16 +535,18 @@ def apply_migration(
     *,
     verbose: bool = True,
 ) -> int:
+    baseline_violations = foreign_key_snapshot(connection)
     before = _schema_objects(connection)
     _require_prerequisites(connection)
     contract_expanded = _expand_operation_contracts(connection)
     _create_commercial_tables(connection)
     _verify_schema(connection)
-    violations = connection.execute("PRAGMA foreign_key_check").fetchall()
-    if violations:
-        raise sqlite3.IntegrityError(
-            "Marketplace commercial migration produced foreign-key violations"
-        )
+    assert_foreign_key_safety(
+        connection,
+        baseline=baseline_violations,
+        managed_tables=MANAGED_TABLES,
+        label="Marketplace commercial migration",
+    )
     after = _schema_objects(connection)
     if verbose:
         print("Marketplace commercial schema migration completed successfully!")

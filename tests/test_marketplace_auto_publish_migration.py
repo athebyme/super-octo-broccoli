@@ -176,3 +176,39 @@ def test_marketplace_auto_publish_migration_preserves_and_isolates(tmp_path):
     assert run == (7, "wb", None, 1)
     assert item == ("wb", None, 123456, 20, None, None, None)
     assert violations == []
+
+
+def test_migration_preserves_unrelated_legacy_fk_violation(tmp_path):
+    database = tmp_path / "auto-publish-with-legacy-orphan.db"
+    connection = sqlite3.connect(database)
+    try:
+        _legacy_schema(connection)
+        connection.executescript("""
+            CREATE TABLE legacy_parent (id INTEGER PRIMARY KEY);
+            CREATE TABLE legacy_child (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER REFERENCES legacy_parent(id)
+            );
+            INSERT INTO legacy_child(id, parent_id) VALUES (1, 404);
+        """)
+        connection.commit()
+    finally:
+        connection.close()
+
+    migrate(str(database))
+    migrate(str(database))
+
+    connection = sqlite3.connect(database)
+    try:
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(auto_publish_settings)"
+            ).fetchall()
+        }
+    finally:
+        connection.close()
+
+    assert violations == [("legacy_child", 1, "legacy_parent", 0)]
+    assert {"account_id", "marketplace_code"} <= columns
