@@ -1,90 +1,193 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import segmented, skeleton %}
+{% from "macros/icons.html" import icon %}
 
-{% block title %}{{ group.name }} - Конкуренты{% endblock %}
+{% block title %}{{ group.name }} — Конкуренты{% endblock %}
+
+{% block topbar_left %}
+<nav class="sh-crumbs" aria-label="Хлебные крошки">
+    <a href="{{ url_for('competitors_dashboard') }}">Конкуренты</a>
+    <span class="sh-crumbs-sep" aria-hidden="true">/</span>
+    <span class="sh-crumbs-current">{{ group.name }}</span>
+</nav>
+{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="groupDetail()">
+<style>
+    .cg-thumb {
+        width: 40px; height: 40px; flex-shrink: 0;
+        border-radius: var(--r-sm);
+        background: var(--bg-hover);
+        color: var(--text-muted);
+        display: flex; align-items: center; justify-content: center;
+        overflow: hidden; position: relative;
+    }
+    .cg-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .cg-link { color: var(--text); text-decoration: none; }
+    .cg-link:hover { color: var(--accent); }
+    .cg-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--r-xs); }
+    .cg-del:hover { color: var(--danger); background: var(--danger-bg); }
+    .cg-chip-wait { border-style: dashed; color: var(--text-muted); }
+    .cg-chip-warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
+    .cg-chip-ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok-border); }
+    .cg-input {
+        border: 1px solid var(--border); border-radius: var(--r-sm);
+        background: transparent; color: var(--text);
+        padding: 8px 12px; font-size: 14px; width: 100%;
+    }
+    .cg-input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: var(--accent); }
+    .cg-pick { border-bottom: 1px solid var(--border-light); cursor: pointer; }
+    .cg-pick:last-child { border-bottom: none; }
+    .cg-pick:hover { background: var(--bg-hover); }
+    .cg-pick input[type="checkbox"]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+</style>
+
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6" x-data="groupDetail()" x-init="init()">
 
     <!-- Header -->
-    <div class="mb-8 relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
-        <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div class="sh-page-header">
+        <div class="sh-page-header-content">
             <div>
-                <div class="flex items-center gap-2 mb-1">
-                    <a href="{{ url_for('competitors_dashboard') }}" class="text-gray-400 hover:text-white text-sm">&larr; Конкуренты</a>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <span class="w-3 h-3 rounded-full flex-shrink-0" style="background: {{ group.color }}" aria-hidden="true"></span>
+                    <h1 class="sh-page-title">{{ group.name }}</h1>
+                    {% if group.import_requested %}
+                    <span class="sh-chip" title="Каталог продавца подтянется фоновой синхронизацией в течение нескольких минут">
+                        <span class="sh-spinner sh-spinner--sm" role="status" aria-label="Импорт выполняется"></span>
+                        Импорт каталога…
+                    </span>
+                    {% endif %}
                 </div>
-                <div class="flex items-center gap-3">
-                    <div class="w-4 h-4 rounded-full" style="background-color: {{ group.color }}"></div>
-                    <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">{{ group.name }}</h1>
-                </div>
-                <p class="mt-1 text-sm text-gray-400">{{ group.description or '' }} &middot; <span x-text="products.length"></span> товаров</p>
+                <p class="sh-page-subtitle">{% if group.description %}{{ group.description }} · {% endif %}<span x-text="products.length"></span> <span x-text="plural(products.length, ['товар','товара','товаров'])"></span> под мониторингом</p>
             </div>
-            <div class="flex items-center gap-3">
-                <button @click="showAddModal = true"
-                    class="px-4 py-2 text-sm rounded-md bg-white text-[#1a1a1a] font-semibold hover:bg-gray-100 transition-all">
-                    + Добавить товары
+            <div class="sh-page-actions">
+                <button type="button" class="sh-btn sh-btn--white-outline sh-btn--md" @click="forceSync()" :disabled="syncing" :class="{ 'is-loading': syncing }">
+                    <span class="sh-btn-icon">{{ icon('refresh', size=16) }}</span>
+                    Обновить данные
+                </button>
+                <button type="button" class="sh-btn sh-btn--white sh-btn--md" @click="openAdd()">
+                    <span class="sh-btn-icon">{{ icon('plus', size=16) }}</span>
+                    Добавить товары
                 </button>
             </div>
         </div>
     </div>
 
+    <!-- Own product comparison -->
+    <div class="sh-card" style="padding:16px 20px">
+        <template x-if="compareLoading">
+            {{ skeleton(lines=1) }}
+        </template>
+        <template x-if="!compareLoading && compareError">
+            <p class="text-sm" style="color:var(--text-muted)">
+                Не удалось загрузить сравнение с вашим товаром.
+                <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" @click="loadCompare()">Повторить</button>
+            </p>
+        </template>
+        <template x-if="!compareLoading && !compareError && compare && !compare.own_product">
+            <p class="text-sm flex items-center gap-2" style="color:var(--text-muted)">
+                {{ icon('info-circle', size=16) }}
+                Привяжите свою карточку в настройках группы, чтобы видеть позицию по цене среди конкурентов.
+            </p>
+        </template>
+        <template x-if="!compareLoading && compare && compare.own_product">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span class="text-xs font-semibold uppercase tracking-wide flex-shrink-0" style="color:var(--text-muted)">Ваш товар</span>
+                <a class="cg-link text-sm font-medium truncate max-w-xs" target="_blank" rel="noopener"
+                   :href="'https://www.wildberries.ru/catalog/' + compare.own_product.nm_id + '/detail.aspx'"
+                   x-text="compare.own_product.title || ('nm ' + compare.own_product.nm_id)"></a>
+                <span class="text-sm font-semibold" style="color:var(--text)" x-text="fmtPrice(ownPrice())"></span>
+                <template x-if="compare.own_product.position">
+                    <span class="sh-chip" x-text="'позиция ' + compare.own_product.position + ' из ' + compare.own_product.total_with_own + ' по цене'"></span>
+                </template>
+                <template x-if="compare.own_product.vs_min_percent !== null && compare.own_product.vs_min_percent <= 0">
+                    <span class="sh-chip cg-chip-ok" x-text="compare.own_product.vs_min_percent === 0 ? 'на уровне минимума' : ('на ' + Math.abs(compare.own_product.vs_min_percent) + '% ниже минимума')"></span>
+                </template>
+                <template x-if="compare.own_product.vs_min_percent !== null && compare.own_product.vs_min_percent > 0">
+                    <span class="sh-chip cg-chip-warn" x-text="'+' + compare.own_product.vs_min_percent + '% к минимуму'"></span>
+                </template>
+                <template x-if="compare.own_product.median_competitor_price">
+                    <span class="text-xs" style="color:var(--text-muted)" x-text="'медиана конкурентов: ' + fmtPrice(compare.own_product.median_competitor_price)"></span>
+                </template>
+            </div>
+        </template>
+    </div>
+
     <!-- Products table -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-gray-200">
-                <thead class="bg-gray-50">
+    <div class="sh-card sh-card--flush" x-show="products.length > 0" x-cloak>
+        <div class="sh-table-wrap">
+            <table class="sh-table">
+                <thead>
                     <tr>
-                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Товар</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Цена</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Со скидкой</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Скидка</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Рейтинг</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Отзывы</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Остаток</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Обновлено</th>
-                        <th class="px-4 py-3"></th>
+                        <th>Товар</th>
+                        <th class="text-right">Цена</th>
+                        <th class="text-right">Со скидкой</th>
+                        <th class="text-right">Скидка</th>
+                        <th class="text-right">Рейтинг</th>
+                        <th class="text-right">Отзывы</th>
+                        <th class="text-right">Остаток</th>
+                        <th class="text-right">Данные</th>
+                        <th></th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-100">
+                <tbody>
                     <template x-for="p in products" :key="p.id">
-                        <tr class="hover:bg-gray-50">
-                            <td class="px-4 py-3">
+                        <tr>
+                            <td>
                                 <div class="flex items-center gap-3">
-                                    <img :src="p.image_url || ''" class="w-10 h-10 rounded-lg object-cover bg-gray-100"
-                                        onerror="this.style.display='none'">
+                                    <span class="cg-thumb" aria-hidden="true">
+                                        {{ icon('image', size=18, stroke=1.5) }}
+                                        <template x-if="p.image_url">
+                                            <img :src="p.image_url" alt="" loading="lazy" @error="$el.remove()">
+                                        </template>
+                                    </span>
                                     <div class="min-w-0">
-                                        <a :href="'https://www.wildberries.ru/catalog/' + p.nm_id + '/detail.aspx'" target="_blank"
-                                            class="text-sm font-medium text-gray-900 hover:text-indigo-600 truncate block max-w-[300px]" x-text="p.title || ('nm: ' + p.nm_id)"></a>
-                                        <p class="text-xs text-gray-500" x-text="(p.brand || '') + (p.supplier_name ? ' / ' + p.supplier_name : '')"></p>
+                                        <a class="cg-link text-sm font-medium truncate block max-w-xs" target="_blank" rel="noopener"
+                                           :href="'https://www.wildberries.ru/catalog/' + p.nm_id + '/detail.aspx'"
+                                           x-text="p.title || ('nm ' + p.nm_id)"></a>
+                                        <p class="text-xs truncate max-w-xs" style="color:var(--text-muted)"
+                                           x-text="[p.brand, p.supplier_name].filter(Boolean).join(' · ')"></p>
                                     </div>
                                 </div>
                             </td>
-                            <td class="px-4 py-3 text-right text-sm text-gray-500" x-text="p.current_price ? (p.current_price + ' ₽') : '—'"></td>
-                            <td class="px-4 py-3 text-right text-sm font-medium text-gray-900" x-text="p.current_sale_price ? (p.current_sale_price + ' ₽') : '—'"></td>
-                            <td class="px-4 py-3 text-right text-sm">
+                            <td class="text-right" style="color:var(--text-muted)" x-text="p.current_price ? fmtPrice(p.current_price) : '—'"></td>
+                            <td class="text-right font-medium" style="color:var(--text)" x-text="p.current_sale_price ? fmtPrice(p.current_sale_price) : '—'"></td>
+                            <td class="text-right">
                                 <template x-if="p.current_discount_percent">
-                                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
-                                        :class="p.current_discount_percent >= 30 ? 'bg-red-100 text-red-700' : p.current_discount_percent >= 15 ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'"
-                                        x-text="'-' + p.current_discount_percent + '%'"></span>
+                                    <span class="sh-badge sh-badge--sm" :class="discountTone(p)" x-text="'-' + p.current_discount_percent + '%'"></span>
                                 </template>
                                 <template x-if="!p.current_discount_percent">
-                                    <span class="text-gray-400">—</span>
+                                    <span style="color:var(--text-muted)">—</span>
                                 </template>
                             </td>
-                            <td class="px-4 py-3 text-right text-sm">
-                                <span x-text="p.current_rating ? p.current_rating.toFixed(1) : '—'"></span>
+                            <td class="text-right" x-text="p.current_rating ? p.current_rating.toFixed(1) : '—'"></td>
+                            <td class="text-right" style="color:var(--text-muted)" x-text="p.current_feedbacks_count ?? '—'"></td>
+                            <td class="text-right">
+                                <span :style="p.current_total_stock === 0 ? 'color:var(--danger);font-weight:500' : 'color:var(--text-muted)'"
+                                      x-text="p.current_total_stock !== null && p.current_total_stock !== undefined ? p.current_total_stock : '—'"></span>
                             </td>
-                            <td class="px-4 py-3 text-right text-sm text-gray-500" x-text="p.current_feedbacks_count || '—'"></td>
-                            <td class="px-4 py-3 text-right text-sm" :class="p.current_total_stock === 0 ? 'text-red-600 font-medium' : 'text-gray-500'"
-                                x-text="p.current_total_stock !== null ? p.current_total_stock : '—'"></td>
-                            <td class="px-4 py-3 text-right text-xs text-gray-400"
-                                x-text="p.last_fetched_at ? new Date(p.last_fetched_at).toLocaleString('ru-RU', {hour:'2-digit',minute:'2-digit'}) : 'нет'"></td>
-                            <td class="px-4 py-3 text-right">
-                                <div class="flex items-center gap-1">
-                                    <button @click="showHistory(p)" class="p-1.5 text-gray-400 hover:text-indigo-600 rounded hover:bg-indigo-50" title="История цен">
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                            <td class="text-right">
+                                <template x-if="!p.current_price && !p.current_sale_price">
+                                    <span class="sh-chip cg-chip-wait">
+                                        <span class="sh-spinner sh-spinner--sm" role="status" aria-label="Ожидание данных"></span>
+                                        ожидает данных
+                                    </span>
+                                </template>
+                                <template x-if="(p.current_price || p.current_sale_price) && isStale(p)">
+                                    <span class="sh-chip cg-chip-warn" :title="'Цена не обновлялась с ' + shortDateTime(priceTs(p))"
+                                          x-text="'цена от ' + shortDate(priceTs(p))"></span>
+                                </template>
+                                <template x-if="(p.current_price || p.current_sale_price) && !isStale(p)">
+                                    <span class="text-xs" style="color:var(--text-muted)" x-text="priceTs(p) ? shortDateTime(priceTs(p)) : '—'"></span>
+                                </template>
+                            </td>
+                            <td class="text-right">
+                                <div class="flex items-center justify-end gap-1">
+                                    <button type="button" class="sh-icon-btn" @click="showHistoryFor(p)" title="История цен" aria-label="История цен">
+                                        {{ icon('chart', size=16) }}
                                     </button>
-                                    <button @click="removeProduct(p)" class="p-1.5 text-gray-400 hover:text-red-600 rounded hover:bg-red-50" title="Удалить">
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    <button type="button" class="sh-icon-btn cg-del" @click="removeProduct(p)" title="Убрать из мониторинга" aria-label="Убрать из мониторинга">
+                                        {{ icon('trash', size=16) }}
                                     </button>
                                 </div>
                             </td>
@@ -93,188 +196,559 @@
                 </tbody>
             </table>
         </div>
-
-        <template x-if="products.length === 0">
-            <div class="p-12 text-center text-gray-500">
-                <p>В группе пока нет товаров</p>
-                <button @click="showAddModal = true" class="mt-3 text-indigo-600 text-sm hover:underline">Добавить товары</button>
-            </div>
-        </template>
     </div>
 
-    <!-- Price History Modal -->
-    <template x-if="historyProduct">
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="historyProduct = null">
-            <div class="bg-white rounded-2xl shadow-xl max-w-2xl w-full mx-4 p-6">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-lg font-semibold" x-text="'История цен: ' + (historyProduct.title || historyProduct.nm_id)"></h3>
-                    <button @click="historyProduct = null" class="text-gray-400 hover:text-gray-600">&times;</button>
+    <!-- Empty state -->
+    <div class="sh-card sh-card--flush" x-show="products.length === 0" x-cloak>
+        <div class="sh-empty">
+            <div class="sh-empty-icon">{{ icon('package', size=48, stroke=1) }}</div>
+            <p class="sh-empty-title">В группе пока нет товаров</p>
+            <p class="sh-empty-desc">Добавьте артикулы вручную, найдите товары в поиске WB или импортируйте каталог продавца.</p>
+            <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" style="margin-top:16px" @click="openAdd()">Добавить товары</button>
+        </div>
+    </div>
+
+    <!-- Add products modal -->
+    <div x-show="showAddModal" x-cloak class="sh-modal sh-modal--lg" @keydown.escape.window="closeAdd()"
+         x-trap.noscroll.inert="showAddModal" role="dialog" aria-modal="true" aria-labelledby="cg-add-title">
+        <div class="sh-backdrop" x-show="showAddModal"
+             x-transition:enter="sh-backdrop-enter" x-transition:leave="sh-backdrop-leave" @click="closeAdd()"></div>
+        <div class="sh-modal-panel" x-show="showAddModal"
+             x-transition:enter="sh-modal-enter" x-transition:leave="sh-modal-leave" @click.stop>
+            <div class="sh-modal-header">
+                <h2 id="cg-add-title" class="sh-modal-title">Добавить товары</h2>
+                <button type="button" class="sh-modal-close" @click="closeAdd()" aria-label="Закрыть">&times;</button>
+            </div>
+            <div class="sh-modal-body">
+                {{ segmented([
+                    {'value': 'nm_ids', 'label': 'По артикулам'},
+                    {'value': 'search', 'label': 'Поиск WB'},
+                    {'value': 'seller', 'label': 'Каталог продавца'}
+                ], x_model='addMode') }}
+
+                <!-- Tab: nm_ids -->
+                <div x-show="addMode === 'nm_ids'" class="mt-4">
+                    <label class="block text-sm font-medium mb-1" for="cg-nm-input" style="color:var(--text)">Артикулы WB (nm_id)</label>
+                    <textarea id="cg-nm-input" x-model="nmInput" rows="4" class="cg-input font-mono"
+                              placeholder="12345678, 87654321 — через запятую, пробел или с новой строки"></textarea>
+                    <p class="mt-1.5 text-xs" style="color:var(--text-muted)" aria-live="polite">
+                        <template x-if="nmInput.trim()">
+                            <span>
+                                <span x-text="'Распознано: ' + parsedNm().valid.length"></span>
+                                <span x-show="parsedNm().invalid > 0" style="color:var(--warn)"
+                                      x-text="' · невалидных: ' + parsedNm().invalid + ' (будут пропущены)'"></span>
+                                <span x-show="parsedNm().valid.length > 300" style="color:var(--danger)"> · максимум 300 за раз</span>
+                            </span>
+                        </template>
+                        <template x-if="!nmInput.trim()">
+                            <span>Данные по новым товарам подтянутся фоновой синхронизацией в течение минуты.</span>
+                        </template>
+                    </p>
                 </div>
-                <div class="h-64">
-                    <canvas x-ref="historyChart"></canvas>
+
+                <!-- Tab: WB search -->
+                <div x-show="addMode === 'search'" class="mt-4">
+                    <form class="flex gap-2" @submit.prevent="runSearch()">
+                        <label class="sr-only" for="cg-search-input">Поисковый запрос</label>
+                        <input id="cg-search-input" type="search" x-model="searchQuery" class="cg-input flex-1"
+                               placeholder="Например: беспроводные наушники">
+                        <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md" :disabled="searching || !searchQuery.trim()"
+                                :class="{ 'is-loading': searching }">Найти</button>
+                    </form>
+                    <p x-show="searchError" class="mt-2 text-xs" style="color:var(--danger)" x-text="searchError"></p>
+                    <template x-if="searchResults && searchResults.length === 0">
+                        <p class="mt-3 text-sm" style="color:var(--text-muted)">Ничего не найдено — попробуйте другой запрос.</p>
+                    </template>
+                    <template x-if="searchResults && searchResults.length > 0">
+                        <div class="mt-3 max-h-72 overflow-y-auto rounded-md" style="border:1px solid var(--border)">
+                            <template x-for="r in searchResults" :key="r.nm_id">
+                                <label class="cg-pick flex items-center gap-3 px-3 py-2">
+                                    <input type="checkbox" :value="r.nm_id" x-model="selectedNmIds">
+                                    <span class="cg-thumb" aria-hidden="true">
+                                        {{ icon('image', size=16, stroke=1.5) }}
+                                        <template x-if="r.image_url"><img :src="r.image_url" alt="" loading="lazy" @error="$el.remove()"></template>
+                                    </span>
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block text-sm truncate" style="color:var(--text)" x-text="r.title || ('nm ' + r.nm_id)"></span>
+                                        <span class="block text-xs truncate" style="color:var(--text-muted)"
+                                              x-text="[r.brand, r.supplier_name].filter(Boolean).join(' · ')"></span>
+                                    </span>
+                                    <span class="text-sm font-medium flex-shrink-0" style="color:var(--text)"
+                                          x-text="r.sale_price ? fmtPrice(r.sale_price) : (r.price ? fmtPrice(r.price) : '—')"></span>
+                                </label>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Tab: seller catalog -->
+                <div x-show="addMode === 'seller'" class="mt-4">
+                    <form class="flex gap-2" @submit.prevent="loadSellerPreview()">
+                        <label class="sr-only" for="cg-supplier-input">ID продавца WB</label>
+                        <input id="cg-supplier-input" type="number" min="1" step="1" x-model="supplierIdInput" class="cg-input flex-1"
+                               placeholder="ID продавца WB, например 123456">
+                        <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md"
+                                :disabled="sellerLoading || !supplierIdInput" :class="{ 'is-loading': sellerLoading }">Показать превью</button>
+                    </form>
+                    <p x-show="sellerError" class="mt-2 text-xs" style="color:var(--danger)" x-text="sellerError"></p>
+                    <template x-if="sellerPreview && sellerPreview.length === 0">
+                        <p class="mt-3 text-sm" style="color:var(--text-muted)">У продавца не нашлось товаров — проверьте ID.</p>
+                    </template>
+                    <template x-if="sellerPreview && sellerPreview.length > 0">
+                        <div class="mt-3">
+                            <p class="text-xs mb-2" style="color:var(--text-muted)"
+                               x-text="'Первая страница каталога: ' + sellerPreview.length + ' ' + plural(sellerPreview.length, ['товар','товара','товаров'])"></p>
+                            <div class="max-h-60 overflow-y-auto rounded-md" style="border:1px solid var(--border)">
+                                <template x-for="r in sellerPreview" :key="r.nm_id">
+                                    <div class="cg-pick flex items-center gap-3 px-3 py-2" style="cursor:default">
+                                        <span class="cg-thumb" aria-hidden="true">
+                                            {{ icon('image', size=16, stroke=1.5) }}
+                                            <template x-if="r.image_url"><img :src="r.image_url" alt="" loading="lazy" @error="$el.remove()"></template>
+                                        </span>
+                                        <span class="block text-sm truncate min-w-0 flex-1" style="color:var(--text)" x-text="r.title || ('nm ' + r.nm_id)"></span>
+                                        <span class="text-sm font-medium flex-shrink-0" style="color:var(--text)"
+                                              x-text="r.sale_price ? fmtPrice(r.sale_price) : (r.price ? fmtPrice(r.price) : '—')"></span>
+                                    </div>
+                                </template>
+                            </div>
+                            <p class="mt-2 text-xs" style="color:var(--text-muted)">Полный каталог импортируется в фоне, до 300 товаров.</p>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            <div class="sh-modal-footer">
+                <button type="button" class="sh-btn sh-btn--ghost sh-btn--md" @click="closeAdd()">Закрыть</button>
+                <button x-show="addMode === 'nm_ids'" type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                        :disabled="adding || !parsedNm().valid.length || parsedNm().valid.length > 300"
+                        :class="{ 'is-loading': adding }" @click="addByNmIds()">Добавить</button>
+                <button x-show="addMode === 'search'" type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                        :disabled="adding || !selectedNmIds.length" :class="{ 'is-loading': adding }"
+                        @click="addSelected()" x-text="'Добавить выбранные (' + selectedNmIds.length + ')'"></button>
+                <button x-show="addMode === 'seller'" type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                        :disabled="adding || !supplierIdInput" :class="{ 'is-loading': adding }"
+                        @click="importSellerCatalog()">Импортировать весь каталог (до 300)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Price history modal -->
+    <div x-show="!!historyProduct" x-cloak class="sh-modal sh-modal--lg" @keydown.escape.window="closeHistory()"
+         x-trap.noscroll.inert="!!historyProduct" role="dialog" aria-modal="true" aria-labelledby="cg-history-title">
+        <div class="sh-backdrop" x-show="!!historyProduct"
+             x-transition:enter="sh-backdrop-enter" x-transition:leave="sh-backdrop-leave" @click="closeHistory()"></div>
+        <div class="sh-modal-panel" x-show="!!historyProduct"
+             x-transition:enter="sh-modal-enter" x-transition:leave="sh-modal-leave" @click.stop>
+            <div class="sh-modal-header">
+                <div class="min-w-0">
+                    <h2 id="cg-history-title" class="sh-modal-title">История цен</h2>
+                    <p class="mt-1 text-sm truncate" style="color:var(--text-muted)"
+                       x-text="historyProduct ? (historyProduct.title || ('nm ' + historyProduct.nm_id)) : ''"></p>
+                </div>
+                <button type="button" class="sh-modal-close" @click="closeHistory()" aria-label="Закрыть">&times;</button>
+            </div>
+            <div class="sh-modal-body">
+                {{ segmented([
+                    {'value': '7d', 'label': '7д'},
+                    {'value': '30d', 'label': '30д'},
+                    {'value': '90d', 'label': '90д'},
+                    {'value': '1y', 'label': 'Год'}
+                ], x_model='historyPeriod') }}
+                <div class="relative mt-4" style="height:280px">
+                    <canvas x-ref="historyChart" aria-label="График истории цен" role="img"></canvas>
+                    <div x-show="historyLoading" class="absolute inset-0 flex items-center justify-center" style="background:var(--bg-card)">
+                        <span class="sh-spinner sh-spinner--lg" role="status" aria-label="Загрузка"></span>
+                    </div>
+                    <div x-show="!historyLoading && historyError" class="absolute inset-0 flex items-center justify-center px-6 text-center" style="background:var(--bg-card)">
+                        <p class="text-sm" style="color:var(--danger)" x-text="historyError"></p>
+                    </div>
+                    <div x-show="!historyLoading && !historyError && !historyHasData" class="absolute inset-0 flex items-center justify-center px-6 text-center" style="background:var(--bg-card)">
+                        <p class="text-sm" style="color:var(--text-muted)">Пока нет истории за период — снимки появляются при изменении цены.</p>
+                    </div>
                 </div>
             </div>
         </div>
-    </template>
-
-    <!-- Add Products Modal -->
-    <template x-if="showAddModal">
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showAddModal = false">
-            <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full mx-4 p-6">
-                <h3 class="text-lg font-semibold mb-4">Добавить товары</h3>
-
-                <!-- Tabs -->
-                <div class="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1">
-                    <button @click="addMode = 'nm_ids'" :class="addMode === 'nm_ids' ? 'bg-white shadow-sm' : ''"
-                        class="flex-1 px-3 py-1.5 text-sm rounded-md transition-all">По артикулу</button>
-                    <button @click="addMode = 'search'" :class="addMode === 'search' ? 'bg-white shadow-sm' : ''"
-                        class="flex-1 px-3 py-1.5 text-sm rounded-md transition-all">Поиск</button>
-                    <button @click="addMode = 'seller'" :class="addMode === 'seller' ? 'bg-white shadow-sm' : ''"
-                        class="flex-1 px-3 py-1.5 text-sm rounded-md transition-all">По продавцу</button>
-                </div>
-
-                <!-- By nm_ids -->
-                <div x-show="addMode === 'nm_ids'" class="space-y-3">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Артикулы WB (nm_id)</label>
-                        <textarea x-model="addForm.nm_ids" rows="3" placeholder="Введите артикулы через запятую: 12345, 67890, ..."
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"></textarea>
-                    </div>
-                </div>
-
-                <!-- By search -->
-                <div x-show="addMode === 'search'" class="space-y-3">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Поисковый запрос</label>
-                        <input type="text" x-model="addForm.search_query" placeholder="Например: футболка мужская"
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                    </div>
-                </div>
-
-                <!-- By seller -->
-                <div x-show="addMode === 'seller'" class="space-y-3">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">ID продавца на WB</label>
-                        <input type="number" x-model="addForm.wb_supplier_id" placeholder="Например: 123456"
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                    </div>
-                </div>
-
-                <template x-if="addResult">
-                    <div class="mt-3 p-3 rounded-lg text-sm" :class="addResult.error ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'"
-                        x-text="addResult.error || ('Добавлено: ' + addResult.added + ', пропущено: ' + addResult.skipped)"></div>
-                </template>
-
-                <div class="flex justify-end gap-3 mt-6">
-                    <button @click="showAddModal = false" class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">Закрыть</button>
-                    <button @click="addProducts()" :disabled="adding"
-                        class="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
-                        <template x-if="adding"><span>Добавляем...</span></template>
-                        <template x-if="!adding"><span>Добавить</span></template>
-                    </button>
-                </div>
-            </div>
-        </div>
-    </template>
+    </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 function groupDetail() {
     return {
-        products: {{ products_data|tojson }},
         groupId: {{ group.id }},
+        products: {{ products_data|tojson }},
+
+        compare: null,
+        compareLoading: true,
+        compareError: null,
+
+        syncing: false,
+
         showAddModal: false,
         addMode: 'nm_ids',
-        addForm: { nm_ids: '', search_query: '', wb_supplier_id: '' },
         adding: false,
-        addResult: null,
+        nmInput: '',
+        searchQuery: '',
+        searching: false,
+        searchResults: null,
+        searchError: null,
+        selectedNmIds: [],
+        supplierIdInput: '',
+        sellerLoading: false,
+        sellerPreview: null,
+        sellerError: null,
+
         historyProduct: null,
-        historyChart: null,
+        historyPeriod: '30d',
+        historyLoading: false,
+        historyError: null,
+        historyHasData: false,
+        _chart: null,
 
-        async addProducts() {
-            this.adding = true;
-            this.addResult = null;
-            const csrf = document.querySelector('meta[name=csrf-token]')?.content;
-            const body = { group_id: this.groupId };
+        init() {
+            this.loadCompare();
+            this.$watch('historyPeriod', () => { if (this.historyProduct) this.loadHistory(); });
+        },
 
-            if (this.addMode === 'nm_ids') {
-                body.nm_ids = this.addForm.nm_ids;
-            } else if (this.addMode === 'search') {
-                body.search_query = this.addForm.search_query;
-            } else if (this.addMode === 'seller') {
-                body.wb_supplier_id = parseInt(this.addForm.wb_supplier_id);
-            }
+        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content || ''; },
 
+        // Даты с сервера — naive UTC: добавляем 'Z' при парсинге
+        parseUTC(s) {
+            if (!s) return null;
+            const iso = /[zZ]$|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z';
+            const d = new Date(iso);
+            return isNaN(d.getTime()) ? null : d;
+        },
+        fmtPrice(v) {
+            if (v === null || v === undefined) return '—';
+            return new Intl.NumberFormat('ru-RU').format(Math.round(v)) + ' ₽';
+        },
+        shortDate(d) { return d ? d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—'; },
+        shortDateTime(d) {
+            return d ? d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+        },
+        plural(n, forms) {
+            const m10 = n % 10, m100 = n % 100;
+            if (m10 === 1 && m100 !== 11) return forms[0];
+            if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return forms[1];
+            return forms[2];
+        },
+
+        priceTs(p) { return this.parseUTC(p.last_price_at || p.last_fetched_at); },
+        isStale(p) {
+            const t = this.priceTs(p);
+            return !!t && (Date.now() - t.getTime() > 24 * 3600 * 1000);
+        },
+        discountTone(p) {
+            const d = p.current_discount_percent || 0;
+            return d >= 30 ? 'sh-badge--red' : (d >= 15 ? 'sh-badge--yellow' : 'sh-badge--green');
+        },
+
+        ownPrice() {
+            const o = this.compare && this.compare.own_product;
+            if (!o) return null;
+            return o.discount_price ?? o.price ?? null;
+        },
+
+        async loadCompare() {
+            this.compareLoading = true;
+            this.compareError = null;
             try {
-                const res = await fetch('/api/competitors/products', {
-                    method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
-                    body: JSON.stringify(body)
+                const res = await fetch(`/api/competitors/compare/${this.groupId}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Ошибка загрузки');
+                this.compare = data;
+            } catch (e) {
+                this.compareError = e.message;
+            } finally {
+                this.compareLoading = false;
+            }
+        },
+
+        async forceSync() {
+            this.syncing = true;
+            try {
+                const res = await fetch('/api/competitors/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify({})
                 });
-                this.addResult = await res.json();
-                if (this.addResult.success) {
-                    // Reload products
-                    location.reload();
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Не удалось запланировать синхронизацию');
+                this.$store.toasts.info(data.message || 'Синхронизация запустится в течение минуты');
+            } catch (e) {
+                this.$store.toasts.error(e.message);
+            } finally {
+                this.syncing = false;
+            }
+        },
+
+        openAdd() {
+            this.showAddModal = true;
+        },
+        closeAdd() {
+            this.showAddModal = false;
+        },
+
+        parsedNm() {
+            const tokens = this.nmInput.split(/[\s,;]+/).filter(Boolean);
+            const seen = new Set();
+            const valid = [];
+            let invalid = 0;
+            for (const t of tokens) {
+                const n = Number(t);
+                if (Number.isInteger(n) && n > 0) {
+                    if (!seen.has(n)) { seen.add(n); valid.push(n); }
+                } else {
+                    invalid++;
                 }
-            } catch(e) {
-                this.addResult = { error: 'Ошибка при добавлении' };
+            }
+            return { valid, invalid };
+        },
+
+        async postProducts(body) {
+            const res = await fetch('/api/competitors/products', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Ошибка при добавлении');
+            return data;
+        },
+
+        _afterAddReload() {
+            // Даём тосту показаться, затем перечитываем серверный список
+            setTimeout(() => location.reload(), 900);
+        },
+
+        async addByNmIds() {
+            const { valid } = this.parsedNm();
+            if (!valid.length || valid.length > 300) return;
+            this.adding = true;
+            try {
+                const data = await this.postProducts({ group_id: this.groupId, nm_ids: valid });
+                const parts = [];
+                if (data.added) parts.push('добавлено ' + data.added);
+                if (data.reactivated) parts.push('возвращено ' + data.reactivated);
+                if (data.skipped) parts.push('уже в группе ' + data.skipped);
+                this.$store.toasts.success(
+                    (parts.length ? parts.join(', ') + '. ' : '') + 'Данные подтянутся в течение минуты',
+                    'Товары добавлены');
+                this.closeAdd();
+                this._afterAddReload();
+            } catch (e) {
+                this.$store.toasts.error(e.message);
             } finally {
                 this.adding = false;
             }
         },
 
-        async removeProduct(product) {
-            if (!confirm('Удалить товар из мониторинга?')) return;
-            const csrf = document.querySelector('meta[name=csrf-token]')?.content;
-            await fetch(`/api/competitors/products/${product.id}`, {
-                method: 'DELETE', headers: {'X-CSRFToken': csrf}
-            });
-            this.products = this.products.filter(p => p.id !== product.id);
+        async runSearch() {
+            const q = this.searchQuery.trim();
+            if (!q) return;
+            this.searching = true;
+            this.searchError = null;
+            this.searchResults = null;
+            this.selectedNmIds = [];
+            try {
+                const res = await fetch('/api/competitors/search?q=' + encodeURIComponent(q));
+                const data = await res.json();
+                if (!res.ok) {
+                    const msg = data.error || 'Ошибка поиска';
+                    this.searchError = msg;
+                    this.$store.toasts.error(msg);
+                    return;
+                }
+                this.searchResults = Array.isArray(data) ? data : [];
+            } catch (e) {
+                this.searchError = 'Ошибка поиска';
+                this.$store.toasts.error('Ошибка поиска');
+            } finally {
+                this.searching = false;
+            }
         },
 
-        async showHistory(product) {
-            this.historyProduct = product;
+        async addSelected() {
+            const nmIds = this.selectedNmIds.map(Number).filter(n => Number.isInteger(n) && n > 0);
+            if (!nmIds.length) return;
+            this.adding = true;
             try {
-                const res = await fetch(`/api/competitors/products/${product.id}/history?period=30d`);
-                const data = await res.json();
-
-                await this.$nextTick();
-                const canvas = this.$refs.historyChart;
-                if (!canvas) return;
-
-                if (this.historyChart) this.historyChart.destroy();
-
-                this.historyChart = new Chart(canvas, {
-                    type: 'line',
-                    data: {
-                        labels: data.history.map(h => new Date(h.created_at).toLocaleDateString('ru-RU')),
-                        datasets: [{
-                            label: 'Цена со скидкой',
-                            data: data.history.map(h => h.sale_price),
-                            borderColor: '#3B82F6',
-                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                            fill: true,
-                            tension: 0.3,
-                        }, {
-                            label: 'Цена',
-                            data: data.history.map(h => h.price),
-                            borderColor: '#9CA3AF',
-                            borderDash: [5, 5],
-                            tension: 0.3,
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: { legend: { position: 'bottom' } },
-                        scales: { y: { beginAtZero: false } }
-                    }
-                });
-            } catch(e) {
-                console.error(e);
+                const data = await this.postProducts({ group_id: this.groupId, nm_ids: nmIds });
+                this.$store.toasts.success(
+                    'Добавлено ' + (data.added + (data.reactivated || 0)) + ', данные подтянутся в течение минуты',
+                    'Товары добавлены');
+                this.closeAdd();
+                this._afterAddReload();
+            } catch (e) {
+                this.$store.toasts.error(e.message);
+            } finally {
+                this.adding = false;
             }
-        }
-    }
+        },
+
+        async loadSellerPreview() {
+            const sid = parseInt(this.supplierIdInput, 10);
+            if (!sid || sid <= 0) return;
+            this.sellerLoading = true;
+            this.sellerError = null;
+            this.sellerPreview = null;
+            try {
+                const res = await fetch('/api/competitors/seller-catalog?supplier_id=' + sid + '&page=1');
+                const data = await res.json();
+                if (!res.ok) {
+                    const msg = data.error || 'Ошибка загрузки каталога';
+                    this.sellerError = msg;
+                    this.$store.toasts.error(msg);
+                    return;
+                }
+                this.sellerPreview = Array.isArray(data) ? data : [];
+            } catch (e) {
+                this.sellerError = 'Ошибка загрузки каталога';
+                this.$store.toasts.error('Ошибка загрузки каталога');
+            } finally {
+                this.sellerLoading = false;
+            }
+        },
+
+        async importSellerCatalog() {
+            const sid = parseInt(this.supplierIdInput, 10);
+            if (!sid || sid <= 0) return;
+            this.adding = true;
+            try {
+                await this.postProducts({ group_id: this.groupId, wb_supplier_id: sid });
+                this.$store.toasts.success('Каталог продавца подтянется фоновой синхронизацией', 'Импорт запланирован');
+                this.closeAdd();
+                this._afterAddReload();
+            } catch (e) {
+                this.$store.toasts.error(e.message);
+            } finally {
+                this.adding = false;
+            }
+        },
+
+        async removeProduct(p) {
+            if (!confirm('Убрать товар из мониторинга?')) return;
+            try {
+                const res = await fetch(`/api/competitors/products/${p.id}`, {
+                    method: 'DELETE',
+                    headers: { 'X-CSRFToken': this.csrf() }
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Не удалось удалить товар');
+                this.products = this.products.filter(x => x.id !== p.id);
+                this.$store.toasts.success('Товар убран из мониторинга');
+            } catch (e) {
+                this.$store.toasts.error(e.message);
+            }
+        },
+
+        showHistoryFor(p) {
+            this.historyProduct = p;
+            this.historyError = null;
+            this.historyHasData = false;
+            this.loadHistory();
+        },
+        closeHistory() {
+            this.historyProduct = null;
+            if (this._chart) { this._chart.destroy(); this._chart = null; }
+        },
+
+        async loadHistory() {
+            const p = this.historyProduct;
+            if (!p) return;
+            this.historyLoading = true;
+            this.historyError = null;
+            try {
+                const res = await fetch(`/api/competitors/products/${p.id}/history?period=${this.historyPeriod}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Ошибка загрузки истории');
+                await this.$nextTick();
+                this.renderHistory(data.history || []);
+            } catch (e) {
+                this.historyError = e.message;
+                this.historyHasData = false;
+                if (this._chart) { this._chart.destroy(); this._chart = null; }
+            } finally {
+                this.historyLoading = false;
+            }
+        },
+
+        renderHistory(history) {
+            this.historyHasData = history.length > 0;
+            if (this._chart) { this._chart.destroy(); this._chart = null; }
+            if (!history.length) return;
+            const canvas = this.$refs.historyChart;
+            if (!canvas || typeof Chart === 'undefined') return;
+
+            const labels = history.map(h => {
+                const d = this.parseUTC(h.created_at);
+                return d ? d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '';
+            });
+            const P = window.shChart;
+            const datasets = [
+                {
+                    label: 'Цена со скидкой',
+                    data: history.map(h => h.sale_price),
+                    borderColor: P.color(1),
+                    backgroundColor: P.fade(P.color(1), 0.08),
+                    fill: true, tension: 0.3, borderWidth: 2,
+                    pointRadius: 2, pointHoverRadius: 5, pointBackgroundColor: P.color(1),
+                    spanGaps: true,
+                },
+                {
+                    label: 'Без скидки',
+                    data: history.map(h => h.price),
+                    borderColor: P.color(3),
+                    borderDash: [4, 4],
+                    fill: false, tension: 0.3, borderWidth: 2,
+                    pointRadius: 0, pointHoverRadius: 4,
+                    spanGaps: true,
+                },
+            ];
+            const own = this.ownPrice();
+            if (own !== null && own !== undefined) {
+                datasets.push({
+                    label: 'Ваша цена',
+                    data: labels.map(() => own),
+                    borderColor: P.color(5),
+                    borderDash: [8, 4],
+                    fill: false, borderWidth: 2, pointRadius: 0,
+                });
+            }
+
+            this._chart = P.register(new Chart(canvas, {
+                type: 'line',
+                data: { labels, datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'bottom', labels: { color: P.textMuted(), usePointStyle: true, boxWidth: 8 } },
+                        tooltip: {
+                            backgroundColor: P._read('--bg-sidebar', '#0a0a0a'),
+                            titleColor: '#ffffff', bodyColor: 'rgba(255,255,255,0.85)',
+                            cornerRadius: 8, padding: 12,
+                        },
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: P.textMuted(), maxTicksLimit: 8 } },
+                        y: { beginAtZero: false, grid: { color: P.grid() }, ticks: { color: P.textMuted() } },
+                    }
+                }
+            }), (c, p) => {
+                c.data.datasets[0].borderColor = p.color(1);
+                c.data.datasets[0].backgroundColor = p.fade(p.color(1), 0.08);
+                c.data.datasets[0].pointBackgroundColor = p.color(1);
+                c.data.datasets[1].borderColor = p.color(3);
+                if (c.data.datasets[2]) c.data.datasets[2].borderColor = p.color(5);
+                c.options.plugins.legend.labels.color = p.textMuted();
+                c.options.plugins.tooltip.backgroundColor = p._read('--bg-sidebar', '#0a0a0a');
+                c.options.scales.x.ticks.color = p.textMuted();
+                c.options.scales.y.ticks.color = p.textMuted();
+                c.options.scales.y.grid.color = p.grid();
+            });
+        },
+    };
 }
 </script>
 {% endblock %}

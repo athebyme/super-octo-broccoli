@@ -10747,6 +10747,9 @@ class CompetitorProduct(db.Model):
             'priority': self.priority,
             'is_active': self.is_active,
             'last_fetched_at': self.last_fetched_at.isoformat() if self.last_fetched_at else None,
+            'last_price_at': self.last_price_at.isoformat() if self.last_price_at else None,
+            'price_miss_count': self.price_miss_count,
+            'is_adult': self.is_adult,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 

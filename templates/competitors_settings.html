@@ -1,131 +1,183 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
 
-{% block title %}Настройки мониторинга - Seller Hub{% endblock %}
+{% block title %}Настройки мониторинга — Seller Hub{% endblock %}
+
+{% block topbar_left %}
+<nav class="sh-crumbs" aria-label="Хлебные крошки">
+    <a href="{{ url_for('competitors_dashboard') }}">Конкуренты</a>
+    <span class="sh-crumbs-sep" aria-hidden="true">/</span>
+    <span class="sh-crumbs-current">Настройки</span>
+</nav>
+{% endblock %}
 
 {% block content %}
-<div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="competitorSettings()">
+<style>
+    .cs-input {
+        border: 1px solid var(--border); border-radius: var(--r-sm);
+        background: transparent; color: var(--text);
+        padding: 8px 12px; font-size: 14px; width: 100%;
+    }
+    .cs-input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: var(--accent); }
+    .cs-input--error { border-color: var(--danger); }
+    .cs-hint { display: block; margin-top: 4px; font-size: 12px; color: var(--text-muted); }
+    .cs-label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text-muted); }
+</style>
+
+<div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-6" x-data="competitorSettings()" x-init="init()">
 
     <!-- Header -->
-    <div class="mb-8 relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
-        <div class="relative">
-            <div class="flex items-center gap-2 mb-1">
-                <a href="{{ url_for('competitors_dashboard') }}" class="text-gray-400 hover:text-white text-sm">&larr; Конкуренты</a>
+    <div class="sh-page-header">
+        <div class="sh-page-header-content">
+            <div>
+                <h1 class="sh-page-title">Настройки мониторинга</h1>
+                <p class="sh-page-subtitle">Интервал синхронизации, пороги алертов и прокси для сбора цен конкурентов</p>
             </div>
-            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Настройки мониторинга</h1>
         </div>
     </div>
 
-    <!-- Settings form -->
-    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-6">
-
-        <!-- Enable toggle -->
-        <div class="flex items-center justify-between">
-            <div>
-                <h3 class="font-medium text-gray-900">Мониторинг конкурентов</h3>
-                <p class="text-sm text-gray-500">Непрерывный сбор цен через публичные API Wildberries</p>
-            </div>
-            <button @click="toggleEnabled()" class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
-                :class="form.is_enabled ? 'bg-indigo-600' : 'bg-gray-200'">
-                <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
-                    :class="form.is_enabled ? 'translate-x-5' : 'translate-x-0'"></span>
-            </button>
+    <!-- Мониторинг -->
+    <div class="sh-card">
+        <div class="sh-card-header">
+            <h3 class="sh-card-title">Мониторинг</h3>
         </div>
+        <div class="flex items-center justify-between gap-4">
+            <div>
+                <p class="text-sm font-medium" style="color:var(--text)">Мониторинг конкурентов</p>
+                <p class="text-xs mt-0.5" style="color:var(--text-muted)">Периодический сбор цен, скидок и остатков через публичные API Wildberries</p>
+            </div>
+            <label class="sh-toggle">
+                <input type="checkbox" x-model="form.is_enabled" aria-label="Включить мониторинг конкурентов">
+                <span class="sh-toggle-track"><span class="sh-toggle-thumb"></span></span>
+            </label>
+        </div>
+        <div class="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="block">
+                <span class="cs-label">Интервал синхронизации</span>
+                <select x-model.number="form.sync_interval_minutes" class="cs-input">
+                    <option value="30">Каждые 30 минут</option>
+                    <option value="60">Каждый час</option>
+                    <option value="120">Каждые 2 часа</option>
+                    <option value="240">Каждые 4 часа</option>
+                    <option value="720">Каждые 12 часов</option>
+                    <option value="1440">Раз в сутки</option>
+                </select>
+                <span class="cs-hint">Как часто монитор обходит все отслеживаемые товары</span>
+            </label>
+            <label class="block">
+                <span class="cs-label">Максимум отслеживаемых товаров</span>
+                <input type="number" min="1" max="1000" step="1" x-model.number="form.max_products" class="cs-input">
+                <span class="cs-hint">До 1000 товаров суммарно по всем группам</span>
+            </label>
+        </div>
+    </div>
 
-        <hr class="border-gray-100">
+    <!-- Алерты -->
+    <div class="sh-card">
+        <div class="sh-card-header">
+            <h3 class="sh-card-title">Алерты</h3>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="block">
+                <span class="cs-label">Порог изменения цены, %</span>
+                <input type="number" min="0.5" max="90" step="0.5" x-model.number="form.price_change_alert_percent" class="cs-input">
+                <span class="cs-hint">Алерт создаётся, если цена конкурента изменилась на этот процент или больше</span>
+            </label>
+            <label class="block">
+                <span class="cs-label">Порог изменения скидки</span>
+                <input type="number" min="1" max="50" step="0.5" x-model.number="form.discount_alert_pp" class="cs-input">
+                <span class="cs-hint">Процентные пункты скидки: алерт при изменении скидки на столько пп и больше</span>
+            </label>
+        </div>
+    </div>
 
-        <!-- Status -->
-        <div x-show="form.is_enabled">
-            <div class="bg-gray-50 rounded-xl p-4">
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-                    <div>
-                        <p class="text-xs text-gray-500">Статус</p>
-                        <p class="text-sm font-medium mt-1">
-                            <template x-if="form.is_running">
-                                <span class="text-green-600">
-                                    <span class="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse mr-1"></span>
-                                    Работает
-                                </span>
-                            </template>
-                            <template x-if="!form.is_running">
-                                <span class="text-yellow-600">Остановлен</span>
-                            </template>
-                        </p>
-                    </div>
-                    <div>
-                        <p class="text-xs text-gray-500">Товаров</p>
-                        <p class="text-sm font-medium mt-1" x-text="form.total_products_monitored || 0"></p>
-                    </div>
-                    <div>
-                        <p class="text-xs text-gray-500">Время цикла</p>
-                        <p class="text-sm font-medium mt-1" x-text="form.last_full_cycle_duration ? (Math.round(form.last_full_cycle_duration) + ' сек') : '—'"></p>
-                    </div>
-                    <div>
-                        <p class="text-xs text-gray-500">Циклов</p>
-                        <p class="text-sm font-medium mt-1" x-text="form.total_cycles_completed || 0"></p>
-                    </div>
-                </div>
-                <template x-if="form.last_sync_error">
-                    <p class="mt-3 text-sm text-red-600" x-text="'Ошибка: ' + form.last_sync_error"></p>
+    <!-- Прокси -->
+    <div class="sh-card">
+        <div class="sh-card-header">
+            <h3 class="sh-card-title">Прокси</h3>
+        </div>
+        <p class="text-xs" style="color:var(--text-secondary)">WB может блокировать серверные IP — укажите HTTP-прокси, через который монитор будет получать цены.</p>
+
+        <template x-if="form.proxy && form.proxy.is_set && proxyMode === 'keep'">
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+                <code class="text-sm px-2 py-1 font-mono" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--r-xs)"
+                      x-text="form.proxy.masked"></code>
+                <span x-show="form.proxy.has_credentials" class="sh-chip">логин и пароль заданы</span>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="startReplace()">Заменить</button>
+                <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" style="color:var(--danger)" @click="proxyMode = 'delete'">Удалить</button>
+            </div>
+        </template>
+
+        <template x-if="proxyMode === 'delete'">
+            <div class="mt-3 flex flex-wrap items-center gap-2 text-sm" style="color:var(--warn)">
+                {{ icon('warning', size=16) }}
+                Прокси будет удалён при сохранении настроек.
+                <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" @click="proxyMode = 'keep'">Отменить</button>
+            </div>
+        </template>
+
+        <template x-if="proxyMode === 'replace' || !(form.proxy && form.proxy.is_set)">
+            <div class="mt-3">
+                <label class="block max-w-md">
+                    <span class="cs-label" x-text="form.proxy && form.proxy.is_set ? 'Новый прокси' : 'Адрес прокси'"></span>
+                    <input type="password" x-model="proxyInput" autocomplete="new-password"
+                           class="cs-input font-mono" :class="{ 'cs-input--error': proxyError }"
+                           placeholder="http://user:pass@host:port"
+                           :aria-invalid="proxyError ? 'true' : 'false'"
+                           @input="proxyError = null">
+                </label>
+                <p x-show="proxyError" class="mt-1 text-xs" style="color:var(--danger)" x-text="proxyError" aria-live="polite"></p>
+                <p x-show="!proxyError" class="cs-hint">Значение шифруется на сервере и наружу не возвращается — после сохранения видна только маска.</p>
+                <template x-if="form.proxy && form.proxy.is_set">
+                    <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm mt-2" @click="cancelReplace()">Отменить замену</button>
                 </template>
             </div>
-        </div>
+        </template>
+    </div>
 
-        <!-- Price alert threshold -->
-        <div>
-            <label class="block text-sm font-medium text-gray-700">Порог алерта изменения цены (%)</label>
-            <p class="text-xs text-gray-500 mb-2">Алерт создастся если цена изменится на этот % или больше</p>
-            <input type="number" x-model.number="form.price_change_alert_percent" min="0.1" max="100" step="0.5"
-                class="w-32 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+    <!-- Статус -->
+    <div class="sh-card">
+        <div class="sh-card-header">
+            <h3 class="sh-card-title">Статус</h3>
         </div>
+        <dl>
+            <div class="sh-kv">
+                <dt class="sh-kv-label">Последняя синхронизация</dt>
+                <dd class="sh-kv-value">
+                    <span class="sh-badge sh-badge--sm" :class="statusToneClass()" x-text="statusLabel()"></span>
+                    <span class="ml-2" style="color:var(--text-secondary)" x-text="fmtDateTime(form.last_sync_at) || 'ещё не выполнялась'"></span>
+                </dd>
+            </div>
+            <div class="sh-kv">
+                <dt class="sh-kv-label">Следующая синхронизация</dt>
+                <dd class="sh-kv-value" x-text="nextSyncText()"></dd>
+            </div>
+            <div class="sh-kv">
+                <dt class="sh-kv-label">Товаров под мониторингом</dt>
+                <dd class="sh-kv-value" x-text="form.total_products_monitored || 0"></dd>
+            </div>
+            <div class="sh-kv">
+                <dt class="sh-kv-label">Длительность полного цикла</dt>
+                <dd class="sh-kv-value" x-text="fmtDuration(form.last_full_cycle_duration)"></dd>
+            </div>
+            <div class="sh-kv">
+                <dt class="sh-kv-label">Циклов выполнено</dt>
+                <dd class="sh-kv-value" x-text="form.total_cycles_completed || 0"></dd>
+            </div>
+        </dl>
+        <template x-if="form.last_sync_error">
+            <div class="mt-3 px-3 py-2 text-sm" style="background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger-border);border-radius:var(--r-sm)">
+                <span class="font-medium">Ошибка последней синхронизации:</span>
+                <span x-text="form.last_sync_error"></span>
+            </div>
+        </template>
+    </div>
 
-        <!-- Rate limit -->
-        <div>
-            <label class="block text-sm font-medium text-gray-700">Скорость запросов (в минуту)</label>
-            <p class="text-xs text-gray-500 mb-2">Запросов к публичному API WB в минуту. Рекомендуется 30-60</p>
-            <input type="number" x-model.number="form.requests_per_minute" min="1" max="120" step="1"
-                class="w-32 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-            <p class="text-xs text-gray-400 mt-1">
-                При 60 запросах/мин и 100 товарах на запрос: ~<span x-text="Math.ceil(form.total_products_monitored / 100 / (form.requests_per_minute / 60))"></span> сек на цикл
-            </p>
-        </div>
-
-        <!-- Pause between cycles -->
-        <div>
-            <label class="block text-sm font-medium text-gray-700">Пауза между циклами (секунд)</label>
-            <p class="text-xs text-gray-500 mb-2">От 60 секунд; это защищает монитор от пустых циклов на кэшированных данных</p>
-            <input type="number" x-model.number="form.pause_between_cycles_seconds" min="60" max="3600" step="1"
-                class="w-32 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-        </div>
-
-        <!-- Max products -->
-        <div>
-            <label class="block text-sm font-medium text-gray-700">Максимум отслеживаемых товаров</label>
-            <p class="text-xs text-gray-500 mb-2">Лимит на количество товаров в мониторинге</p>
-            <input type="number" x-model.number="form.max_products" min="1" max="500000" step="1000"
-                class="w-40 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-        </div>
-
-        <!-- Proxy -->
-        <div>
-            <label class="block text-sm font-medium text-gray-700">HTTP-прокси</label>
-            <p class="text-xs text-gray-500 mb-2">WB блокирует серверные IP. Укажите прокси для получения цен. Формат: http://user:pass@host:port</p>
-            <input type="text" x-model="form.proxy_url" placeholder="http://user:pass@host:port"
-                class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono">
-        </div>
-
-        <hr class="border-gray-100">
-
-        <!-- Save -->
-        <div class="flex items-center gap-3">
-            <button @click="saveSettings()" :disabled="saving"
-                class="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-                <template x-if="saving"><span>Сохраняем...</span></template>
-                <template x-if="!saving"><span>Сохранить</span></template>
-            </button>
-            <template x-if="saved">
-                <span class="text-sm text-green-600">Сохранено</span>
-            </template>
-        </div>
+    <!-- Save -->
+    <div class="flex items-center gap-3 mt-2">
+        <button type="button" class="sh-btn sh-btn--primary sh-btn--md" @click="save()"
+                :disabled="saving" :class="{ 'is-loading': saving }">Сохранить</button>
+        <span class="text-xs" style="color:var(--text-muted)">Сервер нормализует значения — итог будет виден сразу после сохранения</span>
     </div>
 </div>
 
@@ -134,33 +186,123 @@ function competitorSettings() {
     return {
         form: {{ settings.to_dict()|tojson }},
         saving: false,
-        saved: false,
+        proxyMode: 'keep',      // keep | replace | delete
+        proxyInput: '',
+        proxyError: null,
 
-        toggleEnabled() {
-            this.form.is_enabled = !this.form.is_enabled;
+        init() {
+            const allowed = [30, 60, 120, 240, 720, 1440];
+            if (!allowed.includes(this.form.sync_interval_minutes)) {
+                const v = this.form.sync_interval_minutes || 60;
+                this.form.sync_interval_minutes = allowed.reduce(
+                    (a, b) => Math.abs(b - v) < Math.abs(a - v) ? b : a);
+            }
         },
 
-        async saveSettings() {
+        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content || ''; },
+
+        // Даты с сервера — naive UTC: добавляем 'Z' при парсинге
+        parseUTC(s) {
+            if (!s) return null;
+            const iso = /[zZ]$|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z';
+            const d = new Date(iso);
+            return isNaN(d.getTime()) ? null : d;
+        },
+        fmtDateTime(s) {
+            const d = this.parseUTC(s);
+            return d ? d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+        },
+        fmtDuration(sec) {
+            if (sec === null || sec === undefined) return '—';
+            if (sec < 90) return Math.round(sec) + ' сек';
+            return Math.round(sec / 60) + ' мин';
+        },
+        statusLabel() {
+            return {
+                never: 'не запускалась',
+                running: 'выполняется',
+                success: 'успешно',
+                failed: 'ошибка'
+            }[this.form.last_sync_status] || (this.form.last_sync_status || '—');
+        },
+        statusToneClass() {
+            return {
+                success: 'sh-badge--green',
+                failed: 'sh-badge--red',
+                running: 'sh-badge--yellow'
+            }[this.form.last_sync_status] || 'sh-badge--gray';
+        },
+        nextSyncText() {
+            if (!this.form.is_enabled) return 'мониторинг выключен';
+            const d = this.parseUTC(this.form.next_sync_due_at);
+            if (!d || d.getTime() <= Date.now()) return 'в ближайшую минуту';
+            return this.fmtDateTime(this.form.next_sync_due_at);
+        },
+
+        startReplace() {
+            this.proxyMode = 'replace';
+            this.proxyInput = '';
+            this.proxyError = null;
+        },
+        cancelReplace() {
+            this.proxyMode = 'keep';
+            this.proxyInput = '';
+            this.proxyError = null;
+        },
+
+        async save() {
+            this.proxyError = null;
+            const payload = {
+                is_enabled: !!this.form.is_enabled,
+                sync_interval_minutes: this.form.sync_interval_minutes,
+                price_change_alert_percent: this.form.price_change_alert_percent,
+                discount_alert_pp: this.form.discount_alert_pp,
+                max_products: this.form.max_products,
+            };
+            let sentProxy = false;
+            if (this.proxyMode === 'delete') {
+                payload.proxy_url = null;
+                sentProxy = true;
+            } else if (this.proxyMode === 'replace') {
+                const v = this.proxyInput.trim();
+                if (!v) {
+                    this.proxyError = 'Введите адрес прокси или отмените замену';
+                    return;
+                }
+                payload.proxy_url = v;
+                sentProxy = true;
+            } else if (!(this.form.proxy && this.form.proxy.is_set) && this.proxyInput.trim()) {
+                payload.proxy_url = this.proxyInput.trim();
+                sentProxy = true;
+            }
+
             this.saving = true;
-            this.saved = false;
-            const csrf = document.querySelector('meta[name=csrf-token]')?.content;
             try {
                 const res = await fetch('/api/competitors/settings', {
                     method: 'PUT',
-                    headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
-                    body: JSON.stringify(this.form)
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify(payload)
                 });
                 const data = await res.json();
+                if (!res.ok) {
+                    const msg = data.error || 'Не удалось сохранить настройки';
+                    if (sentProxy) this.proxyError = msg;
+                    this.$store.toasts.error(msg);
+                    return;
+                }
+                // Ответ сервера — источник истины: нормализованные значения видны сразу
                 this.form = data;
-                this.saved = true;
-                setTimeout(() => this.saved = false, 3000);
-            } catch(e) {
-                console.error(e);
+                this.init();
+                this.proxyMode = 'keep';
+                this.proxyInput = '';
+                this.$store.toasts.success('Настройки сохранены');
+            } catch (e) {
+                this.$store.toasts.error('Не удалось сохранить настройки');
             } finally {
                 this.saving = false;
             }
         }
-    }
+    };
 }
 </script>
 {% endblock %}
