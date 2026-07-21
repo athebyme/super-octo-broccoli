@@ -59,3 +59,17 @@ Thumbs.db
 seller_platform.log
 *.log.*
 .env.gpu
+
+# Локальное операционное состояние (не код)
+backups/
+data/ssl/
+
+# Служебные каталоги инструментов разработки
+.claude/
+.playwright-mcp/
+.skills/
+.worktrees/
+
+# Скриншоты рабочих сессий в корне
+/*.png
+/*.jpeg
