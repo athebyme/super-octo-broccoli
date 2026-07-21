@@ -54,10 +54,9 @@ class SyntheticFulfillmentAdapter:
 
     def read_fbs_postings(self, credentials, payload):
         if self._record("fbs_postings", credentials, payload):
-            return {"result": {"postings": [], "has_next": "wrong"}}
+            return {"postings": [], "has_next": "wrong", "cursor": ""}
         return {
-            "result": {
-                "postings": [{
+            "postings": [{
                     "posting_number": "100-1-1",
                     "order_id": 100,
                     "order_number": "100-1",
@@ -77,15 +76,15 @@ class SyntheticFulfillmentAdapter:
                         "phone": "+70000000000",
                     },
                 }],
-                "has_next": False,
-            }
+            "has_next": False,
+            "cursor": "",
         }
 
     def read_fbo_postings(self, credentials, payload):
         if self._record("fbo_postings", credentials, payload):
-            return {"result": {}}
+            return {"postings": [], "has_next": False, "cursor": None}
         return {
-            "result": [{
+            "postings": [{
                 "posting_number": "200-2-1",
                 "order_id": 200,
                 "status": "cancelled",
@@ -102,7 +101,9 @@ class SyntheticFulfillmentAdapter:
                     "price": "200",
                     "currency_code": "RUB",
                 }],
-            }]
+            }],
+            "has_next": False,
+            "cursor": "",
         }
 
     def read_returns(self, credentials, payload):
@@ -281,6 +282,13 @@ class MarketplaceFulfillmentServiceTest(unittest.TestCase):
             [phase for phase, _ in adapter.calls],
             list(MarketplaceFulfillmentService.PHASES),
         )
+        payloads = dict(adapter.calls)
+        self.assertEqual(payloads["fbs_postings"]["limit"], 100)
+        self.assertEqual(payloads["fbo_postings"]["limit"], 100)
+        self.assertEqual(payloads["fbs_postings"]["cursor"], "")
+        self.assertEqual(payloads["fbo_postings"]["cursor"], "")
+        self.assertNotIn("offset", payloads["fbs_postings"])
+        self.assertNotIn("offset", payloads["fbo_postings"])
 
         self.assertEqual(MarketplacePosting.query.count(), 2)
         self.assertEqual(MarketplacePostingItem.query.count(), 2)

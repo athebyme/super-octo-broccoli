@@ -12,6 +12,8 @@ import re
 import hmac
 import hashlib
 import logging
+import threading
+import time
 from pathlib import Path
 from io import BytesIO
 
@@ -21,6 +23,24 @@ from flask_login import login_required
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Общий wall-clock бюджет на скачивание одного фото со всеми fallback URL.
+# requests timeout=N ограничивает только отдельные socket-операции: медленно
+# капающий upstream может держать gunicorn-поток минутами и класть всю
+# платформу (инцидент 2026-07-20). Дедлайн проверяется между чанками, поэтому
+# фактический потолок ~ бюджет + read timeout.
+PHOTO_FETCH_TOTAL_BUDGET = 12.0
+_PHOTO_FETCH_CONNECT_TIMEOUT = 5.0
+_PHOTO_FETCH_READ_TIMEOUT = 10.0
+_PHOTO_FETCH_MAX_BYTES = 10 * 1024 * 1024
+
+# TTL-кэш auth-cookies поставщика: без него каждый промах фото-кэша делает
+# отдельный логин-POST на сайт поставщика, а страница на 30+ фото — шторм
+# логинов, за который поставщик троттлит наш IP.
+AUTH_COOKIE_TTL_OK = 1800
+AUTH_COOKIE_TTL_FAIL = 120
+_auth_cookie_cache = {}  # supplier.code -> (cookies_dict, monotonic_expires_at)
+_auth_cookie_lock = threading.Lock()
 
 
 def _sign_photo_token(secret_key: str, sp_id: int, photo_idx: int) -> str:
@@ -221,22 +241,18 @@ def register_photo_routes(app):
 
         from services.url_security import validate_external_url as _validate_url
 
+        deadline = time.monotonic() + PHOTO_FETCH_TOTAL_BUDGET
         for current_url in [url] + fallbacks:
             # SSRF protection: проверяем каждый URL перед запросом
             if _validate_url(current_url) is not None:
                 continue
             try:
-                resp = _requests.get(
-                    current_url, headers=headers, cookies=auth_cookies,
-                    timeout=15, allow_redirects=True
-                )
-                resp.raise_for_status()
-
-                content_type = resp.headers.get('Content-Type', '')
-                if not content_type.startswith('image/') and len(resp.content) < 1024:
+                content = _download_image_with_deadline(
+                    current_url, headers, auth_cookies, deadline)
+                if content is None:
                     continue
 
-                img = _Image.open(BytesIO(resp.content))
+                img = _Image.open(BytesIO(content))
                 output = BytesIO()
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
@@ -310,12 +326,17 @@ def register_photo_routes(app):
         import requests as _requests
         from urllib.parse import urljoin
         try:
+            deadline = time.monotonic() + PHOTO_FETCH_TOTAL_BUDGET
             current_url = url
             resp = None
             for _ in range(5):  # max redirects
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.5:
+                    return _generate_placeholder_image()
                 resp = _requests.get(
                     current_url,
-                    timeout=15,
+                    timeout=(min(_PHOTO_FETCH_CONNECT_TIMEOUT, remaining),
+                             min(_PHOTO_FETCH_READ_TIMEOUT, remaining)),
                     allow_redirects=False,
                     headers={'User-Agent': 'Mozilla/5.0'},
                     stream=True,
@@ -341,7 +362,7 @@ def register_photo_routes(app):
             total = 0
             for chunk in resp.iter_content(chunk_size=65536):
                 total += len(chunk)
-                if total > max_size:
+                if total > max_size or time.monotonic() > deadline:
                     resp.close()
                     return _generate_placeholder_image()
                 chunks.append(chunk)
@@ -492,19 +513,15 @@ def register_photo_routes(app):
             if ph.get('original') and ph['original'] != url:
                 fallbacks.append(ph['original'])
 
+        deadline = time.monotonic() + PHOTO_FETCH_TOTAL_BUDGET
         for current_url in [url] + fallbacks:
             try:
-                resp = _requests.get(
-                    current_url, headers=headers, cookies=auth_cookies,
-                    timeout=15, allow_redirects=True
-                )
-                resp.raise_for_status()
-
-                content_type = resp.headers.get('Content-Type', '')
-                if not content_type.startswith('image/') and len(resp.content) < 1024:
+                content = _download_image_with_deadline(
+                    current_url, headers, auth_cookies, deadline)
+                if content is None:
                     continue
 
-                img = _Image.open(BytesIO(resp.content))
+                img = _Image.open(BytesIO(content))
                 output = BytesIO()
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
@@ -604,19 +621,15 @@ def register_photo_routes(app):
             if ph.get('original') and ph['original'] != url:
                 fallbacks.append(ph['original'])
 
+        deadline = time.monotonic() + PHOTO_FETCH_TOTAL_BUDGET
         for current_url in [url] + fallbacks:
             try:
-                resp = _requests.get(
-                    current_url, headers=headers, cookies=auth_cookies,
-                    timeout=15, allow_redirects=True
-                )
-                resp.raise_for_status()
-
-                content_type = resp.headers.get('Content-Type', '')
-                if not content_type.startswith('image/') and len(resp.content) < 1024:
+                content = _download_image_with_deadline(
+                    current_url, headers, auth_cookies, deadline)
+                if content is None:
                     continue
 
-                img = _Image.open(BytesIO(resp.content))
+                img = _Image.open(BytesIO(content))
                 output = BytesIO()
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
@@ -638,11 +651,27 @@ def register_photo_routes(app):
 
 
 def _get_supplier_auth_cookies(supplier) -> dict:
-    """Получает cookies авторизации для поставщика (если требуется)"""
+    """
+    Получает cookies авторизации для поставщика (если требуется).
+
+    Результат кэшируется в памяти процесса: успешная сессия переиспользуется
+    AUTH_COOKIE_TTL_OK секунд, неудачный логин не повторяется чаще, чем раз в
+    AUTH_COOKIE_TTL_FAIL секунд. Логин выполняется под lock, чтобы параллельные
+    фото-запросы не устраивали шторм логинов на сайт поставщика.
+    """
     if not supplier:
         return {}
 
-    if supplier.code == 'sexoptovik' and supplier.auth_login and supplier.auth_password:
+    if supplier.code != 'sexoptovik' or not supplier.auth_login or not supplier.auth_password:
+        return {}
+
+    with _auth_cookie_lock:
+        cached = _auth_cookie_cache.get(supplier.code)
+        if cached and cached[1] > time.monotonic():
+            return dict(cached[0])
+
+        cookies = {}
+        ttl = AUTH_COOKIE_TTL_FAIL
         try:
             import requests as _requests
             session = _requests.Session()
@@ -652,11 +681,53 @@ def _get_supplier_auth_cookies(supplier) -> dict:
                 'password': supplier.auth_password,
             }, timeout=10, allow_redirects=False)
             if resp.status_code in (200, 302):
-                return dict(session.cookies)
+                cookies = dict(session.cookies)
+                if cookies:
+                    ttl = AUTH_COOKIE_TTL_OK
         except Exception as e:
             logger.debug(f"[PhotoProxy] Auth failed for {supplier.code}: {e}")
 
-    return {}
+        _auth_cookie_cache[supplier.code] = (cookies, time.monotonic() + ttl)
+        return dict(cookies)
+
+
+def _download_image_with_deadline(url, headers, cookies, deadline,
+                                  max_bytes=_PHOTO_FETCH_MAX_BYTES):
+    """
+    Скачивает изображение, укладываясь в общий wall-clock дедлайн.
+
+    Возвращает bytes либо None (таймаут/не изображение/слишком большой ответ).
+    Дедлайн проверяется между чанками, поэтому превышение ограничено
+    read timeout одной socket-операции.
+    """
+    import requests as _requests
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0.5:
+        return None
+
+    resp = _requests.get(
+        url, headers=headers, cookies=cookies,
+        timeout=(min(_PHOTO_FETCH_CONNECT_TIMEOUT, remaining),
+                 min(_PHOTO_FETCH_READ_TIMEOUT, remaining)),
+        allow_redirects=True, stream=True,
+    )
+    try:
+        resp.raise_for_status()
+        content_type = resp.headers.get('Content-Type', '')
+        chunks = []
+        total = 0
+        for chunk in resp.iter_content(chunk_size=65536):
+            total += len(chunk)
+            if total > max_bytes or time.monotonic() > deadline:
+                return None
+            chunks.append(chunk)
+        content = b''.join(chunks)
+        if not content_type.startswith('image/') and len(content) < 1024:
+            return None
+        return content
+    finally:
+        resp.close()
 
 
 def _generate_placeholder_image():

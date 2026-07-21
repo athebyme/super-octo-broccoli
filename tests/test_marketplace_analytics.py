@@ -26,7 +26,7 @@ SYNTHETIC_CREDENTIALS = MarketplaceCredentials(
     external_account_id="synthetic-client",
     api_key="synthetic-key",
 )
-METRICS = [1200, 4, 120, 10, 8.3, 3, 1, 0]
+METRICS = [1200, 4]
 
 
 class SyntheticAnalyticsAdapter:
@@ -150,13 +150,13 @@ class MarketplaceAnalyticsServiceTest(unittest.TestCase):
         self.assertEqual(run.phase, "completed")
         self.assertEqual(run.matched_rows, 1)
         self.assertEqual(run.unmatched_rows, 0)
-        self.assertEqual(run.fact_count, 16)
+        self.assertEqual(run.fact_count, 4)
         self.assertEqual(len(adapter.payloads), 2)
         self.assertEqual(adapter.payloads[0]["dimension"], ["sku"])
         self.assertEqual(adapter.payloads[1]["dimension"], ["day"])
 
         facts = MarketplaceMetricFact.query.filter_by(sync_id=run.id).all()
-        self.assertEqual(len(facts), 16)
+        self.assertEqual(len(facts), 4)
         self.assertTrue(all(not item.cross_marketplace_comparable for item in facts))
         self.assertTrue(all(
             item.definition_code.startswith("ozon.analytics.v1/")
@@ -165,7 +165,7 @@ class MarketplaceAnalyticsServiceTest(unittest.TestCase):
         product_fact = MarketplaceMetricFact.query.filter_by(
             sync_id=run.id,
             dimension_kind="listing",
-            metric_code="views",
+            metric_code="ordered_units",
         ).one()
         self.assertEqual(product_fact.listing_id, self.listing.id)
 

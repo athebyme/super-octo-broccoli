@@ -31,7 +31,8 @@ from services.marketplace_adapters import MarketplaceCredentials, get_marketplac
 from services.marketplace_adapters.base import MarketplaceAdapterError
 from services.ozon_api_client import OzonAPIError
 from services.ozon_fulfillment_contracts import (
-    POSTING_PAGE_LIMIT,
+    FBO_POSTING_PAGE_LIMIT,
+    FBS_POSTING_PAGE_LIMIT,
     RETURN_PAGE_LIMIT,
     OzonFulfillmentContractError,
     build_conditional_cancellation_request,
@@ -75,7 +76,7 @@ class MarketplaceFulfillmentProtocolError(MarketplaceFulfillmentError):
 
 
 class MarketplaceFulfillmentService:
-    CONTRACT_VERSION = "ozon-fulfillment-v1"
+    CONTRACT_VERSION = "ozon-fulfillment-v2"
     SUPPORTED_PERIODS = {"7d": 7, "30d": 30}
     PHASES = (
         "fbs_postings",
@@ -375,7 +376,7 @@ class MarketplaceFulfillmentService:
             status="running",
             phase=cls.PHASES[0],
             next_offset=0,
-            next_cursor="0",
+            next_cursor="",
             contract_version=cls.CONTRACT_VERSION,
             request_fingerprint=cls._run_fingerprint(period_start, period_end),
             started_at=now,
@@ -399,12 +400,15 @@ class MarketplaceFulfillmentService:
     def _next_phase(cls, run: MarketplaceFulfillmentSync, now: datetime) -> None:
         index = cls.PHASES.index(run.phase)
         run.next_offset = 0
-        run.next_cursor = "0"
         if index + 1 < len(cls.PHASES):
             run.phase = cls.PHASES[index + 1]
+            run.next_cursor = (
+                "" if run.phase in {"fbs_postings", "fbo_postings"} else "0"
+            )
         else:
             run.phase = "completed"
             run.status = "completed"
+            run.next_cursor = "0"
             run.completed_at = now
 
     @classmethod
@@ -678,7 +682,8 @@ class MarketplaceFulfillmentService:
                 unmatched += row_unmatched
             run.posting_count += len(normalized["rows"])
             if normalized["has_next"]:
-                run.next_offset = normalized["next_offset"]
+                run.next_cursor = normalized["next_cursor"]
+                run.next_offset += len(normalized["rows"])
             else:
                 cls._next_phase(run, now)
         elif phase in {"returns", "rfbs_returns"}:
@@ -751,30 +756,30 @@ class MarketplaceFulfillmentService:
                 fulfillment_kind="fbs",
                 period_start=run.period_start,
                 period_end=run.period_end,
-                offset=run.next_offset,
-                limit=POSTING_PAGE_LIMIT,
+                cursor=run.next_cursor or "",
+                limit=FBS_POSTING_PAGE_LIMIT,
             )
             response = adapter.read_fbs_postings(credentials, payload)
             return normalize_posting_response(
                 response,
                 fulfillment_kind="fbs",
-                requested_limit=POSTING_PAGE_LIMIT,
-                requested_offset=run.next_offset,
+                requested_limit=FBS_POSTING_PAGE_LIMIT,
+                requested_cursor=run.next_cursor or "",
             )
         if run.phase == "fbo_postings":
             payload = build_posting_request(
                 fulfillment_kind="fbo",
                 period_start=run.period_start,
                 period_end=run.period_end,
-                offset=run.next_offset,
-                limit=POSTING_PAGE_LIMIT,
+                cursor=run.next_cursor or "",
+                limit=FBO_POSTING_PAGE_LIMIT,
             )
             response = adapter.read_fbo_postings(credentials, payload)
             return normalize_posting_response(
                 response,
                 fulfillment_kind="fbo",
-                requested_limit=POSTING_PAGE_LIMIT,
-                requested_offset=run.next_offset,
+                requested_limit=FBO_POSTING_PAGE_LIMIT,
+                requested_cursor=run.next_cursor or "",
             )
         cursor = cls._cursor(run)
         if run.phase == "returns":

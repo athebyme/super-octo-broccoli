@@ -234,6 +234,12 @@ class Product(db.Model):
     attention_reasons = db.Column(db.Text, nullable=True)
     quality_impact = db.Column(db.Float, nullable=True)  # потенциал фикса для сортировки
 
+    # WB-ревизия: последний наблюдённый live-факт карточки на WB
+    # (services/wb_card_audit.py) — существование, фото, расхождения
+    # характеристик. Bounded JSON, контент карточки не перезаписывает.
+    wb_audit_json = db.Column(db.Text, nullable=True)
+    wb_audited_at = db.Column(db.DateTime, nullable=True)
+
     # Метаданные
     is_active = db.Column(db.Boolean, default=True)  # Активна ли карточка
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -1109,6 +1115,8 @@ class ImportedProduct(db.Model):
     # Связь с централизованной базой поставщика
     supplier_product_id = db.Column(db.Integer, db.ForeignKey('supplier_products.id'), nullable=True, index=True)
     supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=True, index=True)
+    # Последняя версия общей SupplierProduct, скопированная продавцу.
+    supplier_content_revision = db.Column(db.Integer, default=0, nullable=False)
 
     # Исходные данные из CSV
     external_id = db.Column(db.String(200), index=True)  # ID из внешнего источника
@@ -1144,6 +1152,7 @@ class ImportedProduct(db.Model):
 
     # Цена поставщика и рассчитанные цены
     supplier_price = db.Column(db.Float, nullable=True)  # Закупочная цена из CSV поставщика
+    recommended_retail_price = db.Column(db.Float, nullable=True)  # РРЦ поставщика (информационная)
     supplier_quantity = db.Column(db.Integer, nullable=True, default=None)  # Остаток на складе поставщика
     calculated_price = db.Column(db.Float, nullable=True)  # Z — итоговая цена
     calculated_discount_price = db.Column(db.Float, nullable=True)  # X — цена с SPP скидкой
@@ -1210,6 +1219,7 @@ class ImportedProduct(db.Model):
             'mapped_wb_category': self.mapped_wb_category,
             'brand': self.brand,
             'import_status': self.import_status,
+            'supplier_content_revision': self.supplier_content_revision,
             'validation_errors': json.loads(self.validation_errors) if self.validation_errors else [],
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'imported_at': self.imported_at.isoformat() if self.imported_at else None
@@ -1288,6 +1298,674 @@ class ImageGenerationExperiment(db.Model):
             'seller_id',
             'marketplace_listing_id',
             'created_at',
+        ),
+    )
+
+
+class BestsellerImageRecommendation(db.Model):
+    """Admin-curated, seller-reviewed shortlist for Image Lab.
+
+    The row stores only a bounded snapshot of already synchronized sales
+    metrics.  Creating it never invokes an LLM, an image provider or a
+    marketplace write.  WB and Ozon values keep their own definition metadata
+    and are never treated as one cross-marketplace financial total.
+    """
+    __tablename__ = 'bestseller_image_recommendations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer,
+        db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    imported_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('imported_products.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    marketplace_code = db.Column(db.String(20), nullable=False, index=True)
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    marketplace_listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    legacy_product_id = db.Column(
+        db.Integer,
+        db.ForeignKey('products.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    scope_key = db.Column(db.String(220), nullable=False)
+    period_code = db.Column(db.String(10), nullable=False)
+    status = db.Column(
+        db.String(20),
+        nullable=False,
+        default='recommended',
+        index=True,
+    )
+    opportunity_score = db.Column(db.Float, nullable=False)
+    units = db.Column(db.Float, nullable=False, default=0)
+    revenue_rub = db.Column(db.Float, nullable=False, default=0)
+    photo_count = db.Column(db.Integer, nullable=False, default=0)
+    quality_score = db.Column(db.Float)
+    source_observed_at = db.Column(db.DateTime)
+    metric_definitions_json = db.Column(db.Text, nullable=False, default='{}')
+    snapshot_json = db.Column(db.Text, nullable=False, default='{}')
+    recommended_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    reviewed_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    reviewed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship(
+        'Seller',
+        backref=db.backref(
+            'bestseller_image_recommendations',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
+    imported_product = db.relationship('ImportedProduct')
+    account = db.relationship('SellerMarketplaceAccount')
+    marketplace_listing = db.relationship('MarketplaceListing')
+    legacy_product = db.relationship('Product')
+    recommended_by_user = db.relationship(
+        'User',
+        foreign_keys=[recommended_by_user_id],
+    )
+    reviewed_by_user = db.relationship(
+        'User',
+        foreign_keys=[reviewed_by_user_id],
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'seller_id',
+            'scope_key',
+            name='uq_bestseller_image_recommendation_scope',
+        ),
+        db.CheckConstraint(
+            "marketplace_code IN ('wb','ozon')",
+            name='ck_bestseller_image_recommendation_marketplace',
+        ),
+        db.CheckConstraint(
+            "period_code IN ('7d','30d')",
+            name='ck_bestseller_image_recommendation_period',
+        ),
+        db.CheckConstraint(
+            "status IN ('recommended','dismissed','completed')",
+            name='ck_bestseller_image_recommendation_status',
+        ),
+        db.CheckConstraint(
+            'opportunity_score >= 0 AND opportunity_score <= 100 '
+            'AND units >= 0 AND revenue_rub >= 0 AND photo_count >= 0',
+            name='ck_bestseller_image_recommendation_metrics',
+        ),
+        db.CheckConstraint(
+            'quality_score IS NULL OR (quality_score >= 0 AND quality_score <= 100)',
+            name='ck_bestseller_image_recommendation_quality',
+        ),
+        db.Index(
+            'idx_bestseller_image_recommendation_seller_status',
+            'seller_id',
+            'status',
+            'opportunity_score',
+        ),
+        db.Index(
+            'idx_bestseller_image_recommendation_admin_status',
+            'status',
+            'marketplace_code',
+            'updated_at',
+        ),
+    )
+
+
+class InfographicCampaign(db.Model):
+    """Durable seller-scoped batch of locally rendered infographic packs."""
+    __tablename__ = 'infographic_campaigns'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    name = db.Column(db.String(160), nullable=False)
+    template_key = db.Column(db.String(40), nullable=False, default='botanical')
+    mode = db.Column(db.String(24), nullable=False, default='catalog')
+    status = db.Column(db.String(24), nullable=False, default='queued', index=True)
+    scope_json = db.Column(db.Text, nullable=False, default='{}')
+    config_json = db.Column(db.Text, nullable=False, default='{}')
+    total_items = db.Column(db.Integer, nullable=False, default=0)
+    runnable_items = db.Column(db.Integer, nullable=False, default=0)
+    completed_items = db.Column(db.Integer, nullable=False, default=0)
+    failed_items = db.Column(db.Integer, nullable=False, default=0)
+    approved_items = db.Column(db.Integer, nullable=False, default=0)
+    total_slides = db.Column(db.Integer, nullable=False, default=0)
+    completed_slides = db.Column(db.Integer, nullable=False, default=0)
+    approved_slides = db.Column(db.Integer, nullable=False, default=0)
+    estimated_cost_rub = db.Column(db.Float, nullable=False, default=0.0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship(
+        'Seller', backref=db.backref(
+            'infographic_campaigns', lazy='dynamic', cascade='all, delete-orphan',
+        ),
+    )
+    created_by_user = db.relationship('User')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "mode IN ('catalog')", name='ck_infographic_campaign_mode',
+        ),
+        db.CheckConstraint(
+            "status IN ('queued','running','review','approved','partial','cancelled')",
+            name='ck_infographic_campaign_status',
+        ),
+        db.CheckConstraint(
+            'total_items >= 0 AND runnable_items >= 0 AND completed_items >= 0 '
+            'AND failed_items >= 0 AND approved_items >= 0 '
+            'AND total_slides >= 0 AND completed_slides >= 0 '
+            'AND approved_slides >= 0 AND estimated_cost_rub >= 0',
+            name='ck_infographic_campaign_counters',
+        ),
+        db.Index(
+            'idx_infographic_campaign_seller_created',
+            'seller_id', 'created_at',
+        ),
+        db.Index(
+            'idx_infographic_campaign_seller_status',
+            'seller_id', 'status', 'created_at',
+        ),
+    )
+
+
+class InfographicCampaignItem(db.Model):
+    """One exact canonical product frozen into an infographic campaign."""
+    __tablename__ = 'infographic_campaign_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    campaign_id = db.Column(
+        db.Integer, db.ForeignKey('infographic_campaigns.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    imported_product_id = db.Column(
+        db.Integer, db.ForeignKey('imported_products.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    product_title = db.Column(db.String(500), nullable=False)
+    status = db.Column(db.String(24), nullable=False, default='queued', index=True)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+    fact_pack_json = db.Column(db.Text, nullable=False, default='{}')
+    content_json = db.Column(db.Text, nullable=False, default='{}')
+    error_code = db.Column(db.String(80), nullable=True)
+    error_message = db.Column(db.String(1000), nullable=True)
+    total_slides = db.Column(db.Integer, nullable=False, default=0)
+    completed_slides = db.Column(db.Integer, nullable=False, default=0)
+    approved_slides = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    campaign = db.relationship(
+        'InfographicCampaign', backref=db.backref(
+            'items', lazy='dynamic', cascade='all, delete-orphan',
+        ),
+    )
+    seller = db.relationship('Seller')
+    imported_product = db.relationship('ImportedProduct')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'campaign_id', 'imported_product_id',
+            name='uq_infographic_campaign_product',
+        ),
+        db.CheckConstraint(
+            "status IN ('queued','running','ready','failed','blocked','cancelled','conflict')",
+            name='ck_infographic_campaign_item_status',
+        ),
+        db.CheckConstraint(
+            'total_slides >= 0 AND completed_slides >= 0 AND approved_slides >= 0',
+            name='ck_infographic_campaign_item_counters',
+        ),
+        db.Index(
+            'idx_infographic_item_campaign_status',
+            'campaign_id', 'status', 'id',
+        ),
+        db.Index(
+            'idx_infographic_item_seller_product',
+            'seller_id', 'imported_product_id', 'created_at',
+        ),
+    )
+
+
+class InfographicCampaignSlide(db.Model):
+    """Persisted 900x1200 slide artifact with an explicit human decision."""
+    __tablename__ = 'infographic_campaign_slides'
+
+    id = db.Column(db.Integer, primary_key=True)
+    campaign_id = db.Column(
+        db.Integer, db.ForeignKey('infographic_campaigns.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    item_id = db.Column(
+        db.Integer, db.ForeignKey('infographic_campaign_items.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    position = db.Column(db.Integer, nullable=False)
+    slide_type = db.Column(db.String(40), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='completed', index=True)
+    review_status = db.Column(
+        db.String(20), nullable=False, default='pending', index=True,
+    )
+    content_json = db.Column(db.Text, nullable=False, default='{}')
+    quality_json = db.Column(db.Text, nullable=False, default='{}')
+    artifact_path = db.Column(db.String(500), nullable=True)
+    artifact_sha256 = db.Column(db.String(64), nullable=True)
+    error_message = db.Column(db.String(1000), nullable=True)
+    reviewed_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True,
+    )
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    campaign = db.relationship('InfographicCampaign')
+    item = db.relationship(
+        'InfographicCampaignItem', backref=db.backref(
+            'slides', lazy='dynamic', cascade='all, delete-orphan',
+        ),
+    )
+    seller = db.relationship('Seller')
+    reviewed_by_user = db.relationship('User')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'item_id', 'position', name='uq_infographic_item_slide_position',
+        ),
+        db.CheckConstraint(
+            'position >= 1', name='ck_infographic_slide_position',
+        ),
+        db.CheckConstraint(
+            "status IN ('completed','failed')", name='ck_infographic_slide_status',
+        ),
+        db.CheckConstraint(
+            "review_status IN ('pending','approved','rejected')",
+            name='ck_infographic_slide_review_status',
+        ),
+        db.Index(
+            'idx_infographic_slide_campaign_review',
+            'campaign_id', 'review_status', 'position',
+        ),
+        db.Index(
+            'idx_infographic_slide_item_position', 'item_id', 'position',
+        ),
+    )
+
+
+class MarketplaceMediaPublication(db.Model):
+    """Human-reviewed bulk media publication for one exact channel scope.
+
+    The row groups independent per-listing operations.  It never acts as a
+    provider payload: each item owns its exact target, before/proposed state
+    and reconciliation lifecycle so one failure cannot poison the whole batch.
+    """
+    __tablename__ = 'marketplace_media_publications'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    campaign_id = db.Column(
+        db.Integer, db.ForeignKey('infographic_campaigns.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    confirmed_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    marketplace_code = db.Column(db.String(32), nullable=False, index=True)
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    status = db.Column(db.String(24), nullable=False, default='draft', index=True)
+    placement_policy = db.Column(
+        db.String(32), nullable=False, default='prepend_approved',
+    )
+    overflow_policy = db.Column(
+        db.String(32), nullable=False, default='trim_current_tail',
+    )
+    scope_json = db.Column(db.Text, nullable=False, default='{}')
+    constraints_json = db.Column(db.Text, nullable=False, default='{}')
+    total_items = db.Column(db.Integer, nullable=False, default=0)
+    ready_items = db.Column(db.Integer, nullable=False, default=0)
+    blocked_items = db.Column(db.Integer, nullable=False, default=0)
+    queued_items = db.Column(db.Integer, nullable=False, default=0)
+    succeeded_items = db.Column(db.Integer, nullable=False, default=0)
+    failed_items = db.Column(db.Integer, nullable=False, default=0)
+    uncertain_items = db.Column(db.Integer, nullable=False, default=0)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    confirmed_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    seller = db.relationship('Seller')
+    campaign = db.relationship('InfographicCampaign')
+    account = db.relationship('SellerMarketplaceAccount')
+    created_by_user = db.relationship(
+        'User', foreign_keys=[created_by_user_id],
+    )
+    confirmed_by_user = db.relationship(
+        'User', foreign_keys=[confirmed_by_user_id],
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('draft','ready','queued','running','succeeded',"
+            "'partial','cancelled')",
+            name='ck_marketplace_media_publication_status',
+        ),
+        db.CheckConstraint(
+            "placement_policy IN ('prepend_approved')",
+            name='ck_marketplace_media_placement_policy',
+        ),
+        db.CheckConstraint(
+            "overflow_policy IN ('trim_current_tail')",
+            name='ck_marketplace_media_overflow_policy',
+        ),
+        db.CheckConstraint(
+            'total_items >= 0 AND ready_items >= 0 AND blocked_items >= 0 '
+            'AND queued_items >= 0 AND succeeded_items >= 0 '
+            'AND failed_items >= 0 AND uncertain_items >= 0 AND version >= 1',
+            name='ck_marketplace_media_publication_counters',
+        ),
+        db.Index(
+            'idx_marketplace_media_publication_seller_created',
+            'seller_id', 'created_at',
+        ),
+        db.Index(
+            'idx_marketplace_media_publication_scope',
+            'seller_id', 'marketplace_code', 'account_id', 'status',
+        ),
+    )
+    __mapper_args__ = {'version_id_col': version}
+
+
+class MarketplaceMediaOperation(db.Model):
+    """One exact, single-attempt media write plus read reconciliation."""
+    __tablename__ = 'marketplace_media_operations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    publication_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_media_publications.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    rollback_of_operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_media_operations.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    created_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    confirmed_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    infographic_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('infographic_campaign_items.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    imported_product_id = db.Column(
+        db.Integer, db.ForeignKey('imported_products.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    marketplace_code = db.Column(db.String(32), nullable=False, index=True)
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    listing_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_listings.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
+    legacy_product_id = db.Column(
+        db.Integer, db.ForeignKey('products.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    external_item_id = db.Column(db.String(200), nullable=False)
+    operation_kind = db.Column(db.String(20), nullable=False, default='publish')
+    status = db.Column(db.String(24), nullable=False, default='ready', index=True)
+    placement_policy = db.Column(
+        db.String(32), nullable=False, default='prepend_approved',
+    )
+    target_json = db.Column(db.Text, nullable=False, default='{}')
+    source_snapshot_json = db.Column(db.Text, nullable=False, default='{}')
+    baseline_media_json = db.Column(db.Text, nullable=False, default='[]')
+    proposed_media_json = db.Column(db.Text, nullable=False, default='[]')
+    dropped_media_json = db.Column(db.Text, nullable=False, default='[]')
+    confirmed_media_json = db.Column(db.Text, nullable=False, default='[]')
+    baseline_fingerprint = db.Column(db.String(64), nullable=False)
+    proposed_fingerprint = db.Column(db.String(64), nullable=False)
+    confirmed_fingerprint = db.Column(db.String(64))
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    reconcile_count = db.Column(db.Integer, nullable=False, default=0)
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(1000))
+    public_assets_expires_at = db.Column(db.DateTime)
+    submitted_at = db.Column(db.DateTime)
+    last_reconciled_at = db.Column(db.DateTime)
+    next_reconcile_at = db.Column(db.DateTime)
+    deadline_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    publication = db.relationship(
+        'MarketplaceMediaPublication', backref=db.backref(
+            'operations', lazy='dynamic', cascade='all, delete-orphan',
+        ),
+    )
+    rollback_of_operation = db.relationship(
+        'MarketplaceMediaOperation', remote_side=[id],
+        backref=db.backref('rollback_operations', lazy='dynamic'),
+    )
+    seller = db.relationship('Seller')
+    created_by_user = db.relationship(
+        'User', foreign_keys=[created_by_user_id],
+    )
+    confirmed_by_user = db.relationship(
+        'User', foreign_keys=[confirmed_by_user_id],
+    )
+    infographic_item = db.relationship('InfographicCampaignItem')
+    imported_product = db.relationship('ImportedProduct')
+    account = db.relationship('SellerMarketplaceAccount')
+    listing = db.relationship('MarketplaceListing')
+    legacy_product = db.relationship('Product')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "operation_kind IN ('publish','rollback')",
+            name='ck_marketplace_media_operation_kind',
+        ),
+        db.CheckConstraint(
+            "status IN ('ready','blocked','queued','preflighting','submitting',"
+            "'reconciling','succeeded','uncertain','failed','conflict','cancelled')",
+            name='ck_marketplace_media_operation_status',
+        ),
+        db.CheckConstraint(
+            "placement_policy IN ('prepend_approved','restore_snapshot')",
+            name='ck_marketplace_media_operation_placement',
+        ),
+        db.CheckConstraint(
+            'attempt_count >= 0 AND attempt_count <= 1 '
+            'AND reconcile_count >= 0 AND version >= 1',
+            name='ck_marketplace_media_operation_counters',
+        ),
+        db.Index(
+            'idx_marketplace_media_operation_due',
+            'status', 'next_reconcile_at', 'id',
+        ),
+        db.Index(
+            'idx_marketplace_media_operation_seller_status',
+            'seller_id', 'marketplace_code', 'status', 'updated_at',
+        ),
+        db.Index(
+            'uq_marketplace_media_publication_publish_item',
+            'publication_id', 'infographic_item_id',
+            unique=True,
+            sqlite_where=db.text("operation_kind = 'publish'"),
+        ),
+        db.Index(
+            'uq_marketplace_media_active_wb_target',
+            'legacy_product_id',
+            unique=True,
+            sqlite_where=db.text(
+                "marketplace_code = 'wb' AND legacy_product_id IS NOT NULL "
+                "AND status IN ('queued','preflighting','submitting',"
+                "'reconciling','uncertain')"
+            ),
+        ),
+        db.Index(
+            'uq_marketplace_media_active_listing_target',
+            'account_id', 'listing_id',
+            unique=True,
+            sqlite_where=db.text(
+                "account_id IS NOT NULL AND listing_id IS NOT NULL "
+                "AND status IN ('queued','preflighting','submitting',"
+                "'reconciling','uncertain')"
+            ),
+        ),
+    )
+    __mapper_args__ = {'version_id_col': version}
+
+
+class MarketplaceMediaOperationSlide(db.Model):
+    """Frozen reviewed slide membership for a media operation."""
+    __tablename__ = 'marketplace_media_operation_slides'
+
+    id = db.Column(db.Integer, primary_key=True)
+    operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_media_operations.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    slide_id = db.Column(
+        db.Integer,
+        db.ForeignKey('infographic_campaign_slides.id', ondelete='RESTRICT'),
+        nullable=False,
+        index=True,
+    )
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+    position = db.Column(db.Integer, nullable=False)
+    artifact_sha256 = db.Column(db.String(64), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    operation = db.relationship(
+        'MarketplaceMediaOperation', backref=db.backref(
+            'operation_slides', lazy='dynamic', cascade='all, delete-orphan',
+        ),
+    )
+    slide = db.relationship('InfographicCampaignSlide')
+    seller = db.relationship('Seller')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'operation_id', 'slide_id',
+            name='uq_marketplace_media_operation_slide',
+        ),
+        db.UniqueConstraint(
+            'operation_id', 'position',
+            name='uq_marketplace_media_operation_slide_position',
+        ),
+        db.CheckConstraint(
+            'position >= 1', name='ck_marketplace_media_operation_slide_position',
+        ),
+        db.Index(
+            'idx_marketplace_media_operation_slide_order',
+            'operation_id', 'position',
         ),
     )
 
@@ -2623,7 +3301,8 @@ class SupplierProduct(db.Model):
     # Идентификация
     external_id = db.Column(db.String(200), index=True)  # ID из каталога поставщика
     vendor_code = db.Column(db.String(200))  # Артикул поставщика
-    barcode = db.Column(db.String(200))
+    barcode = db.Column(db.String(200))  # Первый штрихкод (совместимость)
+    barcodes_json = db.Column(db.Text)  # Полный список штрихкодов из фида (JSON list)
 
     # Основные данные (нормализованные)
     title = db.Column(db.String(500))
@@ -2704,6 +3383,10 @@ class SupplierProduct(db.Model):
     marketplace_validation_status = db.Column(db.String(50))
     marketplace_fill_pct = db.Column(db.Float)
 
+    # Версия общих данных карточки. Увеличивается после admin enrichment,
+    # чтобы продавец видел, что импортированную карточку можно обновить.
+    content_revision = db.Column(db.Integer, default=1, nullable=False)
+
     # Метаданные
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -2728,6 +3411,11 @@ class SupplierProduct(db.Model):
             return json.loads(self.photo_urls_json)
         except Exception:
             return []
+
+    def has_photos(self) -> bool:
+        """Есть ли фото — без полного json.loads (для списков в шаблонах)"""
+        raw = (self.photo_urls_json or '').strip()
+        return bool(raw) and raw not in ('[]', 'null')
 
     def get_processed_photos(self) -> list:
         """Получить обработанные фотографии"""
@@ -2801,6 +3489,7 @@ class SupplierProduct(db.Model):
             'marketplace_validation_status': self.marketplace_validation_status,
             'marketplace_fill_pct': self.marketplace_fill_pct,
             'marketplace_fields': self.get_marketplace_fields(),
+            'content_revision': self.content_revision,
         }
         if include_ai:
             data['ai_seo_title'] = self.ai_seo_title
@@ -3017,6 +3706,155 @@ class AIParseJob(db.Model):
         if not check_time:
             return False
         return (datetime.utcnow() - check_time).total_seconds() > self.STALE_TIMEOUT_SECONDS
+
+
+class SupplierCatalogEnrichmentRun(db.Model):
+    """Durable admin run for shared supplier-card enrichment."""
+    __tablename__ = 'supplier_catalog_enrichment_runs'
+
+    id = db.Column(db.String(36), primary_key=True)
+    supplier_id = db.Column(
+        db.Integer, db.ForeignKey('suppliers.id'), nullable=False, index=True,
+    )
+    admin_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id'), nullable=False, index=True,
+    )
+    mode = db.Column(db.String(40), nullable=False, default='category_only')
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    selection_json = db.Column(db.Text, nullable=False, default='{}')
+    reference_snapshot_json = db.Column(db.Text)
+    model_used = db.Column(db.String(100))
+
+    total = db.Column(db.Integer, nullable=False, default=0)
+    processed = db.Column(db.Integer, nullable=False, default=0)
+    applied = db.Column(db.Integer, nullable=False, default=0)
+    unchanged = db.Column(db.Integer, nullable=False, default=0)
+    needs_review = db.Column(db.Integer, nullable=False, default=0)
+    failed = db.Column(db.Integer, nullable=False, default=0)
+    cancelled = db.Column(db.Integer, nullable=False, default=0)
+    llm_calls = db.Column(db.Integer, nullable=False, default=0)
+    llm_call_limit = db.Column(db.Integer, nullable=False, default=1600)
+
+    current_label = db.Column(db.String(300))
+    error_code = db.Column(db.String(80))
+    error_message = db.Column(db.Text)
+    heartbeat_at = db.Column(db.DateTime)
+    started_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    supplier = db.relationship('Supplier', foreign_keys=[supplier_id])
+    admin_user = db.relationship('User', foreign_keys=[admin_user_id])
+    items = db.relationship(
+        'SupplierCatalogEnrichmentItem',
+        back_populates='run',
+        cascade='all, delete-orphan',
+        lazy='dynamic',
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "mode IN ('category_only', 'category_and_characteristics', "
+            "'characteristics_inference')",
+            name='ck_supplier_catalog_enrichment_run_mode',
+        ),
+        db.CheckConstraint(
+            "status IN ('pending', 'running', 'cancelling', 'cancelled', "
+            "'completed', 'partial', 'failed')",
+            name='ck_supplier_catalog_enrichment_run_status',
+        ),
+        db.Index(
+            'idx_supplier_catalog_enrichment_run_active',
+            'supplier_id', 'status', 'created_at',
+        ),
+        db.Index(
+            'uq_supplier_catalog_enrichment_active_supplier',
+            'supplier_id',
+            unique=True,
+            sqlite_where=db.text(
+                "status IN ('pending','running','cancelling')"
+            ),
+            postgresql_where=db.text(
+                "status IN ('pending','running','cancelling')"
+            ),
+        ),
+    )
+
+
+class SupplierCatalogEnrichmentItem(db.Model):
+    """One exact SupplierProduct target and its audited enrichment result."""
+    __tablename__ = 'supplier_catalog_enrichment_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(
+        db.String(36),
+        db.ForeignKey('supplier_catalog_enrichment_runs.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    supplier_product_id = db.Column(
+        db.Integer, db.ForeignKey('supplier_products.id'), nullable=False,
+        index=True,
+    )
+    ordinal = db.Column(db.Integer, nullable=False)
+    phase = db.Column(db.String(24), nullable=False, default='category')
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    source_fingerprint = db.Column(db.String(64), nullable=False)
+
+    proposed_subject_id = db.Column(db.Integer)
+    proposed_subject_name = db.Column(db.String(300))
+    confidence = db.Column(db.Float)
+    reasoning = db.Column(db.Text)
+    evidence = db.Column(db.Text)
+    before_json = db.Column(db.Text)
+    after_json = db.Column(db.Text)
+    reference_json = db.Column(db.Text)
+    # Предложения inference-режима [{name, value, rationale, confidence}] —
+    # применяются только через явное подтверждение админа
+    inference_json = db.Column(db.Text)
+    error_code = db.Column(db.String(80))
+    error_message = db.Column(db.Text)
+    category_changed = db.Column(db.Boolean, nullable=False, default=False)
+    characteristics_changed = db.Column(
+        db.Boolean, nullable=False, default=False,
+    )
+    applied_revision = db.Column(db.Integer)
+    started_at = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    run = db.relationship('SupplierCatalogEnrichmentRun', back_populates='items')
+    supplier_product = db.relationship('SupplierProduct')
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'run_id', 'supplier_product_id',
+            name='uq_supplier_catalog_enrichment_run_product',
+        ),
+        db.CheckConstraint(
+            "phase IN ('category', 'characteristics', 'done')",
+            name='ck_supplier_catalog_enrichment_item_phase',
+        ),
+        db.CheckConstraint(
+            "status IN ('pending', 'running', 'applied', 'unchanged', "
+            "'needs_review', 'failed', 'cancelled', 'rolled_back', "
+            "'rollback_conflict')",
+            name='ck_supplier_catalog_enrichment_item_status',
+        ),
+        db.Index(
+            'idx_supplier_catalog_enrichment_item_queue',
+            'run_id', 'status', 'phase', 'ordinal',
+        ),
+    )
 
 
 # ============= MARKETPLACE INTEGRATION MODELS =============
@@ -8091,18 +8929,27 @@ class MarketplaceBrand(db.Model):
 
 
 class BrandCategoryLink(db.Model):
-    """Допустимость бренда в категории маркетплейса"""
+    """Допустимость и точная provider identity бренда в категории."""
     __tablename__ = 'brand_category_links'
 
     id = db.Column(db.Integer, primary_key=True)
     marketplace_brand_id = db.Column(db.Integer, db.ForeignKey('marketplace_brands.id'), nullable=False, index=True)
     category_id = db.Column(db.Integer, nullable=False, index=True)  # subject_id (WB), category_id (Ozon) и т.д.
+    # WB may expose different external brand IDs for the same canonical brand
+    # in different categories. Keep that identity on the exact category link;
+    # MarketplaceBrand.marketplace_brand_id remains only the legacy/primary ID.
+    marketplace_external_brand_id = db.Column(db.Integer)
     category_name = db.Column(db.String(200))
     is_available = db.Column(db.Boolean, default=True, nullable=False)
     verified_at = db.Column(db.DateTime)
 
     __table_args__ = (
         db.UniqueConstraint('marketplace_brand_id', 'category_id', name='uq_mp_brand_category'),
+        db.Index(
+            'idx_bcl_category_external_brand_id',
+            'category_id',
+            'marketplace_external_brand_id',
+        ),
     )
 
     def to_dict(self):
@@ -8110,6 +8957,7 @@ class BrandCategoryLink(db.Model):
             'id': self.id,
             'marketplace_brand_id': self.marketplace_brand_id,
             'category_id': self.category_id,
+            'marketplace_external_brand_id': self.marketplace_external_brand_id,
             'category_name': self.category_name,
             'is_available': self.is_available,
             'verified_at': self.verified_at.isoformat() if self.verified_at else None,
@@ -9290,6 +10138,11 @@ class SocialAccount(db.Model):
     connected_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_used_at = db.Column(db.DateTime)
     last_error = db.Column(db.Text)
+    last_error_code = db.Column(db.String(80))
+    last_error_at = db.Column(db.DateTime)
+    # Terminal provider auth/capability failures quarantine only automatic
+    # publishing. Manual publish remains available as an explicit recheck.
+    automatic_publish_blocked_at = db.Column(db.DateTime)
 
     seller = db.relationship('Seller', backref=db.backref('social_accounts', lazy='dynamic'))
 
@@ -9344,7 +10197,21 @@ class SocialAccount(db.Model):
             'connected_at': self.connected_at.isoformat() if self.connected_at else None,
             'last_used_at': self.last_used_at.isoformat() if self.last_used_at else None,
             'last_error': self.last_error,
+            'last_error_code': self.last_error_code,
+            'last_error_at': self.last_error_at.isoformat() if self.last_error_at else None,
+            'automatic_publish_blocked_at': (
+                self.automatic_publish_blocked_at.isoformat()
+                if self.automatic_publish_blocked_at else None
+            ),
         }
+
+    __table_args__ = (
+        db.Index(
+            'idx_social_account_auto_publish_health',
+            'is_active',
+            'automatic_publish_blocked_at',
+        ),
+    )
 
     def __repr__(self):
         return f'<SocialAccount #{self.id} {self.platform}:{self.account_name}>'
@@ -9659,7 +10526,8 @@ class CompetitorMonitorSettings(db.Model):
     max_products = db.Column(db.Integer, default=100000)  # лимит отслеживаемых товаров
 
     # Непрерывный цикл
-    pause_between_cycles_seconds = db.Column(db.Integer, default=0)  # пауза между циклами (0 = без паузы)
+    # Runtime/API enforce 60..3600 seconds to prevent a cache-hit hot loop.
+    pause_between_cycles_seconds = db.Column(db.Integer, default=60)
 
     # Прокси для обхода блокировки WB (формат: http://user:pass@host:port)
     proxy_url = db.Column(db.String(500), nullable=True)

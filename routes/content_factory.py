@@ -752,25 +752,9 @@ def register_content_factory_routes(app):
         if item.status not in ('draft', 'approved', 'scheduled', 'failed'):
             return jsonify({'error': f'Нельзя опубликовать контент со статусом {item.status}'}), 400
 
-        # Атомарно ставим статус publishing чтобы предотвратить дубли
-        updated = ContentItem.query.filter(
-            ContentItem.id == item_id,
-            ContentItem.status.in_(['draft', 'approved', 'scheduled', 'failed']),
-        ).update({'status': 'publishing'}, synchronize_session='fetch')
-        db.session.commit()
-        if not updated:
-            return jsonify({'error': 'Контент уже публикуется или опубликован'}), 409
-        # Обновляем объект
-        db.session.refresh(item)
-
         # Определяем целевую платформу: берём из фабрики (источник правды), фоллбэк на item
-        factory = ContentFactory.query.get(item.factory_id)
+        factory = db.session.get(ContentFactory, item.factory_id)
         target_platform = factory.platform if factory else item.platform
-
-        # Синхронизируем platform айтема с фабрикой если рассинхрон
-        if item.platform != target_platform:
-            item.platform = target_platform
-            db.session.flush()
 
         # Определяем аккаунт для публикации
         account = None
@@ -802,6 +786,25 @@ def register_content_factory_routes(app):
                          f'Подключите аккаунт для платформы {target_platform}.'
             }), 400
 
+        # Claim выполняется только после локального preflight. Exact target
+        # сохраняется до provider call, чтобы crash recovery не гадал об
+        # аккаунте и ранняя validation-ошибка не оставляла вечный publishing.
+        updated = ContentItem.query.filter(
+            ContentItem.id == item_id,
+            ContentItem.status.in_(['draft', 'approved', 'scheduled', 'failed']),
+        ).update(
+            {
+                'status': 'publishing',
+                'platform': target_platform,
+                'social_account_id': account.id,
+            },
+            synchronize_session='fetch',
+        )
+        db.session.commit()
+        if not updated:
+            return jsonify({'error': 'Контент уже публикуется или опубликован'}), 409
+        db.session.refresh(item)
+
         # Публикуем
         try:
             from services.content_publishers import get_publisher
@@ -810,11 +813,13 @@ def register_content_factory_routes(app):
             # Логируем медиа для диагностики
             media_urls = item.get_media_urls()
             logger.info(f"Publishing item {item.id} to {target_platform}: {len(media_urls)} media URLs")
-            if media_urls:
-                for i, url in enumerate(media_urls[:3]):
-                    logger.info(f"  media[{i}]: {url[:100]}")
 
             result = publisher.publish(item, account)
+
+            from services.social_account_publish_health import (
+                clear_publish_failure,
+                record_publish_failure,
+            )
 
             if result.success:
                 item.status = 'published'
@@ -824,11 +829,13 @@ def register_content_factory_routes(app):
                 # Сохраняем предупреждения о фото (result.error может быть заполнен при success)
                 item.error_message = result.error if result.error else None
                 account.last_used_at = datetime.utcnow()
-                account.last_error = None
+                clear_publish_failure(account)
             else:
                 item.status = 'failed'
                 item.error_message = result.error
-                account.last_error = result.error
+                record_publish_failure(
+                    account, result, now=datetime.utcnow(),
+                )
 
             db.session.commit()
 
@@ -842,7 +849,11 @@ def register_content_factory_routes(app):
                     resp_data['warning'] = result.error
                 return jsonify(resp_data)
             else:
-                return jsonify({'error': result.error}), 500
+                return jsonify({
+                    'error': result.error,
+                    'error_code': result.error_code,
+                    'automatic_publish_blocked': bool(result.terminal),
+                }), 500
 
         except ValueError as e:
             item.status = 'failed'
@@ -1045,7 +1056,7 @@ def register_content_factory_routes(app):
                         result['local_photo_urls'] = local_urls
                         result['local_photo_urls_count'] = len(local_urls)
                     except Exception as e:
-                        result['local_photo_urls_error'] = str(e)
+                        result['local_photo_urls_error'] = type(e).__name__
                 else:
                     result['imported_product'] = 'NOT FOUND (no ImportedProduct linked to this Product)'
 
@@ -1096,52 +1107,78 @@ def register_content_factory_routes(app):
                         'jpeg_bytes': jpeg_size,
                     })
                 except Exception as e:
-                    result['steps'].append({'step': 'convert_jpeg', 'status': 'FAIL', 'error': str(e)})
+                    result['steps'].append({
+                        'step': 'convert_jpeg',
+                        'status': 'FAIL',
+                        'error': type(e).__name__,
+                    })
         except Exception as e:
-            result['steps'].append({'step': 'download_photo', 'status': 'FAIL', 'error': str(e)})
+            result['steps'].append({
+                'step': 'download_photo',
+                'status': 'FAIL',
+                'error': type(e).__name__,
+            })
 
         # Шаг 4: Проверяем VK аккаунт
         data = request.get_json(silent=True) or {}
         social_account_id = data.get('social_account_id') or item.social_account_id
         if social_account_id:
-            account = SocialAccount.query.get(social_account_id)
+            account = SocialAccount.query.filter_by(
+                id=social_account_id,
+                seller_id=current_user.seller.id,
+            ).first()
             if account:
                 creds = account.get_credentials_dict()
                 access_token = creds.get('access_token', '')
+                user_token = creds.get('user_token', '')
                 group_id = str(creds.get('group_id', '') or account.account_id).lstrip('-')
                 api_version = creds.get('api_version', '5.199')
 
                 result['vk_group_id'] = group_id
-                result['vk_token_prefix'] = access_token[:20] + '...' if access_token else 'EMPTY'
+                result['vk_access_token_present'] = bool(access_token)
+                result['vk_user_token_present'] = bool(user_token)
 
                 # Тестируем getWallUploadServer
-                try:
-                    srv_resp = _requests.get(
-                        'https://api.vk.com/method/photos.getWallUploadServer',
-                        params={
-                            'access_token': access_token,
-                            'group_id': group_id,
-                            'v': api_version,
-                        },
-                        timeout=10,
-                    )
-                    srv_data = srv_resp.json()
-                    if 'error' in srv_data:
+                if not user_token:
+                    result['steps'].append({
+                        'step': 'vk_getWallUploadServer',
+                        'status': 'FAIL',
+                        'error_code': 'vk_user_token_required',
+                        'error': 'Для загрузки фото нужен user_token',
+                    })
+                else:
+                    try:
+                        srv_resp = _requests.get(
+                            'https://api.vk.com/method/photos.getWallUploadServer',
+                            params={
+                                'access_token': user_token,
+                                'group_id': group_id,
+                                'v': api_version,
+                            },
+                            timeout=10,
+                        )
+                        srv_data = srv_resp.json()
+                        if 'error' in srv_data:
+                            result['steps'].append({
+                                'step': 'vk_getWallUploadServer',
+                                'status': 'FAIL',
+                                'error_code': srv_data['error'].get('error_code'),
+                                'error_msg': srv_data['error'].get('error_msg'),
+                            })
+                        else:
+                            result['steps'].append({
+                                'step': 'vk_getWallUploadServer',
+                                'status': 'OK',
+                                'upload_url_present': bool(
+                                    srv_data.get('response', {}).get('upload_url')
+                                ),
+                            })
+                    except Exception as e:
                         result['steps'].append({
                             'step': 'vk_getWallUploadServer',
                             'status': 'FAIL',
-                            'error_code': srv_data['error'].get('error_code'),
-                            'error_msg': srv_data['error'].get('error_msg'),
+                            'error': type(e).__name__,
                         })
-                    else:
-                        upload_url = srv_data.get('response', {}).get('upload_url', '')
-                        result['steps'].append({
-                            'step': 'vk_getWallUploadServer',
-                            'status': 'OK',
-                            'upload_url_prefix': upload_url[:80] + '...' if upload_url else 'EMPTY',
-                        })
-                except Exception as e:
-                    result['steps'].append({'step': 'vk_getWallUploadServer', 'status': 'FAIL', 'error': str(e)})
             else:
                 result['steps'].append({'step': 'vk_account', 'status': 'FAIL', 'error': f'Account {social_account_id} not found'})
         else:

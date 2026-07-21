@@ -16,6 +16,7 @@ from models import (
     ImportedProduct,
     Marketplace,
     MarketplaceListing,
+    Product,
     Seller,
     SellerMarketplaceAccount,
     User,
@@ -54,6 +55,14 @@ class ImageLabRouteTests(unittest.TestCase):
         seller2 = Seller(user_id=user2.id, company_name="Two")
         db.session.add_all([seller1, seller2])
         db.session.flush()
+        wb_product = Product(
+            seller_id=seller1.id,
+            nm_id=40404,
+            title="Товар WB с исторической галереей",
+            photos_json=json.dumps([1, 2]),
+        )
+        db.session.add(wb_product)
+        db.session.flush()
         product1 = ImportedProduct(
             seller_id=seller1.id,
             title="Товар 1",
@@ -73,7 +82,13 @@ class ImageLabRouteTests(unittest.TestCase):
             title="Товар 3",
             photo_urls=json.dumps(["https://cdn.example.test/3.png"]),
         )
-        db.session.add_all([product1, product2, product3])
+        wb_fallback_product = ImportedProduct(
+            seller_id=seller1.id,
+            product_id=wb_product.id,
+            title=wb_product.title,
+            photo_urls=None,
+        )
+        db.session.add_all([product1, product2, product3, wb_fallback_product])
         db.session.flush()
         ozon = Marketplace(
             name="Ozon",
@@ -158,6 +173,7 @@ class ImageLabRouteTests(unittest.TestCase):
         self.seller2_id = seller2.id
         self.product1_id = product1.id
         self.product3_id = product3.id
+        self.wb_fallback_product_id = wb_fallback_product.id
         self.account1_id = account1.id
         self.listing1_id = listing1.id
         self.listing3_id = listing3.id
@@ -207,6 +223,61 @@ class ImageLabRouteTests(unittest.TestCase):
             [self.listing1_id],
         )
         self.assertNotIn("ozon.example.test", json.dumps(product))
+
+    @mock.patch("routes.image_lab.render_template", return_value="ok")
+    def test_recommended_exact_wb_gallery_is_visible_without_canonical_urls(self, render):
+        recommendation = {
+            "id": 91,
+            "product_id": self.wb_fallback_product_id,
+            "target_ready": True,
+        }
+        with mock.patch(
+            "routes.image_lab.AdminSalesIntelligenceService.seller_recommendations",
+            return_value=[recommendation],
+        ):
+            response = self.client.get("/image-lab")
+
+        self.assertEqual(response.status_code, 200)
+        products = render.call_args.kwargs["lab_products"]
+        product = next(
+            item for item in products
+            if item["id"] == self.wb_fallback_product_id
+        )
+        self.assertEqual(product["photo_count"], 2)
+        self.assertEqual(product["photos"][-1], {"index": 1, "label": "Фото 2"})
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    @mock.patch(
+        "services.image_lab_service.exact_linked_wb_photo_urls",
+        return_value=[
+            "https://basket.test/wb-1.webp",
+            "https://basket.test/wb-2.webp",
+        ],
+    )
+    def test_confirmed_wb_experiment_persists_exact_gallery_urls(
+        self,
+        fallback_urls,
+        launch,
+    ):
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.wb_fallback_product_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+        })
+
+        self.assertEqual(response.status_code, 202, response.get_json())
+        product = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+        self.assertEqual(json.loads(product.photo_urls), [
+            "https://basket.test/wb-1.webp",
+            "https://basket.test/wb-2.webp",
+        ])
+        fallback_urls.assert_called_once()
+        launch.assert_called_once()
 
     @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
     @mock.patch("routes.image_lab.lab.launch_experiments")

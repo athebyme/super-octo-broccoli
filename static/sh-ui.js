@@ -290,7 +290,11 @@
                 try { this.muted = localStorage.getItem('sh-notif-muted') === '1'; } catch (e) {}
                 this._shownInitial = sessionStorage.getItem('_notif_initial_shown') === '1';
                 this.poll();
-                setInterval(() => this.poll(), 15000);
+                // Скрытая вкладка не опрашивает бэкенд; при возврате — сразу.
+                setInterval(() => { if (!document.hidden) this.poll(); }, 15000);
+                document.addEventListener('visibilitychange', () => {
+                    if (!document.hidden) this.poll();
+                });
             },
 
             toggleMute() {
@@ -385,10 +389,21 @@
             open: false,
             _timer: null,
 
-            init() { this.tick(); },
+            init() {
+                this.tick();
+                document.addEventListener('visibilitychange', () => {
+                    if (!document.hidden) this.tick();
+                });
+            },
 
             tick() {
                 const self = this;
+                if (this._timer) { clearTimeout(this._timer); this._timer = null; }
+                // Скрытая вкладка не опрашивает трей — только держит цикл.
+                if (document.hidden) {
+                    this._timer = setTimeout(function () { self.tick(); }, 30000);
+                    return;
+                }
                 this.poll().then(function () {
                     const delay = (self.count > 0 || self.open) ? 10000 : 30000;
                     if (self._timer) clearTimeout(self._timer);
@@ -429,5 +444,32 @@
             const label = span && span.textContent.trim();
             if (label) el.setAttribute('title', label);
         });
+    });
+})();
+
+/* ── Channel bar: перенос объявленных query-параметров при смене канала ──
+   Бар с data-carry="period,..." переписывает href таба при клике, подмешивая
+   перечисленные параметры из текущего URL (фильтры не сбрасываются при
+   переключении кабинета). Явно заданный в href параметр не перетирается. */
+(function () {
+    'use strict';
+    document.addEventListener('click', function (e) {
+        const tab = e.target.closest('.sh-channel-tab');
+        if (!tab || !tab.href) return;
+        const bar = tab.closest('.sh-channel-bar[data-carry]');
+        if (!bar) return;
+        try {
+            const url = new URL(tab.href, window.location.origin);
+            const current = new URLSearchParams(window.location.search);
+            bar.dataset.carry.split(',').forEach(function (name) {
+                name = name.trim();
+                if (!name) return;
+                const value = current.get(name);
+                if (value !== null && !url.searchParams.has(name)) {
+                    url.searchParams.set(name, value);
+                }
+            });
+            tab.href = url.toString();
+        } catch (err) { /* не мешаем обычной навигации */ }
     });
 })();

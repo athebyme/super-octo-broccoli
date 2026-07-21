@@ -81,6 +81,29 @@ class MarketplaceListingMediaService:
         return result
 
     @classmethod
+    def observed_main_image_summary(
+        cls,
+        listing: MarketplaceListing,
+    ) -> Dict[str, Any]:
+        """Return a bounded observation without exposing provider CDN URLs."""
+        observed = cls.observed_main_images(listing)
+        observed_hash = sha256(
+            json.dumps(
+                observed,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return {
+            "main_image_count": len(observed),
+            "main_image_fingerprint": observed_hash,
+            "available_main_slots": max(
+                0,
+                cls.OZON_MAX_MAIN_IMAGES - len(observed),
+            ),
+        }
+
+    @classmethod
     def _context(cls, listing: MarketplaceListing) -> Dict[str, Any]:
         marketplace_code = (
             listing.marketplace.code if listing.marketplace is not None else None
@@ -110,14 +133,7 @@ class MarketplaceListingMediaService:
                 "Недоступный или архивный Ozon-листинг нельзя выбрать целью"
             )
 
-        observed = cls.observed_main_images(listing)
-        observed_hash = sha256(
-            json.dumps(
-                observed,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        observed_media = cls.observed_main_image_summary(listing)
         return {
             "contract_version": cls.CONTRACT_VERSION,
             "entity_kind": "marketplace_listing",
@@ -129,14 +145,7 @@ class MarketplaceListingMediaService:
             "listing_title": (listing.title or listing.imported_product.title or "")[:500],
             "offer_id": (listing.offer_id or "")[:200],
             "source_policy": "canonical_imported_product_only",
-            "observed_media": {
-                "main_image_count": len(observed),
-                "main_image_fingerprint": observed_hash,
-                "available_main_slots": max(
-                    0,
-                    cls.OZON_MAX_MAIN_IMAGES - len(observed),
-                ),
-            },
+            "observed_media": observed_media,
             "constraints": {
                 "preferred_width": cls.OUTPUT_WIDTH,
                 "preferred_height": cls.OUTPUT_HEIGHT,

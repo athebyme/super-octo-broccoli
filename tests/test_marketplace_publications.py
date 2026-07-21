@@ -235,7 +235,7 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
             "type_id": item["type_id"],
             "is_archived": self.archived,
             "barcodes": [item["barcode"]] if item.get("barcode") else [],
-            "primary_image": media["primary_image"],
+            "primary_image": [media["primary_image"]],
             "images": [media["primary_image"], *media["images"]],
             "statuses": {},
             "visibility_details": {},
@@ -668,6 +668,129 @@ class OzonProductImportContractTest(OzonPublicationFixture, unittest.TestCase):
                 "operation_limits": {"unexpected": True},
                 "daily_create": {"limit": 999, "usage": 0},
             })
+
+
+
+class BulkEnqueueTest(OzonPublicationFixture, unittest.TestCase):
+    """enqueue_bulk_publications: durable queued без provider-вызова."""
+
+    def _second_draft(self, *, offer_id="bulk-offer-2", published_listing_id=None):
+        import json as _json
+        source = ImportedProduct(
+            seller_id=self.seller.id,
+            external_id=f"source-{offer_id}",
+            external_vendor_code=offer_id,
+            source_type="synthetic",
+            title="Безопасный товар",
+            description="Наблюдаемое описание",
+            category="Категория",
+        )
+        db.session.add(source)
+        db.session.flush()
+        draft = MarketplaceProductDraft(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account.id,
+            imported_product_id=source.id,
+            product_type_id=self.product_type.id,
+            offer_id=offer_id,
+            external_category_id="10",
+            external_type_id="777",
+            status="ready",
+            source_fact_hash="a" * 64,
+            source_facts_json="{}",
+            provenance_json="{}",
+            content_json=self.draft.content_json,
+            attributes_json="[]",
+            complex_attributes_json="[]",
+            media_json=self.draft.media_json,
+            dimensions_json=self.draft.dimensions_json,
+            barcodes_json=_json.dumps(["4600000000002"]),
+            commercial_json=self.draft.commercial_json,
+            schema_version=3,
+            schema_hash="schema-hash",
+            validation_status="valid",
+            validation_result_json=self.draft.validation_result_json,
+            validated_at=self.draft.validated_at,
+            published_listing_id=published_listing_id,
+        )
+        db.session.add(draft)
+        db.session.commit()
+        return draft
+
+    def _enqueue(self, draft_ids):
+        with patch.object(
+            MarketplaceDraftService,
+            "_build_validation_result",
+            return_value=self.validation_result(),
+        ):
+            return MarketplacePublicationService.enqueue_bulk_publications(
+                seller_id=self.seller.id,
+                account_id=self.account.id,
+                draft_ids=draft_ids,
+                created_by_user_id=self.user.id,
+            )
+
+    def test_mixed_set_enqueues_valid_and_skips_rest_with_reasons(self):
+        linked = self._second_draft(
+            offer_id="bulk-linked", published_listing_id=1,
+        )
+        result = self._enqueue([self.draft.id, 999999, linked.id])
+
+        self.assertEqual(len(result["queued"]), 1)
+        self.assertEqual(result["queued"][0]["draft_id"], self.draft.id)
+        skipped_ids = {row["draft_id"] for row in result["skipped"]}
+        self.assertEqual(skipped_ids, {999999, linked.id})
+
+        operation = MarketplaceOperation.query.get(
+            result["queued"][0]["operation_id"]
+        )
+        # Durable queued: провайдер не вызывался, submit оставлен scheduler-у
+        self.assertEqual(operation.status, "queued")
+        self.assertEqual(operation.attempt_count, 0)
+        self.assertIsNotNone(operation.next_poll_at)
+
+        # Повторный bulk не создаёт дублей: активная операция уже есть
+        repeat = self._enqueue([self.draft.id])
+        self.assertEqual(repeat["queued"], [])
+        self.assertEqual(len(repeat["skipped"]), 1)
+        self.assertEqual(
+            MarketplaceOperation.query.filter_by(
+                draft_id=self.draft.id,
+            ).count(),
+            1,
+        )
+
+    def test_id_validation_rejects_whole_request(self):
+        from services.marketplace_publications import (
+            MarketplacePublicationValidationError,
+        )
+        with self.assertRaises(MarketplacePublicationValidationError):
+            self._enqueue([self.draft.id, self.draft.id])
+        with self.assertRaises(MarketplacePublicationValidationError):
+            self._enqueue([True])
+        with self.assertRaises(MarketplacePublicationValidationError):
+            self._enqueue(list(range(1, 52)))
+
+    def test_non_publishable_draft_is_skipped_not_fatal(self):
+        broken = self._second_draft(offer_id="bulk-broken")
+        invalid = {"publishable": False, "errors": [
+            {"code": "missing_required"},
+        ], "warnings": []}
+        with patch.object(
+            MarketplaceDraftService,
+            "_build_validation_result",
+            side_effect=[self.validation_result(), invalid],
+        ):
+            result = MarketplacePublicationService.enqueue_bulk_publications(
+                seller_id=self.seller.id,
+                account_id=self.account.id,
+                draft_ids=[self.draft.id, broken.id],
+                created_by_user_id=self.user.id,
+            )
+        self.assertEqual(len(result["queued"]), 1)
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertEqual(result["skipped"][0]["draft_id"], broken.id)
 
 
 class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCase):

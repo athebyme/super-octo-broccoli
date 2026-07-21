@@ -170,7 +170,10 @@ def register_competitor_routes(app):
         if 'max_products' in data:
             settings.max_products = max(1, int(data['max_products']))
         if 'pause_between_cycles_seconds' in data:
-            settings.pause_between_cycles_seconds = max(0, int(data['pause_between_cycles_seconds']))
+            from services.competitor_monitor import normalize_cycle_pause_seconds
+            settings.pause_between_cycles_seconds = normalize_cycle_pause_seconds(
+                data['pause_between_cycles_seconds']
+            )
         if 'proxy_url' in data:
             settings.proxy_url = data['proxy_url'].strip() if data['proxy_url'] else None
 

@@ -204,6 +204,7 @@ def index():
         sources=sources,
         filters=filters,
         ozon_enabled=_feature_enabled(),
+        publication_enabled=_publication_enabled(),
     )
 
 
@@ -326,6 +327,150 @@ def create():
     return redirect(url_for("marketplace_drafts.detail", draft_id=draft.id))
 
 
+@marketplace_drafts_bp.route("/bulk-prepare", methods=["POST"])
+@login_required
+def bulk_prepare():
+    """Готовит Ozon-черновики для выбранных ImportedProduct одного кабинета.
+
+    Тонкий route: parse входа + вызов MarketplaceDraftService.bulk_prepare
+    (детерминированный локальный путь без LLM/provider calls; ошибка одного
+    товара не блокирует остальные) + ответ.
+    """
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    if not _feature_enabled():
+        return _feature_disabled_response()
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                raise MarketplaceDraftValidationError(
+                    "JSON body должен быть объектом"
+                )
+            raw_ids = data.get("imported_product_ids")
+            account_raw = data.get("account_id")
+            validate_raw = data.get("validate")
+        else:
+            raw_ids = request.form.getlist("imported_product_ids")
+            account_raw = request.form.get("account_id")
+            validate_raw = request.form.get("validate")
+        account_id = _integer(account_raw, "account_id")
+        validate_immediately = _boolean(validate_raw, "validate")
+        if not isinstance(raw_ids, list):
+            raise MarketplaceDraftValidationError(
+                "imported_product_ids обязателен и должен быть непустым списком"
+            )
+        # Form-строки приводим к int здесь (сервис принимает только строгие int)
+        product_ids = [
+            _integer(raw, "imported_product_id") for raw in raw_ids
+        ]
+        summary = MarketplaceDraftService.bulk_prepare(
+            seller_id=seller_id,
+            account_id=account_id,
+            imported_product_ids=product_ids,
+            validate=validate_immediately,
+            corrected_by_user_id=getattr(current_user, "id", None),
+        )
+    except Exception as exc:
+        return _write_failure(exc, seller_id=seller_id, action="bulk_prepare")
+    if _wants_json():
+        return jsonify({"success": True, **summary}), 200
+    parts = []
+    if summary["created"]:
+        parts.append(f"создано {summary['created']}")
+    if summary["existing"]:
+        parts.append(f"уже были {summary['existing']}")
+    if summary["failed"]:
+        parts.append(f"с ошибкой {summary['failed']}")
+    message = "Ozon-черновики: " + (", ".join(parts) if parts else "нет изменений")
+    if summary["failed"] and not summary["created"]:
+        category = "error"
+    elif summary["failed"]:
+        # Частичный результат не маскируем под полный успех
+        category = "warning"
+    else:
+        category = "success"
+    flash(message, category)
+    return redirect(url_for("marketplace_drafts.index", account_id=account_id))
+
+
+@marketplace_drafts_bp.route("/bulk-publish", methods=["POST"])
+@login_required
+def bulk_publish():
+    """Ставит выбранные готовые черновики в durable-очередь публикации.
+
+    Тонкий route: provider не вызывается — операции создаются queued, их
+    отправляет минутный scheduler под account claim с квотой и preflight.
+    """
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    if not _feature_enabled():
+        return _feature_disabled_response()
+    if not _publication_enabled():
+        message = (
+            "Публикация Ozon выключена флагом MARKETPLACE_OZON_PUBLICATION_ENABLED."
+        )
+        if _wants_json():
+            return jsonify({"success": False, "error": message}), 403
+        flash(message, "warning")
+        return redirect(url_for("marketplace_drafts.index"))
+    from services.marketplace_publications import (
+        MarketplacePublicationError,
+        MarketplacePublicationService,
+    )
+    try:
+        if request.is_json:
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                raise MarketplaceDraftValidationError(
+                    "JSON body должен быть объектом"
+                )
+            raw_ids = data.get("draft_ids")
+            account_raw = data.get("account_id")
+        else:
+            raw_ids = request.form.getlist("draft_ids")
+            account_raw = request.form.get("account_id")
+        account_id = _integer(account_raw, "account_id")
+        if not isinstance(raw_ids, list):
+            raise MarketplaceDraftValidationError(
+                "draft_ids обязателен и должен быть непустым списком"
+            )
+        draft_ids = [_integer(raw, "draft_id") for raw in raw_ids]
+        result = MarketplacePublicationService.enqueue_bulk_publications(
+            seller_id=seller_id,
+            account_id=account_id,
+            draft_ids=draft_ids,
+            created_by_user_id=getattr(current_user, "id", None),
+        )
+    except (MarketplaceDraftError, MarketplacePublicationError) as exc:
+        if _wants_json():
+            return jsonify({"success": False, "error": str(exc)}), 400
+        flash(str(exc), "error")
+        return redirect(url_for("marketplace_drafts.index"))
+    if _wants_json():
+        return jsonify({"success": True, **result}), 200
+    queued_count = len(result["queued"])
+    skipped = result["skipped"]
+    message = f"Поставлено в очередь публикации: {queued_count}."
+    if skipped:
+        reasons = "; ".join(
+            f"#{row['draft_id']}: {row['reason']}" for row in skipped[:3]
+        )
+        message += f" Пропущено: {len(skipped)} ({reasons}"
+        if len(skipped) > 3:
+            message += " …"
+        message += ")."
+    message += " Прогресс — в разделе «Операции Ozon»."
+    flash(
+        message,
+        "success" if queued_count and not skipped
+        else ("warning" if queued_count else "error"),
+    )
+    return redirect(url_for("marketplace_drafts.index", account_id=account_id))
+
+
 @marketplace_drafts_bp.route("/<int:draft_id>", methods=["GET"])
 @login_required
 def detail(draft_id: int):
@@ -374,10 +519,37 @@ def detail(draft_id: int):
         ),
         None,
     )
+    # Рекомендуемые типы Ozon для черновика без типа (только предложение,
+    # привязка остаётся явным действием продавца)
+    type_suggestions = []
+    if not draft.product_type_id:
+        try:
+            type_suggestions = MarketplaceDraftService.suggest_product_types(
+                seller_id=seller_id, draft_id=draft.id,
+            )
+        except MarketplaceDraftError:
+            type_suggestions = []
+
+    # Имена атрибутов типа для человекочитаемого отображения (read-only)
+    attribute_names = {}
+    if draft.product_type_id:
+        from models import MarketplaceAttributeDefinition
+        attribute_names = {
+            row[0]: row[1]
+            for row in db.session.query(
+                MarketplaceAttributeDefinition.external_attribute_id,
+                MarketplaceAttributeDefinition.name,
+            ).filter(
+                MarketplaceAttributeDefinition.product_type_id
+                == draft.product_type_id,
+            ).all()
+        }
     return render_template(
         "marketplace_draft_detail.html",
         draft=draft,
         draft_data=draft.to_public_dict(detail=True),
+        attribute_names=attribute_names,
+        type_suggestions=type_suggestions,
         type_query=type_query,
         type_options=type_options,
         ozon_enabled=_feature_enabled(),

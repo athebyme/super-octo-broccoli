@@ -150,6 +150,25 @@ class ImageLabPromptTests(unittest.TestCase):
             self.assertTrue(model["supports_reference"])
             self.assertEqual(model["resolution"], "1K")
             self.assertNotIn("reference_guided", model["supported_strategies"])
+            gpt_image = next(
+                model
+                for backend in config["backends"]
+                if backend["id"] == "openrouter"
+                for model in backend["models"]
+                if model["id"] == "openai/gpt-image-2"
+            )
+            self.assertEqual(gpt_image["quality"], "medium")
+            self.assertEqual(gpt_image["profile_label"], "Medium · автоформат")
+            self.assertEqual(gpt_image["cost_rub"], 4.5)
+            self.assertEqual(
+                validate_target(
+                    "openrouter",
+                    "openai/gpt-image-2",
+                    "native_scene",
+                    reference_count=10,
+                ),
+                4.5,
+            )
 
     def test_legacy_and_masked_targets_are_rejected_for_new_runs(self):
         with mock.patch.dict(os.environ, {
@@ -217,6 +236,49 @@ class ImageLabPromptTests(unittest.TestCase):
                     "angle_synthesis",
                     reference_count=4,
                 )
+            with self.assertRaises(ImageLabError):
+                validate_target(
+                    "openrouter",
+                    "openai/gpt-image-2",
+                    "angle_synthesis",
+                    reference_count=11,
+                )
+
+    @mock.patch("services.image_lab_service.canonicalize_image", side_effect=lambda value: value)
+    @mock.patch(
+        "services.image_lab_service._prepare_native_model_input",
+        return_value=(b"raw-primary", [], None),
+    )
+    @mock.patch("services.image_generation_service.ImageGenerationService")
+    @mock.patch("services.image_generation_service.ImageGenerationConfig.from_env")
+    def test_gpt_image_2_uses_fixed_medium_profile(
+        self, from_env, service_class, prepare_native, canonicalize
+    ):
+        from_env.return_value = SimpleNamespace(
+            timeout=120,
+            openrouter_model="",
+            openrouter_resolution="1K",
+            openrouter_aspect_ratio="3:4",
+            openrouter_quality=None,
+            openrouter_background=None,
+        )
+        service_class.return_value.edit_image.return_value = (
+            True, b"provider-output", "",
+        )
+        experiment = SimpleNamespace(
+            backend="openrouter",
+            model="openai/gpt-image-2",
+            generation_strategy="native_scene",
+            prompt="native scene",
+        )
+
+        self.assertEqual(_generate_provider_output(experiment), b"provider-output")
+        prepare_native.assert_called_once_with(experiment)
+        self.assertEqual(from_env.return_value.openrouter_model, "openai/gpt-image-2")
+        self.assertEqual(from_env.return_value.openrouter_resolution, "")
+        self.assertEqual(from_env.return_value.openrouter_aspect_ratio, "")
+        self.assertEqual(from_env.return_value.openrouter_quality, "medium")
+        self.assertEqual(from_env.return_value.openrouter_background, "opaque")
 
     @mock.patch("services.image_lab_service.requests.Session.get")
     def test_private_source_url_is_rejected_before_request(self, get):

@@ -485,6 +485,7 @@ class AgentReferenceFreshnessApiTest(unittest.TestCase):
         db.session.add(BrandCategoryLink(
             marketplace_brand_id=binding.id,
             category_id=self.category.subject_id,
+            marketplace_external_brand_id=9399,
             is_available=True,
             verified_at=datetime.utcnow(),
         ))
@@ -525,10 +526,12 @@ class AgentReferenceFreshnessApiTest(unittest.TestCase):
         self.assertEqual(scoped['reference_status']['scope'], 'category')
         self.assertEqual(scoped['result']['status'], 'found')
         self.assertTrue(scoped['result']['category_available'])
+        self.assertEqual(scoped['result']['marketplace_brand_id'], 9399)
         self.assertEqual(global_result['result']['status'], 'unavailable')
         self.assertEqual(batch['count'], 2)
         self.assertEqual(batch['results'][0]['status'], 'found')
         self.assertTrue(batch['results'][0]['category_available'])
+        self.assertEqual(batch['results'][0]['marketplace_brand_id'], 9399)
         self.assertEqual(batch['results'][1]['status'], 'unavailable')
         self.assertEqual(
             batch['results'][1]['reference_status']['reason'],

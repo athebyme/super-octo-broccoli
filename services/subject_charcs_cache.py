@@ -37,26 +37,36 @@ def refresh_subject_charcs(wb_client, subject_ids, force=False):
     from models import db, WbSubjectCharcsCache
     now = datetime.utcnow()
     cutoff = now - timedelta(days=CHARCS_TTL_DAYS)
-    changed = False
-    for sid in {int(s) for s in (subject_ids or []) if s}:
+
+    # Фаза 1: только чтение и сеть. no_autoflush обязателен: вызывающий синк
+    # рейтингов держит незакоммиченные Product-строки, и autoflush при get
+    # открыл бы SQLite write-транзакцию на всё время сетевых вызовов WB —
+    # параллельные писатели падали бы с «database is locked».
+    fetched = {}
+    with db.session.no_autoflush:
+        for sid in {int(s) for s in (subject_ids or []) if s}:
+            row = db.session.get(WbSubjectCharcsCache, sid)
+            if row and not force and row.fetched_at and row.fetched_at > cutoff:
+                continue
+            try:
+                resp = wb_client.get_card_characteristics_config(sid)
+            except Exception as e:
+                logger.warning('charcs config fetch failed subject_id=%s: %s', sid, e)
+                continue
+            fetched[sid] = [
+                {'name': c.get('name'), 'required': bool(c.get('required'))}
+                for c in (resp or {}).get('data') or []
+                if isinstance(c, dict) and c.get('name')
+            ]
+
+    # Фаза 2: запись и один commit, без сетевых вызовов.
+    if not fetched:
+        return
+    for sid, charcs in fetched.items():
         row = db.session.get(WbSubjectCharcsCache, sid)
-        if row and not force and row.fetched_at and row.fetched_at > cutoff:
-            continue
-        try:
-            resp = wb_client.get_card_characteristics_config(sid)
-        except Exception as e:
-            logger.warning('charcs config fetch failed subject_id=%s: %s', sid, e)
-            continue
-        charcs = [
-            {'name': c.get('name'), 'required': bool(c.get('required'))}
-            for c in (resp or {}).get('data') or []
-            if isinstance(c, dict) and c.get('name')
-        ]
         if row is None:
             row = WbSubjectCharcsCache(subject_id=sid)
             db.session.add(row)
         row.charcs_json = json.dumps(charcs, ensure_ascii=False)
         row.fetched_at = now
-        changed = True
-    if changed:
-        db.session.commit()
+    db.session.commit()

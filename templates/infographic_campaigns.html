@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Кампании инфографики · Seller Hub{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='infographic-campaigns.css', v='20260717-1') }}">
+{% endblock %}
+
+{% block content %}
+{% set status_labels = {
+    'queued': 'В очереди', 'running': 'Генерация', 'review': 'Нужна проверка',
+    'approved': 'Одобрено', 'partial': 'Есть замечания', 'cancelled': 'Отменено'
+} %}
+<div class="ic-shell">
+  <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold" style="color:var(--text)">Кампании инфографики</h1>
+      <p class="mt-1 text-sm" style="color:var(--text-secondary)">Массовые серии по выбранным товарам: очередь, проверка и пакетное решение.</p>
+    </div>
+    <a class="sh-btn sh-btn--primary" href="{{ url_for('seller_my_products') }}">Выбрать товары</a>
+  </div>
+
+  <nav class="ic-tabs mt-5" aria-label="Разделы фотостудии">
+    <a class="ic-tab" href="{{ url_for('image_lab_page') }}">Штучная работа</a>
+    <a class="ic-tab is-active" href="{{ url_for('infographic_campaign_list') }}" aria-current="page">Кампании</a>
+  </nav>
+
+  <div class="ic-notice mt-5">
+    Готовые слайды сохраняются локально и требуют проверки. Эта очередь не меняет текущие фотографии и не отправляет их на Wildberries.
+  </div>
+
+  {% if campaigns %}
+  <div class="ic-table-wrap mt-5">
+    <table class="ic-table">
+      <thead>
+        <tr>
+          <th>Кампания</th>
+          <th>Статус</th>
+          <th>Товары</th>
+          <th>Слайды</th>
+          <th>Одобрено</th>
+          <th>Создана</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in campaigns %}
+        <tr>
+          <td>
+            <a class="ic-product-title hover:underline" href="{{ row.url }}">{{ row.name }}</a>
+            <span class="block mt-1 text-xs" style="color:var(--text-muted)">{{ row.template_label }} · #{{ row.id }}</span>
+          </td>
+          <td><span class="ic-status ic-status--{{ row.status }}">{{ status_labels.get(row.status, row.status) }}</span></td>
+          <td>{{ row.completed_items + row.failed_items }} / {{ row.total_items }}</td>
+          <td>{{ row.completed_slides }} / {{ row.total_slides }}</td>
+          <td>{{ row.approved_slides }}</td>
+          <td class="whitespace-nowrap">{{ row.created_at[:16].replace('T', ' ') if row.created_at else '—' }}</td>
+          <td class="text-right"><a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ row.url }}">Открыть</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="mt-5 flex items-center justify-center gap-2" aria-label="Пагинация кампаний">
+    {% if page > 1 %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('infographic_campaign_list', page=page-1) }}">Назад</a>{% endif %}
+    <span class="text-xs" style="color:var(--text-muted)">{{ page }} из {{ pages }} · всего {{ total }}</span>
+    {% if page < pages %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('infographic_campaign_list', page=page+1) }}">Дальше</a>{% endif %}
+  </nav>
+  {% endif %}
+  {% else %}
+  <div class="sh-card ic-empty mt-5">
+    <strong class="block" style="color:var(--text)">Кампаний пока нет</strong>
+    <span class="block mt-2 text-sm">Отметьте товары в «Моих товарах» и нажмите «Инфографика».</span>
+    <a class="sh-btn sh-btn--primary mt-4" href="{{ url_for('seller_my_products') }}">Перейти к товарам</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

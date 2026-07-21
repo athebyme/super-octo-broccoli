@@ -1,34 +1,36 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import channel_bar %}
 
 {% block title %}Каталог маркетплейсов — Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-    <nav class="sh-breadcrumb" aria-label="Навигационная цепочка">
-        <a href="{{ url_for('marketplaces.index') }}">Маркетплейсы</a>
-        <span aria-hidden="true"> / </span>
-        <span>Единый каталог</span>
-    </nav>
-    <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between mb-6">
+{% set sync_status_labels = {'running': 'Идёт синхронизация', 'paused': 'Приостановлено', 'completed': 'Завершено', 'failed': 'Ошибка'} %}
+{% set sync_phase_labels = {'active': 'Активные товары', 'archived': 'Архив', 'finalize': 'Проверка пропавших', 'completed': 'Завершено'} %}
+{% set normalized_status_labels = {'active': 'Активен', 'moderation': 'На модерации', 'creating': 'Создаётся', 'error': 'Ошибка', 'archived': 'В архиве', 'inactive': 'Неактивен', 'unknown': 'Неизвестно'} %}
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
         <div>
-            <h1 class="text-2xl font-semibold" style="color:var(--text)">Каталог маркетплейсов</h1>
-            <p class="mt-1 text-sm" style="color:var(--text-secondary)">
-                Единая read-only проекция WB и Ozon. Цены и остатки здесь не изменяются.
-            </p>
+            <h1 class="sh-page-title">Каталог маркетплейсов</h1>
+            <p class="sh-page-subtitle">Общий каталог WB и Ozon, только для просмотра. Цены и остатки здесь не меняются.</p>
         </div>
-        <div class="flex flex-wrap gap-2 self-start">
-            <a class="sh-btn sh-btn--secondary" href="{{ url_for('seller_my_products') }}">Подготовка WB</a>
-            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index') }}">Черновики Ozon</a>
-            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
+        <div class="sh-page-actions">
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('seller_my_products') }}">Подготовка WB</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index') }}">Черновики Ozon</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
         </div>
     </div>
+</div>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-    <div class="mb-4 rounded-md border px-4 py-3 text-sm"
-         style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>
-    {% endfor %}
-    {% endwith %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    {{ channel_bar(
+        active=('wb' if filters.marketplace_code == 'wb' else ('ozon' if filters.marketplace_code == 'ozon' else 'all')),
+        account_id=filters.account_id,
+        all_href=url_for('marketplace_listings.index'),
+        wb_href=url_for('marketplace_listings.index', marketplace='wb'),
+        ozon_href=url_for('marketplace_listings.index', marketplace='ozon'),
+        class='mb-6'
+    ) }}
+
 
     {% if ozon_enabled and accounts %}
     <section class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-6" aria-label="Синхронизация кабинетов">
@@ -39,11 +41,11 @@
                 <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                         <h2 class="font-semibold truncate" style="color:var(--text)">{{ account.label }}</h2>
-                        <span class="text-xs uppercase" style="color:var(--accent)">Ozon</span>
+                        <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span><span class="text-xs" style="color:var(--text-muted)">Ozon</span>
                     </div>
                     <p class="mt-1 text-xs" style="color:var(--text-muted)">
                         {% if sync %}
-                        Последний run: {{ sync.status }} · {{ sync.phase }} · страниц {{ sync.page_count }} · найдено {{ sync.seen_count }}
+                        Последняя синхронизация: {{ sync_status_labels.get(sync.status, sync.status) }} · {{ sync_phase_labels.get(sync.phase, sync.phase) }} · страниц {{ sync.page_count }} · найдено {{ sync.seen_count }}
                         {% else %}
                         Каталог ещё не синхронизировался
                         {% endif %}
@@ -62,7 +64,7 @@
                 </form>
                 {% if sync and sync.status == 'failed' %}
                 <form method="post" action="{{ url_for('marketplace_listings.sync_account', account_id=account.id) }}"
-                      onsubmit="return confirm('Начать новый полный sweep с первой страницы? Последний успешный read-model останется доступен.')">
+                      onsubmit="return confirm('Начать новую полную синхронизацию с первой страницы? Последний успешный результат останется доступен.')">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="max_pages" value="5">
                     <input type="hidden" name="force_restart" value="1">
@@ -70,7 +72,7 @@
                 </form>
                 {% endif %}
                 {% else %}
-                <span class="text-xs" style="color:var(--text-muted)">Сначала проверьте подключение</span>
+                <a href="{{ url_for('marketplace_accounts.index') }}" class="sh-badge sh-badge--sm sh-badge--yellow">Сначала проверьте подключение</a>
                 {% endif %}
             </div>
         </article>
@@ -82,36 +84,21 @@
         <label class="block lg:col-span-2">
             <span class="block text-xs mb-1" style="color:var(--text-muted)">Поиск</span>
             <input name="search" maxlength="200" value="{{ filters.search or '' }}"
-                   placeholder="Название, offer ID или product ID"
+                   placeholder="Название, артикул (offer_id) или ID товара"
                    class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                    style="border-color:var(--border);color:var(--text)">
         </label>
-        <label class="block">
-            <span class="block text-xs mb-1" style="color:var(--text-muted)">Маркетплейс</span>
-            <select name="marketplace" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                    style="border-color:var(--border);color:var(--text)">
-                <option value="">Все</option>
-                <option value="wb" {% if filters.marketplace_code == 'wb' %}selected{% endif %}>Wildberries</option>
-                <option value="ozon" {% if filters.marketplace_code == 'ozon' %}selected{% endif %}>Ozon</option>
-            </select>
-        </label>
-        <label class="block">
-            <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет</span>
-            <select name="account_id" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                    style="border-color:var(--border);color:var(--text)">
-                <option value="">Все</option>
-                {% for account in accounts %}
-                <option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>
-                {% endfor %}
-            </select>
-        </label>
+        {# Канал и кабинет переключаются channel bar-ом выше;
+           форма только сохраняет текущий выбор при фильтрации #}
+        {% if filters.marketplace_code %}<input type="hidden" name="marketplace" value="{{ filters.marketplace_code }}">{% endif %}
+        {% if filters.account_id %}<input type="hidden" name="account_id" value="{{ filters.account_id }}">{% endif %}
         <label class="block">
             <span class="block text-xs mb-1" style="color:var(--text-muted)">Статус</span>
             <select name="status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                     style="border-color:var(--border);color:var(--text)">
                 <option value="">Все</option>
                 {% for status in ['active', 'moderation', 'creating', 'error', 'archived', 'inactive', 'unknown'] %}
-                <option value="{{ status }}" {% if filters.normalized_status == status %}selected{% endif %}>{{ status }}</option>
+                <option value="{{ status }}" {% if filters.normalized_status == status %}selected{% endif %}>{{ normalized_status_labels.get(status, status) }}</option>
                 {% endfor %}
             </select>
         </label>
@@ -125,12 +112,12 @@
                 <option value="ambiguous" {% if filters.link_status == 'ambiguous' %}selected{% endif %}>Нужно выбрать</option>
             </select>
         </label>
-        <div class="sm:col-span-2 lg:col-span-6 flex flex-wrap items-center justify-between gap-3">
+        <div class="sm:col-span-2 lg:col-span-6 flex flex-wrap items-end justify-between gap-3">
             <label class="inline-flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
                 <input type="checkbox" name="include_unavailable" value="1" {% if filters.include_unavailable %}checked{% endif %}>
-                Показывать отсутствующие после полного sweep
+                Показывать пропавшие после полной синхронизации
             </label>
-            <button class="sh-btn sh-btn--secondary" type="submit">Применить</button>
+            <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">Применить</button>
         </div>
     </form>
 
@@ -148,16 +135,16 @@
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
-                        <span class="text-xs uppercase font-medium" style="color:var(--accent)">{{ listing.marketplace.code }}</span>
+                        <span class="inline-flex items-center gap-1.5"><span class="sh-mp-dot sh-mp-dot--{{ listing.marketplace.code }}" aria-hidden="true"></span><span class="text-xs" style="color:var(--text-muted)">{{ listing.marketplace.code | upper }}</span></span>
                         {% if listing.account %}<span class="text-xs" style="color:var(--text-muted)">{{ listing.account.label }}</span>{% endif %}
-                        <span class="text-xs rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ listing.normalized_status }}</span>
+                        <span class="text-xs rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ normalized_status_labels.get(listing.normalized_status, listing.normalized_status) }}</span>
                         <span class="sh-badge sh-badge--{{ 'green' if listing.canonical_link_status == 'linked' else ('yellow' if listing.canonical_link_status == 'ambiguous' else 'gray') }} sh-badge--sm">
                             {{ 'общая карточка' if listing.canonical_link_status == 'linked' else ('нужно выбрать связь' if listing.canonical_link_status == 'ambiguous' else 'без общей карточки') }}
                         </span>
-                        {% if not listing.is_available %}<span class="text-xs" style="color:var(--danger)">не найден в полном sweep</span>{% endif %}
+                        {% if not listing.is_available %}<span class="text-xs" style="color:var(--danger)">не найден при последней синхронизации</span>{% endif %}
                     </div>
                     <h2 class="mt-2 font-semibold truncate" style="color:var(--text)">{{ listing.title or 'Без названия' }}</h2>
-                    <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">offer: {{ listing.offer_id }} · product: {{ listing.external_product_id }}</p>
+                    <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">артикул: {{ listing.offer_id }} · ID товара: {{ listing.external_product_id }}</p>
                 </div>
                 <div class="grid grid-cols-2 gap-5 text-sm md:text-right shrink-0">
                     <div>

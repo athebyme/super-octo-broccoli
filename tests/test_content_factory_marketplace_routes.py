@@ -15,6 +15,7 @@ from models import (
     MarketplaceListing,
     Seller,
     SellerMarketplaceAccount,
+    SocialAccount,
     User,
     db,
 )
@@ -255,6 +256,72 @@ class ContentFactoryMarketplaceRouteTests(unittest.TestCase):
         db.session.refresh(self.factory)
         self.assertEqual(self.factory.catalog_source, "marketplace_listing")
         self.assertEqual(self.factory.marketplace_account_id, self.account1.id)
+
+    def test_publish_preflight_error_does_not_leave_item_claimed(self):
+        item = ContentItem(
+            factory_id=self.factory.id,
+            seller_id=self.seller1.id,
+            platform="telegram",
+            content_type="promo_post",
+            body_text="preflight must remain retryable",
+            status="approved",
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        response = self.client.post(
+            f"/api/content-factory/items/{item.id}/publish",
+            json={},
+        )
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        db.session.refresh(item)
+        self.assertEqual(item.status, "approved")
+
+    @mock.patch("requests.get")
+    def test_vk_photo_diagnostic_cannot_use_foreign_social_credentials(self, get):
+        response = mock.MagicMock()
+        response.status_code = 404
+        response.content = b""
+        response.headers = {}
+        get.return_value = response
+        foreign_account = SocialAccount(
+            seller_id=self.seller2.id,
+            platform="vk",
+            account_name="Foreign VK",
+            account_id="99999",
+            is_active=True,
+        )
+        foreign_account.set_credentials_dict({
+            "access_token": "foreign-group-secret",
+            "user_token": "foreign-user-secret",
+            "group_id": "99999",
+        })
+        db.session.add(foreign_account)
+        db.session.flush()
+        item = ContentItem(
+            factory_id=self.factory.id,
+            seller_id=self.seller1.id,
+            platform="vk",
+            content_type="promo_post",
+            body_text="diagnostic",
+            media_urls_json='["https://example.test/photo.jpg"]',
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        result = self.client.post(
+            f"/api/content-factory/items/{item.id}/debug-photos",
+            json={"social_account_id": foreign_account.id},
+        )
+
+        self.assertEqual(result.status_code, 200)
+        payload = result.get_json()
+        self.assertNotIn("vk_access_token_present", payload)
+        self.assertNotIn("vk_user_token_present", payload)
+        self.assertEqual(payload["steps"][-1]["step"], "vk_account")
+        self.assertEqual(payload["steps"][-1]["status"], "FAIL")
+        get.assert_called_once()
 
 
 if __name__ == "__main__":

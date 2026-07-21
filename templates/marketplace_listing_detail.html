@@ -4,6 +4,7 @@
 {% block title %}{{ listing.title or listing.offer_id }} — Seller Hub{% endblock %}
 
 {% block content %}
+{% set normalized_status_labels = {'active': 'Активен', 'moderation': 'На модерации', 'creating': 'Создаётся', 'error': 'Ошибка', 'archived': 'В архиве', 'inactive': 'Неактивен', 'unknown': 'Неизвестно'} %}
 <div class="max-w-6xl mx-auto px-4 sm:px-6 py-6"
      data-listing-id="{{ listing.id }}"
      data-account-id="{{ listing.account_id }}"
@@ -18,7 +19,7 @@
             <div class="flex flex-wrap items-center gap-2 text-xs" style="color:var(--text-muted)">
                 <span class="uppercase font-medium" style="color:var(--accent)">{{ listing.marketplace.code }}</span>
                 {% if listing.account %}<span>{{ listing.account.label }}</span>{% endif %}
-                <span>{{ listing.normalized_status }}</span>
+                <span>{{ normalized_status_labels.get(listing.normalized_status, listing.normalized_status) }}</span>
                 {% if not listing.is_available %}<span style="color:var(--danger)">не найден upstream</span>{% endif %}
             </div>
             <h1 class="mt-2 text-2xl font-semibold" style="color:var(--text)">{{ listing.title or 'Без названия' }}</h1>
@@ -301,11 +302,45 @@
         </section>
         <section class="sh-card p-4">
             <h2 class="font-semibold" style="color:var(--text)">Цена</h2>
-            <pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.price_summary | tojson(indent=2) }}</pre>
+            {% set price_values = listing_data.price_summary.get('values', {}) %}
+            {% set price_currency = listing_data.price_summary.get('currency') or price_values.get('currency_code') or '' %}
+            {% if price_values %}
+            <dl class="mt-3 space-y-2 text-sm">
+                {% if price_values.get('price') is not none %}
+                <div><dt class="text-xs" style="color:var(--text-muted)">Текущая цена</dt><dd style="color:var(--text)">{{ price_values.get('price') }} {{ price_currency }}</dd></div>
+                {% endif %}
+                {% if price_values.get('old_price') not in (none, '', '0', '0.00', 0) %}
+                <div><dt class="text-xs" style="color:var(--text-muted)">Цена до скидки</dt><dd style="color:var(--text)">{{ price_values.get('old_price') }} {{ price_currency }}</dd></div>
+                {% endif %}
+                {% if price_values.get('min_price') not in (none, '', '0', '0.00', 0) %}
+                <div><dt class="text-xs" style="color:var(--text-muted)">Мин. цена</dt><dd style="color:var(--text)">{{ price_values.get('min_price') }} {{ price_currency }}</dd></div>
+                {% endif %}
+            </dl>
+            {% else %}
+            <p class="mt-3 text-sm" style="color:var(--text-muted)">Нет данных о цене — запустите синхронизацию каталога.</p>
+            {% endif %}
+            <details class="mt-3">
+                <summary class="cursor-pointer text-xs" style="color:var(--accent)">Полный снимок (JSON)</summary>
+                <pre class="mt-2 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.price_summary | tojson(indent=2) }}</pre>
+            </details>
         </section>
         <section class="sh-card p-4">
             <h2 class="font-semibold" style="color:var(--text)">Остатки</h2>
-            <pre class="mt-3 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.stock_summary | tojson(indent=2) }}</pre>
+            {% if listing_data.stock_summary.get('available') %}
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt class="text-xs" style="color:var(--text-muted)">Доступно</dt><dd style="color:var(--text)">{{ listing_data.stock_summary.get('present', 0) }} шт</dd></div>
+                <div><dt class="text-xs" style="color:var(--text-muted)">В резерве</dt><dd style="color:var(--text)">{{ listing_data.stock_summary.get('reserved', 0) }} шт</dd></div>
+                {% for stock_type, bucket in (listing_data.stock_summary.get('by_type') or {}).items() %}
+                <div><dt class="text-xs" style="color:var(--text-muted)">{{ stock_type }}</dt><dd style="color:var(--text)">{{ bucket.get('present', 0) }} шт · резерв {{ bucket.get('reserved', 0) }}</dd></div>
+                {% endfor %}
+            </dl>
+            {% else %}
+            <p class="mt-3 text-sm" style="color:var(--text-muted)">Нет данных об остатках — запустите синхронизацию каталога.</p>
+            {% endif %}
+            <details class="mt-3">
+                <summary class="cursor-pointer text-xs" style="color:var(--accent)">Полный снимок (JSON)</summary>
+                <pre class="mt-2 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.stock_summary | tojson(indent=2) }}</pre>
+            </details>
         </section>
     </div>
 
@@ -357,11 +392,25 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
         <section class="sh-card p-4">
             <h2 class="font-semibold" style="color:var(--text)">Атрибуты ({{ listing_data.attributes | length }})</h2>
-            <pre class="mt-3 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.attributes | tojson(indent=2) }}</pre>
+            {% if listing_data.attributes %}
+            <details class="mt-3" open>
+                <summary class="cursor-pointer text-xs" style="color:var(--accent)">Снимок атрибутов (JSON)</summary>
+                <pre class="mt-2 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.attributes | tojson(indent=2) }}</pre>
+            </details>
+            {% else %}
+            <p class="mt-3 text-sm" style="color:var(--text-muted)">Атрибуты ещё не прочитаны — запустите синхронизацию каталога.</p>
+            {% endif %}
         </section>
         <section class="sh-card p-4">
             <h2 class="font-semibold" style="color:var(--text)">Media / dimensions / barcodes</h2>
-            <pre class="mt-3 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ {'media': listing_data.media, 'dimensions': listing_data.dimensions, 'barcodes': listing_data.barcodes} | tojson(indent=2) }}</pre>
+            {% if listing_data.media.get('primary_image') or listing_data.media.get('images') or listing_data.barcodes or listing_data.dimensions %}
+            <details class="mt-3" open>
+                <summary class="cursor-pointer text-xs" style="color:var(--accent)">Снимок media / габаритов / ШК (JSON)</summary>
+                <pre class="mt-2 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ {'media': listing_data.media, 'dimensions': listing_data.dimensions, 'barcodes': listing_data.barcodes} | tojson(indent=2) }}</pre>
+            </details>
+            {% else %}
+            <p class="mt-3 text-sm" style="color:var(--text-muted)">Фото, габариты и штрихкоды ещё не прочитаны — запустите синхронизацию каталога.</p>
+            {% endif %}
         </section>
     </div>
 

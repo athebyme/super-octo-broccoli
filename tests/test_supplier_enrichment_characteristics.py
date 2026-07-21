@@ -187,6 +187,9 @@ class SupplierEnrichmentCharacteristicsTestCase(unittest.TestCase):
         wb_client.update_card.assert_not_called()
 
     def test_material_does_not_match_schema_by_substring(self):
+        # Fuzzy/substring сопоставление по-прежнему запрещено: материал не
+        # уходит в чужую характеристику. Но отсутствие точного поля в схеме —
+        # это skip с отчётом, а не блокировка всей записи.
         material = MarketplaceCategoryCharacteristic.query.filter_by(
             charc_id=self.MATERIAL_ID,
         ).one()
@@ -206,9 +209,69 @@ class SupplierEnrichmentCharacteristicsTestCase(unittest.TestCase):
             wb_client,
         )
 
-        self.assertFalse(result['success'])
-        self.assertIn('не сопоставлен', result['error'])
+        self.assertTrue(result['success'])
+        self.assertNotIn('characteristics', result['fields_applied'])
+        skipped_names = [
+            item['name'] for item in result['skipped_characteristics']
+        ]
+        self.assertIn('Материал', skipped_names)
         wb_client.update_card.assert_not_called()
+
+    def test_package_dimension_names_routed_to_dimensions_not_characteristics(self):
+        # «Ширина упаковки, см» и прочие габариты — объект dimensions WB,
+        # а не характеристики: они не должны валить весь патч.
+        imp = self._andrey_import(
+            characteristics=json.dumps({
+                'Ширина упаковки, см': '10',
+                'Высота упаковки, см': '19',
+                'Длина упаковки, см': '6',
+                'Вес упаковки, кг': '0.11',
+                'Материал изделия': 'Силикон',
+            }, ensure_ascii=False),
+            materials=None,
+            gender=None,
+        )
+        source = self.service._build_supplier_characteristic_source(imp)
+        patch = self.service._map_characteristics(
+            imp, self.SUBJECT_ID, source=source)
+
+        self.assertEqual(patch, [
+            {'id': self.MATERIAL_ID, 'value': ['Силикон']},
+        ])
+        dims = source['extracted_dimensions']
+        self.assertEqual(dims['width'], 10)
+        self.assertEqual(dims['height'], 19)
+        self.assertEqual(dims['length'], 6)
+        self.assertAlmostEqual(dims['weightBrutto'], 0.11)
+        reasons = {
+            item['name']: item['reason']
+            for item in source['skipped_characteristics']
+        }
+        self.assertEqual(reasons.get('Ширина упаковки, см'), 'dimension_field')
+
+    def test_out_of_schema_optional_name_skipped_with_report(self):
+        # Имя вне схемы категории («Состав» здесь не существует) пропускается
+        # с отчётом; валидные поля записываются, весь патч не блокируется.
+        imp = self._andrey_import(
+            characteristics=json.dumps({
+                'Состав': 'Хлопок',
+                'Материал изделия': 'Силикон',
+            }, ensure_ascii=False),
+            materials=None,
+            gender=None,
+        )
+        source = self.service._build_supplier_characteristic_source(imp)
+        patch = self.service._map_characteristics(
+            imp, self.SUBJECT_ID, source=source)
+
+        self.assertEqual(patch, [
+            {'id': self.MATERIAL_ID, 'value': ['Силикон']},
+        ])
+        skipped = {
+            item['name']: item['reason']
+            for item in source['skipped_characteristics']
+        }
+        self.assertEqual(skipped.get('Состав'), 'not_in_schema')
 
     def test_valid_separate_fields_are_canonicalized(self):
         patch = self.service._map_characteristics(

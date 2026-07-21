@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import channel_bar %}
 
 {% block title %}Финансы - Seller Hub{% endblock %}
 
@@ -28,6 +29,8 @@
             </div>
         </div>
     </div>
+
+    {{ channel_bar(active='wb', wb_href=url_for('finances_page'), ozon_href=url_for('marketplace_finance.page'), class='mb-6') }}
 
     <!-- Loading -->
     <template x-if="loading && !hasData">

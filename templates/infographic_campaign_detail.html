@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% block title %}{{ campaign.name }} · Инфографика · Seller Hub{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='infographic-campaigns.css', v='20260717-1') }}">
+{% endblock %}
+
+{% block content %}
+<div class="ic-shell" x-data="infographicCampaignPage()" x-init="init()">
+  <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <div class="min-w-0">
+      <a class="inline-flex items-center gap-1 text-xs hover:underline" style="color:var(--text-muted)" href="{{ url_for('infographic_campaign_list') }}">{{ icon('arrow-left', size=12) }} Все кампании</a>
+      <div class="flex flex-wrap items-center gap-2 mt-2">
+        <h1 class="text-2xl font-semibold truncate" style="color:var(--text)" x-text="campaign.name"></h1>
+        <span class="ic-status" :class="'ic-status--' + campaign.status" x-text="statusLabel(campaign.status)"></span>
+      </div>
+      <p class="mt-1 text-sm" style="color:var(--text-secondary)"><span x-text="campaign.template_label"></span> · кампания #<span x-text="campaign.id"></span></p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" class="sh-btn sh-btn--secondary" x-show="['queued','running'].includes(campaign.status)" @click="cancelCampaign()">Остановить очередь</button>
+      <button type="button" class="sh-btn sh-btn--primary" :disabled="!campaign.approved_slides" @click="openPublicationWizard()">Подготовить публикацию</button>
+      <a class="sh-btn sh-btn--primary" href="{{ url_for('seller_my_products') }}">Новая выборка</a>
+    </div>
+  </div>
+
+  <div class="ic-notice mt-5">
+    Одобрение само по себе ничего не публикует. Кнопка «Подготовить публикацию» создаёт отдельный точный предпросмотр: одобренные слайды идут перед текущей галереей, а provider write требует ещё одного явного подтверждения.
+  </div>
+
+  <div class="ic-metrics mt-5">
+    <div class="ic-metric"><span class="ic-metric-label">Товары обработаны</span><strong class="ic-metric-value" x-text="`${campaign.completed_items + campaign.failed_items}/${campaign.total_items}`"></strong></div>
+    <div class="ic-metric"><span class="ic-metric-label">Слайды собраны</span><strong class="ic-metric-value" x-text="`${campaign.completed_slides}/${campaign.total_slides}`"></strong></div>
+    <div class="ic-metric"><span class="ic-metric-label">Одобрено слайдов</span><strong class="ic-metric-value" x-text="campaign.approved_slides"></strong></div>
+    <div class="ic-metric"><span class="ic-metric-label">Проблемные товары</span><strong class="ic-metric-value" x-text="campaign.failed_items"></strong></div>
+    <div class="ic-metric"><span class="ic-metric-label">Стоимость API</span><strong class="ic-metric-value" x-text="`${campaign.estimated_cost_rub} ₽`"></strong></div>
+  </div>
+
+  <div class="mt-5">
+    <div class="ic-toolbar">
+      <label class="flex items-center gap-2 mr-1 text-xs" style="color:var(--text-secondary)">
+        <input type="checkbox" class="rounded" :checked="allVisibleSelected" @change="toggleVisible($event.target.checked)">
+        <span x-text="selectedItems.length ? `${selectedItems.length} выбрано` : 'Выбрать видимые'"></span>
+      </label>
+      <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" :disabled="!selectedReady.length || busy" @click="reviewItems('approve')">Одобрить выбранные</button>
+      <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="!selectedReady.length || busy" @click="reviewItems('reject')">Отклонить выбранные</button>
+      <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="!selectedRetryable.length || busy" @click="retryItems()">Повторить ошибки</button>
+      <span class="flex-1"></span>
+      <input class="ic-filter" type="search" x-model.debounce.200ms="search" placeholder="Поиск по товару" aria-label="Поиск по товару в кампании">
+      <select class="ic-filter" x-model="statusFilter" aria-label="Фильтр статуса товаров">
+        <option value="all">Все статусы</option>
+        <option value="active">В работе</option>
+        <option value="ready">Готовы к проверке</option>
+        <option value="problem">С ошибками</option>
+        <option value="approved">Одобрены</option>
+      </select>
+    </div>
+    <div class="ic-table-wrap">
+      <table class="ic-table">
+        <thead><tr><th class="w-10"></th><th>Товар</th><th>Статус</th><th>Слайды и точечная проверка</th></tr></thead>
+        <tbody>
+          <template x-for="item in filteredItems" :key="item.id">
+            <tr>
+              <td><input type="checkbox" class="rounded" :value="item.id" x-model.number="selectedItems" :aria-label="`Выбрать ${item.title}`"></td>
+              <td class="min-w-[220px]">
+                <span class="ic-product-title" x-text="item.title"></span>
+                <span class="block mt-1 text-xs" style="color:var(--text-muted)" x-text="`Товар #${item.product_id || 'удалён'} · элемент #${item.id}`"></span>
+                <span x-show="item.error" class="block mt-2 text-xs max-w-sm" style="color:var(--danger)" x-text="item.error"></span>
+              </td>
+              <td><span class="ic-status" :class="'ic-status--' + item.status" x-text="statusLabel(item.status)"></span><span class="block mt-2 text-xs" style="color:var(--text-muted)" x-text="`${item.completed_slides}/${item.total_slides} готово`"></span></td>
+              <td>
+                <div x-show="item.slides.length" class="ic-slides">
+                  <template x-for="slide in item.slides" :key="slide.id">
+                    <div class="ic-slide">
+                      <a class="ic-slide-media block" :href="slide.image_url" target="_blank" rel="noopener">
+                        <img x-show="slide.has_artifact" :src="slide.image_url" :alt="`Слайд ${slide.position}`" loading="lazy">
+                        <span class="ic-slide-number" x-text="slide.position"></span>
+                      </a>
+                      <div class="ic-slide-review" x-text="reviewLabel(slide.review_status)"></div>
+                      <div class="ic-slide-actions" x-show="slide.status === 'completed'">
+                        <button type="button" class="ic-slide-action" title="Одобрить слайд" :aria-label="`Одобрить слайд ${slide.position}`" @click="reviewSlide(slide.id, 'approve')">{{ icon('check', size=12) }}</button>
+                        <button type="button" class="ic-slide-action" title="Отклонить слайд" :aria-label="`Отклонить слайд ${slide.position}`" @click="reviewSlide(slide.id, 'reject')">{{ icon('close', size=12) }}</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <span x-show="!item.slides.length && ['queued','running'].includes(item.status)" class="text-xs" style="color:var(--text-muted)">Результат появится автоматически…</span>
+                <button x-show="['failed','blocked','conflict'].includes(item.status)" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="retryOne(item.id)">Повторить</button>
+              </td>
+            </tr>
+          </template>
+          <tr x-show="!filteredItems.length"><td colspan="4" class="ic-empty">По текущему фильтру ничего нет.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <nav x-show="pages > 1" class="mt-5 flex items-center justify-center gap-2" aria-label="Пагинация кампании">
+    <a x-show="page > 1" class="sh-btn sh-btn--secondary" :href="`?page=${page - 1}`">Назад</a>
+    <span class="text-xs" style="color:var(--text-muted)" x-text="`${page} из ${pages}`"></span>
+    <a x-show="page < pages" class="sh-btn sh-btn--secondary" :href="`?page=${page + 1}`">Дальше</a>
+  </nav>
+
+</div>
+
+<script>
+window.INFOGRAPHIC_CAMPAIGN_BOOTSTRAP = {
+  campaign: {{ campaign|tojson }},
+  items: {{ items|tojson }},
+  page: {{ page|tojson }},
+  pages: {{ pages|tojson }},
+  total: {{ total|tojson }}
+};
+</script>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='infographic-campaigns.js', v='20260717-2') }}"></script>
+{% endblock %}

@@ -51,10 +51,10 @@ BLOCKER_LABELS = {
         "Common read запрошен раньше зелёного parity; действует fallback"
     ),
     "ozon_connected_account_missing": "Нет подключённого кабинета Ozon",
-    "ozon_credentials_missing": "У подключённого кабинета Ozon нет credential",
+    "ozon_credentials_missing": "У подключённого кабинета Ozon нет ключей доступа",
     "ozon_active_account_unhealthy": "Есть активный кабинет Ozon не в connected state",
     "ozon_credentials_expired": "Credential Ozon истёк и требует замены",
-    "ozon_reference_not_ready": "Справочники Ozon не имеют успешного snapshot",
+    "ozon_reference_not_ready": "Справочники Ozon ещё ни разу не синхронизировались успешно",
     "ozon_uncertain_operations": "Есть Ozon-операции с неизвестным outcome",
 }
 WARNING_LABELS = {

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import channel_bar %}
 {% block title %}Отзывы и вопросы{% endblock %}
 {% block content %}
 <div x-data="reviewsApp()" x-init="init()" class="p-6 max-w-7xl mx-auto">
@@ -22,6 +23,8 @@
             </button>
         </div>
     </div>
+
+    {{ channel_bar(active='wb', wb_href=url_for('reviews_page'), ozon_href=url_for('marketplace_inbox.page'), class='mb-6') }}
 
     <!-- AI Settings Panel -->
     <div x-show="showSettings" x-cloak class="rounded-xl p-5 mb-6" style="background:var(--bg-card);border:1px solid var(--border)">

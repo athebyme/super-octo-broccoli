@@ -31,6 +31,7 @@ from services.marketplace_adapters.base import MarketplaceAdapterError
 from services.ozon_analytics_contracts import (
     METRIC_BY_CODE,
     METRIC_DEFINITIONS,
+    REQUEST_METRIC_DEFINITIONS,
     PAGE_LIMIT,
     OzonAnalyticsContractError,
     build_analytics_request,
@@ -72,7 +73,7 @@ class MarketplaceAnalyticsProtocolError(MarketplaceAnalyticsError):
 
 
 class MarketplaceAnalyticsService:
-    CONTRACT_VERSION = "ozon-analytics-v1"
+    CONTRACT_VERSION = "ozon-analytics-core-v2"
     SUPPORTED_PERIODS = {"7d": 7, "30d": 30}
     CACHE_TTL = timedelta(hours=4)
     STALE_RUNNING_AFTER = timedelta(minutes=30)
@@ -272,7 +273,17 @@ class MarketplaceAnalyticsService:
             exact_current_period=True,
             today=today,
         )
-        if sync and sync.completed_at and sync.completed_at >= now - cls.CACHE_TTL:
+        expected_fingerprint = request_fingerprint(
+            period_start=sync.period_start,
+            period_end=sync.period_end,
+        ) if sync is not None else None
+        if (
+            sync
+            and sync.contract_version == cls.CONTRACT_VERSION
+            and sync.request_fingerprint == expected_fingerprint
+            and sync.completed_at
+            and sync.completed_at >= now - cls.CACHE_TTL
+        ):
             return sync
         return None
 
@@ -401,7 +412,10 @@ class MarketplaceAnalyticsService:
             period_start=run.period_start,
             period_end=run.period_end,
         )
-        if run.request_fingerprint != expected:
+        if (
+            run.contract_version != cls.CONTRACT_VERSION
+            or run.request_fingerprint != expected
+        ):
             run.status = "failed"
             run.error_code = "analytics_contract_drift"
             run.error_message = "Контракт незавершённой синхронизации изменился"
@@ -473,7 +487,7 @@ class MarketplaceAnalyticsService:
                     unmatched += 1
                 else:
                     matched += 1
-            for definition in METRIC_DEFINITIONS:
+            for definition in REQUEST_METRIC_DEFINITIONS:
                 db.session.add(MarketplaceMetricFact(
                     sync_id=run.id,
                     seller_id=run.seller_id,
@@ -497,7 +511,9 @@ class MarketplaceAnalyticsService:
         run.row_count += len(normalized["rows"])
         run.matched_rows += matched
         run.unmatched_rows += unmatched
-        run.fact_count += len(normalized["rows"]) * len(METRIC_DEFINITIONS)
+        run.fact_count += (
+            len(normalized["rows"]) * len(REQUEST_METRIC_DEFINITIONS)
+        )
         run.last_page_at = now
         run.response_timestamp = normalized["timestamp"]
 
@@ -827,14 +843,14 @@ class MarketplaceAnalyticsService:
                 "revenue": revenue,
                 "orders": orders,
                 "avgCheck": round(revenue / orders, 2) if orders else 0,
-                "views": totals.get("views", 0.0),
-                "cartAdditions": totals.get("cart_additions", 0.0),
+                "views": totals.get("views"),
+                "cartAdditions": totals.get("cart_additions"),
                 "cartConversionPercent": totals.get(
-                    "cart_conversion_percent", 0.0
+                    "cart_conversion_percent"
                 ),
-                "delivered": totals.get("delivered_units", 0.0),
-                "cancellations": totals.get("cancelled_units", 0.0),
-                "returns": totals.get("returned_units", 0.0),
+                "delivered": totals.get("delivered_units"),
+                "cancellations": totals.get("cancelled_units"),
+                "returns": totals.get("returned_units"),
             },
             "dailyData": cls._daily_rows(sync),
             "topProducts": products[:20],
@@ -854,7 +870,9 @@ class MarketplaceAnalyticsService:
         page: int = 1,
         per_page: int = 20,
     ) -> Dict[str, Any]:
-        allowed_sorts = {item.metric_code for item in METRIC_DEFINITIONS}
+        allowed_sorts = {
+            item.metric_code for item in REQUEST_METRIC_DEFINITIONS
+        }
         if sort_by not in allowed_sorts:
             raise MarketplaceAnalyticsValidationError("Неизвестная метрика сортировки")
         if sort_dir not in {"asc", "desc"}:

@@ -322,6 +322,26 @@ class OzonReferenceServiceTest(unittest.TestCase):
         self.assertEqual(brand.name, "Бренд новый")
         self.assertEqual(second["version"], 2)
 
+    def test_attribute_display_prose_normalizes_provider_line_breaks(self):
+        attribute = _attribute(31, "Бренд", required=True)
+        attribute["description"] = "Первая строка\n\tВторая строка\r\nТретья"
+
+        normalized = OzonReferenceService.normalize_attributes({
+            "result": [attribute],
+        })
+
+        self.assertEqual(
+            normalized["attributes"][0]["description"],
+            "Первая строка Вторая строка Третья",
+        )
+
+    def test_attribute_display_prose_rejects_non_whitespace_controls(self):
+        attribute = _attribute(31, "Бренд", required=True)
+        attribute["description"] = "Небезопасный\x00текст"
+
+        with self.assertRaises(OzonReferenceValidationError):
+            OzonReferenceService.normalize_attributes({"result": [attribute]})
+
     def test_malformed_attribute_response_preserves_last_good_schema(self):
         product_type = self._create_type_with_schema()
         good = SyntheticOzonAdapter(attributes={

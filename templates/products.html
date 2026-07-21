@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% from "macros/overlays.html" import tooltip, confirm_modal, command_palette %}
+{% from "macros/components.html" import channel_bar %}
+{% from "macros/icons.html" import icon %}
 
 {% block content %}
 <div class="sh-page">
@@ -137,6 +139,8 @@
             </div>
         </div>
     </div>
+
+    {{ channel_bar(active='wb', wb_href=url_for('products_list'), all_href=url_for('marketplace_listings.index'), ozon_href=url_for('marketplace_listings.index', marketplace='ozon'), class='mb-5') }}
 
     {% if marketplace_read_state is defined and marketplace_read_state.common_read_requested %}
     {% if marketplace_read_state.read_mode == 'marketplace_listing' %}
@@ -449,11 +453,12 @@
                 Применить
             </button>
             <button type="button" onclick="bulkEnrich()"
-                    class="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors flex items-center font-medium">
-                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
-                </svg>
-                Обогатить
+                    class="sh-btn sh-btn--accent sh-btn--md"
+                    title="Массово обновить фотографии выбранных карточек из каталога поставщика">
+                <span class="sh-btn-icon">
+                    {{ icon('image', size=16) }}
+                </span>
+                Обновить фото
             </button>
             <!-- AI-помощник (пакетный режим) -->
             {% with ai_mode='batch', ai_product_id=0, ai_product_title='', ai_seller_id=current_user.seller.id %}
@@ -560,6 +565,15 @@
                                   title="Карточка создана из каталога поставщика">
                                 {{ product_supplier_map.get(product.id) }}
                             </span>
+                            {% endif %}
+                            {% if ozon_listings_map and ozon_listings_map.get(product.id) %}
+                            {% set ozon_first = ozon_listings_map[product.id][0] %}
+                            <a href="{{ url_for('marketplace_listings.detail', listing_id=ozon_first.listing_id) }}"
+                               class="inline-flex items-center gap-1.5 mt-1 px-1.5 py-0.5 rounded-full text-xs font-medium hover:opacity-80"
+                               style="background:var(--bg-hover);color:var(--text-secondary)"
+                               title="Карточка есть на Ozon{% if ozon_listings_map[product.id]|length > 1 %} ({{ ozon_listings_map[product.id]|length }} кабинета){% endif %} — открыть листинг">
+                                <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>Ozon{% if ozon_listings_map[product.id]|length > 1 %} ×{{ ozon_listings_map[product.id]|length }}{% endif %}
+                            </a>
                             {% endif %}
                         </td>
                         <td class="px-4 py-3">
@@ -814,7 +828,7 @@ function bulkEnrich() {
     const ids = Array.from(checkboxes).map(cb => cb.value);
 
     if (ids.length === 0) {
-        alert('Выберите хотя бы один товар для обогащения');
+        alert('Выберите хотя бы одну карточку для обновления фото');
         return;
     }
 

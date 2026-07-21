@@ -5,6 +5,8 @@ from decimal import Decimal
 import unittest
 
 from services.ozon_fulfillment_contracts import (
+    FBO_POSTING_PAGE_LIMIT,
+    FBS_POSTING_PAGE_LIMIT,
     OzonFulfillmentContractError,
     build_conditional_cancellation_request,
     build_posting_request,
@@ -23,12 +25,13 @@ class OzonFulfillmentRequestContractTest(unittest.TestCase):
             fulfillment_kind="fbs",
             period_start=date(2026, 7, 1),
             period_end=date(2026, 7, 15),
-            offset=100,
-            limit=500,
+            cursor="opaque-page-2",
+            limit=FBS_POSTING_PAGE_LIMIT,
         )
         self.assertEqual(payload["dir"], "ASC")
-        self.assertEqual(payload["offset"], 100)
-        self.assertEqual(payload["limit"], 500)
+        self.assertEqual(payload["cursor"], "opaque-page-2")
+        self.assertNotIn("offset", payload)
+        self.assertEqual(payload["limit"], FBS_POSTING_PAGE_LIMIT)
         self.assertEqual(
             payload["with"],
             {
@@ -39,6 +42,23 @@ class OzonFulfillmentRequestContractTest(unittest.TestCase):
         )
         self.assertTrue(payload["filter"]["since"].endswith("Z"))
         self.assertTrue(payload["filter"]["to"].endswith("Z"))
+
+    def test_posting_page_limits_are_endpoint_specific(self):
+        common = {
+            "period_start": date(2026, 7, 1),
+            "period_end": date(2026, 7, 15),
+        }
+        fbs = build_posting_request(fulfillment_kind="fbs", **common)
+        fbo = build_posting_request(fulfillment_kind="fbo", **common)
+        self.assertEqual(fbs["limit"], FBS_POSTING_PAGE_LIMIT)
+        self.assertEqual(fbo["limit"], FBO_POSTING_PAGE_LIMIT)
+
+        with self.assertRaises(OzonFulfillmentContractError):
+            build_posting_request(
+                fulfillment_kind="fbs",
+                limit=FBS_POSTING_PAGE_LIMIT + 1,
+                **common,
+            )
 
     def test_return_requests_use_current_cursor_contracts(self):
         common = {
@@ -100,15 +120,19 @@ class OzonPostingResponseContractTest(unittest.TestCase):
             "financial_data": {"commission": 99},
         }
 
-    def test_fbs_object_envelope_normalizes_only_safe_fields(self):
+    def test_fbs_cursor_envelope_normalizes_only_safe_fields(self):
         page = normalize_posting_response(
-            {"result": {"postings": [self._posting()], "has_next": False}},
+            {
+                "postings": [self._posting()],
+                "has_next": False,
+                "cursor": "",
+            },
             fulfillment_kind="fbs",
-            requested_limit=1000,
-            requested_offset=0,
+            requested_limit=FBS_POSTING_PAGE_LIMIT,
+            requested_cursor="",
         )
         self.assertFalse(page["has_next"])
-        self.assertEqual(page["next_offset"], 1)
+        self.assertIsNone(page["next_cursor"])
         row = page["rows"][0]
         self.assertEqual(row["posting_number"], "100-1-1")
         self.assertEqual(row["fulfillment_kind"], "fbs")
@@ -117,46 +141,64 @@ class OzonPostingResponseContractTest(unittest.TestCase):
         self.assertNotIn("financial_data", row)
         self.assertNotIn("analytics_data", row)
 
-    def test_fbo_list_envelope_uses_exact_page_size_for_pagination(self):
+    def test_fbo_cursor_envelope_requires_provider_has_next(self):
         page = normalize_posting_response(
-            {"result": [self._posting()]},
+            {
+                "postings": [self._posting()],
+                "has_next": True,
+                "cursor": "opaque-page-2",
+            },
             fulfillment_kind="fbo",
             requested_limit=1,
-            requested_offset=20,
+            requested_cursor="opaque-page-1",
         )
         self.assertTrue(page["has_next"])
-        self.assertEqual(page["next_offset"], 21)
+        self.assertEqual(page["next_cursor"], "opaque-page-2")
 
     def test_duplicate_postings_and_products_fail_whole_page(self):
         duplicate_product = self._posting()
         duplicate_product["products"].append(dict(duplicate_product["products"][0]))
         with self.assertRaises(OzonFulfillmentContractError):
             normalize_posting_response(
-                {"result": {"postings": [duplicate_product], "has_next": False}},
+                {
+                    "postings": [duplicate_product],
+                    "has_next": False,
+                    "cursor": "",
+                },
                 fulfillment_kind="fbs",
                 requested_limit=10,
-                requested_offset=0,
+                requested_cursor="",
             )
         with self.assertRaises(OzonFulfillmentContractError):
             normalize_posting_response(
                 {
-                    "result": {
-                        "postings": [self._posting(), self._posting()],
-                        "has_next": False,
-                    }
+                    "postings": [self._posting(), self._posting()],
+                    "has_next": False,
+                    "cursor": "",
                 },
                 fulfillment_kind="fbs",
                 requested_limit=10,
-                requested_offset=0,
+                requested_cursor="",
             )
 
     def test_non_advancing_empty_page_is_rejected(self):
         with self.assertRaises(OzonFulfillmentContractError):
             normalize_posting_response(
-                {"result": {"postings": [], "has_next": True}},
+                {"postings": [], "has_next": True, "cursor": "next"},
                 fulfillment_kind="fbs",
                 requested_limit=10,
-                requested_offset=0,
+                requested_cursor="",
+            )
+        with self.assertRaises(OzonFulfillmentContractError):
+            normalize_posting_response(
+                {
+                    "postings": [self._posting()],
+                    "has_next": True,
+                    "cursor": "same-cursor",
+                },
+                fulfillment_kind="fbs",
+                requested_limit=10,
+                requested_cursor="same-cursor",
             )
 
 
@@ -271,10 +313,38 @@ class OzonReturnResponseContractTest(unittest.TestCase):
         self.assertEqual(row["reason"], "Передумал")
         self.assertNotIn("cancellation_reason_message", row)
 
+    def test_empty_rfbs_page_without_cursor_is_terminal(self):
+        page = normalize_rfbs_return_response(
+            {"returns": []},
+            requested_limit=500,
+            requested_last_id=12,
+        )
+        self.assertEqual(
+            page,
+            {"rows": [], "has_next": False, "next_last_id": 12},
+        )
+
     def test_cursor_pages_reject_missing_or_non_advancing_cursors(self):
         with self.assertRaises(OzonFulfillmentContractError):
             normalize_rfbs_return_response(
-                {"returns": []},
+                {
+                    "returns": [
+                        {
+                            "return_id": 51,
+                            "posting_number": "200-2-1",
+                            "order_number": "200-2",
+                            "created_at": "2026-07-12T10:00:00Z",
+                            "state": {"group_state": "IN_PROGRESS"},
+                            "product": {
+                                "sku": 654321,
+                                "offer_id": "offer-2",
+                                "name": "Synthetic product",
+                                "price": "500",
+                                "currency_code": "RUB",
+                            },
+                        }
+                    ]
+                },
                 requested_limit=500,
                 requested_last_id=0,
             )

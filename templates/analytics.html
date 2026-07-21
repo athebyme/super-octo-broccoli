@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/components.html" import page_header, stat_card, stat_grid, section_title, badge %}
+{% from "macros/components.html" import page_header, stat_card, stat_grid, section_title, badge, channel_bar %}
 
 {% block title %}Аналитика - Seller Hub{% endblock %}
 
@@ -33,6 +33,8 @@
     </div>
 
     <div style="max-width:1280px;margin:0 auto;padding:0 24px">
+
+    {{ channel_bar(active='wb', wb_href=url_for('analytics_page'), ozon_href=url_for('marketplace_analytics_page'), class='mb-5') }}
 
     <!-- Loading overlay -->
     <template x-if="loading && !hasData">

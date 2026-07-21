@@ -30,8 +30,12 @@
   .lab-tag.active { background:var(--accent-light); border-color:var(--accent); color:var(--accent); }
   .lab-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
   .lab-empty { min-height:260px; display:flex; align-items:center; justify-content:center; color:var(--text-muted); text-align:center; padding:30px; }
+  .lab-recommendations { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+  .lab-recommendation { border:1px solid var(--border); border-radius:8px; background:var(--bg-card); padding:13px; }
+  .lab-recommendation-score { min-width:42px; height:34px; padding:0 8px; border-radius:8px; display:grid; place-items:center; background:var(--accent-light); color:var(--accent); font-size:12px; font-weight:800; }
   @media(max-width:1100px){.lab-results{grid-template-columns:repeat(2,minmax(0,1fr));}}
-  @media(max-width:800px){.lab-grid{grid-template-columns:1fr}.lab-sticky{position:static}.lab-results{grid-template-columns:1fr}.lab-kpis{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:1000px){.lab-recommendations{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:800px){.lab-grid{grid-template-columns:1fr}.lab-sticky{position:static}.lab-results{grid-template-columns:1fr}.lab-kpis{grid-template-columns:repeat(2,1fr)}.lab-recommendations{grid-template-columns:1fr}}
 </style>
 
 <div class="max-w-7xl mx-auto px-4 py-6" x-data="imageLab()" x-init="init()">
@@ -42,6 +46,7 @@
         <p class="sh-page-subtitle">Фото-референсы, точный локальный композит, инфографика и честное сравнение движков.</p>
       </div>
       <div class="sh-page-actions">
+        <a href="{{ url_for('infographic_campaign_list') }}" class="sh-btn sh-btn--primary">Кампании</a>
         <label class="flex items-center gap-2 text-sm text-white/80">
           <input type="checkbox" x-model="blindMode" class="rounded">
           Слепое сравнение
@@ -58,6 +63,44 @@
        :class="messageType==='error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'">
     <span x-text="message"></span>
   </div>
+
+  <section x-show="recommendations.length" x-cloak class="sh-card mb-5" aria-label="Рекомендации по бестселлерам">
+    <div class="sh-card-header">
+      <div>
+        <h2 class="sh-card-title">Бестселлеры на проверку</h2>
+        <p class="mt-1 text-xs" style="color:var(--text-secondary)">Администратор отобрал сильные товары по локальным продажам. Открытие рекомендации бесплатно; запуск вы подтверждаете отдельно.</p>
+      </div>
+      <span class="text-xs" style="color:var(--text-muted)" x-text="`${recommendations.length} в списке`"></span>
+    </div>
+    <div class="p-4 pt-0 lab-recommendations">
+      <template x-for="item in recommendations" :key="item.id">
+        <article class="lab-recommendation">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-[10px] font-bold uppercase tracking-wide" style="color:var(--text-muted)" x-text="item.marketplace_label"></span>
+                <span class="text-[10px]" style="color:var(--text-muted)" x-text="item.period_code === '7d' ? '7 дней' : '30 дней'"></span>
+              </div>
+              <h3 class="text-sm font-bold leading-snug line-clamp-2" style="color:var(--text)" x-text="item.title"></h3>
+            </div>
+            <div class="lab-recommendation-score" :title="'Приоритет внутри маркетплейса'" x-text="item.opportunity_score"></div>
+          </div>
+          <p class="mt-2 text-[11px] leading-relaxed" style="color:var(--text-secondary)" x-text="item.reason"></p>
+          <div class="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[10px]" style="color:var(--text-muted)">
+            <span x-text="`${Math.round(Number(item.revenue_rub || 0)).toLocaleString('ru-RU')} ₽`"></span>
+            <span x-text="`${Math.round(Number(item.units || 0)).toLocaleString('ru-RU')} шт.`"></span>
+            <span x-text="`${item.photo_count} фото`"></span>
+          </div>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" :disabled="!item.target_ready" @click="openRecommendation(item)">Открыть товар</button>
+            <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="reviewRecommendation(item, 'completed')">Уже улучшено</button>
+            <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" @click="reviewRecommendation(item, 'dismissed')">Скрыть</button>
+          </div>
+          <p x-show="!item.target_ready" class="mt-2 text-[10px]" style="color:var(--warn)">Сначала восстановите исходное фото или точную связь карточки.</p>
+        </article>
+      </template>
+    </div>
+  </section>
 
   <section x-show="showAnalytics" x-cloak class="sh-card mb-5">
     <div class="sh-card-header"><h2 class="sh-card-title">Сводка экспериментов</h2><span class="text-xs text-gray-500" x-text="`${analytics.total || 0} запусков`"></span></div>
@@ -82,7 +125,7 @@
 
   <div class="lab-grid">
     <aside class="lab-sticky space-y-4">
-      <section class="sh-card">
+      <section id="image-lab-source" class="sh-card">
         <div class="sh-card-header"><h2 class="sh-card-title">1. Исходник</h2></div>
         <label class="block text-xs text-gray-500 mb-1">Товар</label>
         <select class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm" x-model.number="productId" @change="onProductChange()">
@@ -269,7 +312,7 @@
                      :checked="selectedTargetKeys.includes(variant.key)"
                      @change="toggleTarget(variant)">
               <span class="min-w-0"><strong class="block text-sm" x-text="variant.label"></strong>
-                <span class="lab-provider" x-text="`${variant.providerLabel} · ${variant.resolution} · ≈${variant.cost_rub} ₽`"></span>
+                <span class="lab-provider" x-text="`${variant.providerLabel} · ${variant.profileLabel} · ≈${variant.cost_rub} ₽`"></span>
                 <span x-show="!variant.enabled" class="block text-xs text-red-600">Не настроен</span>
                 <span x-show="variant.enabled && !variant.supported_strategies.includes(generationStrategy)" class="block text-xs text-amber-600">Не поддерживает выбранный режим</span>
                 <span x-show="variant.enabled && generationStrategy!=='background_only' && selectedPhotoIndices.length > variant.max_references && !['single','each'].includes(generationMode)" class="block text-xs text-amber-600" x-text="`Не более ${variant.max_references} референсов`"></span>
@@ -364,11 +407,12 @@
 <script>
 window.IMAGE_LAB_BOOTSTRAP = {
   products: {{ lab_products|tojson }},
+  recommendations: {{ lab_recommendations|tojson }},
   capabilities: {{ lab_capabilities|tojson }},
   experiments: {{ lab_experiments|tojson }},
   analytics: {{ lab_analytics|tojson }},
   ratingTags: {{ rating_tags|tojson }}
 };
 </script>
-<script src="{{ url_for('static', filename='image-lab.js', v='20260716-openrouter-ozon1') }}"></script>
+<script src="{{ url_for('static', filename='image-lab.js', v='20260717-bestsellers') }}"></script>
 {% endblock %}

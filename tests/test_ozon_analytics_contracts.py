@@ -4,6 +4,7 @@ import unittest
 
 from services.ozon_analytics_contracts import (
     METRIC_DEFINITIONS,
+    REQUEST_METRIC_DEFINITIONS,
     OzonAnalyticsContractError,
     build_analytics_request,
     normalize_analytics_response,
@@ -12,7 +13,7 @@ from services.ozon_analytics_contracts import (
 
 
 def _response(dimension_id="101", *, values=None, totals=None):
-    values = values or [1000, 4, 120, 10, 8.3, 3, 1, 0]
+    values = values or [1000, 4]
     totals = totals or list(values)
     return {
         "result": {
@@ -45,7 +46,7 @@ class OzonAnalyticsContractsTest(unittest.TestCase):
         self.assertEqual(payload["dimension"], ["sku"])
         self.assertEqual(
             payload["metrics"],
-            [item.provider_metric for item in METRIC_DEFINITIONS],
+            [item.provider_metric for item in REQUEST_METRIC_DEFINITIONS],
         )
         self.assertEqual(
             request_fingerprint(
@@ -98,9 +99,11 @@ class OzonAnalyticsContractsTest(unittest.TestCase):
         response = _response()
         response["result"]["data"].append(response["result"]["data"][0].copy())
         malformed.append(response)
-        response = _response(values=[1000, 4, math.nan, 10, 8.3, 3, 1, 0])
+        response = _response(values=[1000, math.nan])
         malformed.append(response)
-        response = _response(values=[1000, 4, 120, 10, 101, 3, 1, 0])
+        response = _response(values=[1000, -1])
+        malformed.append(response)
+        response = _response(values=[1000, 4, 120])
         malformed.append(response)
         response = _response(dimension_id="00101")
         malformed.append(response)
@@ -114,6 +117,10 @@ class OzonAnalyticsContractsTest(unittest.TestCase):
 
     def test_definitions_explicitly_forbid_cross_marketplace_comparison(self):
         self.assertTrue(METRIC_DEFINITIONS)
+        self.assertEqual(
+            [item.provider_metric for item in REQUEST_METRIC_DEFINITIONS],
+            ["revenue", "ordered_units"],
+        )
         self.assertTrue(all(
             item.definition_code.startswith("ozon.analytics.v1/")
             and item.cross_marketplace_comparable is False

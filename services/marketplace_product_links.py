@@ -81,6 +81,62 @@ class MarketplaceProductLinkService:
             ) from None
 
     @classmethod
+    def ozon_listings_for_products(
+        cls,
+        *,
+        seller_id: int,
+        product_ids: Sequence[int],
+    ) -> Dict[int, List[dict]]:
+        """Bulk read-проекция «WB Product → его Ozon-листинги» для UI-страницы.
+
+        Один SELECT по цепочке Product ← ImportedProduct.product_id ←
+        MarketplaceListing.imported_product_id (Marketplace.code == 'ozon'),
+        tenant-scoped. Возвращает {product_id: [{listing_id, status,
+        is_available, account_id}]} только для переданных ID; ничего не пишет.
+        """
+        if not isinstance(seller_id, int) or isinstance(seller_id, bool):
+            return {}
+        ids = [
+            pid for pid in product_ids
+            if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+        ]
+        if not ids:
+            return {}
+        rows = (
+            db.session.query(
+                ImportedProduct.product_id,
+                MarketplaceListing.id,
+                MarketplaceListing.normalized_status,
+                MarketplaceListing.is_available,
+                MarketplaceListing.account_id,
+            )
+            .join(
+                MarketplaceListing,
+                MarketplaceListing.imported_product_id == ImportedProduct.id,
+            )
+            .join(
+                Marketplace,
+                Marketplace.id == MarketplaceListing.marketplace_id,
+            )
+            .filter(
+                ImportedProduct.seller_id == seller_id,
+                MarketplaceListing.seller_id == seller_id,
+                ImportedProduct.product_id.in_(ids),
+                Marketplace.code == "ozon",
+            )
+            .all()
+        )
+        listings_map: Dict[int, List[dict]] = {}
+        for product_id, listing_id, status, is_available, account_id in rows:
+            listings_map.setdefault(product_id, []).append({
+                "listing_id": listing_id,
+                "status": status,
+                "is_available": bool(is_available),
+                "account_id": account_id,
+            })
+        return listings_map
+
+    @classmethod
     def _canonical_json(cls, value: Any) -> str:
         if not isinstance(value, dict):
             value = {}

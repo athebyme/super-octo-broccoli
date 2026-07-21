@@ -210,18 +210,19 @@ class TestRunPhotosJob(HubDBTestCase):
         db.session.commit()
         return job
 
-    def _run(self, product_ids, apply_result=None, target=None):
+    def _run(self, product_ids, apply_result=None):
         from services.supplier_update_hub import run_photos_job
         apply_result = apply_result or {
             'success': True, 'fields_applied': ['photos'],
-            'old_quality': 40, 'new_quality': 60, 'wb_sync': True, 'error': None,
+            'photos': {'uploaded': 2}, 'wb_sync': True, 'error': None,
         }
         self._make_job(product_ids)
         with patch('services.supplier_update_hub.WildberriesAPIClient'), \
-             patch('services.supplier_update_hub.apply_card_updates',
+             patch('services.supplier_update_hub.verify_cards_on_wb',
+                   return_value={'items': [], 'summary': {}}), \
+             patch('services.supplier_enrichment.EnrichmentService.apply_enrichment',
                    return_value=apply_result) as mock_apply, \
-             patch('services.supplier_update_hub.build_target_photo_set',
-                   return_value=target if target is not None else ['u1', 'u2']):
+             patch('services.supplier_update_hub.time.sleep'):
             run_photos_job(self.app, 'j-test', 1, product_ids)
         return mock_apply
 
@@ -243,10 +244,18 @@ class TestRunPhotosJob(HubDBTestCase):
         self.assertEqual(job.succeeded, 0)
         self.assertEqual(job.processed, 2)
 
-    def test_skips_when_target_empty(self):
-        self._run([11], target=[])
+    def test_photo_noop_counts_as_skipped(self):
+        self._run([11], apply_result={
+            'success': True,
+            'fields_applied': [],
+            'photos': {'skipped': True, 'reason': 'empty_photo_list'},
+            'wb_sync': False,
+            'error': None,
+        })
         job = BackgroundJob.query.filter_by(job_uid='j-test').first()
         self.assertEqual(job.succeeded, 0)
+        self.assertEqual(job.failed_count, 0)
+        self.assertEqual(job.get_result()['skipped'], 1)
         self.assertEqual(job.status, 'completed')
 
     def test_failed_apply_counts_as_failed(self):
@@ -257,13 +266,44 @@ class TestRunPhotosJob(HubDBTestCase):
         self.assertEqual(job.failed_count, 1)
         self.assertEqual(job.status, 'completed')
 
+    def test_bulk_uses_multipart_even_with_public_base_url(self):
+        from services.supplier_update_hub import run_photos_job
+
+        self._make_job([11, 12])
+        self.app.config['PUBLIC_BASE_URL'] = 'https://platform.example'
+        result = {
+            'success': True,
+            'fields_applied': ['photos'],
+            'photos': {'uploaded': 2},
+            'wb_sync': True,
+            'error': None,
+        }
+        with patch('services.supplier_update_hub.WildberriesAPIClient'), \
+             patch('services.supplier_update_hub.build_target_photo_set') as build_target, \
+             patch('services.supplier_update_hub.verify_cards_on_wb',
+                   return_value={'items': [], 'summary': {}}), \
+             patch('services.supplier_enrichment.EnrichmentService.apply_enrichment',
+                   return_value=result) as apply_enrichment, \
+             patch('services.supplier_update_hub.time.sleep'):
+            run_photos_job(self.app, 'j-test', 1, [11, 12])
+
+        job = BackgroundJob.query.filter_by(job_uid='j-test').first()
+        self.assertEqual(job.status, 'completed')
+        self.assertEqual(job.succeeded, 2)
+        self.assertEqual(apply_enrichment.call_count, 2)
+        build_target.assert_not_called()
+        self.assertEqual(
+            apply_enrichment.call_args.args[2:4],
+            (['photos'], 'replace'),
+        )
+
     def test_cancelled_job_stops_processing(self):
         from services.supplier_update_hub import run_photos_job
         job = self._make_job([11, 12])
         job.status = 'cancelled'
         db.session.commit()
         with patch('services.supplier_update_hub.WildberriesAPIClient'), \
-             patch('services.supplier_update_hub.apply_card_updates') as mock_apply:
+             patch('services.supplier_enrichment.EnrichmentService.apply_enrichment') as mock_apply:
             run_photos_job(self.app, 'j-test', 1, [11, 12])
         self.assertEqual(mock_apply.call_count, 0)
 

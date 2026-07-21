@@ -10,11 +10,13 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import json
+import logging
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import unicodedata
 from urllib.parse import urlsplit
 
+from flask import current_app
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
@@ -40,6 +42,8 @@ from services.marketplace_fact_pack import (
     MarketplaceFactPackError,
 )
 from services.ozon_reference_service import OzonReferenceService
+
+logger = logging.getLogger(__name__)
 
 
 class MarketplaceDraftError(RuntimeError):
@@ -623,6 +627,71 @@ class MarketplaceDraftService:
             "schema_fresh": OzonReferenceService.reference_is_fresh(item),
             "schema_version": item.attributes_version,
         } for item in product_types]
+
+    @classmethod
+    def suggest_product_types(
+        cls,
+        *,
+        seller_id: int,
+        draft_id: int,
+        limit: int = 3,
+    ) -> list:
+        """Детерминированные кандидаты типа Ozon для черновика без типа.
+
+        Только предложение: лексический подбор по имени WB-предмета и
+        категории поставщика среди enabled/available типов свежего дерева.
+        Ничего не применяет — подтверждение остаётся отдельным явным
+        действием продавца (существующая форма «Привязать»)."""
+        draft = cls.get_draft(seller_id=seller_id, draft_id=draft_id)
+        if draft.product_type_id:
+            return []
+        queries = []
+        imported = draft.imported_product
+        if imported is not None:
+            if imported.mapped_wb_category:
+                queries.append(('wb_subject', imported.mapped_wb_category))
+            if imported.category:
+                # Последний сегмент цепочки категорий поставщика
+                tail = str(imported.category).split('/')[-1].strip()
+                if tail:
+                    queries.append(('supplier_category', tail))
+        if not queries:
+            return []
+
+        def _norm(value: Any) -> str:
+            return ' '.join(str(value or '').casefold().split())
+
+        best: dict = {}
+        for priority, (source, query) in enumerate(queries):
+            query_norm = _norm(query)
+            if not query_norm:
+                continue
+            try:
+                found = cls.search_product_types(
+                    seller_id=seller_id, query=query, limit=10,
+                )
+            except MarketplaceDraftError:
+                continue
+            for item in found:
+                name_norm = _norm(item.get('name'))
+                if name_norm == query_norm:
+                    score = 100
+                elif query_norm in name_norm or name_norm in query_norm:
+                    score = 60
+                else:
+                    score = 30
+                # Совпадение по WB-предмету приоритетнее категории поставщика
+                score -= priority * 5
+                existing = best.get(item['id'])
+                if existing is None or existing['score'] < score:
+                    best[item['id']] = {
+                        **item, 'score': score, 'matched_on': query,
+                        'matched_source': source,
+                    }
+        ranked = sorted(
+            best.values(), key=lambda i: (-i['score'], i['name']),
+        )
+        return ranked[:max(1, min(int(limit), 10))]
 
     @classmethod
     def mapping_readiness(
@@ -2551,6 +2620,137 @@ class MarketplaceDraftService:
                 ),
             },
             "validated_at": now.isoformat(),
+        }
+
+    BULK_PREPARE_MAX_PRODUCTS = 200
+
+    @classmethod
+    def bulk_prepare(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        imported_product_ids: Sequence[int],
+        validate: bool = False,
+        corrected_by_user_id: Optional[int] = None,
+    ) -> dict:
+        """Детерминированная bulk-подготовка черновиков одного owned кабинета.
+
+        Локальный путь без provider/LLM: для каждого товара создаётся
+        отсутствующий draft, существующие считаются отдельно, ошибка одного
+        товара не блокирует остальные. Неудачная validation уже созданного
+        черновика не считается failed — черновик сохранён и остаётся
+        доступным для доводки на /marketplaces/drafts/.
+        """
+        # Fail-closed на уровне сервиса: kill-switch Ozon гейтит создание
+        # черновиков и для вызовов в обход UI/route (например, supplier import
+        # с draft_account_ids в form body при выключенном флаге).
+        if not current_app.config.get("MARKETPLACE_OZON_ENABLED", False):
+            raise MarketplaceDraftValidationError(
+                "Черновики Ozon отключены feature flag"
+            )
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        validate = cls._strict_boolean(validate, "validate")
+        if not isinstance(imported_product_ids, (list, tuple)):
+            raise MarketplaceDraftValidationError(
+                "imported_product_ids должен быть списком"
+            )
+        if not imported_product_ids:
+            raise MarketplaceDraftValidationError(
+                "imported_product_ids обязателен и должен быть непустым списком"
+            )
+        if len(imported_product_ids) > cls.BULK_PREPARE_MAX_PRODUCTS:
+            raise MarketplaceDraftValidationError(
+                f"За один запрос можно подготовить не больше "
+                f"{cls.BULK_PREPARE_MAX_PRODUCTS} товаров"
+            )
+        product_ids: List[int] = []
+        seen_ids: set = set()
+        for raw in imported_product_ids:
+            parsed = cls._positive_integer(raw, "imported_product_id")
+            if parsed in seen_ids:
+                raise MarketplaceDraftValidationError(
+                    "imported_product_ids содержит дубликаты"
+                )
+            seen_ids.add(parsed)
+            product_ids.append(parsed)
+
+        # Tenant scope: кабинет и весь exact-set товаров текущего продавца.
+        # is_active проверяется здесь, чтобы неактивный кабинет давал один
+        # быстрый отказ, а не N per-item ошибок.
+        account = cls._owned_account(seller_id=seller_id, account_id=account_id)
+        if not account.is_active:
+            raise MarketplaceDraftValidationError(
+                "Кабинет Ozon отключён — черновики для него не создаются"
+            )
+        owned_ids = {
+            row[0]
+            for row in db.session.query(ImportedProduct.id).filter(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.id.in_(product_ids),
+            ).all()
+        }
+        if owned_ids != seen_ids:
+            raise MarketplaceDraftValidationError(
+                "Выбранные товары не принадлежат текущему продавцу"
+            )
+
+        existing_ids = {
+            row[0]
+            for row in db.session.query(
+                MarketplaceProductDraft.imported_product_id
+            ).filter(
+                MarketplaceProductDraft.seller_id == seller_id,
+                MarketplaceProductDraft.account_id == account.id,
+                MarketplaceProductDraft.imported_product_id.in_(product_ids),
+            ).all()
+        }
+        created = existing = failed = 0
+        for product_id in product_ids:
+            if product_id in existing_ids:
+                existing += 1
+                continue
+            try:
+                draft = cls.create_draft(
+                    seller_id=seller_id,
+                    account_id=account.id,
+                    imported_product_id=product_id,
+                    corrected_by_user_id=corrected_by_user_id,
+                )
+                created += 1
+                if validate:
+                    try:
+                        cls.validate_draft(
+                            seller_id=seller_id,
+                            draft_id=draft.id,
+                            expected_version=draft.version,
+                        )
+                    except Exception:
+                        # Черновик уже создан и закоммичен: любая ошибка
+                        # validation не откатывает его и не считается failed —
+                        # иначе товар попадёт и в created, и в failed.
+                        db.session.rollback()
+                        logger.exception(
+                            "bulk-prepare validate failed seller_id=%s draft_id=%s",
+                            seller_id,
+                            draft.id,
+                        )
+            except MarketplaceDraftError:
+                db.session.rollback()
+                failed += 1
+            except Exception:
+                db.session.rollback()
+                logger.exception(
+                    "bulk-prepare draft failed seller_id=%s product_id=%s",
+                    seller_id,
+                    product_id,
+                )
+                failed += 1
+        return {
+            "created": created,
+            "existing": existing,
+            "failed": failed,
+            "total": len(product_ids),
         }
 
     @classmethod

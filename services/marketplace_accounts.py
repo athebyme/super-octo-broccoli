@@ -16,6 +16,8 @@ from models import (
     MarketplaceCanonicalContentProposal,
     MarketplaceCommercialProposal,
     MarketplaceCredentialEncryptionError,
+    MarketplaceMediaOperation,
+    MarketplaceMediaPublication,
     MarketplaceOperation,
     SellerMarketplaceAccount,
     db,
@@ -77,6 +79,13 @@ class MarketplaceAccountService:
     }
     ACCOUNT_MUTATION_BLOCKING_STATUSES = RECONCILIATION_REQUIRED_STATUSES | {
         "queued",
+    }
+    MEDIA_OPERATION_BLOCKING_STATUSES = {
+        "queued",
+        "preflighting",
+        "submitting",
+        "reconciling",
+        "uncertain",
     }
 
     @staticmethod
@@ -234,6 +243,13 @@ class MarketplaceAccountService:
                     cls.ACCOUNT_MUTATION_BLOCKING_STATUSES
                 ),
             ).first()
+            blocking_media = MarketplaceMediaOperation.query.filter(
+                MarketplaceMediaOperation.seller_id == seller_id,
+                MarketplaceMediaOperation.account_id == account.id,
+                MarketplaceMediaOperation.status.in_(
+                    cls.MEDIA_OPERATION_BLOCKING_STATUSES
+                ),
+            ).first()
             pending_commercial = MarketplaceCommercialProposal.query.filter(
                 MarketplaceCommercialProposal.seller_id == seller_id,
                 MarketplaceCommercialProposal.account_id == account.id,
@@ -253,6 +269,7 @@ class MarketplaceAccountService:
             )
             if (
                 blocking is not None
+                or blocking_media is not None
                 or pending_commercial is not None
                 or pending_canonical_content is not None
             ):
@@ -417,7 +434,14 @@ class MarketplaceAccountService:
                     cls.ACCOUNT_MUTATION_BLOCKING_STATUSES
                 ),
             ).first()
-            if blocking is not None:
+            blocking_media = MarketplaceMediaOperation.query.filter(
+                MarketplaceMediaOperation.seller_id == seller_id,
+                MarketplaceMediaOperation.account_id == account.id,
+                MarketplaceMediaOperation.status.in_(
+                    cls.MEDIA_OPERATION_BLOCKING_STATUSES
+                ),
+            ).first()
+            if blocking is not None or blocking_media is not None:
                 raise MarketplaceAccountConflict(
                     "Проверка подключения недоступна во время Ozon write"
                 )
@@ -604,7 +628,29 @@ class MarketplaceAccountService:
             ).filter(
                 MarketplaceOperation.attempt_count > 0,
             ).first()
-            if blocking is not None or unsafe_queued is not None:
+            blocking_media = MarketplaceMediaOperation.query.filter(
+                MarketplaceMediaOperation.seller_id == seller_id,
+                MarketplaceMediaOperation.account_id == account.id,
+                MarketplaceMediaOperation.status.in_((
+                    "preflighting",
+                    "submitting",
+                    "reconciling",
+                    "uncertain",
+                )),
+            ).first()
+            unsafe_queued_media = MarketplaceMediaOperation.query.filter_by(
+                seller_id=seller_id,
+                account_id=account.id,
+                status="queued",
+            ).filter(
+                MarketplaceMediaOperation.attempt_count > 0,
+            ).first()
+            if (
+                blocking is not None
+                or unsafe_queued is not None
+                or blocking_media is not None
+                or unsafe_queued_media is not None
+            ):
                 raise MarketplaceAccountConflict(
                     "API key нельзя удалить, пока Ozon write требует сверки"
                 )
@@ -625,6 +671,32 @@ class MarketplaceAccountService:
                 operation.quota_reserved = 0
                 operation.next_poll_at = None
                 operation.completed_at = now
+
+            queued_media = MarketplaceMediaOperation.query.filter_by(
+                seller_id=seller_id,
+                account_id=account.id,
+                status="queued",
+                attempt_count=0,
+            ).all()
+            media_publication_ids = set()
+            for operation in queued_media:
+                media_publication_ids.add(operation.publication_id)
+                operation.status = "cancelled"
+                operation.error_code = "account_disconnected_before_submission"
+                operation.error_message = (
+                    "Media-операция отменена до Ozon write при отключении кабинета"
+                )
+                operation.next_reconcile_at = None
+                operation.completed_at = now
+            if media_publication_ids:
+                db.session.flush()
+                from services.marketplace_media_publications import refresh_publication
+                for publication_id in media_publication_ids:
+                    publication = db.session.get(
+                        MarketplaceMediaPublication, publication_id,
+                    )
+                    if publication is not None:
+                        refresh_publication(publication, commit=False)
 
             proposals = MarketplaceCommercialProposal.query.filter(
                 MarketplaceCommercialProposal.seller_id == seller_id,

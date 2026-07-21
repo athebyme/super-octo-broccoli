@@ -1,6 +1,6 @@
 # «Фотостудия»: production flow, лаборатория и честная оценка пилота
 
-Актуально на 2026-07-16. Исторические прогоны полезны для выбора latency,
+Актуально на 2026-07-18. Исторические прогоны полезны для выбора latency,
 стоимости и частоты provider refusals, но их старый `status=ok` означал только
 «получен файл». Он не доказывал сохранность товара, правильность текста или
 готовность к публикации. При чтении старого JSON `ok` теперь консервативно
@@ -38,7 +38,9 @@ Production pipeline разделён на независимые этапы:
    PNG уже содержит осмысленную alpha-mask, она считается source-of-truth и
    rembg не вызывается.
 5. Текст рендерит Playwright в верхней safe-zone. Он собирается без LLM из
-   fact pack и дословно связан с `fact_id/source`.
+   fact pack и дословно связан с `fact_id/source`. Catalog v2 использует
+   полноценную hero-иерархию и группы из 1–4 адаптивных fact cards,
+   а не отдельный слайд на каждую пару label/value.
 6. Финал нормализуется в 900×1200 и проходит hard gates. Только `auto_pass`
    имеет `publishable=true`; i2i edit всегда `review_required` или `rejected`.
 
@@ -81,15 +83,19 @@ Production pipeline разделён на независимые этапы:
   watermark с настройкой позиции, размера и прозрачности на все jobs запуска;
 - пресет или своё описание сцены (до 800 символов, только фон);
 - один prompt одновременно на 1–3 OpenRouter-моделях: Nano Banana 2 Lite (1K,
-  default), Nano Banana 2 (2K) и Grok Imagine Quality (2K); российские
-  GPU/Gen-API/AITunnel скрыты и запрещены для новых create/repeat;
+  default), Nano Banana 2 (2K), Grok Imagine Quality (2K) и GPT Image 2
+  (`quality=medium`, оценка 4,50 ₽); российские GPU/Gen-API/AITunnel скрыты и
+  запрещены для новых create/repeat;
 - live polling: queue → generation → conditional local composite → quality;
 - переключение «оригинал / вход модели / AI-финал или фон / финал»;
 - OpenRouter получает локальные reference bytes как PNG/JPEG/WebP data URL в
-  `input_references[]` запроса `POST /api/v1/images`, с `aspect_ratio=3:4` и
-  `resolution=1K|2K`; Nano принимает до 10 UI-референсов, Grok — до 3. Chat по
-  умолчанию использует Nano Banana 2 Lite и показывает оценку около 3,30 ₽, но
-  фактическую USD-стоимость определяет `usage.cost` OpenRouter;
+  `input_references[]` запроса `POST /api/v1/images`. Nano/Grok получают
+  `aspect_ratio=3:4` и `resolution=1K|2K`; GPT Image 2 получает только
+  поддерживаемые `quality=medium` и `background=opaque`, а итог затем локально
+  нормализуется до 900×1200. Nano/GPT Image 2 принимают до 10 UI-референсов,
+  Grok — до 3. Chat по умолчанию использует Nano Banana 2 Lite и показывает
+  оценку около 3,30 ₽, но фактическую USD-стоимость определяет `usage.cost`
+  OpenRouter;
 - слепое сравнение, чтобы название модели не влияло на оценку;
 - оценка 1–5, включая теги «ракурс совпал»/«геометрия выдумана», комментарий,
   повтор запуска;
@@ -121,6 +127,8 @@ IMAGE_LAB_DAILY_BUDGET_RUB=500
 IMAGE_LAB_PROVIDER_TIMEOUT=180
 IMAGE_LAB_DATA_DIR=data/image_lab
 IMAGE_LAB_INLINE_WORKER=1
+MEDIA_PUBLICATION_DATA_DIR=data/image_lab/media_publications
+MEDIA_PUBLICATION_INLINE_WORKER=1
 INFOGRAPHIC_REMBG_MODEL=u2net
 ```
 
@@ -137,6 +145,8 @@ firewall от внешней сети. Публичный plain HTTP запре�
 python migrations/migrate_add_image_generation_lab.py data/seller_platform.db
 python migrations/migrate_add_image_lab_reference_watermark.py data/seller_platform.db
 python migrations/migrate_add_image_lab_angle_synthesis.py data/seller_platform.db
+python migrations/migrate_add_infographic_campaigns.py data/seller_platform.db
+python migrations/migrate_add_marketplace_media_publications.py data/seller_platform.db
 ```
 
 Docker entrypoint выполняет эту миграцию fail-fast. Artifacts находятся внутри
@@ -161,6 +171,48 @@ IMAGE_LAB_INLINE_WORKER=0 docker compose --profile image-lab up -d --build image
 
 Job claim атомарный; оборванные `running/finalizing` старше 30 минут становятся
 failed, а remote GPU jobs продолжают polling после рестарта runner.
+
+## Массовая инфографика и публикация в карточку
+
+Из «Моих товаров» можно создать кампанию максимум на 200 точных
+`ImportedProduct`. Рендер и ошибка одной строки не блокируют остальные;
+approve/reject остаётся отдельным human-review этапом. Одобрение само по себе
+ничего не отправляет на маркетплейс.
+
+Новые кампании хранят `template_version=2`: exact category и brand дополняют
+hero, semantic-дубли с одинаковым значением удаляются, а краткие характеристики
+группируются до четырёх на слайд. Existing v1 content не ломается и рендерится
+новым single-card layout. Байты фото загружаются тем же `fetch_original_product_bytes`,
+что и Фотостудия: он пробует supplier cache и все exact candidates в слоте до отказа.
+
+Кнопка «Подготовить публикацию» сначала читает exact live gallery WB и создаёт
+durable предпросмотр. Политика фиксирована: одобренные слайды идут первыми,
+текущие изображения сохраняют порядок после них, а хвост сверх лимита 30 явно
+показывается до подтверждения. Публикация разрешается только при публичном
+HTTPS `PUBLIC_BASE_URL`; provider получает подписанные URL со сроком жизни не
+более 24 часов. Все текущие изображения заранее сохраняются в private cache,
+поэтому rollback не зависит от изменившихся WB CDN-позиций. Карточки с видео
+блокируются, так как `media/save` заменяет галерею целиком и безопасно сохранить
+video этим контрактом нельзя.
+
+Каждая карточка имеет отдельную operation: повторный live preflight, durable
+`attempt_count=1` до network I/O, ровно один write, затем ordered visual
+reconciliation. HTTP 200 не считается успехом без фактического live match;
+timeout/5xx после возможной отправки не повторяется. Rollback является новой
+подтверждённой операцией и перед write проверяет отсутствие live drift.
+Scheduler продолжает reconciliation каждые 15 секунд, даже если optional
+Image Lab worker выключен; due reconciliation всегда важнее нового queued
+write.
+
+Новый gallery replace и legacy import/enrichment photo writes используют один
+seller-scoped file lock. Пока один из потоков выполняет WB photo write, второй
+получает безопасный pre-write busy result и не начинает параллельную замену.
+Это предполагает общий lock filesystem для поддерживаемой single-host topology.
+
+Ozon уже представлен тем же exact `seller + account + listing` target, но пока
+создаёт только blocked preview с `main_image_count + fingerprint`, без CDN URL
+и без pictures write. Включать прямую запись можно только через существующий
+Ozon full-state publication/snapshot/reconciliation lifecycle.
 
 ## GPU tunnel
 

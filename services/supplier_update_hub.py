@@ -7,9 +7,11 @@ Product ← ImportedProduct → SupplierProduct → Supplier. Актуальны
 ImportedProduct.photo_urls может устареть).
 
 «Дозагрузить фото» = полная пересборка набора карточки из галереи поставщика
-(+ стандартные пины продавца) через media/save: реальные URL текущих фото WB
-в БД недоступны (photos_json после WB-синка — int-счётчик), а после загрузки
-WB перехостит файлы на CDN, так что дедуп против «уже загруженных» невозможен.
+(+ стандартные пины продавца). Worker синхронно кэширует файлы и использует
+multipart media/file — тот же надёжный transport, что рабочий одиночный поток;
+PUBLIC_BASE_URL для массовой операции не требуется. Реальные URL текущих фото
+WB в БД недоступны, а после загрузки WB перехостит файлы на CDN, поэтому дедуп
+против «уже загруженных» невозможен.
 """
 import json
 import logging
@@ -24,7 +26,6 @@ from models import (
     BackgroundJob, BulkEditHistory, Notification,
     get_standard_media, get_min_photos,
 )
-from services.card_improver import apply_card_updates
 from services.standard_photos import compose_card_photo_urls, WB_MAX_PHOTOS
 from services.wb_api_client import WildberriesAPIClient, normalize_cards_error_list
 
@@ -33,13 +34,12 @@ logger = logging.getLogger(__name__)
 JOB_TYPE = 'supplier_photos_update'
 VERIFY_JOB_TYPE = 'supplier_updates_verify'
 
-# Пауза между карточками в фоновом job: ~40-50 req/мин к media/save —
-# запас в бюджете Контента (у нас 80/мин при лимите WB 100/мин), чтобы
-# параллельные обновления цен/остатков и действия пользователя не упирались.
+# Пауза между карточками отдаёт Content API другим операциям. Каждый multipart
+# запрос дополнительно проходит общий category/endpoint limiter WB-клиента.
 JOB_ITEM_PAUSE_SECONDS = 1.0
 
-# Пауза перед авто-проверкой после дозагрузки: media/save обрабатывается
-# WB асинхронно, мгновенная сверка почти всегда даст «ещё обрабатывается».
+# Пауза перед авто-проверкой после дозагрузки: WB может обновлять read model
+# не мгновенно, поэтому немедленная сверка часто даст «ещё обрабатывается».
 VERIFY_DELAY_SECONDS = 20
 
 
@@ -208,6 +208,13 @@ def verify_cards_on_wb(seller, product_ids: List[int]) -> dict:
             ImportedProduct.supplier_product_id.isnot(None),
         ).all()
     }
+    sp_ids = [imp.supplier_product_id for imp in imps.values()]
+    sps_by_id = {
+        sp.id: sp
+        for sp in SupplierProduct.query.filter(
+            SupplierProduct.id.in_(sp_ids)
+        ).all()
+    } if sp_ids else {}
 
     items = []
     for p in products:
@@ -228,7 +235,7 @@ def verify_cards_on_wb(seller, product_ids: List[int]) -> dict:
         expected = None
         imp = imps.get(p.id)
         if imp:
-            sp = db.session.get(SupplierProduct, imp.supplier_product_id)
+            sp = sps_by_id.get(imp.supplier_product_id)
             if sp:
                 expected = len(build_target_photo_set(sp, p, seller.id))
         entry['expected_photos'] = expected
@@ -244,19 +251,19 @@ def verify_cards_on_wb(seller, product_ids: List[int]) -> dict:
             photos = card.get('photos') or []
             entry['wb_photos'] = len(photos)
             # Синхронизируем локальный набор фото с фактом WB — дельта хаба
-            # пересчитается честно. Пустой список не пишем: WB мог ещё
-            # не закончить обработку media/save.
-            if photos:
-                urls = []
-                for ph in photos:
-                    if isinstance(ph, dict):
-                        url = ph.get('big') or ph.get('c516x688') or ph.get('square')
-                    else:
-                        url = ph if isinstance(ph, str) else None
-                    if url:
-                        urls.append(url)
-                if urls:
-                    p.photos_json = json.dumps(urls, ensure_ascii=False)
+            # пересчитается честно. Пустое состояние тоже факт: карточка без
+            # фото обязана вернуться в хаб дозагрузки, а не скрываться за
+            # старым локальным списком. Если read model WB запаздывает,
+            # следующая сверка поправит счётчик обратно.
+            urls = []
+            for ph in photos:
+                if isinstance(ph, dict):
+                    url = ph.get('big') or ph.get('c516x688') or ph.get('square')
+                else:
+                    url = ph if isinstance(ph, str) else None
+                if url:
+                    urls.append(url)
+            p.photos_json = json.dumps(urls, ensure_ascii=False)
             if expected is not None and len(photos) < expected:
                 entry['status'] = 'pending'
                 summary['pending'] += 1
@@ -330,6 +337,8 @@ def run_photos_job(flask_app, job_uid: str, seller_id: int,
         succeeded = failed = skipped = 0
         item_errors = []
         succeeded_ids = []
+        from services.supplier_enrichment import EnrichmentService
+        enrichment_service = EnrichmentService()
 
         for idx, pid in enumerate(product_ids):
             # Проверка отмены между карточками
@@ -354,20 +363,26 @@ def run_photos_job(flask_app, job_uid: str, seller_id: int,
                     continue
 
                 sp = db.session.get(SupplierProduct, imp.supplier_product_id)
-                target = build_target_photo_set(sp, product, seller_id)
-                if not target or not product.nm_id:
+                if not sp or not product.nm_id:
                     skipped += 1
                     job.processed = idx + 1
                     db.session.commit()
                     continue
 
-                result = apply_card_updates(
-                    product, {'photos': target}, seller, wb_client,
-                    source='supplier-updates',
+                result = enrichment_service.apply_enrichment(
+                    product,
+                    imp,
+                    ['photos'],
+                    'replace',
+                    seller,
+                    wb_client,
+                    is_bulk=True,
                 )
                 if result.get('success') and result.get('wb_sync'):
                     succeeded += 1
                     succeeded_ids.append(pid)
+                elif (result.get('photos') or {}).get('skipped'):
+                    skipped += 1
                 else:
                     failed += 1
                     outcome_error = result.get('error') or 'не применилось'
@@ -443,7 +458,7 @@ def run_photos_job(flask_app, job_uid: str, seller_id: int,
             f"[SupplierPhotos] job {job_uid} done: ok={succeeded} fail={failed} skip={skipped}"
         )
 
-        # Авто-сверка с WB: media/save обрабатывается асинхронно, поэтому
+        # Авто-сверка с WB: provider read model обновляется не мгновенно, поэтому
         # ждём и одним проходом проверяем, что фото реально применились и
         # WB не вернул ошибок обработки. Результат — в result джобы ('verify').
         if succeeded_ids and job.status == 'completed':

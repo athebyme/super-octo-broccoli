@@ -37,7 +37,10 @@ class TestTasksTrayApi(unittest.TestCase):
     @classmethod
     def _seed(cls):
         from datetime import datetime, timedelta
-        from models import User, Seller, BackgroundJob
+        from models import (
+            User, Seller, BackgroundJob, InfographicCampaign,
+            MarketplaceMediaPublication,
+        )
         u1 = User(username='t1', email='t1@e.com', password_hash='x')
         cls.db.session.add(u1); cls.db.session.flush()
         s1 = Seller(user_id=u1.id, company_name='Один', wb_seller_id='1')
@@ -68,6 +71,24 @@ class TestTasksTrayApi(unittest.TestCase):
             BackgroundJob(job_uid='j-zombie', seller_id=s1.id, job_type='bulk_wb_import',
                           status='running', total=10, processed=2,
                           created_at=datetime.utcnow() - timedelta(days=90)),
+            InfographicCampaign(
+                seller_id=s1.id,
+                created_by_user_id=u1.id,
+                name='Массовая инфографика',
+                status='running',
+                total_items=10,
+                completed_items=2,
+                failed_items=1,
+            ),
+            MarketplaceMediaPublication(
+                seller_id=s1.id,
+                marketplace_code='wb',
+                status='running',
+                total_items=5,
+                blocked_items=1,
+                succeeded_items=1,
+                failed_items=1,
+            ),
         ])
         cls.db.session.commit()
 
@@ -91,6 +112,8 @@ class TestTasksTrayApi(unittest.TestCase):
         data = resp.get_json()
         kinds = [i['kind'] for i in data['items']]
         self.assertIn('import', kinds)   # активная BackgroundJob
+        self.assertIn('image', kinds)    # активная кампания инфографики
+        self.assertIn('publish', kinds)  # подтверждённая media-публикация
         self.assertIn('sync', kinds)     # sync-флаг
         self.assertEqual(data['count'], len(data['items']))
         # нормализованная форма
@@ -104,6 +127,13 @@ class TestTasksTrayApi(unittest.TestCase):
         self.assertEqual(imp[0]['progress'], 40)  # 4/10
         sync = [i for i in data['items'] if i['kind'] == 'sync']
         self.assertIsNone(sync[0]['progress'])
+        image = [i for i in data['items'] if i['title'] == 'Массовая инфографика']
+        self.assertEqual(image[0]['progress'], 30)
+        publication = [
+            i for i in data['items']
+            if i['title'] == 'Публикация медиа WB'
+        ]
+        self.assertEqual(publication[0]['progress'], 60)
 
     def test_tenant_isolation(self):
         # У продавца 1 не видно задачи продавца 2

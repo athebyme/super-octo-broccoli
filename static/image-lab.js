@@ -67,6 +67,7 @@ function imageLab() {
   const csrf = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
   return {
     products: boot.products || [],
+    recommendations: boot.recommendations || [],
     capabilities: boot.capabilities || {backends: [], scenes: []},
     experiments: boot.experiments || [],
     analytics: boot.analytics || {total: 0, variants: []},
@@ -91,6 +92,8 @@ function imageLab() {
           label: model.label || model.id, providerLabel: backend.label,
           enabled: backend.enabled, cost_rub: model.cost_rub,
           resolution: model.resolution || '',
+          quality: model.quality || '',
+          profileLabel: model.profile_label || model.resolution || model.quality || 'Авто',
           max_references: Number(model.max_references || 0),
           supported_strategies: model.supported_strategies || ['background_only'],
           supports_reference: Boolean(model.supports_reference)
@@ -210,6 +213,30 @@ function imageLab() {
       if (this.generationMode === 'single') this.selectedPhotoIndices = this.currentPhotos.length ? [first] : [];
       else this.selectedPhotoIndices = this.currentPhotos.map(item => Number(item.index));
       this.fillOverlayFromProduct();
+    },
+    openRecommendation(item) {
+      const product = this.products.find(value => Number(value.id) === Number(item.product_id));
+      if (!product) {
+        this.showMessage('Товар пока недоступен в Фотостудии: проверьте исходное фото', 'error');
+        return;
+      }
+      this.productId = product.id;
+      this.marketplaceTargetListingId = '';
+      this.onProductChange();
+      if (item.listing_id && this.currentMarketplaceTargets.some(
+        target => Number(target.listing_id) === Number(item.listing_id)
+      )) this.marketplaceTargetListingId = String(item.listing_id);
+      document.getElementById('image-lab-source')?.scrollIntoView({behavior:'smooth', block:'start'});
+      this.showMessage('Товар выбран. Проверьте исходники и стоимость перед запуском', 'success');
+    },
+    async reviewRecommendation(item, status) {
+      try {
+        await this.api(`/image-lab/api/recommendations/${Number(item.id)}/status`, {
+          method:'POST', body:JSON.stringify({status})
+        });
+        this.recommendations = this.recommendations.filter(value => Number(value.id) !== Number(item.id));
+        this.showMessage(status === 'completed' ? 'Рекомендация отмечена выполненной' : 'Рекомендация скрыта', 'success');
+      } catch (error) { this.showMessage(error.message, 'error'); }
     },
     onModeChange() {
       if (this.generationMode === 'angles') this.generationStrategy = 'angle_synthesis';

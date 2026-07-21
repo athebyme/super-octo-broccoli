@@ -183,6 +183,8 @@ def migrate(db_path):
             ("brand_status", "VARCHAR(20)"),
             # nmID карточки WB (дубль-детект по баркодам, история загрузок)
             ("wb_nm_id", "INTEGER"),
+            # РРЦ поставщика (копируется из supplier_products при импорте)
+            ("recommended_retail_price", "FLOAT"),
         ]
 
         for col_name, col_type in products_columns:
@@ -240,6 +242,8 @@ def migrate(db_path):
                 ("marketplace_fields_json", "TEXT"),
                 ("marketplace_validation_status", "VARCHAR(50)"),
                 ("marketplace_fill_pct", "FLOAT"),
+                # Полный список штрихкодов из фида (JSON list)
+                ("barcodes_json", "TEXT"),
             ]
             for col_name, col_type in sp_columns:
                 if add_column_if_missing(cursor, 'supplier_products', col_name, col_type, existing_sp):
@@ -1043,6 +1047,32 @@ def migrate(db_path):
             from migrations.migrate_add_marketplace_reference_freshness import apply_migration
         total_added += apply_migration(conn, verbose=False)
 
+        # Exact provider brand identity is category-scoped on WB. Existing
+        # links remain NULL until a fresh category observation proves the ID.
+        try:
+            from migrate_add_brand_category_external_id import (
+                apply_migration as apply_brand_category_id_migration,
+            )
+        except ImportError:
+            from migrations.migrate_add_brand_category_external_id import (
+                apply_migration as apply_brand_category_id_migration,
+            )
+        total_added += apply_brand_category_id_migration(conn, verbose=False)
+
+        # Durable terminal auth/capability quarantine for automatic social
+        # publishing; manual publish remains an explicit recheck path.
+        try:
+            from migrate_add_social_account_publish_health import (
+                apply_migration as apply_social_publish_health_migration,
+            )
+        except ImportError:
+            from migrations.migrate_add_social_account_publish_health import (
+                apply_migration as apply_social_publish_health_migration,
+            )
+        total_added += apply_social_publish_health_migration(
+            conn, verbose=False,
+        )
+
         # WB characteristic dictionary provenance/freshness. This remains in
         # the comprehensive path as well as the fail-fast Docker migration.
         try:
@@ -1272,10 +1302,34 @@ def main():
                 migrate as migrate_image_lab_marketplace_target,
             )
             migrate_image_lab_marketplace_target(db_path)
+            from migrate_add_infographic_campaigns import (
+                migrate as migrate_infographic_campaigns,
+            )
+            migrate_infographic_campaigns(db_path)
+            from migrate_add_marketplace_media_publications import (
+                migrate as migrate_marketplace_media_publications,
+            )
+            migrate_marketplace_media_publications(db_path)
+            from migrate_add_bestseller_image_recommendations import (
+                migrate as migrate_bestseller_image_recommendations,
+            )
+            migrate_bestseller_image_recommendations(db_path)
             from migrate_add_content_factory_marketplace_scope import (
                 migrate as migrate_content_factory_marketplace_scope,
             )
             migrate_content_factory_marketplace_scope(db_path)
+            from migrate_add_supplier_catalog_enrichment import (
+                migrate as migrate_supplier_catalog_enrichment,
+            )
+            migrate_supplier_catalog_enrichment(db_path)
+            from migrate_clean_characteristic_dimensions import (
+                migrate as migrate_clean_characteristic_dimensions,
+            )
+            migrate_clean_characteristic_dimensions(db_path)
+            from migrate_add_wb_card_audit import (
+                migrate as migrate_wb_card_audit,
+            )
+            migrate_wb_card_audit(db_path)
         except Exception as exc:
             print(f"❌ Post-schema migration failed: {exc}")
             success = False

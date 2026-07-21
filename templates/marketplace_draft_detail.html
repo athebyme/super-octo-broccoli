@@ -3,6 +3,19 @@
 {% block title %}Черновик {{ draft.offer_id }} — Seller Hub{% endblock %}
 
 {% block content %}
+{% set status_labels = {'needs_category': 'Нет категории', 'draft': 'Черновик', 'ready': 'Готов', 'published': 'Опубликован', 'blocked': 'Заблокирован', 'archived': 'Архив'} %}
+{% set validation_status_labels = {'never_validated': 'Не проверялся', 'valid': 'Готов к публикации', 'invalid': 'Есть ошибки', 'stale': 'Устарело'} %}
+{% set operation_status_labels = {
+    'queued': 'В очереди', 'submitting': 'Отправляется', 'submitted': 'Отправлено',
+    'polling': 'Проверяем статус', 'uncertain': 'Нужна сверка', 'succeeded': 'Успешно',
+    'partial': 'Частично', 'failed': 'Ошибка', 'cancelled': 'Отменено'
+} %}
+{% set operation_kind_labels = {
+    'product_import': 'Создание карточки', 'product_import_rollback': 'Откат создания',
+    'product_update': 'Обновление карточки', 'product_update_rollback': 'Откат обновления',
+    'price_update': 'Изменение цены', 'stock_update': 'Изменение остатков',
+    'price_rollback': 'Откат цены', 'stock_rollback': 'Откат остатков'
+} %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
     <a href="{{ url_for('marketplace_drafts.index') }}" class="text-sm" style="color:var(--accent)">← Черновики Ozon</a>
     <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -10,14 +23,14 @@
             <div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)">
                 <span class="uppercase font-medium" style="color:var(--accent)">Ozon</span>
                 <span>{{ draft.account.label }}</span>
-                <span>{{ draft.status }}</span>
-                <span>{{ draft.validation_status }}</span>
-                <span>version {{ draft.version }}</span>
+                <span>{{ status_labels.get(draft.status, draft.status) }}</span>
+                <span>{{ validation_status_labels.get(draft.validation_status, draft.validation_status) }}</span>
+                <span>версия {{ draft.version }}</span>
             </div>
             <h1 class="mt-2 text-2xl font-semibold" style="color:var(--text)">{{ draft.imported_product.title or draft.offer_id }}</h1>
-            <p class="mt-1 text-sm break-all" style="color:var(--text-secondary)">offer_id: {{ draft.offer_id }} · source #{{ draft.imported_product_id }}</p>
+            <p class="mt-1 text-sm break-all" style="color:var(--text-secondary)">артикул (offer_id): {{ draft.offer_id }} · товар-источник #{{ draft.imported_product_id }}</p>
             <p class="mt-1 text-xs" style="color:var(--text-muted)">
-                {{ draft.product_type.category.full_path ~ ' / ' ~ draft.product_type.name if draft.product_type else 'Точная Ozon category/type ещё не выбрана' }}
+                {{ draft.product_type.category.full_path ~ ' / ' ~ draft.product_type.name if draft.product_type else 'Точные категория и тип Ozon ещё не выбраны' }}
             </p>
         </div>
         {% if ozon_enabled and not active_operation and draft.status != 'archived' %}
@@ -28,7 +41,7 @@
                 <button class="sh-btn sh-btn--primary" type="submit">Проверить</button>
             </form>
             <form method="post" action="{{ url_for('marketplace_drafts.refresh_facts', draft_id=draft.id) }}"
-                  onsubmit="return confirm('Обновить source fact snapshot? Пользовательские поля останутся без изменений.')">
+                  onsubmit="return confirm('Обновить снимок фактов о товаре? Пользовательские поля останутся без изменений.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="expected_version" value="{{ draft.version }}">
                 <button class="sh-btn sh-btn--secondary" type="submit">Обновить факты</button>
@@ -36,17 +49,11 @@
         </div>
         {% elif active_operation %}
         <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=active_operation.id) }}">
-            Операция #{{ active_operation.id }} · {{ active_operation.status }}
+            Операция #{{ active_operation.id }} · {{ operation_status_labels.get(active_operation.status, active_operation.status) }}
         </a>
         {% endif %}
     </div>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-    <div class="mt-4 rounded-md border px-4 py-3 text-sm"
-         style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>
-    {% endfor %}
-    {% endwith %}
 
     {% set readiness = mapping_readiness %}
     <section class="sh-card p-4 mt-5" aria-labelledby="ozon-readiness-heading">
@@ -54,7 +61,7 @@
             <div>
                 <h2 id="ozon-readiness-heading" class="font-semibold" style="color:var(--text)">Готовность общей карточки к Ozon</h2>
                 <p class="mt-1 text-xs" style="color:var(--text-muted)">
-                    Это точный локальный preflight: повторного AI-парсинга и запроса в Ozon здесь нет. Финальное решение всегда принимает полная validation ниже.
+                    Это точная локальная предварительная проверка: повторного AI-парсинга и запроса в Ozon здесь нет. Финальное решение всегда принимает полная проверка ниже.
                 </p>
             </div>
             <span class="sh-badge sh-badge--{{ 'green' if readiness.overall == 'ready' else ('yellow' if readiness.overall in ['needs_category', 'needs_attributes', 'needs_validation'] else 'red') }} sh-badge--sm">
@@ -74,15 +81,15 @@
                 <div class="text-xs" style="color:var(--text-muted)">Общая карточка</div>
                 <div class="mt-1 text-sm font-medium" style="color:var(--text)">#{{ readiness.source.imported_product_id }}</div>
                 <p class="mt-1 text-xs" style="color:var(--text-secondary)">
-                    {% if readiness.source.wb_projection_linked %}WB{% if readiness.source.wb_nm_id %} {{ readiness.source.wb_nm_id }}{% endif %} связан{% else %}без WB-проекции{% endif %} · {{ 'snapshot актуален' if readiness.source.facts_fresh else 'snapshot устарел' }}
+                    {% if readiness.source.wb_projection_linked %}WB{% if readiness.source.wb_nm_id %} {{ readiness.source.wb_nm_id }}{% endif %} связан{% else %}без WB-проекции{% endif %} · {{ 'снимок актуален' if readiness.source.facts_fresh else 'снимок устарел' }}
                 </p>
             </div>
             <div class="rounded border p-3" style="border-color:var(--border)">
                 <div class="text-xs" style="color:var(--text-muted)">Категория Ozon</div>
                 <div class="mt-1 text-sm font-medium" style="color:{{ 'var(--ok)' if readiness.category.status in ['exact_mapping', 'linked_listing'] else ('var(--warn)' if readiness.category.status == 'selected' else 'var(--danger)') }}">
-                    {% if readiness.category.status == 'exact_mapping' and readiness.category.mapping_source_type == 'wb' %}Exact WB subject mapping
-                    {% elif readiness.category.status == 'exact_mapping' %}Exact source mapping
-                    {% elif readiness.category.status == 'linked_listing' %}Из связанного listing
+                    {% if readiness.category.status == 'exact_mapping' and readiness.category.mapping_source_type == 'wb' %}Точное сопоставление по категории WB
+                    {% elif readiness.category.status == 'exact_mapping' %}Точное сопоставление по категории поставщика
+                    {% elif readiness.category.status == 'linked_listing' %}Из связанной карточки на Ozon
                     {% elif readiness.category.status == 'selected' %}Выбрана вручную
                     {% else %}Не выбрана{% endif %}
                 </div>
@@ -92,7 +99,7 @@
             <div class="rounded border p-3" style="border-color:var(--border)">
                 <div class="text-xs" style="color:var(--text-muted)">Схема Ozon</div>
                 <div class="mt-1 text-sm font-medium" style="color:{{ 'var(--ok)' if readiness.schema.fresh else 'var(--danger)' }}">{{ 'Свежая' if readiness.schema.fresh else 'Нет свежей схемы' }}</div>
-                <p class="mt-1 text-xs" style="color:var(--text-secondary)">version {{ readiness.schema.version or '—' }}</p>
+                <p class="mt-1 text-xs" style="color:var(--text-secondary)">версия {{ readiness.schema.version or '—' }}</p>
             </div>
             <div class="rounded border p-3" style="border-color:var(--border)">
                 <div class="text-xs" style="color:var(--text-muted)">Обязательные атрибуты</div>
@@ -106,7 +113,7 @@
                 <div class="mt-1 text-sm font-medium" style="color:{{ 'var(--ok)' if readiness.dictionaries.fresh == readiness.dictionaries.total else 'var(--danger)' }}">
                     {{ readiness.dictionaries.fresh }} / {{ readiness.dictionaries.total }} свежих
                 </div>
-                <p class="mt-1 text-xs" style="color:var(--text-secondary)">Только exact ID + official value</p>
+                <p class="mt-1 text-xs" style="color:var(--text-secondary)">Только точный ID и официальное значение</p>
             </div>
         </div>
 
@@ -114,7 +121,7 @@
             <span>
                 {% if readiness.source.ai_cache_reused %}Общий AI-кэш {{ readiness.source.ai_source }} переиспользован; неподтверждённые AI-предложения не подставляются автоматически.{% else %}AI-кэш отсутствует; текущий черновик собран только из подтверждённых/наблюдаемых фактов.{% endif %}
             </span>
-            <span class="shrink-0">Ozon → WB: только reviewed common-fact diff</span>
+            <span class="shrink-0">Ozon → WB: только проверенные изменения общих полей</span>
         </div>
 
         {% if readiness.source.wb_projection.differing_fields %}
@@ -128,7 +135,7 @@
             <summary class="cursor-pointer text-xs font-medium" style="color:var(--warn)">Не сопоставлены обязательные поля ({{ readiness.attributes.missing_required | length }}{% if readiness.attributes.missing_required_truncated %}+{% endif %})</summary>
             <ul class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1 text-xs" style="color:var(--text-secondary)">
                 {% for item in readiness.attributes.missing_required %}
-                <li>{{ item.name }} · attribute {{ item.attribute_id }}{% if item.complex_id != '0' %} · complex {{ item.complex_id }}{% endif %}</li>
+                <li>{{ item.name }} · атрибут {{ item.attribute_id }}{% if item.complex_id != '0' %} · составная группа {{ item.complex_id }}{% endif %}</li>
                 {% endfor %}
             </ul>
         </details>
@@ -137,7 +144,7 @@
         <details class="mt-3">
             <summary class="cursor-pointer text-xs font-medium" style="color:var(--danger)">Устаревшие/неполные справочники ({{ readiness.dictionaries.stale | length }}{% if readiness.dictionaries.stale_truncated %}+{% endif %})</summary>
             <ul class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1 text-xs" style="color:var(--text-secondary)">
-                {% for item in readiness.dictionaries.stale %}<li>{{ item.name }} · dictionary {{ item.dictionary_id }}</li>{% endfor %}
+                {% for item in readiness.dictionaries.stale %}<li>{{ item.name }} · справочник {{ item.dictionary_id }}</li>{% endfor %}
             </ul>
         </details>
         {% endif %}
@@ -148,15 +155,15 @@
     <section class="sh-card p-4 mt-5">
         <div class="flex flex-wrap items-center justify-between gap-2">
             <h2 class="font-semibold" style="color:var(--text)">Результат валидации</h2>
-            <span class="text-xs" style="color:{{ 'var(--accent)' if validation.publishable else 'var(--danger, #b42318)' }}">
-                {{ 'publishable' if validation.publishable else 'blocked' }}
+            <span class="text-xs" style="color:{{ 'var(--accent)' if validation.publishable else 'var(--danger)' }}">
+                {{ 'можно публиковать' if validation.publishable else 'заблокировано' }}
             </span>
         </div>
         {% if validation.errors %}
         <div class="mt-3 space-y-2">
             {% for item in validation.errors %}
             <div class="rounded border px-3 py-2 text-sm" style="border-color:var(--border);color:var(--text)">
-                <div class="text-xs font-medium" style="color:var(--danger, #b42318)">{{ item.code }} · {{ item.field }}</div>
+                <div class="text-xs font-medium" style="color:var(--danger)">{{ item.code }} · {{ item.field }}</div>
                 <div class="mt-1">{{ item.message }}</div>
             </div>
             {% endfor %}
@@ -176,28 +183,55 @@
     {% endif %}
 
     <section class="sh-card p-4 mt-5">
-        <h2 class="font-semibold" style="color:var(--text)">Категория и seller mapping</h2>
+        <h2 class="font-semibold" style="color:var(--text)">Категория и сопоставление</h2>
+        {% if type_suggestions and ozon_enabled and not active_operation and draft.status != 'archived' %}
+        <div class="mt-3 rounded-md border p-3" style="border-color:var(--accent);background:var(--accent-light)">
+            <p class="text-xs font-semibold" style="color:var(--text)">Рекомендуемые типы
+                <span class="font-normal" style="color:var(--text-muted)">— подобраны по «{{ type_suggestions[0].matched_on }}», привязка применится только по вашей кнопке</span></p>
+            <div class="mt-2 flex flex-col gap-2">
+                {% for item in type_suggestions %}
+                <form method="post" action="{{ url_for('marketplace_drafts.update', draft_id=draft.id) }}"
+                      class="flex flex-wrap items-center gap-2 text-sm">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="expected_version" value="{{ draft.version }}">
+                    <input type="hidden" name="product_type_id" value="{{ item.id }}">
+                    <input type="hidden" name="save_mapping" value="1">
+                    <span style="color:var(--text)">{{ item.category_path }} / <b>{{ item.name }}</b></span>
+                    <span class="text-xs" style="color:var(--text-muted)">схема {{ 'актуальна' if item.schema_fresh else 'устарела' }}</span>
+                    <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit"
+                            {% if not item.schema_fresh %}disabled title="Сначала дождитесь синхронизации схемы"{% endif %}>Привязать</button>
+                </form>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
         <form method="get" class="mt-3 flex flex-col sm:flex-row gap-2">
             <input name="type_query" value="{{ type_query }}" maxlength="200" placeholder="Поиск по типу или пути категории"
                    class="flex-1 rounded-md border px-3 py-2 text-sm bg-transparent"
                    style="border-color:var(--border);color:var(--text)">
             <button class="sh-btn sh-btn--secondary" type="submit">Найти тип</button>
         </form>
+        {% if type_query and not type_options %}
+        <p class="mt-2 text-sm" style="color:var(--text-muted)">
+            По запросу «{{ type_query }}» подходящих типов не найдено. Попробуйте другое слово;
+            если справочник Ozon ещё не синхронизировался (см. «Готовность» выше), типы появятся после синхронизации.
+        </p>
+        {% endif %}
         {% if type_options and ozon_enabled and not active_operation and draft.status != 'archived' %}
         <form method="post" action="{{ url_for('marketplace_drafts.update', draft_id=draft.id) }}" class="mt-3 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="expected_version" value="{{ draft.version }}">
             <label class="block">
-                <span class="block text-xs mb-1" style="color:var(--text-muted)">Точная category/type pair</span>
+                <span class="block text-xs mb-1" style="color:var(--text-muted)">Точная пара категория/тип</span>
                 <select name="product_type_id" required class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                         style="border-color:var(--border);color:var(--text)">
                     {% for item in type_options %}
-                    <option value="{{ item.id }}">{{ item.category_path }} / {{ item.name }} · schema {{ 'fresh' if item.schema_fresh else 'STALE' }}</option>
+                    <option value="{{ item.id }}">{{ item.category_path }} / {{ item.name }} · схема {{ 'актуальна' if item.schema_fresh else 'устарела' }}</option>
                     {% endfor %}
                 </select>
                 <label class="mt-2 inline-flex items-center gap-2 text-xs" style="color:var(--text-secondary)">
                     <input type="checkbox" name="save_mapping" value="1" checked>
-                    Запомнить exact mapping для этой source category и seller
+                    Запомнить точное сопоставление для этой категории поставщика и продавца
                 </label>
             </label>
             <div class="flex items-end"><button class="sh-btn sh-btn--primary" type="submit">Привязать</button></div>
@@ -205,70 +239,248 @@
         {% endif %}
     </section>
 
+    {% macro fact_value(value) -%}
+        {%- if value is mapping -%}
+            {%- for k, v in value.items() -%}{{ k }}: {{ fact_value(v) }}{{ '; ' if not loop.last }}{%- endfor -%}
+        {%- elif value is sequence and value is not string -%}
+            {{ value | join(', ') | truncate(160) }}
+        {%- else -%}
+            {{ value | string | truncate(160) }}
+        {%- endif -%}
+    {%- endmacro %}
+    {% macro trust_badge(trust) -%}
+        {%- if trust == 'observed' -%}<span class="sh-badge sh-badge--green sh-badge--sm" title="Наблюдённый факт от поставщика">факт</span>
+        {%- elif trust == 'seller_current' -%}<span class="sh-badge sh-badge--blue sh-badge--sm" title="Текущее значение вашей карточки">карточка</span>
+        {%- elif trust == 'seller_calculation' -%}<span class="sh-badge sh-badge--blue sh-badge--sm" title="Рассчитано платформой по вашим правилам">расчёт</span>
+        {%- elif trust -%}<span class="sh-badge sh-badge--yellow sh-badge--sm">{{ trust }}</span>
+        {%- endif -%}
+    {%- endmacro %}
+
     <form method="post" action="{{ url_for('marketplace_drafts.update', draft_id=draft.id) }}" class="mt-5 space-y-4">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="expected_version" value="{{ draft.version }}">
+
         <section class="sh-card p-4">
             <h2 class="font-semibold" style="color:var(--text)">Идентичность и контент</h2>
-            <label class="block mt-3">
-                <span class="block text-xs mb-1" style="color:var(--text-muted)">offer_id — обязателен в Ozon с 10.07.2026</span>
+            <label class="block mt-3 max-w-md">
+                <span class="block text-xs mb-1" style="color:var(--text-muted)">Артикул — обязателен в Ozon с 10.07.2026</span>
                 <input name="offer_id" value="{{ draft.offer_id }}" maxlength="50" required
                        class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                        style="border-color:var(--border);color:var(--text)">
             </label>
-            <label class="block mt-3">
-                <span class="block text-xs mb-1" style="color:var(--text-muted)">content JSON</span>
-                <textarea name="content_json" rows="8" class="w-full rounded-md border p-3 text-xs font-mono bg-transparent"
+            {% if draft_data.content and draft_data.content.get('title') %}
+            <div class="mt-3 text-sm" style="color:var(--text)"><span class="text-xs" style="color:var(--text-muted)">Название:</span> {{ draft_data.content.get('title') }}</div>
+            {% endif %}
+            {% if draft_data.content and draft_data.content.get('description') %}
+            <div class="mt-2 text-sm" style="color:var(--text-secondary)">{{ draft_data.content.get('description') | truncate(360) }}</div>
+            {% endif %}
+            {% if not draft_data.content %}
+            <div class="mt-3 text-sm" style="color:var(--text-muted)">Контент не заполнен — название и описание подтянутся из фактов при валидации либо задаются здесь.</div>
+            {% endif %}
+            <details class="mt-3">
+                <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править контент как JSON</summary>
+                <textarea name="content_json" rows="8" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
                           style="border-color:var(--border);color:var(--text)">{{ draft_data.content | tojson(indent=2) }}</textarea>
-            </label>
+            </details>
         </section>
 
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <section class="sh-card p-4">
-                <h2 class="font-semibold" style="color:var(--text)">Обычные атрибуты</h2>
-                <p class="mt-1 text-xs" style="color:var(--text-muted)">Dictionary ID и display value проверяются как exact pair в scope выбранного типа.</p>
-                <textarea name="attributes_json" rows="24" class="mt-3 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
-                          style="border-color:var(--border);color:var(--text)">{{ draft_data.attributes | tojson(indent=2) }}</textarea>
+                <h2 class="font-semibold" style="color:var(--text)">Атрибуты Ozon {% if draft_data.attributes %}<span class="text-xs font-normal" style="color:var(--text-muted)">· {{ draft_data.attributes | length }}</span>{% endif %}</h2>
+                {% if draft_data.attributes %}
+                <div class="mt-3 overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <tbody>
+                        {% for attr in draft_data.attributes %}
+                        <tr style="border-top:1px solid var(--border)">
+                            <td class="py-1.5 pr-3 align-top" style="color:var(--text-secondary);min-width:140px">
+                                {{ attribute_names.get(attr.attribute_id | string) or attribute_names.get(attr.attribute_id) or 'Атрибут ' ~ attr.attribute_id }}
+                            </td>
+                            <td class="py-1.5 align-top" style="color:var(--text)">
+                                {% for v in attr.get('values', []) %}
+                                    {{ v.get('value') if v is mapping else v }}{% if v is mapping and v.get('dictionary_value_id') %} <span class="text-xs" style="color:var(--text-muted)">#{{ v.get('dictionary_value_id') }}</span>{% endif %}{{ ', ' if not loop.last }}
+                                {% endfor %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="mt-3 text-sm" style="color:var(--text-muted)">Атрибуты не заполнены. Выберите тип товара и запустите «Проверить» — обязательные поля покажет валидация.</p>
+                {% endif %}
+                <details class="mt-3">
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править атрибуты как JSON</summary>
+                    <p class="mt-1 text-xs" style="color:var(--text-muted)">ID значения справочника и его отображаемое значение проверяются как точная пара в рамках выбранного типа.</p>
+                    <textarea name="attributes_json" rows="18" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
+                              style="border-color:var(--border);color:var(--text)">{{ draft_data.attributes | tojson(indent=2) }}</textarea>
+                </details>
             </section>
             <section class="sh-card p-4">
-                <h2 class="font-semibold" style="color:var(--text)">Complex-атрибуты</h2>
-                <p class="mt-1 text-xs" style="color:var(--text-muted)">Каждая запись массива — отдельная complex group с массивом attributes.</p>
-                <textarea name="complex_attributes_json" rows="24" class="mt-3 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
-                          style="border-color:var(--border);color:var(--text)">{{ draft_data.complex_attributes | tojson(indent=2) }}</textarea>
+                <h2 class="font-semibold" style="color:var(--text)">Составные атрибуты {% if draft_data.complex_attributes %}<span class="text-xs font-normal" style="color:var(--text-muted)">· {{ draft_data.complex_attributes | length }}</span>{% endif %}</h2>
+                {% if draft_data.complex_attributes %}
+                <div class="mt-3 flex flex-col gap-2 text-sm" style="color:var(--text)">
+                    {% for group in draft_data.complex_attributes %}
+                    <div class="rounded-md border p-2" style="border-color:var(--border)">
+                        {% for attr in group.get('attributes', []) %}
+                        <div><span style="color:var(--text-secondary)">{{ attribute_names.get(attr.attribute_id | string) or 'Атрибут ' ~ attr.attribute_id }}:</span>
+                            {% for v in attr.get('values', []) %}{{ v.get('value') if v is mapping else v }}{{ ', ' if not loop.last }}{% endfor %}</div>
+                        {% endfor %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="mt-3 text-sm" style="color:var(--text-muted)">Составных групп нет — для большинства категорий это нормально.</p>
+                {% endif %}
+                <details class="mt-3">
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <textarea name="complex_attributes_json" rows="18" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
+                              style="border-color:var(--border);color:var(--text)">{{ draft_data.complex_attributes | tojson(indent=2) }}</textarea>
+                </details>
             </section>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {% for label, name, value, rows in [
-                ('Габариты и вес', 'dimensions_json', draft_data.dimensions, 10),
-                ('Media (images360 запрещён)', 'media_json', draft_data.media, 10),
-                ('Штрихкоды', 'barcodes_json', draft_data.barcodes, 8),
-                ('Цена и НДС', 'commercial_json', draft_data.commercial, 8)
-            ] %}
             <section class="sh-card p-4">
-                <h2 class="font-semibold" style="color:var(--text)">{{ label }}</h2>
-                <textarea name="{{ name }}" rows="{{ rows }}" class="mt-3 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
-                          style="border-color:var(--border);color:var(--text)">{{ value | tojson(indent=2) }}</textarea>
+                <h2 class="font-semibold" style="color:var(--text)">Габариты и вес</h2>
+                {% set dims = draft_data.dimensions or {} %}
+                {% if dims %}
+                <dl class="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm" style="color:var(--text)">
+                    {% for key, label in [('depth', 'Длина'), ('width', 'Ширина'), ('height', 'Высота'), ('weight', 'Вес')] %}
+                        {% if dims.get(key) is not none %}
+                        <div class="flex justify-between gap-3"><dt style="color:var(--text-secondary)">{{ label }}</dt>
+                            <dd>{{ dims.get(key) }} {{ dims.get('weight_unit' if key == 'weight' else 'dimension_unit', '') }}</dd></div>
+                        {% endif %}
+                    {% endfor %}
+                </dl>
+                {% else %}
+                <p class="mt-3 text-sm" style="color:var(--text-muted)">Не заполнено — Ozon требует явные габариты упаковки с единицами.</p>
+                {% endif %}
+                <details class="mt-3">
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <textarea name="dimensions_json" rows="8" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
+                              style="border-color:var(--border);color:var(--text)">{{ draft_data.dimensions | tojson(indent=2) }}</textarea>
+                </details>
             </section>
-            {% endfor %}
+
+            <section class="sh-card p-4">
+                <h2 class="font-semibold" style="color:var(--text)">Медиа</h2>
+                {% set media = draft_data.media or {} %}
+                {% set media_images = media.get('images', []) %}
+                {% if media.get('primary_image') or media_images %}
+                <p class="mt-3 text-sm" style="color:var(--text)">Фотографий: {{ (media_images | length) + (1 if media.get('primary_image') and media.get('primary_image') not in media_images else 0) }} <span class="text-xs" style="color:var(--text-muted)">(лимит Ozon — 30, images360 запрещён)</span></p>
+                <ul class="mt-2 text-xs" style="color:var(--text-muted);max-height:8rem;overflow-y:auto">
+                    {% if media.get('primary_image') %}<li>Главное: <a href="{{ media.get('primary_image') }}" target="_blank" rel="noopener" style="color:var(--accent)">{{ media.get('primary_image') | truncate(70) }}</a></li>{% endif %}
+                    {% for url in media_images[:10] %}<li><a href="{{ url }}" target="_blank" rel="noopener" style="color:var(--accent)">{{ url | truncate(70) }}</a></li>{% endfor %}
+                    {% if media_images | length > 10 %}<li>… и ещё {{ media_images | length - 10 }}</li>{% endif %}
+                </ul>
+                {% else %}
+                <p class="mt-3 text-sm" style="color:var(--text-muted)">Фото не заполнены — подтянутся из канонической карточки при валидации.</p>
+                {% endif %}
+                <details class="mt-3">
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <textarea name="media_json" rows="8" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
+                              style="border-color:var(--border);color:var(--text)">{{ draft_data.media | tojson(indent=2) }}</textarea>
+                </details>
+            </section>
+
+            <section class="sh-card p-4">
+                <h2 class="font-semibold" style="color:var(--text)">Штрихкоды</h2>
+                {% if draft_data.barcodes %}
+                <div class="mt-3 flex flex-wrap gap-2">
+                    {% for barcode in draft_data.barcodes %}<span class="sh-chip">{{ barcode }}</span>{% endfor %}
+                </div>
+                {% else %}
+                <p class="mt-3 text-sm" style="color:var(--text-muted)">Штрихкоды не заполнены.</p>
+                {% endif %}
+                <details class="mt-3">
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <textarea name="barcodes_json" rows="6" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
+                              style="border-color:var(--border);color:var(--text)">{{ draft_data.barcodes | tojson(indent=2) }}</textarea>
+                </details>
+            </section>
+
+            <section class="sh-card p-4">
+                <h2 class="font-semibold" style="color:var(--text)">Цена и НДС</h2>
+                {% set commercial = draft_data.commercial or {} %}
+                {% if commercial %}
+                <dl class="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm" style="color:var(--text)">
+                    {% if commercial.get('price') is not none %}<div class="flex justify-between gap-3"><dt style="color:var(--text-secondary)">Цена</dt><dd>{{ commercial.get('price') }} {{ commercial.get('currency_code', 'RUB') }}</dd></div>{% endif %}
+                    {% if commercial.get('old_price') %}<div class="flex justify-between gap-3"><dt style="color:var(--text-secondary)">Цена до скидки</dt><dd>{{ commercial.get('old_price') }}</dd></div>{% endif %}
+                    {% if commercial.get('vat') is not none %}<div class="flex justify-between gap-3"><dt style="color:var(--text-secondary)">НДС</dt><dd>{{ commercial.get('vat') }}</dd></div>{% endif %}
+                </dl>
+                {% else %}
+                <p class="mt-3 text-sm" style="color:var(--text-muted)">Не заполнено — Ozon требует явные цену, валюту RUB и ставку НДС.</p>
+                {% endif %}
+                <details class="mt-3">
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <textarea name="commercial_json" rows="6" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
+                              style="border-color:var(--border);color:var(--text)">{{ draft_data.commercial | tojson(indent=2) }}</textarea>
+                </details>
+            </section>
         </div>
         {% if ozon_enabled and not active_operation and draft.status != 'archived' %}
         <div class="flex justify-end"><button class="sh-btn sh-btn--primary" type="submit">Сохранить черновик</button></div>
         {% endif %}
     </form>
 
-    <details class="sh-card p-4 mt-5">
-        <summary class="font-semibold cursor-pointer" style="color:var(--text)">Fact snapshot и provenance</summary>
-        <p class="mt-2 text-xs" style="color:var(--text-muted)">Legacy AI suggestions видимы для review, но никогда не подставляются в physical/compliance payload автоматически.</p>
-        <pre class="mt-3 max-h-[40rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ {'facts': draft_data.source_facts, 'provenance': draft_data.provenance} | tojson(indent=2) }}</pre>
-    </details>
+    <section class="sh-card p-4 mt-5">
+        <h2 class="font-semibold" style="color:var(--text)">Снимок фактов и происхождение данных</h2>
+        <p class="mt-1 text-xs" style="color:var(--text-muted)">Проверенные факты из вашей карточки и данных поставщика. Предложения ИИ видны для проверки, но никогда не подставляются автоматически.</p>
+        {% set facts = draft_data.source_facts or {} %}
+        {% set provenance = draft_data.provenance or {} %}
+        {% set section_labels = {'identity': 'Идентичность', 'identifiers': 'Идентификаторы', 'attributes': 'Атрибуты', 'physical': 'Физические данные', 'media': 'Медиа', 'commercial': 'Цены'} %}
+        {% set fact_sections = facts.get('facts', facts) %}
+        {% if fact_sections %}
+        <div class="mt-3 flex flex-col gap-4">
+            {% for section, values in fact_sections.items() if values is mapping and values %}
+            <div>
+                <h3 class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:var(--text-muted)">{{ section_labels.get(section, section) }}</h3>
+                <table class="w-full text-sm">
+                    <tbody>
+                    {% for name, value in values.items() %}
+                    <tr style="border-top:1px solid var(--border)">
+                        <td class="py-1 pr-3 align-top" style="color:var(--text-secondary);min-width:140px;white-space:nowrap">{{ name }}</td>
+                        <td class="py-1 pr-3 align-top" style="color:var(--text);word-break:break-word">{{ fact_value(value) }}</td>
+                        <td class="py-1 align-top text-right" style="white-space:nowrap">{{ trust_badge((provenance.get(section ~ '.' ~ name) or {}).get('trust')) }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="mt-3 text-sm" style="color:var(--text-muted)">Снимок фактов пуст — нажмите «Обновить факты», чтобы собрать его из канонической карточки.</p>
+        {% endif %}
+        {% set suggestions = facts.get('unverified_suggestions', {}) %}
+        {% if suggestions %}
+        <details class="mt-4">
+            <summary class="text-xs cursor-pointer" style="color:var(--warn)">Непроверенные предложения ({{ suggestions | length }}) — не применяются автоматически</summary>
+            <table class="mt-2 w-full text-sm">
+                <tbody>
+                {% for name, value in suggestions.items() %}
+                <tr style="border-top:1px solid var(--border)">
+                    <td class="py-1 pr-3 align-top" style="color:var(--text-secondary);min-width:140px">{{ name }}</td>
+                    <td class="py-1 align-top" style="color:var(--text);word-break:break-word">{{ fact_value(value) }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </details>
+        {% endif %}
+        <details class="mt-3">
+            <summary class="text-xs cursor-pointer" style="color:var(--text-muted)">Полный снимок (JSON)</summary>
+            <pre class="mt-2 max-h-[30rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ {'facts': draft_data.source_facts, 'provenance': draft_data.provenance} | tojson(indent=2) }}</pre>
+        </details>
+    </section>
 
     <section class="sh-card p-4 mt-5" aria-labelledby="ozon-publication-heading">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
                 <h2 id="ozon-publication-heading" class="font-semibold" style="color:var(--text)">Публикация Ozon</h2>
                 <p class="mt-1 text-xs" style="color:var(--text-muted)">
-                    Для новой карточки проверяется отсутствие offer_id. Для связанного listing выполняется exact identity + полный live snapshot и replace-style update. Неопределённый HTTP-результат никогда не повторяется автоматически.
+                    Для новой карточки проверяется отсутствие такого артикула в Ozon. Для уже связанной карточки на Ozon выполняется точная проверка идентичности, полный снимок текущего состояния и полная замена данных. Неопределённый результат запроса никогда не повторяется автоматически.
                 </p>
             </div>
             <a class="text-sm shrink-0" style="color:var(--accent)" href="{{ url_for('marketplace_operations.index') }}">Все операции</a>
@@ -277,11 +489,11 @@
         {% if publication_enabled and draft.status == 'ready' and draft.validation_status == 'valid' and not active_operation %}
         <form class="mt-4" method="post"
               action="{{ url_for('marketplace_operations.update_draft', draft_id=draft.id) if draft.published_listing_id else url_for('marketplace_operations.publish_draft', draft_id=draft.id) }}"
-              onsubmit="return confirm('{{ 'Полностью заменить данные существующей карточки проверенным черновиком?' if draft.published_listing_id else 'Отправить полностью проверенный черновик в Ozon?' }} Операция будет зафиксирована до API write.')">
+              onsubmit="return confirm('{{ 'Полностью заменить данные существующей карточки проверенным черновиком?' if draft.published_listing_id else 'Отправить полностью проверенный черновик в Ozon?' }} Операция будет зафиксирована до отправки запроса в Ozon.')">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="expected_version" value="{{ draft.version }}">
             <input type="hidden" name="idempotency_key" value="{{ publication_idempotency_key }}">
-            {% if draft.published_listing_id %}<label class="mb-3 flex items-start gap-2 text-sm" style="color:var(--text-secondary)"><input type="checkbox" name="confirm_write" value="1" required><span>Понимаю: Ozon требует полный payload, текущая карточка будет заменена целиком после повторной live-проверки.</span></label>{% endif %}
+            {% if draft.published_listing_id %}<label class="mb-3 flex items-start gap-2 text-sm" style="color:var(--text-secondary)"><input type="checkbox" name="confirm_write" value="1" required><span>Понимаю: Ozon требует полный набор данных, текущая карточка будет заменена целиком после повторной проверки текущего состояния.</span></label>{% endif %}
             <button class="sh-btn sh-btn--primary" type="submit">{{ 'Обновить существующую карточку' if draft.published_listing_id else 'Опубликовать подтверждённый черновик' }}</button>
         </form>
         {% elif active_operation %}
@@ -293,7 +505,7 @@
             Публикация подтверждена. <a style="color:var(--accent)" href="{{ url_for('marketplace_listings.detail', listing_id=draft.published_listing_id) }}">Открыть листинг</a>.
         </p>
         {% elif not publication_enabled %}
-        <p class="mt-3 text-sm" style="color:var(--text-secondary)">Новые write-операции выключены настройкой <code>MARKETPLACE_OZON_PUBLICATION_ENABLED</code>. Уже отправленные операции продолжают сверяться.</p>
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">Новые операции записи выключены настройкой <code>MARKETPLACE_OZON_PUBLICATION_ENABLED</code>. Уже отправленные операции продолжают сверяться.</p>
         {% else %}
         <p class="mt-3 text-sm" style="color:var(--text-secondary)">Сначала исправьте ошибки и получите статус <code>ready / valid</code>.</p>
         {% endif %}
@@ -303,8 +515,8 @@
             {% for item in operations %}
             <a class="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between"
                href="{{ url_for('marketplace_operations.detail', operation_id=item.id) }}">
-                <span class="text-sm" style="color:var(--text)">#{{ item.id }} · {{ item.operation_kind }}</span>
-                <span class="text-xs" style="color:var(--text-muted)">{{ item.status }} · {{ item.created_at.strftime('%d.%m.%Y %H:%M:%S') if item.created_at else '—' }}</span>
+                <span class="text-sm" style="color:var(--text)">#{{ item.id }} · {{ operation_kind_labels.get(item.operation_kind, item.operation_kind) }}</span>
+                <span class="text-xs" style="color:var(--text-muted)">{{ operation_status_labels.get(item.status, item.status) }} · {{ item.created_at.strftime('%d.%m.%Y %H:%M:%S') if item.created_at else '—' }}</span>
             </a>
             {% endfor %}
         </div>

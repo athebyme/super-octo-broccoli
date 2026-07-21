@@ -755,5 +755,33 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertEqual(refreshed.content_json, before_content)
 
 
+    def test_suggest_product_types_lexical_and_only_without_type(self):
+        product = self._product(external_id="suggest-1")
+        product.mapped_wb_category = "Футболка"
+        db.session.commit()
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            corrected_by_user_id=1,
+        )
+        suggestions = MarketplaceDraftService.suggest_product_types(
+            seller_id=self.seller1_id, draft_id=draft.id,
+        )
+        self.assertTrue(suggestions)
+        self.assertEqual(suggestions[0]["name"], "Футболка")
+        self.assertEqual(suggestions[0]["score"], 100)
+        self.assertEqual(suggestions[0]["matched_source"], "wb_subject")
+
+        # У черновика с уже выбранным типом предложений нет
+        _, typed_draft = self._ready_draft(external_id="suggest-2")
+        self.assertEqual(
+            MarketplaceDraftService.suggest_product_types(
+                seller_id=self.seller1_id, draft_id=typed_draft.id,
+            ),
+            [],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

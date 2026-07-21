@@ -14,10 +14,16 @@ class OzonFulfillmentContractError(ValueError):
     """A local request or provider response violates the bounded contract."""
 
 
-POSTING_PAGE_LIMIT = 1000
+FBS_POSTING_PAGE_LIMIT = 100
+FBO_POSTING_PAGE_LIMIT = 100
+POSTING_PAGE_LIMITS = {
+    "fbs": FBS_POSTING_PAGE_LIMIT,
+    "fbo": FBO_POSTING_PAGE_LIMIT,
+}
 RETURN_PAGE_LIMIT = 500
 MAX_PERIOD_DAYS = 31
 MAX_ITEMS_PER_POSTING = 1000
+MAX_POSTING_CURSOR_LENGTH = 4096
 FULFILLMENT_KINDS = {"fbo", "fbs"}
 
 
@@ -80,6 +86,21 @@ def _identifier(
             raise OzonFulfillmentContractError(f"{field_name} must be positive")
         value = str(value)
     return _text(value, field_name, maximum=maximum, optional=optional)
+
+
+def _opaque_cursor(value: Any, field_name: str) -> str:
+    """Validate a provider cursor without interpreting or coercing it."""
+    if not isinstance(value, str):
+        raise OzonFulfillmentContractError(f"{field_name} must be a string")
+    if len(value) > MAX_POSTING_CURSOR_LENGTH:
+        raise OzonFulfillmentContractError(
+            f"{field_name} exceeds {MAX_POSTING_CURSOR_LENGTH} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise OzonFulfillmentContractError(
+            f"{field_name} contains control characters"
+        )
+    return value
 
 
 def _decimal(
@@ -183,24 +204,25 @@ def build_posting_request(
     fulfillment_kind: str,
     period_start: Any,
     period_end: Any,
-    offset: Any = 0,
-    limit: Any = POSTING_PAGE_LIMIT,
+    cursor: Any = "",
+    limit: Any = None,
 ) -> Dict[str, Any]:
-    """Build the minimal FBO/FBS request without analytics, PII or finance."""
+    """Build a current cursor-paginated posting request without enrichment."""
     if fulfillment_kind not in FULFILLMENT_KINDS:
         raise OzonFulfillmentContractError("fulfillment_kind is unsupported")
+    page_limit = POSTING_PAGE_LIMITS[fulfillment_kind]
+    if limit is None:
+        limit = page_limit
     start, end = _period(period_start, period_end)
-    normalized_offset = _integer(
-        offset, "offset", minimum=0, maximum=10_000_000
-    )
+    normalized_cursor = _opaque_cursor(cursor, "cursor")
     normalized_limit = _integer(
-        limit, "limit", minimum=1, maximum=POSTING_PAGE_LIMIT
+        limit, "limit", minimum=1, maximum=page_limit
     )
     payload: Dict[str, Any] = {
         "dir": "ASC",
         "filter": {"since": _rfc3339(start), "to": _rfc3339(end)},
         "limit": normalized_limit,
-        "offset": normalized_offset,
+        "cursor": normalized_cursor,
         "with": {"analytics_data": False, "financial_data": False},
     }
     if fulfillment_kind == "fbs":
@@ -438,30 +460,25 @@ def normalize_posting_response(
     *,
     fulfillment_kind: str,
     requested_limit: int,
-    requested_offset: int,
+    requested_cursor: str,
 ) -> Dict[str, Any]:
     if fulfillment_kind not in FULFILLMENT_KINDS:
         raise OzonFulfillmentContractError("fulfillment_kind is unsupported")
+    page_limit = POSTING_PAGE_LIMITS[fulfillment_kind]
     limit = _integer(
-        requested_limit, "requested_limit", minimum=1, maximum=POSTING_PAGE_LIMIT
+        requested_limit, "requested_limit", minimum=1, maximum=page_limit
     )
-    offset = _integer(
-        requested_offset, "requested_offset", minimum=0, maximum=10_000_000
-    )
+    cursor = _opaque_cursor(requested_cursor, "requested_cursor")
     envelope = _mapping(response, "posting response")
-    result = envelope.get("result")
-    explicit_has_next: Optional[bool] = None
-    if isinstance(result, list):
-        raw_rows = result
-    else:
-        result = _mapping(result, "posting response.result")
-        raw_rows = result.get("postings")
-        if "has_next" in result:
-            explicit_has_next = result.get("has_next")
-            if not isinstance(explicit_has_next, bool):
-                raise OzonFulfillmentContractError(
-                    "posting response.result.has_next must be boolean"
-                )
+    raw_rows = envelope.get("postings")
+    has_next = envelope.get("has_next")
+    if not isinstance(has_next, bool):
+        raise OzonFulfillmentContractError(
+            "posting response.has_next must be boolean"
+        )
+    response_cursor = _opaque_cursor(
+        envelope.get("cursor"), "posting response.cursor"
+    )
     rows = _bounded_rows(raw_rows, "posting response rows", limit=limit)
     normalized = []
     seen = set()
@@ -477,15 +494,18 @@ def normalize_posting_response(
             )
         seen.add(item["posting_number"])
         normalized.append(item)
-    has_next = explicit_has_next if explicit_has_next is not None else len(rows) == limit
     if has_next and not rows:
         raise OzonFulfillmentContractError(
             "posting response cannot continue after an empty page"
         )
+    if has_next and (not response_cursor or response_cursor == cursor):
+        raise OzonFulfillmentContractError(
+            "posting response cursor must advance while has_next is true"
+        )
     return {
         "rows": normalized,
         "has_next": has_next,
-        "next_offset": offset + len(rows),
+        "next_cursor": response_cursor if has_next else None,
     }
 
 
@@ -667,7 +687,11 @@ def normalize_rfbs_return_response(
         rows.append(item)
     explicit_last_id = envelope.get("last_id")
     if explicit_last_id is None:
-        raise OzonFulfillmentContractError("rFBS returns.last_id is required")
+        if rows:
+            raise OzonFulfillmentContractError(
+                "rFBS returns.last_id is required for a non-empty page"
+            )
+        return {"rows": [], "has_next": False, "next_last_id": last_id}
     next_last_id = _integer(
         explicit_last_id,
         "rFBS returns.last_id",

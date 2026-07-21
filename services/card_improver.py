@@ -35,6 +35,26 @@ _GENERATIVE_FIELD_MAP: Dict[str, List] = {
 }
 
 
+def _upload_photos_by_url_locked(wb_client, *, seller_id, nm_id, photo_urls):
+    """Serialize this legacy gallery replace with every WB media writer."""
+    from services.marketplace_operation_locks import (
+        release_wb_seller_media_lock,
+        try_wb_seller_media_lock,
+    )
+
+    claim = try_wb_seller_media_lock(seller_id)
+    if claim is None:
+        raise RuntimeError('wb_media_operation_busy')
+    try:
+        return wb_client.upload_photos_by_url(
+            nm_id,
+            photo_urls,
+            seller_id=seller_id,
+        )
+    finally:
+        release_wb_seller_media_lock(claim)
+
+
 def _build_wb_updates(clean: Dict[str, Any]) -> Dict[str, Any]:
     """Из отфильтрованных явных значений строит payload для WB update_card.
 
@@ -222,8 +242,12 @@ def apply_card_updates_bulk(
                 wb_error = 'Некорректные URL фото — media/save не выполнен'
             else:
                 try:
-                    wb_client.upload_photos_by_url(
-                        product.nm_id, photos_to_send, seller_id=seller.id)
+                    _upload_photos_by_url_locked(
+                        wb_client,
+                        seller_id=seller.id,
+                        nm_id=product.nm_id,
+                        photo_urls=photos_to_send,
+                    )
                     product.photos_json = json.dumps(photos_to_send, ensure_ascii=False)
                     fields_applied.append('photos')
                     wb_sync_success = True
@@ -387,10 +411,11 @@ def apply_card_updates(
             wb_error = 'Некорректные URL фото — media/save не выполнен'
         else:
             try:
-                wb_client.upload_photos_by_url(
-                    product.nm_id,
-                    photos_to_send,
+                _upload_photos_by_url_locked(
+                    wb_client,
                     seller_id=seller.id,
+                    nm_id=product.nm_id,
+                    photo_urls=photos_to_send,
                 )
                 wb_sync_success = True
                 product.photos_json = json.dumps(photos_to_send, ensure_ascii=False)

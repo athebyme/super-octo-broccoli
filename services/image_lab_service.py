@@ -31,7 +31,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from sqlalchemy import func
 
-from models import ImageGenerationExperiment, ImportedProduct, db
+from models import ImageGenerationExperiment, ImportedProduct, Product, db
 from services.infographic_prompts import (
     ATMOSPHERE_PRESETS,
     build_angle_prompt,
@@ -126,6 +126,8 @@ BACKENDS = {
                 "label": "Nano Banana 2 Lite",
                 "cost_rub": 3.30,
                 "resolution": "1K",
+                "aspect_ratio": "3:4",
+                "profile_label": "1K",
                 "max_references": 10,
                 "supported_strategies": frozenset({
                     "background_only", "native_scene", "angle_synthesis",
@@ -135,6 +137,8 @@ BACKENDS = {
                 "label": "Nano Banana 2",
                 "cost_rub": 8.50,
                 "resolution": "2K",
+                "aspect_ratio": "3:4",
+                "profile_label": "2K",
                 "max_references": 10,
                 "supported_strategies": frozenset({
                     "background_only", "native_scene", "angle_synthesis",
@@ -144,7 +148,26 @@ BACKENDS = {
                 "label": "Grok Imagine Quality",
                 "cost_rub": 8.50,
                 "resolution": "2K",
+                "aspect_ratio": "3:4",
+                "profile_label": "2K",
                 "max_references": 3,
+                "supported_strategies": frozenset({
+                    "background_only", "native_scene", "angle_synthesis",
+                }),
+            },
+            "openai/gpt-image-2": {
+                "label": "GPT Image 2 · Medium",
+                # Conservative square-output estimate. OpenRouter bills exact
+                # output tokens, and reference-image input can vary per job.
+                "cost_rub": 4.50,
+                "resolution": None,
+                "aspect_ratio": None,
+                "quality": "medium",
+                "background": "opaque",
+                "profile_label": "Medium · автоформат",
+                # OpenRouter currently advertises 16; the Image Lab UI has a
+                # stricter product-level limit of 10 selected photos.
+                "max_references": 10,
                 "supported_strategies": frozenset({
                     "background_only", "native_scene", "angle_synthesis",
                 }),
@@ -315,6 +338,14 @@ def capabilities() -> Dict[str, Any]:
                         "cost_rub": _model_cost(key, model),
                         "resolution": (
                             details.get("resolution")
+                            if isinstance(details, dict) else None
+                        ),
+                        "quality": (
+                            details.get("quality")
+                            if isinstance(details, dict) else None
+                        ),
+                        "profile_label": (
+                            details.get("profile_label")
                             if isinstance(details, dict) else None
                         ),
                         "max_references": (
@@ -809,6 +840,17 @@ def create_experiments(
     if not product:
         raise ImageLabError("Товар не найден")
     photos = photo_entries(product.photo_urls)
+    if not photos:
+        fallback_urls = exact_linked_wb_photo_urls(product)
+        if fallback_urls:
+            # Persist only at the seller-confirmed experiment boundary. Browser
+            # previews use the same exact link without mutating on GET.
+            product.photo_urls = json.dumps(
+                fallback_urls,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            photos = photo_entries(product.photo_urls)
     if not photos:
         raise ImageLabError("У товара нет исходного фото")
     target_context = validate_marketplace_target(
@@ -1407,9 +1449,18 @@ def _generate_provider_output(experiment: ImageGenerationExperiment) -> bytes:
     elif experiment.backend == "openrouter":
         config.openrouter_model = experiment.model
         details = BACKENDS["openrouter"]["models"].get(experiment.model, {})
-        config.openrouter_resolution = str(
-            details.get("resolution") or CHAT_IMAGE_RESOLUTION
-        )
+        if details:
+            config.openrouter_resolution = str(details.get("resolution") or "")
+            config.openrouter_aspect_ratio = str(details.get("aspect_ratio") or "")
+            config.openrouter_quality = details.get("quality")
+            config.openrouter_background = details.get("background")
+        else:
+            # Historical rows may reference a model removed from the current
+            # allowlist; retain the old defaults only for finishing that row.
+            config.openrouter_resolution = CHAT_IMAGE_RESOLUTION
+            config.openrouter_aspect_ratio = "3:4"
+            config.openrouter_quality = None
+            config.openrouter_background = None
     service = ImageGenerationService(config)
     strategy = experiment.generation_strategy or "background_only"
     if strategy in {"reference_guided", "native_scene", "angle_synthesis"}:
@@ -1894,6 +1945,75 @@ def photo_count(raw: Any) -> int:
     return len(photo_entries(raw))
 
 
+def _exact_linked_wb_product(source: ImportedProduct) -> Optional[Product]:
+    """Resolve only the explicit seller-owned ImportedProduct -> Product link."""
+    product_id = getattr(source, "product_id", None)
+    seller_id = getattr(source, "seller_id", None)
+    if (
+        isinstance(product_id, bool)
+        or not isinstance(product_id, int)
+        or product_id <= 0
+        or isinstance(seller_id, bool)
+        or not isinstance(seller_id, int)
+        or seller_id <= 0
+    ):
+        return None
+    return Product.query.filter_by(id=product_id, seller_id=seller_id).first()
+
+
+def exact_linked_wb_photo_count(source: ImportedProduct) -> int:
+    """Count usable slots in the exact linked published WB gallery.
+
+    Historical ``Product.photos_json`` rows may contain positive WB photo
+    indices instead of URLs. Counting those slots is local and does not probe
+    the CDN; URL expansion happens only when a preview or confirmed job needs it.
+    """
+    product = _exact_linked_wb_product(source)
+    if product is None:
+        return 0
+    values = _json_load(product.photos_json, [])
+    if not isinstance(values, list):
+        return 0
+    count = 0
+    for value in values[:MAX_SELECTED_PHOTOS]:
+        if isinstance(value, str) and re.match(
+            r"^https?://", value.strip(), flags=re.IGNORECASE,
+        ):
+            count += 1
+        elif isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            count += 1
+    return count
+
+
+def exact_linked_wb_photo_urls(source: ImportedProduct) -> List[str]:
+    """Expand the exact linked WB gallery into bounded public source URLs."""
+    product = _exact_linked_wb_product(source)
+    if product is None:
+        return []
+    values = _json_load(product.photos_json, [])
+    if not isinstance(values, list):
+        return []
+    from services.wb_media import normalize_photo_urls
+
+    urls = normalize_photo_urls(product.nm_id, values[:MAX_SELECTED_PHOTOS], "big")
+    result = []
+    for value in urls:
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if not re.match(r"^https?://", value, flags=re.IGNORECASE):
+            continue
+        if value not in result:
+            result.append(value)
+    return result[:MAX_SELECTED_PHOTOS]
+
+
+def effective_photo_count(source: ImportedProduct) -> int:
+    """Count canonical sources, falling back only through an exact WB link."""
+    stored = photo_count(source.photo_urls)
+    return stored if stored else exact_linked_wb_photo_count(source)
+
+
 def validate_photo_indices(values: Optional[Iterable[int]], count: int) -> List[int]:
     if values is None:
         values = [0]
@@ -2033,6 +2153,8 @@ def fetch_original_product_bytes(
     prefer_preview: bool = False,
 ) -> bytes:
     entries = photo_entries(product.photo_urls)
+    if not entries:
+        entries = photo_entries(exact_linked_wb_photo_urls(product))
     selected = validate_photo_indices([photo_index], len(entries))[0]
     entry = entries[selected]
     candidates = (

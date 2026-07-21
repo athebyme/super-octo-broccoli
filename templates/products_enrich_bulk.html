@@ -1,409 +1,448 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
 
-{% block title %}Массовое обогащение от поставщика{% endblock %}
+{% block title %}Массовое обновление фото WB — Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-<div x-data="bulkEnrichApp({{ product_ids_json }})" x-cloak class="max-w-4xl mx-auto">
+<style>
+  .be-shell { max-width: 1040px; margin: 0 auto; }
+  .be-header-meta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  .be-header-pill { display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border:1px solid rgba(255,255,255,.16); border-radius:var(--r-pill); color:rgba(255,255,255,.82); font-size:12px; }
+  .be-grid { display:grid; grid-template-columns:minmax(0, 1fr) 280px; gap:16px; align-items:start; }
+  .be-action-card { display:flex; gap:14px; align-items:flex-start; padding:16px; border:1px solid var(--accent); border-radius:var(--r-md); background:var(--accent-light); }
+  .be-action-icon { width:42px; height:42px; flex:0 0 42px; display:flex; align-items:center; justify-content:center; border-radius:var(--r-md); color:var(--accent); background:var(--bg-card); border:1px solid var(--border); }
+  .be-action-icon svg { width:21px; height:21px; }
+  .be-check { width:18px; height:18px; margin-top:2px; accent-color:var(--accent); cursor:pointer; }
+  .be-title { color:var(--text); font-weight:600; font-size:14px; }
+  .be-copy { color:var(--text-secondary); font-size:12px; line-height:1.55; margin-top:3px; }
+  .be-mode-list { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; margin-top:14px; }
+  .be-mode { position:relative; display:block; padding:13px 14px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--bg-card); cursor:pointer; transition:border-color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out); }
+  .be-mode:hover { background:var(--bg-hover); }
+  .be-mode:has(input:focus-visible) { outline:2px solid var(--focus-ring); outline-offset:2px; }
+  .be-mode.is-active { border-color:var(--accent); background:var(--accent-light); }
+  .be-mode input { position:absolute; opacity:0; pointer-events:none; }
+  .be-mode-name { display:flex; align-items:center; gap:7px; color:var(--text); font-size:13px; font-weight:600; }
+  .be-mode-dot { width:9px; height:9px; border:2px solid var(--text-muted); border-radius:50%; background:transparent; }
+  .be-mode.is-active .be-mode-dot { border-color:var(--accent); background:var(--accent); box-shadow:inset 0 0 0 2px var(--bg-card); }
+  .be-mode-desc { display:block; margin-top:5px; color:var(--text-muted); font-size:11px; line-height:1.45; }
+  .be-advanced { margin-top:16px; border-top:1px solid var(--border-light); padding-top:14px; }
+  .be-advanced summary { display:flex; align-items:center; gap:8px; color:var(--text-secondary); font-size:13px; font-weight:500; cursor:pointer; list-style:none; width:max-content; }
+  .be-advanced summary::-webkit-details-marker { display:none; }
+  .be-advanced summary svg { transition:transform var(--dur-2) var(--ease-out); }
+  .be-advanced[open] summary svg { transform:rotate(90deg); }
+  .be-fields { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; margin-top:12px; }
+  .be-field { display:flex; align-items:flex-start; gap:10px; min-width:0; padding:12px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--bg); cursor:pointer; }
+  .be-field:hover { background:var(--bg-hover); }
+  .be-field input { width:16px; height:16px; margin-top:1px; accent-color:var(--accent); flex-shrink:0; }
+  .be-summary { position:sticky; top:76px; }
+  .be-summary-list { display:flex; flex-direction:column; gap:11px; }
+  .be-summary-row { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--border-light); }
+  .be-summary-row:last-child { border-bottom:0; padding-bottom:0; }
+  .be-summary-label { color:var(--text-muted); font-size:12px; }
+  .be-summary-value { color:var(--text); font-size:13px; font-weight:600; text-align:right; }
+  .be-actions { display:flex; flex-direction:column; gap:8px; margin-top:18px; }
+  .be-actions .sh-btn { justify-content:center; width:100%; }
+  .be-status-head { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  .be-status-main { display:flex; align-items:center; gap:12px; }
+  .be-status-icon { width:40px; height:40px; display:flex; align-items:center; justify-content:center; border-radius:var(--r-md); background:var(--accent-light); color:var(--accent); }
+  .be-status-icon.is-ok { background:var(--ok-bg); color:var(--ok); }
+  .be-status-icon.is-error { background:var(--danger-bg); color:var(--danger); }
+  .be-stat-grid { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; margin-top:18px; }
+  .be-stat { padding:13px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--bg); }
+  .be-stat-value { display:block; color:var(--text); font-size:21px; font-weight:650; font-variant-numeric:tabular-nums; }
+  .be-stat-label { color:var(--text-muted); font-size:11px; }
+  .be-result-wrap { max-height:440px; overflow:auto; }
+  .be-result-title { display:flex; align-items:center; gap:8px; }
+  .be-result-status { display:inline-flex; align-items:center; padding:3px 8px; border-radius:var(--r-pill); font-size:11px; font-weight:600; white-space:nowrap; }
+  .be-result-status.is-success { color:var(--ok); background:var(--ok-bg); }
+  .be-result-status.is-skipped { color:var(--warn); background:var(--warn-bg); }
+  .be-result-status.is-failed { color:var(--danger); background:var(--danger-bg); }
+  .be-muted { color:var(--text-muted); }
+  @media (max-width: 820px) {
+    .be-grid { grid-template-columns:1fr; }
+    .be-summary { position:static; }
+    .be-summary-list { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); }
+    .be-summary-row { display:block; border-bottom:0; padding:0; }
+    .be-summary-value { display:block; text-align:left; margin-top:2px; }
+  }
+  @media (max-width: 600px) {
+    .be-mode-list, .be-fields { grid-template-columns:1fr; }
+    .be-stat-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .be-summary-list { grid-template-columns:1fr; }
+    .be-summary-row { display:flex; }
+    .be-summary-value { text-align:right; margin-top:0; }
+    .be-header-pill { width:100%; }
+  }
+</style>
 
-  <!-- Hero Banner -->
-  <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
-    <div class="relative flex items-center gap-3">
-      <a href="{{ url_for('products_list') }}"
-         class="text-white/70 hover:text-white transition-colors">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
-        </svg>
-      </a>
+<div class="be-shell" x-data="bulkEnrichApp({{ product_ids_json }})" x-cloak>
+  <div class="sh-page-header">
+    <div class="sh-page-header-content">
       <div>
-        <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Массовое обогащение от поставщика</h1>
-        <p class="mt-2 text-sm text-gray-400">
-          Выбрано карточек: <span class="font-semibold text-white">{{ count }}</span>
-          {% if matched_count is defined %}
-          <span class="mx-1.5 text-gray-500">|</span>
-          С данными поставщика: <span class="font-semibold text-green-400">{{ matched_count }}</span>
-          {% if matched_count < count %}
-          <span class="text-xs text-gray-500 ml-1">({{ count - matched_count }} будут пропущены)</span>
-          {% endif %}
-          {% endif %}
-        </p>
+        <h1 class="sh-page-title">Массовое обновление фото</h1>
+        <p class="sh-page-subtitle">Один запуск — все выбранные карточки WB. Ошибка одной карточки не остановит остальные.</p>
+        <div class="be-header-meta">
+          <span class="be-header-pill">{{ icon('check-circle', size=15) }} Выбрано: {{ count }}</span>
+          <span class="be-header-pill">{{ icon('image', size=15) }} С фото поставщика: {{ photo_ready_count }}</span>
+        </div>
       </div>
+      <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--white-outline sh-btn--md">
+        <span class="sh-btn-icon">{{ icon('arrow-left', size=16) }}</span>
+        К карточкам
+      </a>
     </div>
   </div>
 
-  <!-- КОНФИГУРАЦИЯ -->
-  <div x-show="phase === 'config'" class="space-y-5">
-
-    <!-- Инфо-блок -->
-    {% if matched_count is defined and matched_count < count %}
-    <div class="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
-      <svg class="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-      </svg>
-      <div>
-        <p class="text-sm font-semibold text-blue-800">Не все карточки будут обогащены</p>
-        <p class="text-xs text-blue-700 mt-0.5">
-          У {{ count - matched_count }} карточек нет привязки к данным поставщика.
-          Они будут пропущены. Чтобы привязать их, откройте каждую карточку и используйте ручной поиск поставщика.
-        </p>
+  <section x-show="phase === 'config'" aria-labelledby="bulk-config-title">
+    {% if photo_ready_count < count %}
+    <div class="sh-alert sh-alert--warning" role="status">
+      <div class="sh-alert-icon">{{ icon('warning', size=18) }}</div>
+      <div class="sh-alert-content">
+        У {{ count - photo_ready_count }} из {{ count }} карточек сейчас нет доступных фото поставщика — они будут честно отмечены как пропущенные. Остальные продолжат обновляться.
       </div>
     </div>
     {% endif %}
 
-    <!-- Выбор полей -->
-    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-      <h2 class="text-base font-semibold text-gray-900 mb-4">Что применить из данных поставщика</h2>
-      <div class="space-y-3">
-
-        <div class="flex items-center justify-between py-3 border-b border-gray-100">
-          <label class="flex items-center gap-3 cursor-pointer flex-1">
-            <input type="checkbox" x-model="fields.photos"
-                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
-            <div>
-              <span class="font-medium text-gray-800 text-sm">Фотографии</span>
-              <p class="text-xs text-gray-500 mt-0.5">Фото из каталога поставщика</p>
-            </div>
-          </label>
-          <div x-show="fields.photos" x-transition class="flex items-center gap-2 ml-4">
-            <select x-model="photoStrategy"
-                    class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-indigo-500">
-              <option value="only_if_empty">Только если нет фото</option>
-              <option value="append">Добавить в конец</option>
-              <option value="replace">Заменить все</option>
-            </select>
+    <div class="be-grid">
+      <div class="sh-card">
+        <div class="sh-card-header">
+          <div>
+            <h2 id="bulk-config-title" class="sh-card-title">Что обновить</h2>
+            <p class="be-copy">По умолчанию выбраны только фотографии. Название, описание и характеристики не изменятся.</p>
           </div>
         </div>
 
-        <!-- Пояснение по стратегии фото -->
-        <div x-show="fields.photos" x-transition class="py-2 px-3 -mt-1 mb-1">
-          <div x-show="photoStrategy === 'only_if_empty'" class="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-            <p class="text-xs text-green-700">
-              <span class="font-semibold">Безопасный режим:</span> Фото будут загружены только для карточек, у которых ещё нет фотографий на WB.
-              Это рекомендуемый вариант для массовых операций — ваши вручную загруженные фото не пострадают.
-            </p>
+        <div class="be-action-card">
+          <div class="be-action-icon">{{ icon('image', size=22) }}</div>
+          <label class="flex items-start gap-3 flex-1 cursor-pointer">
+            <input type="checkbox" x-model="fields.photos" class="be-check" aria-label="Обновить фотографии">
+            <span>
+              <span class="be-title">Фотографии</span>
+              <span class="be-copy block">Актуальная галерея поставщика будет последовательно загружена во все выбранные карточки WB.</span>
+            </span>
+          </label>
+        </div>
+
+        <div x-show="fields.photos" x-transition>
+          <div class="be-mode-list" role="radiogroup" aria-label="Режим обновления фотографий">
+            <label class="be-mode" :class="{'is-active': photoStrategy === 'replace'}">
+              <input type="radio" x-model="photoStrategy" value="replace">
+              <span class="be-mode-name"><span class="be-mode-dot"></span>Обновить галерею</span>
+              <span class="be-mode-desc">Подходит для дообновления существующих карточек: фото поставщика загружаются заново по порядку.</span>
+            </label>
+            <label class="be-mode" :class="{'is-active': photoStrategy === 'only_if_empty'}">
+              <input type="radio" x-model="photoStrategy" value="only_if_empty">
+              <span class="be-mode-name"><span class="be-mode-dot"></span>Только без фото</span>
+              <span class="be-mode-desc">Карточки, где WB-фото уже есть, будут пропущены без ошибки.</span>
+            </label>
           </div>
-          <div x-show="photoStrategy === 'append'" class="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-            <p class="text-xs text-blue-700">
-              <span class="font-semibold">Добавление:</span> Фото поставщика будут добавлены после текущих фото каждой карточки.
-              Это может привести к дублированию, если фото поставщика уже были загружены ранее.
-            </p>
+        </div>
+
+        <details class="be-advanced">
+          <summary>
+            {{ icon('chevron-right', size=16) }}
+            Дополнительно обновить другие поля
+            <span class="sh-badge sh-badge--gray sh-badge--sm" x-text="extraFieldsCount ? extraFieldsCount + ' выбрано' : 'не выбрано'"></span>
+          </summary>
+          <div class="be-fields">
+            <label class="be-field">
+              <input type="checkbox" x-model="fields.title">
+              <span><span class="be-title block">Заголовок</span><span class="be-copy block">SEO-название поставщика</span></span>
+            </label>
+            <label class="be-field">
+              <input type="checkbox" x-model="fields.description">
+              <span><span class="be-title block">Описание</span><span class="be-copy block">Полное описание товара</span></span>
+            </label>
+            <label class="be-field">
+              <input type="checkbox" x-model="fields.characteristics">
+              <span><span class="be-title block">Характеристики</span><span class="be-copy block">Только после проверки словарей WB</span></span>
+            </label>
+            <label class="be-field">
+              <input type="checkbox" x-model="fields.dimensions">
+              <span><span class="be-title block">Габариты</span><span class="be-copy block">Длина, ширина, высота и вес</span></span>
+            </label>
+            <label class="be-field">
+              <input type="checkbox" x-model="fields.brand">
+              <span><span class="be-title block">Бренд</span><span class="be-copy block" style="color:var(--warn)">Может повлиять на SEO и позиции</span></span>
+            </label>
           </div>
-          <div x-show="photoStrategy === 'replace'" class="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            <p class="text-xs text-amber-700">
-              <span class="font-semibold">Замена:</span> Все текущие фото карточек будут заменены фотографиями поставщика.
-              <span class="font-bold">Осторожно!</span> Если вы загружали фото вручную на WB, они будут потеряны.
-              Для точечной работы с фото используйте обогащение каждой карточки отдельно.
-            </p>
-          </div>
-        </div>
-
-        <div class="flex items-center justify-between py-3 border-b border-gray-100">
-          <label class="flex items-center gap-3 cursor-pointer flex-1">
-            <input type="checkbox" x-model="fields.title"
-                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
-            <div>
-              <span class="font-medium text-gray-800 text-sm">Заголовок</span>
-              <p class="text-xs text-gray-500 mt-0.5">SEO-название от поставщика (до 60 символов)</p>
-            </div>
-          </label>
-        </div>
-
-        <div class="flex items-center justify-between py-3 border-b border-gray-100">
-          <label class="flex items-center gap-3 cursor-pointer flex-1">
-            <input type="checkbox" x-model="fields.description"
-                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
-            <div>
-              <span class="font-medium text-gray-800 text-sm">Описание</span>
-              <p class="text-xs text-gray-500 mt-0.5">Полное описание товара</p>
-            </div>
-          </label>
-        </div>
-
-        <div class="flex items-center py-3 border-b border-gray-100">
-          <label class="flex items-center gap-3 cursor-pointer flex-1">
-            <input type="checkbox" x-model="fields.characteristics"
-                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
-            <div>
-              <span class="font-medium text-gray-800 text-sm">Характеристики</span>
-              <p class="text-xs text-gray-500 mt-0.5">Технические параметры из каталога поставщика</p>
-            </div>
-          </label>
-        </div>
-
-        <div class="flex items-center py-3 border-b border-gray-100">
-          <label class="flex items-center gap-3 cursor-pointer flex-1">
-            <input type="checkbox" x-model="fields.dimensions"
-                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
-            <div>
-              <span class="font-medium text-gray-800 text-sm">Габариты</span>
-              <p class="text-xs text-gray-500 mt-0.5">Длина, ширина, высота, вес</p>
-            </div>
-          </label>
-        </div>
-
-        <div class="flex items-center py-3">
-          <label class="flex items-center gap-3 cursor-pointer flex-1">
-            <input type="checkbox" x-model="fields.brand"
-                   class="w-4 h-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500">
-            <div>
-              <span class="font-medium text-gray-800 text-sm">Бренд</span>
-              <p class="text-xs text-amber-600 mt-0.5">Осторожно: смена бренда может влиять на SEO и позиции</p>
-            </div>
-          </label>
-        </div>
+        </details>
       </div>
+
+      <aside class="sh-card be-summary" aria-label="Подтверждение запуска">
+        <div class="sh-card-header"><h2 class="sh-card-title">К запуску</h2></div>
+        <div class="be-summary-list">
+          <div class="be-summary-row">
+            <span class="be-summary-label">Карточек</span>
+            <span class="be-summary-value">{{ count }}</span>
+          </div>
+          <div class="be-summary-row">
+            <span class="be-summary-label">Доступно фото</span>
+            <span class="be-summary-value">{{ photo_ready_count }}</span>
+          </div>
+          <div class="be-summary-row">
+            <span class="be-summary-label">Выбрано полей</span>
+            <span class="be-summary-value" x-text="selectedFieldsCount"></span>
+          </div>
+        </div>
+        <div class="be-actions">
+          <button type="button" @click="startEnrichment()"
+                  :disabled="selectedFieldsCount === 0 || starting"
+                  :class="{'is-loading': starting}"
+                  class="sh-btn sh-btn--accent sh-btn--lg">
+            <span class="sh-btn-icon">{{ icon('check', size=16) }}</span>
+            <span x-text="isPhotoOnly ? 'Подтвердить обновление фото' : 'Запустить обновление'"></span>
+          </button>
+          <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--secondary sh-btn--md">Отмена</a>
+        </div>
+        <p class="be-copy" style="margin-top:12px">Задача выполняется в фоне. Страницу можно оставить открытой — прогресс обновляется автоматически.</p>
+      </aside>
     </div>
+  </section>
 
-    <!-- Кнопка запуска -->
-    <div class="flex items-center justify-between bg-gray-50 rounded-xl border border-gray-200 p-5">
-      <div class="text-sm text-gray-600">
-        Выбрано полей: <span class="font-semibold text-gray-900" x-text="selectedFieldsCount"></span>
-        <span class="mx-1.5 text-gray-300">|</span>
-        Карточек: <span class="font-semibold text-gray-900">{{ count }}</span>
-      </div>
-      <div class="flex items-center gap-3">
-        <a href="{{ url_for('products_list') }}"
-           class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-          Отмена
-        </a>
-        <button @click="startEnrichment()"
-                :disabled="selectedFieldsCount === 0 || starting"
-                :class="{'opacity-50 cursor-not-allowed': selectedFieldsCount === 0 || starting}"
-                class="px-6 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm flex items-center gap-2">
-          <svg x-show="starting" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-          </svg>
-          <span x-text="starting ? 'Запускаю...' : 'Запустить обогащение'"></span>
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ПРОГРЕСС -->
-  <div x-show="phase === 'running' || phase === 'done'" x-transition class="space-y-5" aria-live="polite">
-
-    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div x-show="phase === 'running'"
-               class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center">
-            <svg class="animate-spin w-5 h-5 text-white" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-            </svg>
-          </div>
-          <div x-show="phase === 'done'"
-               class="w-10 h-10 bg-green-600 rounded-xl flex items-center justify-center">
-            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-            </svg>
+  <section x-show="phase === 'running' || phase === 'done'" x-transition aria-live="polite">
+    <div class="sh-card">
+      <div class="be-status-head">
+        <div class="be-status-main">
+          <div class="be-status-icon" :class="{'is-ok': phase === 'done' && !jobFailed, 'is-error': jobFailed}">
+            <span x-show="phase === 'running'" class="sh-spinner" aria-hidden="true"></span>
+            <span x-show="phase === 'done' && !jobFailed">{{ icon('check-circle', size=21) }}</span>
+            <span x-show="jobFailed">{{ icon('x-circle', size=21) }}</span>
           </div>
           <div>
-            <h2 class="font-semibold text-gray-900"
-                x-text="phase === 'running' ? 'Обогащение выполняется...' : 'Обогащение завершено'"></h2>
-            <p class="text-sm text-gray-500 mt-0.5"
-               x-text="`${progress.processed} из ${progress.total} карточек`"></p>
+            <h2 class="sh-card-title" x-text="statusTitle"></h2>
+            <p class="be-copy" x-text="progress.processed + ' из ' + progress.total + ' карточек обработано'"></p>
           </div>
         </div>
-        <div x-show="phase === 'done'" class="flex items-center gap-2">
-          <button @click="downloadReport()"
-                  class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-1.5">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-            </svg>
-            Отчёт
+        <div x-show="phase === 'done'" class="flex items-center gap-2 flex-wrap">
+          <button type="button" @click="downloadReport()" class="sh-btn sh-btn--secondary sh-btn--md">
+            <span class="sh-btn-icon">{{ icon('download', size=16) }}</span>Отчёт CSV
           </button>
-          <a href="{{ url_for('products_list') }}"
-             class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors">
-            К списку
-          </a>
+          <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--primary sh-btn--md">К карточкам</a>
         </div>
       </div>
 
-      <!-- Прогресс-бар -->
-      <div class="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden mb-5" role="progressbar"
-           :aria-valuenow="progress.pct" aria-valuemin="0" aria-valuemax="100"
-           :aria-label="'Обогащение: ' + progress.pct + '%'">
-        <div class="h-2.5 rounded-full bg-indigo-500 transition-all duration-500 ease-out"
-             :style="`width: ${progress.pct}%`"></div>
+      <div class="sh-progress" :class="{'sh-progress--ok': phase === 'done' && !jobFailed, 'sh-progress--danger': jobFailed}" style="margin-top:18px" role="progressbar" :aria-valuenow="progress.pct" aria-valuemin="0" aria-valuemax="100">
+        <div class="sh-progress-bar" :style="'width:' + progress.pct + '%' "></div>
       </div>
 
-      <!-- Счётчики -->
-      <div class="grid grid-cols-4 gap-3">
-        <div class="text-center p-3 rounded-lg bg-gray-50 border border-gray-100">
-          <p class="text-2xl font-bold text-gray-900" x-text="progress.total"></p>
-          <p class="text-xs text-gray-500 mt-1">Всего</p>
-        </div>
-        <div class="text-center p-3 rounded-lg bg-green-50 border border-green-100">
-          <p class="text-2xl font-bold text-green-700" x-text="progress.succeeded"></p>
-          <p class="text-xs text-green-600 mt-1">Обогащено</p>
-        </div>
-        <div class="text-center p-3 rounded-lg bg-yellow-50 border border-yellow-100">
-          <p class="text-2xl font-bold text-yellow-700" x-text="progress.skipped"></p>
-          <p class="text-xs text-yellow-600 mt-1">Пропущено</p>
-        </div>
-        <div class="text-center p-3 rounded-lg bg-red-50 border border-red-100">
-          <p class="text-2xl font-bold text-red-700" x-text="progress.failed"></p>
-          <p class="text-xs text-red-600 mt-1">Ошибок</p>
-        </div>
+      <div class="be-stat-grid">
+        <div class="be-stat"><span class="be-stat-value" x-text="progress.total"></span><span class="be-stat-label">Всего</span></div>
+        <div class="be-stat" style="background:var(--ok-bg);border-color:var(--ok-border)"><span class="be-stat-value" style="color:var(--ok)" x-text="progress.succeeded"></span><span class="be-stat-label">Обновлено</span></div>
+        <div class="be-stat" style="background:var(--warn-bg);border-color:var(--warn-border)"><span class="be-stat-value" style="color:var(--warn)" x-text="progress.skipped"></span><span class="be-stat-label">Пропущено</span></div>
+        <div class="be-stat" style="background:var(--danger-bg);border-color:var(--danger-border)"><span class="be-stat-value" style="color:var(--danger)" x-text="progress.failed"></span><span class="be-stat-label">Ошибок</span></div>
       </div>
     </div>
 
-    <!-- Таблица результатов -->
-    <div x-show="results.length > 0" class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-      <div class="px-5 py-3 border-b border-gray-100 bg-gray-50">
-        <h3 class="font-semibold text-gray-800 text-sm">Результаты</h3>
+    <div x-show="results.length" class="sh-card sh-card--flush">
+      <div class="sh-card-header">
+        <h2 class="sh-card-title be-result-title">{{ icon('checklist', size=18) }} Результат по карточкам</h2>
+        <span class="be-copy" x-text="results.length + ' строк'"></span>
       </div>
-      <div class="overflow-x-auto max-h-96 overflow-y-auto">
-        <table class="w-full text-sm">
-          <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide sticky top-0">
-            <tr>
-              <th class="px-4 py-2 text-left">Артикул</th>
-              <th class="px-4 py-2 text-left">NM ID</th>
-              <th class="px-4 py-2 text-left">Статус</th>
-              <th class="px-4 py-2 text-left">Результат</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-100">
+      <div class="sh-table-wrap be-result-wrap" style="border:0;border-radius:0">
+        <table class="sh-table" style="min-width:680px">
+          <thead><tr><th>Карточка</th><th>nmID</th><th>Статус</th><th>Результат</th></tr></thead>
+          <tbody>
             <template x-for="row in results" :key="row.product_id">
-              <tr :class="{
-                'bg-green-50/50': row.status === 'success',
-                'bg-yellow-50/50': row.status === 'skipped',
-                'bg-red-50/50': row.status === 'failed'
-              }">
-                <td class="px-4 py-2 font-mono text-xs text-gray-600" x-text="row.vendor_code || '—'"></td>
-                <td class="px-4 py-2 font-mono text-xs text-gray-600" x-text="row.nm_id || '—'"></td>
-                <td class="px-4 py-2">
-                  <span :class="{
-                    'bg-green-100 text-green-700': row.status === 'success',
-                    'bg-yellow-100 text-yellow-700': row.status === 'skipped',
-                    'bg-red-100 text-red-700': row.status === 'failed'
-                  }"
-                  class="text-xs px-2 py-0.5 rounded-full font-medium"
-                  x-text="{'success':'Обогащено','skipped':'Пропущено','failed':'Ошибка'}[row.status] || row.status"></span>
-                </td>
-                <td class="px-4 py-2 text-xs text-gray-600"
-                    x-text="row.fields_applied ? row.fields_applied.join(', ') : (row.reason || row.error || '—')"></td>
+              <tr>
+                <td><span class="font-medium" style="color:var(--text)" x-text="row.vendor_code || ('#' + row.product_id)"></span></td>
+                <td><span class="be-muted" x-text="row.nm_id || '—'"></span></td>
+                <td><span class="be-result-status" :class="'is-' + row.status" x-text="statusLabel(row.status)"></span></td>
+                <td><span style="color:var(--text-secondary)" x-text="resultMessage(row)"></span></td>
               </tr>
             </template>
           </tbody>
         </table>
       </div>
     </div>
-  </div>
-
-</div>
+  </section>
 </div>
 
 <script>
 function bulkEnrichApp(productIds) {
-    return {
-        productIds,
-        phase: 'config',
-        jobId: null,
-        pollTimer: null,
-        starting: false,
+  return {
+    productIds,
+    phase: 'config',
+    jobId: null,
+    pollTimer: null,
+    starting: false,
+    jobFailed: false,
+    {% if preset == 'characteristics' %}
+    // Явный переход «Отправить характеристики» из «Моих товаров»:
+    // предвыбраны характеристики и габариты, фото выключены.
+    // Default экрана без preset остаётся только-фото.
+    fields: {
+      photos: false,
+      title: false,
+      description: false,
+      characteristics: true,
+      dimensions: true,
+      brand: false,
+    },
+    {% else %}
+    fields: {
+      photos: true,
+      title: false,
+      description: false,
+      characteristics: false,
+      dimensions: false,
+      brand: false,
+    },
+    {% endif %}
+    // Existing WB cards must not be skipped in the default photo refresh.
+    photoStrategy: 'replace',
+    progress: { total: productIds.length, processed: 0, succeeded: 0, failed: 0, skipped: 0, pct: 0 },
+    results: [],
 
-        fields: {
-            photos: true,
-            title: true,
-            description: true,
-            characteristics: true,
-            dimensions: true,
-            brand: false,
-        },
-        photoStrategy: 'only_if_empty',
+    get selectedFieldsCount() {
+      return Object.values(this.fields).filter(Boolean).length;
+    },
+    get extraFieldsCount() {
+      return Object.entries(this.fields).filter(([key, value]) => key !== 'photos' && value).length;
+    },
+    get isPhotoOnly() {
+      return this.fields.photos && this.selectedFieldsCount === 1;
+    },
+    get statusTitle() {
+      if (this.phase === 'running') return this.isPhotoOnly ? 'Обновляем фотографии…' : 'Обновляем карточки…';
+      if (this.jobFailed) return 'Задача остановилась с ошибкой';
+      if (this.progress.failed) return 'Обновление завершено с отдельными ошибками';
+      return 'Обновление завершено';
+    },
 
-        progress: { total: productIds.length, processed: 0, succeeded: 0, failed: 0, skipped: 0, pct: 0 },
-        results: [],
+    notify(type, title, message) {
+      const normalized = type === 'danger' ? 'error' : type;
+      const toastStore = window.Alpine?.store('toasts');
+      if (toastStore?.add) toastStore.add(normalized, message, title);
+      else if (window.showToast) window.showToast(type, title, message);
+      else if (normalized === 'error' || normalized === 'warning') window.alert(message);
+    },
 
-        get selectedFieldsCount() {
-            return Object.values(this.fields).filter(Boolean).length;
-        },
+    async startEnrichment() {
+      if (!this.selectedFieldsCount || this.starting) return;
+      this.starting = true;
+      const fields = Object.entries(this.fields).filter(([, enabled]) => enabled).map(([name]) => name);
 
-        async startEnrichment() {
-            if (this.selectedFieldsCount === 0 || this.starting) return;
-            this.starting = true;
+      try {
+        const response = await fetch('/api/products/enrich-bulk/start', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({product_ids: this.productIds, fields, photo_strategy: this.photoStrategy}),
+        });
+        const data = await response.json().catch(() => ({}));
 
-            const fields = Object.entries(this.fields).filter(([k, v]) => v).map(([k]) => k);
-
-            try {
-                const resp = await fetch('/api/products/enrich-bulk/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        product_ids: this.productIds,
-                        fields,
-                        photo_strategy: this.photoStrategy
-                    })
-                });
-
-                if (!resp.ok) {
-                    const err = await resp.json();
-                    alert('Ошибка запуска: ' + (err.error || resp.statusText));
-                    this.starting = false;
-                    return;
-                }
-
-                const data = await resp.json();
-                this.jobId = data.job_id;
-                this.progress.total = data.total;
-                this.phase = 'running';
-
-                this.pollTimer = setInterval(() => this.pollStatus(), 2000);
-
-            } catch (e) {
-                alert('Ошибка сети: ' + e.message);
-                this.starting = false;
-            }
-        },
-
-        async pollStatus() {
-            if (!this.jobId) return;
-
-            try {
-                const resp = await fetch(`/api/products/enrich-bulk/${this.jobId}/status`);
-                if (!resp.ok) return;
-
-                const data = await resp.json();
-                this.progress = {
-                    total: data.total,
-                    processed: data.processed,
-                    succeeded: data.succeeded,
-                    failed: data.failed,
-                    skipped: data.skipped,
-                    pct: data.progress_pct
-                };
-                this.results = data.results || [];
-
-                if (data.status === 'done' || data.status === 'failed') {
-                    clearInterval(this.pollTimer);
-                    this.phase = 'done';
-                }
-            } catch (e) {
-                // Ignore polling errors
-            }
-        },
-
-        downloadReport() {
-            const rows = [['product_id', 'nm_id', 'vendor_code', 'status', 'fields_applied', 'error']];
-            for (const r of this.results) {
-                rows.push([
-                    r.product_id, r.nm_id || '', r.vendor_code || '',
-                    r.status, (r.fields_applied || []).join(';'), r.error || r.reason || ''
-                ]);
-            }
-            const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-            const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `enrichment_report_${new Date().toISOString().slice(0,10)}.csv`;
-            a.click();
-            URL.revokeObjectURL(url);
+        if (!response.ok) {
+          if (response.status === 409 && data.job_id) {
+            this.jobId = data.job_id;
+            this.phase = 'running';
+            this.notify('info', 'Массовое обновление', 'Продолжаем показывать уже запущенную задачу');
+            this.startPolling();
+            return;
+          }
+          this.notify('danger', 'Не удалось запустить', data.error || 'Повторите попытку');
+          return;
         }
-    }
+
+        this.jobId = data.job_id;
+        this.progress.total = data.total;
+        this.phase = 'running';
+        this.notify('info', 'Обновление запущено', data.total + ' карточек в очереди');
+        this.startPolling();
+      } catch (error) {
+        this.notify('danger', 'Ошибка сети', 'Не удалось запустить массовое обновление');
+      } finally {
+        this.starting = false;
+      }
+    },
+
+    startPolling() {
+      if (this.pollTimer) clearInterval(this.pollTimer);
+      this.pollStatus();
+      this.pollTimer = setInterval(() => this.pollStatus(), 2000);
+    },
+
+    async pollStatus() {
+      if (!this.jobId) return;
+      try {
+        const response = await fetch('/api/products/enrich-bulk/' + encodeURIComponent(this.jobId) + '/status');
+        if (!response.ok) return;
+        const data = await response.json();
+        this.progress = {
+          total: data.total || 0,
+          processed: data.processed || 0,
+          succeeded: data.succeeded || 0,
+          failed: data.failed || 0,
+          skipped: data.skipped || 0,
+          pct: data.progress_pct || 0,
+        };
+        this.results = Array.isArray(data.results) ? data.results : [];
+
+        if (data.status === 'done' || data.status === 'failed') {
+          if (this.pollTimer) clearInterval(this.pollTimer);
+          this.pollTimer = null;
+          this.jobFailed = data.status === 'failed';
+          this.phase = 'done';
+          if (!this.jobFailed) {
+            this.notify(
+              data.failed ? 'warning' : 'success',
+              'Массовое обновление завершено',
+              'Обновлено: ' + data.succeeded + ', пропущено: ' + data.skipped + ', ошибок: ' + data.failed,
+            );
+          }
+        }
+      } catch (error) {
+        // A transient polling error must not stop the background operation.
+      }
+    },
+
+    statusLabel(status) {
+      return {success: 'Обновлено', skipped: 'Пропущено', failed: 'Ошибка'}[status] || status;
+    },
+
+    resultMessage(row) {
+      if (row.status === 'success') {
+        const labels = {photos: 'фотографии', title: 'заголовок', description: 'описание', characteristics: 'характеристики', dimensions: 'габариты', brand: 'бренд'};
+        return (row.fields_applied || []).map(field => labels[field] || field).join(', ') || 'Готово';
+      }
+      const reasons = {
+        not_found: 'Карточка больше недоступна',
+        no_supplier_data: 'Нет связи с товаром поставщика',
+        no_supplier_photos: 'У поставщика нет фотографий',
+        empty_photo_list: 'У поставщика нет фотографий',
+        invalid_photo_urls_json: 'Повреждены данные фотографий',
+        photos_not_cached_after_timeout: 'Не удалось получить фото поставщика',
+        already_has_photos: 'На WB уже есть фотографии',
+        nothing_to_update: 'Нет доступных изменений',
+      };
+      return row.error || reasons[row.reason] || 'Без изменений';
+    },
+
+    downloadReport() {
+      const rows = [['product_id', 'nm_id', 'vendor_code', 'status', 'fields_applied', 'message']];
+      for (const row of this.results) {
+        rows.push([
+          row.product_id,
+          row.nm_id || '',
+          row.vendor_code || '',
+          row.status || '',
+          (row.fields_applied || []).join(';'),
+          this.resultMessage(row),
+        ]);
+      }
+      const csv = rows.map(row => row.map(cell => '"' + String(cell).replace(/"/g, '""') + '"').join(',')).join('\n');
+      const blob = new Blob(['\ufeff' + csv], {type: 'text/csv;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'wb_photo_update_' + new Date().toISOString().slice(0, 10) + '.csv';
+      link.click();
+      URL.revokeObjectURL(url);
+    },
+
+    destroy() {
+      if (this.pollTimer) clearInterval(this.pollTimer);
+    },
+  };
 }
 </script>
 {% endblock %}

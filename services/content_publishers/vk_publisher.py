@@ -35,6 +35,51 @@ VK_API_BASE = 'https://api.vk.com/method'
 VK_API_VERSION = '5.199'
 
 
+def _vk_provider_error(method: str, payload) -> tuple[str, str, bool]:
+    """Normalize a VK error without relying on provider free text."""
+    error = payload if isinstance(payload, dict) else {}
+    raw_code = error.get('error_code')
+    provider_code = raw_code if type(raw_code) is int else None
+    if provider_code == 5:
+        return (
+            'Токен VK недействителен или отозван (код 5). '
+            'Обновите credentials аккаунта.',
+            'vk_auth_failed',
+            True,
+        )
+    if provider_code == 27:
+        if method == 'photos.getWallUploadServer':
+            return (
+                'Для загрузки фото VK нужен действующий пользовательский '
+                'user_token с доступом к фото (код 27).',
+                'vk_user_token_required',
+                True,
+            )
+        return (
+            'Метод VK недоступен с авторизацией сообщества (код 27).',
+            'vk_group_auth_unavailable',
+            True,
+        )
+    if provider_code == 7:
+        return (
+            'Токен VK не имеет прав на этот метод (код 7).',
+            'vk_permission_denied',
+            True,
+        )
+    if provider_code == 15:
+        return (
+            'VK запретил доступ к целевому сообществу или объекту (код 15).',
+            'vk_access_denied',
+            True,
+        )
+    suffix = f' (код {provider_code})' if provider_code is not None else ''
+    return (
+        f'VK API отклонил метод {method}{suffix}.',
+        'vk_api_error',
+        False,
+    )
+
+
 _BROWSER_UA = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
     'AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -139,7 +184,11 @@ def _download_and_convert_to_jpeg(photo_url: str) -> Optional[tuple[bytes, str]]
         try:
             resp = requests.get(photo_url, timeout=15, headers=headers)
             if resp.status_code != 200:
-                logger.warning(f"Photo download HTTP {resp.status_code} (attempt {attempt + 1}): {photo_url}")
+                logger.warning(
+                    "Photo download HTTP %s (attempt %s)",
+                    resp.status_code,
+                    attempt + 1,
+                )
                 if attempt == 0:
                     continue
                 return None
@@ -148,7 +197,11 @@ def _download_and_convert_to_jpeg(photo_url: str) -> Optional[tuple[bytes, str]]
             content_type = resp.headers.get('Content-Type', '')
             break
         except Exception as e:
-            logger.error(f"Photo download failed (attempt {attempt + 1}): {e} URL: {photo_url[:100]}")
+            logger.error(
+                "Photo download failed (attempt %s): %s",
+                attempt + 1,
+                type(e).__name__,
+            )
             if attempt == 0:
                 continue
             return None
@@ -157,10 +210,14 @@ def _download_and_convert_to_jpeg(photo_url: str) -> Optional[tuple[bytes, str]]
         return None
 
     if len(raw) < 512:
-        logger.warning(f"Photo too small ({len(raw)}B): {photo_url}")
+        logger.warning("Photo too small (%sB)", len(raw))
         return None
 
-    logger.info(f"Photo downloaded: {len(raw)}B, content-type={content_type} from {photo_url[:80]}")
+    logger.info(
+        "Photo downloaded: %sB, content-type=%s",
+        len(raw),
+        content_type,
+    )
 
     # Шаг 2: Если уже JPEG — используем напрямую (серверные фото /photos/public/ уже JPEG)
     if content_type.startswith('image/jpeg') or raw[:3] == b'\xff\xd8\xff':
@@ -179,13 +236,17 @@ def _download_and_convert_to_jpeg(photo_url: str) -> Optional[tuple[bytes, str]]
         img.save(buf, format='JPEG', quality=93)
         jpeg_bytes = buf.getvalue()
 
-        logger.info(f"Photo converted to JPEG: {len(raw)}B → {len(jpeg_bytes)}B from {photo_url[:80]}")
+        logger.info(
+            "Photo converted to JPEG: %sB -> %sB",
+            len(raw),
+            len(jpeg_bytes),
+        )
         return jpeg_bytes, 'photo.jpg'
     except Exception as e:
-        logger.error(f"Pillow conversion failed: {e} URL: {photo_url[:100]}")
+        logger.error("Pillow conversion failed: %s", type(e).__name__)
 
     # Последний fallback — отправляем raw напрямую (VK может принять jpeg/png)
-    logger.warning(f"Conversion failed, sending raw to VK for {photo_url[:80]}")
+    logger.warning("Photo conversion failed; sending bounded raw bytes to VK")
     return raw, 'photo.jpg'
 
 
@@ -206,7 +267,9 @@ class VKPublisher(BasePublisher):
         if not access_token or not group_id:
             return PublishResult(
                 success=False,
-                error="Не указан access_token или group_id"
+                error="Не указан access_token или group_id",
+                error_code='vk_credentials_missing',
+                terminal=True,
             )
 
         # group_id ВСЕГДА положительное число (по доке VK API)
@@ -238,8 +301,6 @@ class VKPublisher(BasePublisher):
 
         logger.info(f"VK publish item={item.id}: group_id={group_id}, media_urls={len(media_urls)}, "
                     f"has_user_token={bool(user_token)}")
-        for i, url in enumerate(media_urls[:5]):
-            logger.info(f"  photo[{i}]: {url[:120]}")
 
         try:
             # Загружаем фото через VK Upload API
@@ -254,32 +315,63 @@ class VKPublisher(BasePublisher):
 
                 # До 2 попыток на каждое фото (ретрай при vk_upload_empty_photo)
                 attachment, error_reason = None, None
+                upload_error_code, upload_terminal = None, False
                 for attempt in range(2):
                     if attempt > 0:
                         logger.info(f"  photo[{i}] retry attempt {attempt + 1} after 3s...")
                         time.sleep(3)
-                    attachment, error_reason = self._upload_photo(photo_token, group_id, url, api_version)
+                    (
+                        attachment,
+                        error_reason,
+                        upload_error_code,
+                        upload_terminal,
+                    ) = self._upload_photo(
+                        photo_token, group_id, url, api_version,
+                    )
                     if attachment:
                         break
                     # Ретраим только при пустом фото (серверная проблема VK)
                     if error_reason and 'vk_upload_empty_photo' not in error_reason:
                         break
 
+                if upload_terminal:
+                    if (
+                        not user_token
+                        and upload_error_code in {
+                            'vk_auth_failed', 'vk_user_token_required',
+                        }
+                    ):
+                        error_reason = (
+                            'Для загрузки фото VK нужен действующий '
+                            'пользовательский user_token с доступом к фото.'
+                        )
+                        upload_error_code = 'vk_user_token_required'
+                    logger.warning(
+                        'VK publish stopped after terminal upload failure: %s',
+                        upload_error_code,
+                    )
+                    return PublishResult(
+                        success=False,
+                        error=error_reason,
+                        error_code=upload_error_code,
+                        terminal=True,
+                    )
+
                 if attachment:
                     attachments.append(attachment)
                     logger.info(f"  photo[{i}] OK: {attachment}")
                 else:
-                    short_url = url.split('/')[-1] if '/' in url else url[:40]
-                    error_info = f"{short_url}({error_reason})"
+                    error_info = f"photo_{i + 1}({error_reason})"
                     photo_errors.append(error_info)
-                    logger.warning(f"  photo[{i}] FAILED: {error_reason} URL: {url[:80]}")
+                    logger.warning("  photo[%s] FAILED: %s", i, error_reason)
 
             if media_urls and not attachments:
                 error_summary = '; '.join(photo_errors[:5])
                 logger.error(f"VK publish: ALL {len(media_urls)} photos failed to upload: {error_summary}")
                 return PublishResult(
                     success=False,
-                    error=f"Все {len(media_urls)} фото не загружены в VK: {error_summary}"
+                    error=f"Все {len(media_urls)} фото не загружены в VK: {error_summary}",
+                    error_code='vk_photo_upload_failed',
                 )
 
             # Даём VK время обработать загруженные фото перед wall.post
@@ -304,14 +396,22 @@ class VKPublisher(BasePublisher):
                 timeout=30,
             )
             data = resp.json()
-            logger.info(f"VK wall.post response: {data}")
+            logger.info(
+                "VK wall.post response: success=%s error_code=%s",
+                'error' not in data,
+                (data.get('error') or {}).get('error_code')
+                if isinstance(data, dict) else None,
+            )
 
             if 'error' in data:
-                error_msg = data['error'].get('error_msg', 'Неизвестная ошибка VK API')
-                error_code = data['error'].get('error_code', 0)
+                error_message, error_code, terminal = _vk_provider_error(
+                    'wall.post', data['error'],
+                )
                 return PublishResult(
                     success=False,
-                    error=f"VK API ошибка {error_code}: {error_msg}"
+                    error=error_message,
+                    error_code=error_code,
+                    terminal=terminal,
                 )
 
             post_id = data.get('response', {}).get('post_id')
@@ -331,12 +431,26 @@ class VKPublisher(BasePublisher):
             )
 
         except requests.exceptions.Timeout:
-            return PublishResult(success=False, error="Таймаут при отправке в VK")
+            return PublishResult(
+                success=False,
+                error="Таймаут при отправке в VK",
+                error_code='vk_timeout',
+            )
         except requests.exceptions.ConnectionError:
-            return PublishResult(success=False, error="Ошибка подключения к VK API")
+            return PublishResult(
+                success=False,
+                error="Ошибка подключения к VK API",
+                error_code='vk_connection_error',
+            )
         except Exception as e:
-            logger.error(f"VK publish error: {e}", exc_info=True)
-            return PublishResult(success=False, error=str(e))
+            logger.error(
+                "VK publish error: %s", type(e).__name__, exc_info=True,
+            )
+            return PublishResult(
+                success=False,
+                error="Внутренняя ошибка публикации в VK",
+                error_code='vk_publish_error',
+            )
 
     def validate_account(self, account: SocialAccount) -> tuple[bool, Optional[str]]:
         """Проверяет валидность VK токена."""
@@ -416,19 +530,18 @@ class VKPublisher(BasePublisher):
         group_id: str,
         photo_url: str,
         api_version: str,
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> tuple[Optional[str], Optional[str], Optional[str], bool]:
         """Загружает фото по URL на стену сообщества VK.
 
         Returns:
-            (attachment_string, None) при успехе
-            (None, error_reason) при ошибке
+            attachment, safe error, typed error code, terminal flag
         """
         # === ШАГ 0: Скачиваем и конвертируем в JPEG ===
         photo_data = _download_and_convert_to_jpeg(photo_url)
         if not photo_data:
-            return None, "download_failed"
+            return None, "Не удалось скачать фото", "vk_photo_download_failed", False
         jpeg_bytes, filename = photo_data
-        logger.info(f"VK upload: downloaded {len(jpeg_bytes)}B from {photo_url[:80]}")
+        logger.info("VK upload: downloaded and converted %sB", len(jpeg_bytes))
 
         try:
             # === ШАГ 1: photos.getWallUploadServer ===
@@ -442,18 +555,24 @@ class VKPublisher(BasePublisher):
                 timeout=10,
             )
             srv = resp.json()
-            logger.debug(f"getWallUploadServer response: {srv}")
+            logger.debug(
+                "getWallUploadServer response: success=%s error_code=%s",
+                'error' not in srv,
+                (srv.get('error') or {}).get('error_code')
+                if isinstance(srv, dict) else None,
+            )
 
             if 'error' in srv:
-                err = srv['error']
-                reason = f"getUploadServer error {err.get('error_code')}: {err.get('error_msg', '')}"
-                logger.error(f"VK {reason}")
-                return None, reason
+                reason, error_code, terminal = _vk_provider_error(
+                    'photos.getWallUploadServer', srv['error'],
+                )
+                logger.error("VK photo upload server rejected: %s", error_code)
+                return None, reason, error_code, terminal
 
             upload_url = srv.get('response', {}).get('upload_url')
             if not upload_url:
                 logger.error(f"VK getWallUploadServer: no upload_url")
-                return None, "no_upload_url"
+                return None, "VK не вернул upload URL", "vk_no_upload_url", False
 
             # === ШАГ 2: POST фото на upload_url (с ретраем при empty photo) ===
             photo_field = None
@@ -474,7 +593,10 @@ class VKPublisher(BasePublisher):
                     )
                     retry_srv = retry_resp.json()
                     if 'error' in retry_srv:
-                        break
+                        reason, error_code, terminal = _vk_provider_error(
+                            'photos.getWallUploadServer', retry_srv['error'],
+                        )
+                        return None, reason, error_code, terminal
                     upload_url = retry_srv.get('response', {}).get('upload_url') or upload_url
 
                 upload_resp = requests.post(
@@ -483,20 +605,31 @@ class VKPublisher(BasePublisher):
                     timeout=30,
                 )
                 upload_data = upload_resp.json()
-                logger.info(f"VK upload response (attempt {upload_attempt + 1}): server={upload_data.get('server')}, "
-                            f"photo_len={len(upload_data.get('photo', ''))}, "
-                            f"hash={upload_data.get('hash', '')[:16]}...")
+                logger.info(
+                    "VK upload response (attempt %s): server_present=%s photo_len=%s",
+                    upload_attempt + 1,
+                    upload_data.get('server') is not None,
+                    len(upload_data.get('photo', '')),
+                )
 
                 photo_field = upload_data.get('photo', '')
                 if photo_field and photo_field not in ('[]', ''):
                     break  # Успешно
 
-                logger.warning(f"VK upload: empty photo field (attempt {upload_attempt + 1}). Response: {upload_data}")
+                logger.warning(
+                    "VK upload: empty photo field (attempt %s)",
+                    upload_attempt + 1,
+                )
 
             # После ретраев всё ещё пусто
             if not photo_field or photo_field in ('[]', ''):
-                logger.error(f"VK upload: empty photo field after retries. Full response: {upload_data}")
-                return None, f"vk_upload_empty_photo: {str(upload_data)[:200]}"
+                logger.error("VK upload: empty photo field after retries")
+                return (
+                    None,
+                    "vk_upload_empty_photo: VK не обработал файл после повторов",
+                    "vk_upload_empty_photo",
+                    False,
+                )
 
             # === ШАГ 3: photos.saveWallPhoto ===
             save_resp = requests.post(
@@ -512,32 +645,57 @@ class VKPublisher(BasePublisher):
                 timeout=10,
             )
             save_data = save_resp.json()
-            logger.debug(f"saveWallPhoto response: {save_data}")
+            logger.debug(
+                "saveWallPhoto response: success=%s error_code=%s",
+                'error' not in save_data,
+                (save_data.get('error') or {}).get('error_code')
+                if isinstance(save_data, dict) else None,
+            )
 
             if 'error' in save_data:
-                err = save_data['error']
-                reason = f"saveWallPhoto error {err.get('error_code')}: {err.get('error_msg', '')}"
-                logger.error(f"VK {reason}")
-                return None, reason
+                reason, error_code, terminal = _vk_provider_error(
+                    'photos.saveWallPhoto', save_data['error'],
+                )
+                logger.error("VK saveWallPhoto rejected: %s", error_code)
+                return None, reason, error_code, terminal
 
             photos = save_data.get('response', [])
             if not photos:
                 logger.error(f"VK saveWallPhoto: empty response array")
-                return None, "saveWallPhoto_empty_response"
+                return (
+                    None,
+                    "VK не вернул сохранённое фото",
+                    "vk_save_photo_empty",
+                    False,
+                )
 
             # === ШАГ 4: Формируем attachment string ===
             photo_obj = photos[0]
             owner_id = photo_obj['owner_id']
             photo_id = photo_obj['id']
             attachment = f"photo{owner_id}_{photo_id}"
-            return attachment, None
+            return attachment, None, None, False
 
         except requests.exceptions.Timeout as e:
-            logger.error(f"VK photo upload timeout: {e}")
-            return None, f"timeout: {e}"
+            logger.error("VK photo upload timeout")
+            return None, "Таймаут загрузки фото в VK", "vk_timeout", False
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"VK photo upload connection error: {e}")
-            return None, f"connection_error: {str(e)[:100]}"
+            logger.error("VK photo upload connection error")
+            return (
+                None,
+                "Ошибка подключения при загрузке фото в VK",
+                "vk_connection_error",
+                False,
+            )
         except Exception as e:
-            logger.error(f"VK photo upload exception: {e}", exc_info=True)
-            return None, f"exception: {str(e)[:100]}"
+            logger.error(
+                "VK photo upload exception: %s",
+                type(e).__name__,
+                exc_info=True,
+            )
+            return (
+                None,
+                "Внутренняя ошибка загрузки фото в VK",
+                "vk_photo_upload_error",
+                False,
+            )

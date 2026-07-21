@@ -411,9 +411,11 @@
     </div>
     {% endif %}
 
-    <!-- Key metrics -->
+    <!-- Key metrics: dashMetrics() определён ниже только при валидном WB-ключе -->
+    {% if current_user.seller and current_user.seller.has_valid_api_key() %}
     <div class="dash-section-header">
         <span class="dash-section-title">Показатели за неделю</span>
+        <span class="sh-badge sh-badge--sm sh-badge--gray" style="vertical-align:middle"><span class="sh-mp-dot sh-mp-dot--wb" style="margin-right:4px"></span>Wildberries</span>
         <div class="dash-section-line"></div>
     </div>
 
@@ -452,11 +454,13 @@
             </div>
         </a>
     </div>
+    {% endif %}
 
     <!-- Качество карточек -->
     {% if current_user.seller and current_user.seller.has_valid_api_key() %}
     <div class="dash-section-header">
         <span class="dash-section-title">Качество карточек</span>
+        <span class="sh-badge sh-badge--sm sh-badge--gray" style="vertical-align:middle"><span class="sh-mp-dot sh-mp-dot--wb" style="margin-right:4px"></span>Wildberries</span>
         <div class="dash-section-line"></div>
     </div>
 

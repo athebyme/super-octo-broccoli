@@ -23,6 +23,10 @@ from sqlalchemy.orm import joinedload
 
 from models import ImageGenerationExperiment, ImportedProduct, db
 from services import image_lab_service as lab
+from services.admin_sales_intelligence import (
+    AdminSalesIntelligenceError,
+    AdminSalesIntelligenceService,
+)
 from services.marketplace_listing_media import (
     MarketplaceListingMediaError,
     MarketplaceListingMediaService,
@@ -74,13 +78,38 @@ def register_image_lab_routes(app):
     @login_required
     @_seller_required
     def image_lab_page():
-        products = ImportedProduct.query.filter(
+        recommendations = AdminSalesIntelligenceService.seller_recommendations(
+            seller_id=current_user.seller.id,
+        )
+        recommended_ids = []
+        for item in recommendations:
+            product_id = item["product_id"]
+            if product_id not in recommended_ids:
+                recommended_ids.append(product_id)
+        owned_product_query = ImportedProduct.query.filter(
             ImportedProduct.seller_id == current_user.seller.id,
+        ).options(joinedload(ImportedProduct.supplier_product))
+        recommended_products = (
+            owned_product_query.filter(ImportedProduct.id.in_(recommended_ids)).all()
+            if recommended_ids else []
+        )
+        recommended_by_id = {product.id: product for product in recommended_products}
+        recent_products = owned_product_query.filter(
             ImportedProduct.photo_urls.isnot(None),
             ImportedProduct.photo_urls != '',
-        ).options(joinedload(ImportedProduct.supplier_product)).order_by(
+        ).order_by(
             ImportedProduct.updated_at.desc()
         ).limit(150).all()
+        products = []
+        for product_id in recommended_ids:
+            product = recommended_by_id.get(product_id)
+            if product is not None:
+                products.append(product)
+        for product in recent_products:
+            if product.id not in recommended_by_id:
+                products.append(product)
+            if len(products) >= 150:
+                break
         experiments = ImageGenerationExperiment.query.filter_by(
             seller_id=current_user.seller.id,
         ).order_by(ImageGenerationExperiment.created_at.desc()).limit(60).all()
@@ -96,7 +125,7 @@ def register_image_lab_routes(app):
                 logger.warning("Image Lab marketplace targets unavailable: %s", exc)
         lab_products = []
         for product in products:
-            count = lab.photo_count(product.photo_urls)
+            count = lab.effective_photo_count(product)
             if not count:
                 continue
             visual_context = lab.build_product_visual_context(product)
@@ -122,8 +151,36 @@ def register_image_lab_routes(app):
             lab_capabilities=lab.capabilities(),
             lab_experiments=[lab.experiment_dict(item) for item in experiments],
             lab_analytics=lab.analytics(current_user.seller.id),
+            lab_recommendations=recommendations,
             rating_tags=sorted(lab.RATING_TAGS),
         )
+
+    @app.post('/image-lab/api/recommendations/<int:recommendation_id>/status')
+    @_seller_required
+    @login_required
+    def image_lab_review_recommendation(recommendation_id):
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or set(data) != {"status"}:
+            return jsonify({"success": False, "error": "Ожидается только status"}), 400
+        if data.get("status") not in {"dismissed", "completed"}:
+            return jsonify({"success": False, "error": "Неизвестный статус рекомендации"}), 400
+        try:
+            recommendation = AdminSalesIntelligenceService.review_recommendation(
+                seller_id=current_user.seller.id,
+                recommendation_id=recommendation_id,
+                user_id=current_user.id,
+                status=data.get("status"),
+            )
+            return jsonify({
+                "success": True,
+                "recommendation": {
+                    "id": recommendation.id,
+                    "status": recommendation.status,
+                },
+            })
+        except AdminSalesIntelligenceError as exc:
+            db.session.rollback()
+            return jsonify({"success": False, "error": str(exc)}), 404
 
     @app.post('/image-lab/api/experiments')
     @_seller_required

@@ -83,6 +83,7 @@ class MarketplaceListingService:
     MAX_ENRICHMENT_PAGES = 20
     MAX_JSON_BYTES = 262_144
     MAX_DESCRIPTION_CHARS = 100_000
+    MAX_ATTRIBUTE_VALUE_CHARS = 10_000
     STALE_RUN_AFTER = timedelta(minutes=15)
     PHASES = {
         "active": "ALL",
@@ -503,10 +504,20 @@ class MarketplaceListingService:
         }
         result = {}
         for key in sorted(allowed.intersection(value)):
-            if key in {"is_created", "status_failed"}:
+            if key == "is_created":
                 result[key] = cls._provider_bool(
                     value[key],
                     f"{field_name}.{key}",
+                )
+            elif key == "status_failed":
+                # Current product info v3 returns the failed import stage as
+                # an enum-like string (for example ``imported``), or ``""``
+                # when no stage failed.  It is not a boolean flag.
+                result[key] = cls._provider_text(
+                    value[key],
+                    f"{field_name}.{key}",
+                    maximum=100,
+                    allow_empty=True,
                 )
             else:
                 result[key] = cls._bounded_value(
@@ -623,16 +634,20 @@ class MarketplaceListingService:
                         if source.get(key) not in (None, ""):
                             identifiers.setdefault(key, str(source[key])[:100])
             for key in ("sku", "sku_fbo", "sku_fbs"):
-                if raw.get(key) not in (None, ""):
-                    identifiers[key] = cls._opaque_id(
-                        raw[key],
-                        f"product_info.items[{index}].{key}",
-                    )
-            primary_image = cls._optional_provider_text(
+                identifier = cls._opaque_id(
+                    raw.get(key),
+                    f"product_info.items[{index}].{key}",
+                    optional=True,
+                )
+                if identifier is not None:
+                    identifiers[key] = identifier
+            primary_images = cls._string_list(
                 raw.get("primary_image"),
                 f"product_info.items[{index}].primary_image",
-                maximum=2000,
+                maximum_items=1,
+                maximum_length=2000,
             )
+            primary_image = primary_images[0] if primary_images else None
             images = cls._string_list(
                 raw.get("images"),
                 f"product_info.items[{index}].images",
@@ -713,6 +728,12 @@ class MarketplaceListingService:
                 raise MarketplaceCatalogProtocolError(
                     f"Ozon {field_name}[{index}] must be an object"
                 )
+            raw_value = raw.get("value")
+            # Ozon may emit a whitespace-only optional value without a
+            # dictionary identity.  Treat it exactly like its existing empty
+            # string sentinel, while keeping non-string values fail-closed.
+            if isinstance(raw_value, str) and not raw_value.strip():
+                raw_value = None
             result.append({
                 "dictionary_value_id": cls._opaque_id(
                     raw.get("dictionary_value_id"),
@@ -720,9 +741,9 @@ class MarketplaceListingService:
                     optional=True,
                 ),
                 "value": cls._optional_provider_text(
-                    raw.get("value"),
+                    raw_value,
                     f"{field_name}[{index}].value",
-                    maximum=5000,
+                    maximum=cls.MAX_ATTRIBUTE_VALUE_CHARS,
                     allow_newlines=True,
                 ),
             })
@@ -788,9 +809,15 @@ class MarketplaceListingService:
                 raise MarketplaceCatalogProtocolError(
                     f"Ozon {field_name}[{index}] must be an object"
                 )
+            nested_attributes = raw.get("attributes")
+            if nested_attributes is None:
+                # Current attributes v4 may preserve an empty complex block as
+                # ``{}``.  It is structurally equivalent to an empty list, not
+                # a malformed non-empty attribute collection.
+                nested_attributes = []
             result.append({
                 "attributes": cls._normalize_attributes(
-                    raw.get("attributes"),
+                    nested_attributes,
                     f"{field_name}[{index}].attributes",
                 )
             })
@@ -1256,14 +1283,19 @@ class MarketplaceListingService:
             )
         if archived:
             return "archived", provider_status, visibility_name or "archived"
-        if errors or statuses.get("status_failed") is True:
+        failed_stage = statuses.get("status_failed")
+        if errors or (
+            isinstance(failed_stage, str) and bool(failed_stage.strip())
+        ):
             return "error", provider_status, visibility_name
         status_text = " ".join(
             str(value).casefold()
             for value in statuses.values()
             if isinstance(value, str)
         )
-        if any(word in status_text for word in ("error", "fail", "reject", "ошиб")):
+        if any(word in status_text for word in (
+            "error", "fail", "reject", "declin", "ошиб", "отклон",
+        )):
             return "error", provider_status, visibility_name
         if any(word in status_text for word in ("moder", "провер", "pending")):
             return "moderation", provider_status, visibility_name

@@ -74,6 +74,35 @@ class TestCharcsCache(unittest.TestCase):
         self.assertIsNone(get_available_charcs(999))
         self.assertIsNone(get_available_charcs(None))
 
+    def test_network_fetch_does_not_flush_pending_writes(self):
+        """Сетевые вызовы идут до любой записи: autoflush незакоммиченных
+        строк вызывающего кода не должен открывать write-транзакцию на время
+        сети (инцидент 2026-07-20, «database is locked»)."""
+        product = Product(seller_id=1, nm_id=300, title='Товар',
+                          subject_id=9, is_active=True)
+        db.session.add(product)
+        db.session.commit()
+        product.title = 'Изменён до синка'  # незакоммиченная запись вызывающего
+
+        outer = self
+
+        class AssertingClient:
+            def __init__(self):
+                self.calls = []
+
+            def get_card_characteristics_config(self, sid):
+                self.calls.append(sid)
+                # Во время сети изменение не сброшено и кэш-строк не создано.
+                outer.assertIn(product, db.session.dirty)
+                outer.assertFalse(db.session.new)
+                return {'data': [{'name': 'Цвет', 'required': True}]}
+
+        client = AssertingClient()
+        refresh_subject_charcs(client, {9})
+        self.assertEqual(client.calls, [9])
+        self.assertEqual(
+            get_available_charcs(9), [{'name': 'Цвет', 'required': True}])
+
 
 class TestScoringContext(unittest.TestCase):
     def setUp(self):

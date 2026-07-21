@@ -19,6 +19,8 @@ class PublishResult:
     external_post_id: Optional[str] = None
     external_post_url: Optional[str] = None
     error: Optional[str] = None
+    error_code: Optional[str] = None
+    terminal: bool = False
     metadata: Optional[Dict[str, Any]] = None
 
 

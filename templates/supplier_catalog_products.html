@@ -22,6 +22,15 @@
         </div>
     </div>
 
+    {% if supplier_update_count %}
+    <div class="sh-alert sh-alert--warning" role="status">
+        <div class="sh-alert-content flex flex-wrap items-center justify-between gap-3">
+            <div><strong>Общая карточка обновилась у {{ supplier_update_count }} товаров</strong><div>Можно подтянуть новую категорию и характеристики в свою карточку. Опубликованная карточка WB сама не изменится.</div></div>
+            <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('supplier_catalog_products', supplier_id=supplier.id, updates_only=1, show_imported=1, stock_status='all') }}">Показать обновления</a>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Поиск и фильтры -->
     <form method="GET" id="search-form" class="bg-white rounded-lg border border-gray-200 p-4 mb-6 flex flex-wrap gap-3 items-end">
         <div class="flex-1 min-w-[250px] relative">
@@ -66,6 +75,11 @@
                    class="rounded border-gray-300 text-gray-900" onchange="this.form.submit()">
             <span class="text-sm text-gray-600">Показать импортированные</span>
         </label>
+        <label class="flex items-center gap-2">
+            <input type="checkbox" name="updates_only" value="1" {{ 'checked' if updates_only }}
+                   class="rounded" style="accent-color:var(--warn)" onchange="this.form.submit()">
+            <span class="text-sm" style="color:var(--warn)">Только с обновлениями</span>
+        </label>
         <button type="submit" class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">Найти</button>
     </form>
     <script>
@@ -90,7 +104,7 @@
 
     <!-- Товары -->
     <form method="POST" action="{{ url_for('supplier_catalog_import') }}" id="import-form"
-          x-data="{ selectedAll: false, selected: [] }">
+          x-data="{ selectedAll: false, selected: [], updates: [] }">
         <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
 
         <!-- Панель действий -->
@@ -98,18 +112,47 @@
             <div class="flex items-center gap-3">
                 <label class="flex items-center gap-2">
                     <input type="checkbox" x-model="selectedAll"
-                           @change="selected = selectedAll ? [...document.querySelectorAll('[name=product_ids]')].map(el => el.value) : []"
+                           @change="selected = selectedAll ? [...document.querySelectorAll('[name=product_ids]')].map(el => el.value) : []; updates = selectedAll ? [...document.querySelectorAll('[name=update_product_ids]')].map(el => el.value) : []"
                            class="rounded border-gray-300 text-gray-900">
                     <span class="text-sm text-gray-600">Все на странице</span>
                 </label>
                 <span class="text-sm text-gray-400" x-text="selected.length + ' выбрано'"></span>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-3 flex-wrap">
+                {% if ozon_import_accounts %}
+                <div class="flex items-center gap-2 flex-wrap" role="group" aria-label="Каналы подготовки">
+                    <span class="text-xs font-medium uppercase tracking-wide" style="color:var(--text-muted)">Каналы:</span>
+                    <span class="inline-flex items-center gap-1.5 text-sm" style="color:var(--text-secondary)" title="Импорт всегда создаёт карточку для подготовки к WB">
+                        <span class="sh-mp-dot sh-mp-dot--wb" aria-hidden="true"></span>WB
+                    </span>
+                    {% for account in ozon_import_accounts %}
+                    {% if account.id in ozon_auto_account_ids %}
+                    <span class="inline-flex items-center gap-1.5 text-sm" style="color:var(--text-secondary)"
+                          title="Авто-публикация включена: черновики для «{{ account.label }}» создаются при импорте автоматически">
+                        <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>{{ account.label }} · авто
+                    </span>
+                    {% else %}
+                    <label class="inline-flex items-center gap-1.5 text-sm cursor-pointer" style="color:var(--text-secondary)"
+                           title="Дополнительно подготовить локальные Ozon-черновики для «{{ account.label }}»; публикации в Ozon не будет">
+                        <input type="checkbox" name="draft_account_ids" value="{{ account.id }}" class="rounded border-gray-300">
+                        <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>{{ account.label }}
+                    </label>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
                 <button type="submit" formaction="{{ url_for('supplier_catalog_smart_import') }}"
                         onclick="return confirm('Товары будут обогащены (бренд, категория, характеристики) и импортированы. Продолжить?')"
                         class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40"
                         :disabled="selected.length === 0">
                     Импортировать
+                </button>
+                <button type="submit" formaction="{{ url_for('supplier_catalog_update') }}"
+                        onclick="return confirm('Обновить выбранные карточки из общего каталога поставщика? Опубликованная карточка WB автоматически не меняется.')"
+                        class="sh-btn sh-btn--secondary sh-btn--md"
+                        style="border-color:var(--warn-border);color:var(--warn)"
+                        :disabled="updates.length === 0">
+                    Обновить карточки <span x-text="updates.length ? '· ' + updates.length : ''"></span>
                 </button>
             </div>
         </div>
@@ -122,7 +165,12 @@
                 {% set is_on_wb = product.id in wb_existing_sp_ids %}
                 <div class="p-4 {{ 'bg-purple-50' if is_on_wb else ('bg-gray-50' if is_imported else 'bg-white') }} hover:bg-gray-50 transition-colors flex flex-col">
                     <div class="flex items-start gap-3 flex-1">
-                        {% if is_on_wb %}
+                        {% if product.id in supplier_update_sp_ids %}
+                        <input type="checkbox" name="update_product_ids" value="{{ product.id }}"
+                               :checked="updates.includes('{{ product.id }}')"
+                               @change="updates = $event.target.checked ? [...updates, '{{ product.id }}'] : updates.filter(id => id !== '{{ product.id }}')"
+                               class="mt-1 rounded flex-shrink-0" style="accent-color:var(--warn)" title="Выбрать для обновления из общего каталога">
+                        {% elif is_on_wb %}
                         <span class="mt-1 text-purple-500 text-sm flex-shrink-0" title="Уже на Wildberries">&#10003;</span>
                         {% elif not is_imported %}
                         <input type="checkbox" name="product_ids" value="{{ product.id }}"
@@ -134,8 +182,7 @@
                         {% endif %}
                         <div class="flex-1 min-w-0">
                             <!-- Фото -->
-                            {% set photos = product.get_photos() %}
-                            {% if photos %}
+                            {% if product.has_photos() %}
                             <div class="w-full h-36 rounded-md mb-2 overflow-hidden bg-gray-100">
                                 <img src="{{ url_for('serve_supplier_product_photo', supplier_product_id=product.id, photo_idx=0) }}"
                                      class="w-full h-full object-contain"
@@ -205,6 +252,14 @@
                                     {% elif is_imported %}
                                     <span class="text-xs text-gray-500 font-medium">Импортирован</span>
                                     {% endif %}
+                                    {% if product.id in supplier_update_sp_ids %}
+                                    <span class="sh-badge sh-badge--yellow sh-badge--sm" title="В общей карточке появились новые данные. Выберите товар и нажмите «Обновить карточки».">Есть обновление</span>
+                                    {% endif %}
+                                    {% if ozon_draft_sp_ids and product.id in ozon_draft_sp_ids %}
+                                    <span class="inline-flex items-center gap-1 text-xs font-medium" style="color:var(--text-secondary)" title="Есть Ozon-черновик">
+                                        <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>Ozon
+                                    </span>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>
@@ -232,19 +287,19 @@
         </p>
         <nav class="flex gap-1">
             {% if pagination.has_prev %}
-            <a href="?page={{ pagination.prev_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
+            <a href="?page={{ pagination.prev_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&updates_only={{ '1' if updates_only else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
                class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&laquo;</a>
             {% endif %}
             {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                 {% if p %}
-                <a href="?page={{ p }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
+                <a href="?page={{ p }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&updates_only={{ '1' if updates_only else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
                    class="px-3 py-2 text-sm border rounded-md {{ 'bg-[#1a1a1a] text-white border-[#1a1a1a]' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
                 {% else %}
                 <span class="px-2 py-2 text-gray-400">...</span>
                 {% endif %}
             {% endfor %}
             {% if pagination.has_next %}
-            <a href="?page={{ pagination.next_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
+            <a href="?page={{ pagination.next_num }}&search={{ search }}&show_imported={{ '1' if show_imported else '0' }}&updates_only={{ '1' if updates_only else '0' }}&stock_status={{ stock_status }}&wb_filter={{ wb_filter }}&ai_filter={{ ai_filter }}"
                class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&raquo;</a>
             {% endif %}
         </nav>

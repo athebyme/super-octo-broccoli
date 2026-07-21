@@ -12,6 +12,7 @@ def test_web_healthcheck_bounds_and_closes_urllib_request():
         if 'urllib.request.urlopen' in line
     )
 
-    assert '--start-period=180s' in declaration
+    # 600s: fail-fast startup-миграции на многогигабайтной проде занимали 451s
+    assert '--start-period=600s' in declaration
     assert 'timeout=3' in healthcheck
     assert 'response.close()' in healthcheck

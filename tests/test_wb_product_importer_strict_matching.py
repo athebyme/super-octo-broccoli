@@ -118,6 +118,38 @@ class TestWBProductImporterStrictCharacteristicMatching(unittest.TestCase):
                     self._product({'Материал изделия': 'Силикон'}),
                 )
 
+    def test_read_only_preview_skips_size_schema_without_source_sizes(self):
+        importer = self._importer([])
+        importer._category_supports_sizes = MagicMock(
+            side_effect=ValueError('reference refresh is busy'),
+        )
+
+        supports_sizes, warning = importer._preview_category_supports_sizes(
+            self.SUBJECT_ID,
+            source_has_sizes=False,
+        )
+
+        self.assertFalse(supports_sizes)
+        self.assertIsNone(warning)
+        importer._category_supports_sizes.assert_not_called()
+
+    def test_read_only_preview_reports_busy_size_schema_without_raising(self):
+        importer = self._importer([])
+        importer._category_supports_sizes = MagicMock(
+            side_effect=ValueError('reference refresh is busy'),
+        )
+
+        supports_sizes, warning = importer._preview_category_supports_sizes(
+            self.SUBJECT_ID,
+            source_has_sizes=True,
+        )
+
+        self.assertIsNone(supports_sizes)
+        self.assertIn('справочник WB', warning)
+        importer._category_supports_sizes.assert_called_once_with(
+            self.SUBJECT_ID,
+        )
+
     def test_required_coverage_rejects_empty_cached_live_config(self):
         importer = self._importer([])
         importer._chars_config_cache[self.SUBJECT_ID] = []

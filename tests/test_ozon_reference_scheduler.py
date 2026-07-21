@@ -341,6 +341,24 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
         sync.assert_not_called()
         self.assertEqual(prune.call_count, 2)
 
+    def test_inbox_scheduler_respects_live_access_denial_cooldown(self):
+        with self.app.app_context():
+            account = db.session.get(SellerMarketplaceAccount, self.account_id)
+            account.capabilities_json = '["reviews_read"]'
+            db.session.commit()
+        with patch(
+            "services.marketplace_inbox."
+            "MarketplaceInboxService.access_denied_retry_after",
+            return_value=datetime.utcnow(),
+        ), patch(
+            "services.marketplace_inbox.MarketplaceInboxService.sync_kind",
+        ) as sync:
+            result = sync_ozon_inbox_accounts(self.app, limit=1)
+
+        self.assertEqual(result["selected"], 0)
+        self.assertEqual(result["failed"], 0)
+        sync.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

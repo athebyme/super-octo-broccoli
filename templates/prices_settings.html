@@ -233,8 +233,8 @@
                         Email для уведомлений
                     </label>
                     <input type="email" name="notify_email" id="notify_email"
-                           value="{{ settings.notify_email or '' }}"
-                           placeholder="example@email.com"
+                           value="{{ settings.notify_email or current_user.email or '' }}"
+                           placeholder="{{ current_user.email or 'example@email.com' }}"
                            class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500">
                     <p class="mt-1 text-sm text-gray-500">
                         Оставьте пустым для отключения email уведомлений

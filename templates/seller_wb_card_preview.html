@@ -29,6 +29,27 @@
                     <span class="px-4 py-2 bg-white/10 text-white rounded-md text-sm font-medium">
                         Уже на WB
                     </span>
+                    {% if product.wb_nm_id %}
+                    <a href="https://www.wildberries.ru/catalog/{{ product.wb_nm_id }}/detail.aspx"
+                       target="_blank" rel="noopener"
+                       class="px-4 py-2 bg-white/10 text-white rounded-md text-sm font-medium hover:bg-white/20">
+                        Открыть на WB ↗
+                    </a>
+                    {% endif %}
+                    <a href="{{ url_for('prices.prices_change') }}"
+                       class="px-4 py-2 bg-white/10 text-white rounded-md text-sm font-medium hover:bg-white/20"
+                       title="Установить розничную цену для опубликованной карточки">
+                        Настроить цену
+                    </a>
+                    <form method="POST" action="{{ url_for('infographic_campaign_new') }}" class="inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="product_ids" value="{{ product.id }}">
+                        <button type="submit"
+                                class="px-4 py-2 bg-white/10 text-white rounded-md text-sm font-medium hover:bg-white/20"
+                                title="Сгенерировать инфографику для этой карточки">
+                            Инфографика
+                        </button>
+                    </form>
                     {% else %}
                     <button @click="
                         if (!confirm('Отправить товар на Wildberries?')) return;
@@ -58,9 +79,11 @@
                     </button>
                     {% endif %}
                 {% else %}
-                <span class="px-4 py-2 bg-white/10 text-white rounded-md text-sm">
-                    Настройте API ключ WB
-                </span>
+                <a href="{{ url_for('api_settings') }}"
+                   class="px-4 py-2 bg-white/10 text-white rounded-md text-sm font-medium hover:bg-white/20"
+                   title="Без API-ключа WB отправка карточек недоступна">
+                    Настроить API ключ WB →
+                </a>
                 {% endif %}
                 <a href="{{ url_for('seller_my_products') }}"
                    class="px-4 py-2 bg-white/10 text-white rounded-md text-sm font-medium hover:bg-white/20">
@@ -76,63 +99,108 @@
         </div>
     </div>
 
+    {% if wb_audit %}
+    {% set wb_audit_status_map = {'ok': ('green', 'совпадает'), 'diverged': ('yellow', 'есть расхождения'), 'not_found': ('red', 'не найдена на WB')} %}
+    {% set wb_audit_badge_color, wb_audit_badge_label = wb_audit_status_map.get(wb_audit.status, ('gray', wb_audit.status)) %}
+    <section class="sh-card mb-6 p-4" style="background:var(--bg-card);border-color:var(--border)">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+                <h2 class="text-base font-semibold" style="color:var(--text)">Реальное состояние на WB</h2>
+                <span class="sh-badge sh-badge--{{ wb_audit_badge_color }} sh-badge--sm">{{ wb_audit_badge_label }}</span>
+            </div>
+            {% if wb_audited_at %}
+            <span class="text-xs" style="color:var(--text-muted)">Сверено: {{ wb_audited_at.strftime('%d.%m.%Y %H:%M') }}</span>
+            {% endif %}
+        </div>
+
+        {% if wb_audit.exists %}
+        <div class="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm" style="color:var(--text-secondary)">
+            <span{% if not wb_audit.photos_count %} style="color:var(--danger)"{% endif %}>Фото: {{ wb_audit.photos_count }}</span>
+            <span>Характеристик на WB: {{ wb_audit.characteristics.wb_count }} (локально {{ wb_audit.characteristics.local_count }})</span>
+        </div>
+        {% if wb_audit.characteristics.missing_on_wb %}
+        <p class="mt-2 text-xs" style="color:var(--warn)">Не долетели на WB ({{ wb_audit.characteristics.missing_on_wb }}): {{ wb_audit.characteristics.missing_on_wb_names | join(', ') }}</p>
+        {% endif %}
+        {% if wb_audit.characteristics.diverged %}
+        <p class="mt-1 text-xs" style="color:var(--warn)">Отличаются ({{ wb_audit.characteristics.diverged }}): {{ wb_audit.characteristics.diverged_names | join(', ') }}</p>
+        {% endif %}
+        {% if wb_audit.characteristics.extra_on_wb %}
+        <p class="mt-1 text-xs" style="color:var(--text-muted)">Только на WB: {{ wb_audit.characteristics.extra_on_wb }}</p>
+        {% endif %}
+        {% if wb_audit.wb_errors %}
+        <div class="mt-3 rounded-lg px-3 py-2 text-xs" style="background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger-border)">
+            {% for err in wb_audit.wb_errors %}
+            <div>{{ err }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% else %}
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">Карточка не найдена в каталоге WB — проверьте, не удалена ли она.</p>
+        {% endif %}
+    </section>
+    {% endif %}
+
     {% if ozon_enabled %}
-    <section id="ozon-preparation" class="bg-white rounded-xl border border-blue-200 shadow-sm mb-6 overflow-hidden">
-        <div class="p-5 border-b border-blue-100 bg-blue-50/60 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    {% set ai_source_labels = {'supplier_product_cache': 'ИИ-разбор из каталога поставщика', 'imported_product_cache': 'ИИ-разбор вашей карточки'} %}
+    {% set connection_labels = {'connected': 'подключён', 'unchecked': 'не проверялся', 'invalid': 'ключ отклонён', 'limited': 'ограничен', 'error': 'ошибка'} %}
+    {% set connection_badge_colors = {'connected': 'green', 'unchecked': 'gray', 'invalid': 'red', 'limited': 'yellow', 'error': 'red'} %}
+    {% set draft_status_labels = {'needs_category': 'нет категории', 'draft': 'черновик', 'blocked': 'заблокирован', 'ready': 'готов', 'published': 'опубликован', 'archived': 'архив'} %}
+    {% set draft_validation_labels = {'never_validated': 'не проверялся', 'invalid': 'есть ошибки', 'valid': 'готов к публикации', 'stale': 'устарело'} %}
+    <section id="ozon-preparation" class="sh-card mb-6 overflow-hidden" style="background:var(--bg-card);border-color:var(--border)">
+        <div class="p-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between" style="background:var(--info-bg);border-bottom:1px solid var(--info-border)">
             <div>
                 <div class="flex items-center gap-2">
-                    <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold">Ozon</span>
-                    <h2 class="text-base font-semibold text-gray-900">Подготовка из общей карточки</h2>
+                    <span class="sh-badge sh-badge--blue sh-badge--sm">Ozon</span>
+                    <h2 class="text-base font-semibold" style="color:var(--text)">Подготовка из общей карточки</h2>
                 </div>
-                <p class="mt-2 text-sm text-gray-600 max-w-3xl">
-                    WB и Ozon используют одну внутреннюю карточку #{{ product.id }}. Контент, подтверждённые факты и фото не парсятся заново; для Ozon создаются только отдельные category/type, атрибуты справочников и статусы публикации.
+                <p class="mt-2 text-sm max-w-3xl" style="color:var(--text-secondary)">
+                    WB и Ozon используют одну внутреннюю карточку #{{ product.id }}. Контент, подтверждённые факты и фото не парсятся заново; для Ozon отдельно выбираются только категория и тип, атрибуты его справочников и статусы публикации.
                 </p>
-                <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" style="color:var(--text-muted)">
                     <span>{% if linked_wb_nm_id %}Связь с WB: nmID {{ linked_wb_nm_id }}{% else %}WB-проекция ещё не связана{% endif %}</span>
-                    <span>{% if shared_ai_source %}AI-кэш найден: {{ shared_ai_source }}{% else %}Общий AI-кэш пока отсутствует{% endif %}</span>
+                    <span>{% if shared_ai_source %}Данные ИИ-разбора: {{ ai_source_labels.get(shared_ai_source, shared_ai_source) }}{% else %}ИИ-разбор ещё не выполнялся{% endif %}</span>
                 </div>
             </div>
-            <a href="{{ url_for('marketplace_drafts.index') }}" class="text-sm font-medium text-blue-700 hover:underline shrink-0">Все Ozon-черновики</a>
+            <a href="{{ url_for('marketplace_drafts.index') }}" class="text-sm font-medium hover:underline shrink-0" style="color:var(--info)">Все Ozon-черновики</a>
         </div>
 
         <div class="p-5">
             {% if wb_projection_drift.differing_fields %}
-            <div class="mb-4 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
-                Версия WB отличается от общей карточки в полях: {{ wb_projection_drift.differing_fields | join(', ') }}. Ozon возьмёт общую карточку, поэтому перед публикацией проверьте этот diff; канал автоматически не перезаписывает master-данные.
+            <div class="sh-alert sh-alert--warning">
+                Версия WB отличается от общей карточки в полях: {{ wb_projection_drift.differing_fields | join(', ') }}. Ozon возьмёт данные из общей карточки — проверьте расхождения перед публикацией; Ozon автоматически не перезаписывает вашу общую карточку.
             </div>
             {% endif %}
             {% if ozon_accounts %}
             <div class="space-y-3">
                 {% for account in ozon_accounts %}
                 {% set draft = ozon_drafts_by_account.get(account.id) %}
-                <article class="rounded-lg border border-gray-200 p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <article class="rounded-lg p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between" style="border:1px solid var(--border)">
                     <div class="min-w-0">
                         <div class="flex flex-wrap items-center gap-2">
-                            <span class="font-medium text-gray-900">{{ account.label }}</span>
-                            <span class="inline-flex px-2 py-0.5 rounded-full text-xs {{ 'bg-green-100 text-green-700' if account.connection_status == 'connected' else 'bg-yellow-100 text-yellow-700' }}">
-                                {{ account.connection_status }}
+                            <span class="font-medium" style="color:var(--text)">{{ account.label }}</span>
+                            <span class="sh-badge sh-badge--{{ connection_badge_colors.get(account.connection_status, 'gray') }} sh-badge--sm">
+                                {{ connection_labels.get(account.connection_status, account.connection_status) }}
                             </span>
-                            {% if account.is_default %}<span class="text-xs text-gray-400">по умолчанию</span>{% endif %}
+                            {% if account.is_default %}<span class="text-xs" style="color:var(--text-muted)">по умолчанию</span>{% endif %}
                         </div>
                         {% if draft %}
-                        <p class="mt-1 text-xs text-gray-500">
-                            Черновик #{{ draft.id }} · {{ draft.status }} / {{ draft.validation_status }}
-                            {% if draft.category_mapping_id %} · exact category mapping сохранён{% elif not draft.product_type_id %} · нужно выбрать Ozon category/type{% endif %}
+                        <p class="mt-1 text-xs" style="color:var(--text-muted)">
+                            Черновик #{{ draft.id }} · {{ draft_status_labels.get(draft.status, draft.status) }} / {{ draft_validation_labels.get(draft.validation_status, draft.validation_status) }}
+                            {% if draft.category_mapping_id %} · точное сопоставление категории сохранено{% elif not draft.product_type_id %} · нужно выбрать категорию и тип Ozon{% endif %}
                         </p>
                         {% else %}
-                        <p class="mt-1 text-xs text-gray-500">Черновика ещё нет. Подготовка выполняется локально и ничего не публикует.</p>
+                        <p class="mt-1 text-xs" style="color:var(--text-muted)">Черновика ещё нет. Подготовка выполняется локально и ничего не публикует.</p>
                         {% endif %}
                     </div>
                     <div class="flex flex-wrap gap-2 shrink-0">
                         {% if draft %}
-                        <a href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}"
-                           class="px-3 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-50">
+                        <a href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">
                             Открыть
                         </a>
                         <form method="post" action="{{ url_for('marketplace_drafts.validate', draft_id=draft.id) }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="expected_version" value="{{ draft.version }}">
-                            <button type="submit" class="px-3 py-2 bg-blue-700 text-white rounded-md text-sm font-medium hover:bg-blue-800">
+                            <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm">
                                 Проверить снова
                             </button>
                         </form>
@@ -142,7 +210,7 @@
                             <input type="hidden" name="account_id" value="{{ account.id }}">
                             <input type="hidden" name="imported_product_id" value="{{ product.id }}">
                             <input type="hidden" name="validate" value="1">
-                            <button type="submit" class="px-3 py-2 bg-blue-700 text-white rounded-md text-sm font-medium hover:bg-blue-800">
+                            <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm">
                                 Подготовить и проверить
                             </button>
                         </form>
@@ -153,13 +221,13 @@
             </div>
             {% else %}
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p class="text-sm text-gray-600">Сначала подключите хотя бы один кабинет Ozon.</p>
-                <a href="{{ url_for('marketplace_accounts.index') }}" class="px-3 py-2 bg-blue-700 text-white rounded-md text-sm font-medium hover:bg-blue-800">Подключить Ozon</a>
+                <p class="text-sm" style="color:var(--text-secondary)">Сначала подключите хотя бы один кабинет Ozon.</p>
+                <a href="{{ url_for('marketplace_accounts.index') }}" class="sh-btn sh-btn--primary sh-btn--sm">Подключить Ozon</a>
             </div>
             {% endif %}
 
-            <div class="mt-4 rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-600">
-                Обратный перенос Ozon → WB выполняется только как проверяемый diff общих фактов. Ozon category/type и ID значений его справочников не копируются в WB: у каналов разные обязательные схемы.
+            <div class="mt-4 rounded-lg px-4 py-3 text-xs" style="background:var(--bg-hover);color:var(--text-secondary)">
+                Обратный перенос с Ozon в общую карточку возможен только как проверяемое человеком сравнение названий и описаний. Категории, типы и значения справочников Ozon в WB не переносятся: у каналов разные обязательные схемы.
             </div>
         </div>
     </section>

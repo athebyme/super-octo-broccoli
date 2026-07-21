@@ -10,33 +10,43 @@
     .ozon-meta { margin-top:6px; color:var(--text-secondary); font-size:12px; }
     .ozon-path { color:var(--text); font-size:12px; line-height:1.45; }
     .ozon-id { margin-top:4px; color:var(--text-muted); font-family:ui-monospace,monospace; font-size:11px; }
-    .ozon-toggle { width:17px; height:17px; accent-color:var(--accent); }
     .ozon-unavailable { opacity:.52; }
     .ozon-search { display:flex; gap:8px; margin:0 0 16px; }
     .ozon-search input { flex:1; min-width:0; padding:9px 11px; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text); }
+    .ozon-quick-filter { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:-8px 0 16px; color:var(--text-secondary); font-size:12px; }
+    .ozon-toggle-cell { display:flex; flex-direction:column; align-items:flex-start; gap:5px; min-width:128px; }
+    .ozon-toggle-state { color:var(--text-secondary); font-size:11px; line-height:1.25; }
+    .ozon-toggle-error { max-width:190px; color:var(--danger); font-size:10px; line-height:1.35; }
     .ozon-pagination { display:flex; align-items:center; justify-content:center; gap:10px; margin-top:18px; color:var(--text-secondary); font-size:12px; }
     @media (max-width:720px) { .ozon-head { flex-direction:column; } }
 </style>
 
+{% set sync_labels = {
+    'success': 'готово',
+    'failed': 'ошибка',
+    'running': 'обновляется',
+    'partial': 'загружено частично',
+    'pending': 'ожидает обновления'
+} %}
 <div class="ozon-page" x-data="ozonTypesManager()">
     <nav class="sh-breadcrumb" aria-label="Навигационная цепочка">
         <a href="{{ url_for('marketplaces.index') }}">Маркетплейсы</a>
         <span aria-hidden="true"> / </span>
-        <span>Ozon taxonomy</span>
+        <span>Справочник категорий Ozon</span>
     </nav>
 
     <div class="ozon-head">
         <div>
             <h1 class="ozon-title">Категории и типы Ozon</h1>
             <p class="ozon-meta">
-                {{ total }} типов в выборке · {{ enabled_count }} включено ·
-                taxonomy v{{ marketplace.categories_version or 0 }} ·
-                {{ marketplace.categories_sync_status or 'не синхронизировано' }}
+                {{ total }} типов в выборке · <span x-text="enabledCount">{{ enabled_count }}</span> включено ·
+                версия справочника {{ marketplace.categories_version or 0 }} ·
+                {{ sync_labels.get(marketplace.categories_sync_status, 'не синхронизировано') }}
             </p>
         </div>
         <form method="POST" action="{{ url_for('marketplaces.sync_ozon_tree', marketplace_id=marketplace.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md">Обновить taxonomy</button>
+            <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md">Обновить справочник</button>
         </form>
     </div>
 
@@ -44,19 +54,30 @@
     <div class="sh-alert sh-alert--error" role="alert">{{ marketplace.categories_sync_error }}</div>
     {% endif %}
 
+    <div class="sh-alert sh-alert--info mb-4" role="note">
+        <div class="sh-alert-content">
+            <strong>Категория 18+ называется «Товары для взрослых».</strong>
+            Ozon включает точный тип товара, а не всю ветку: например, «Вибратор», «Аксессуар БДСМ» или «Крем интимный». При первом включении загружается схема атрибутов, это может занять несколько секунд.
+        </div>
+    </div>
+
     <form method="GET" class="ozon-search" role="search">
         <label class="sr-only" for="ozon-category-search">Поиск по категории, типу или ID</label>
         <input id="ozon-category-search" name="search" value="{{ search }}" maxlength="200"
-               placeholder="Категория, тип, description_category_id или type_id">
+               placeholder="Название категории или типа, ID категории или типа">
         <button type="submit" class="sh-btn sh-btn--accent sh-btn--md">Найти</button>
         {% if search %}<a href="{{ url_for('marketplaces.ozon_categories', marketplace_id=marketplace.id) }}" class="sh-btn sh-btn--ghost sh-btn--md">Сбросить</a>{% endif %}
     </form>
+    <div class="ozon-quick-filter">
+        <span>Быстрый фильтр:</span>
+        <a href="{{ url_for('marketplaces.ozon_categories', marketplace_id=marketplace.id, search='Товары для взрослых') }}" class="sh-btn sh-btn--ghost sh-btn--sm">Товары для взрослых</a>
+    </div>
 
     <div class="sh-table-wrap">
         <table class="sh-table" style="min-width:980px">
             <thead>
                 <tr>
-                    <th style="width:58px;text-align:center">Вкл.</th>
+                    <th style="width:210px">Использовать</th>
                     <th>Категория</th>
                     <th style="width:27%">Тип товара</th>
                     <th style="width:190px">Схема</th>
@@ -66,27 +87,35 @@
             <tbody>
                 {% for item in product_types %}
                 <tr :class="{'ozon-unavailable': !available[{{ item.id }}]}">
-                    <td style="text-align:center">
-                        <input class="ozon-toggle" type="checkbox"
-                               :checked="enabled[{{ item.id }}]"
-                               @change="toggle({{ item.id }}, $event.target.checked)"
-                               :disabled="busy[{{ item.id }}] || !available[{{ item.id }}]"
-                               aria-label="Включить тип {{ item.name }}">
+                    <td>
+                        <div class="ozon-toggle-cell">
+                            <label class="sh-toggle">
+                                <input type="checkbox"
+                                       :checked="enabled[{{ item.id }}]"
+                                       @change="toggle({{ item.id }}, $event)"
+                                       :disabled="busy[{{ item.id }}] || !available[{{ item.id }}]"
+                                       aria-label="Включить тип {{ item.name }}">
+                                <span class="sh-toggle-track"><span class="sh-toggle-thumb"></span></span>
+                                <span class="sh-toggle-label" x-text="enabled[{{ item.id }}] ? 'Включён' : 'Выключен'"></span>
+                            </label>
+                            <span class="ozon-toggle-state" x-show="busy[{{ item.id }}]" x-cloak>Загружаем схему…</span>
+                            <span class="ozon-toggle-error" x-show="errors[{{ item.id }}]" x-text="errors[{{ item.id }}]" x-cloak></span>
+                        </div>
                     </td>
                     <td>
                         <div class="ozon-path">{{ item.category.full_path }}</div>
-                        <div class="ozon-id">description_category_id={{ item.category.external_category_id }}</div>
+                        <div class="ozon-id">ID категории Ozon: {{ item.category.external_category_id }}</div>
                         {% if not item.category.is_available %}<span class="sh-badge sh-badge--sm sh-badge--gray">Категория недоступна</span>{% endif %}
                     </td>
                     <td>
                         <div class="ozon-path" style="font-weight:600">{{ item.name }}</div>
-                        <div class="ozon-id">type_id={{ item.external_type_id }}</div>
-                        {% if item.is_disabled_upstream %}<span class="sh-badge sh-badge--sm sh-badge--gray">Disabled upstream</span>{% endif %}
+                        <div class="ozon-id">ID типа Ozon: {{ item.external_type_id }}</div>
+                        {% if item.is_disabled_upstream %}<span class="sh-badge sh-badge--sm sh-badge--gray">Отключён на стороне Ozon</span>{% endif %}
                     </td>
                     <td>
                         <div class="ozon-path">{{ item.attributes_count or 0 }} атрибутов · {{ item.required_attributes_count or 0 }} обязательных</div>
                         <div class="ozon-id">
-                            {{ item.attributes_sync_status or 'не загружена' }}
+                            {{ sync_labels.get(item.attributes_sync_status, 'не загружена') }}
                             {% if item.attributes_synced_at %} · {{ item.attributes_synced_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}
                         </div>
                     </td>
@@ -95,7 +124,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" style="padding:40px;text-align:center;color:var(--text-muted)">Нет типов. Синхронизируйте taxonomy или измените поиск.</td></tr>
+                <tr><td colspan="5" style="padding:40px;text-align:center;color:var(--text-muted)">Типы не найдены. Обновите справочник или измените поиск.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -114,6 +143,7 @@
 <script>
 function ozonTypesManager() {
     return {
+        enabledCount: {{ enabled_count }},
         enabled: {
             {% for item in product_types %}{{ item.id }}: {{ 'true' if item.is_enabled else 'false' }},{% endfor %}
         },
@@ -121,25 +151,46 @@ function ozonTypesManager() {
             {% for item in product_types %}{{ item.id }}: {{ 'true' if item.is_available and item.category.is_available else 'false' }},{% endfor %}
         },
         busy: {},
+        errors: {},
         csrf() { return document.querySelector('meta[name="csrf-token"]')?.content || ''; },
-        toast(type, message) { Alpine.store('toasts')[type](message); },
-        async toggle(id, state) {
+        toast(type, message) {
+            const store = window.Alpine && window.Alpine.store('toasts');
+            if (store && typeof store[type] === 'function') store[type](message);
+        },
+        async toggle(id, event) {
+            const state = Boolean(event.target.checked);
             const previous = Boolean(this.enabled[id]);
             this.enabled[id] = state;
             this.busy[id] = true;
+            this.errors[id] = '';
             try {
                 const response = await fetch(`/admin/marketplaces/ozon/types/${id}/toggle`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json', 'X-CSRFToken': this.csrf()},
                     body: JSON.stringify({is_enabled: state}),
                 });
-                const data = await response.json();
-                if (!response.ok || !data.success) throw new Error(data.error || 'Не удалось сохранить тип Ozon');
-                this.enabled[id] = Boolean(data.is_enabled);
-                this.toast('success', data.synced ? `Тип включён, схема обновлена (${data.attributes_count})` : 'Настройка типа сохранена');
+                const contentType = response.headers.get('content-type') || '';
+                let data = {};
+                if (contentType.includes('application/json')) {
+                    try { data = await response.json(); } catch (_error) { data = {}; }
+                }
+                if (!response.ok || !data.success) {
+                    const sessionError = response.status === 401 || response.status === 403
+                        ? 'Сессия истекла или нет прав. Обновите страницу.'
+                        : 'Не удалось сохранить тип Ozon';
+                    throw new Error(data.error || sessionError);
+                }
+                const saved = Boolean(data.is_enabled);
+                this.enabled[id] = saved;
+                event.target.checked = saved;
+                if (previous !== saved) this.enabledCount += saved ? 1 : -1;
+                this.toast('success', data.synced ? `Тип включён, схема обновлена: ${data.attributes_count} атрибутов` : 'Настройка типа сохранена');
             } catch (error) {
                 this.enabled[id] = previous;
-                this.toast('error', error.message);
+                event.target.checked = previous;
+                const message = error instanceof Error ? error.message : 'Не удалось сохранить тип Ozon';
+                this.errors[id] = message;
+                this.toast('error', message);
             } finally {
                 this.busy[id] = false;
             }

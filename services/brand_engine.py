@@ -12,6 +12,7 @@ Pipeline: normalize → alias lookup → fuzzy → marketplace API → category 
 """
 import json
 import logging
+import sqlite3
 import threading
 import time
 import unicodedata
@@ -20,7 +21,25 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
 
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
+
 logger = logging.getLogger('brand_engine')
+
+
+def _is_sqlite_write_contention(error: Exception) -> bool:
+    """Recognize SQLite BUSY/LOCKED failures without matching domain errors."""
+    if not isinstance(error, (sqlite3.OperationalError, SQLAlchemyOperationalError)):
+        return False
+    messages = [str(error)]
+    original = getattr(error, 'orig', None)
+    if original is not None:
+        messages.append(str(original))
+    normalized = ' '.join(messages).lower()
+    return any(message in normalized for message in (
+        'database is locked',
+        'database table is locked',
+        'database schema is locked',
+    ))
 
 
 @dataclass
@@ -212,21 +231,21 @@ class BrandEngine:
         result = self._match_exact(normalized, marketplace_id)
         if result:
             if category_id and marketplace_id:
-                result.category_valid = self._check_category(result.marketplace_brand_id, category_id)
+                self._apply_category_scope(result, category_id)
             return result
 
         # Step 2: Alphanumeric exact match
         result = self._match_alphanumeric(raw_brand, marketplace_id)
         if result:
             if category_id and marketplace_id:
-                result.category_valid = self._check_category(result.marketplace_brand_id, category_id)
+                self._apply_category_scope(result, category_id)
             return result
 
         # Step 3: Fuzzy match
         result = self._match_fuzzy(normalized, raw_brand, marketplace_id)
         if result:
             if category_id and marketplace_id:
-                result.category_valid = self._check_category(result.marketplace_brand_id, category_id)
+                self._apply_category_scope(result, category_id)
             return result
 
         # Step 4: Marketplace API поиск
@@ -239,7 +258,7 @@ class BrandEngine:
             )
             if result:
                 if category_id and marketplace_id:
-                    result.category_valid = self._check_category(result.marketplace_brand_id, category_id)
+                    self._apply_category_scope(result, category_id)
                 return result
 
         # Step 5: Не найден — создаём pending бренд
@@ -565,6 +584,32 @@ class BrandEngine:
         except Exception:
             return None
 
+    def _apply_category_scope(
+        self, result: BrandResolution, category_id: int,
+    ) -> None:
+        """Apply exact category availability and provider identity in-place."""
+        result.category_valid = None
+        # A primary MarketplaceBrand ID is not proof for a category-scoped WB
+        # identity. Clear it unless the exact link below supplies one.
+        result.marketplace_brand_ext_id = None
+        if not result.marketplace_brand_id or not category_id:
+            return
+        try:
+            from models import BrandCategoryLink
+
+            link = BrandCategoryLink.query.filter_by(
+                marketplace_brand_id=result.marketplace_brand_id,
+                category_id=category_id,
+            ).first()
+            if link is None:
+                return
+            result.category_valid = link.is_available
+            result.marketplace_brand_ext_id = (
+                link.marketplace_external_brand_id
+            )
+        except Exception:
+            return
+
     # ------------------------------------------------------------------
     # Marketplace-specific helpers
     # ------------------------------------------------------------------
@@ -780,7 +825,7 @@ class BrandEngine:
         Синхронизация справочника брендов маркетплейса в БД.
 
         Загружает бренды последовательно по включённым категориям,
-        сохраняет в БД батчами по 200 штук.
+        сохраняет в БД короткими батчами по 50 штук.
         """
         from models import (
             db, Brand, BrandAlias, Marketplace, MarketplaceBrand,
@@ -810,6 +855,9 @@ class BrandEngine:
             'category_links_created': 0, 'category_links_updated': 0,
             'category_links_removed': 0, 'errors': 0, 'total_fetched': 0,
             'categories_completed_this_run': 0,
+            'category_identity_conflicts': 0,
+            'category_identities_quarantined': 0,
+            'db_contention': 0,
         }
 
         # --- Phase 1: Получаем включённые категории ---
@@ -935,30 +983,74 @@ class BrandEngine:
                     })
                     break
 
-                parsed_brand_ids = set()
-                parsed_snapshot = []
+                candidate_snapshot = []
+                normalized_name_ids = {}
                 for brand_data in snapshot:
                     try:
-                        ext_id = int(brand_data.get('id'))
-                    except (AttributeError, TypeError, ValueError):
-                        parsed_snapshot = []
+                        ext_id = brand_data.get('id')
+                    except AttributeError:
+                        candidate_snapshot = []
                         break
                     name = str(brand_data.get('name') or '').strip()
-                    if ext_id <= 0 or not name:
-                        parsed_snapshot = []
+                    if type(ext_id) is not int or ext_id <= 0 or not name:
+                        candidate_snapshot = []
                         break
+                    name_norm = normalize_for_comparison(name)
+                    if not name_norm:
+                        candidate_snapshot = []
+                        break
+                    normalized_name_ids.setdefault(name_norm, set()).add(ext_id)
                     previous_name = all_brands.get(ext_id)
                     if previous_name and previous_name != name:
-                        parsed_snapshot = []
+                        candidate_snapshot = []
                         break
-                    parsed_snapshot.append((ext_id, name))
-                    parsed_brand_ids.add(ext_id)
-                if not parsed_snapshot:
+                    candidate_snapshot.append((ext_id, name, name_norm))
+                if not candidate_snapshot:
                     fetch_errors.append({
                         'subject_id': subject_id,
                         'code': 'invalid_subject_snapshot',
                     })
                     break
+
+                # WB can expose the same normalized name under several IDs in
+                # one category. A card write sends the name, so selecting one
+                # of those IDs would manufacture evidence. Quarantine only
+                # those identities; the rest of the complete category remains
+                # usable and existing links for ambiguous IDs are disabled.
+                ambiguous_names = {
+                    name_norm
+                    for name_norm, external_ids in normalized_name_ids.items()
+                    if len(external_ids) > 1
+                }
+                if ambiguous_names:
+                    quarantined_count = sum(
+                        1 for _, _, name_norm in candidate_snapshot
+                        if name_norm in ambiguous_names
+                    )
+                    stats['category_identity_conflicts'] += len(ambiguous_names)
+                    stats['category_identities_quarantined'] += quarantined_count
+                    logger.warning(
+                        'Quarantined %s ambiguous WB brand identities in '
+                        'subjectId=%s (%s normalized-name conflicts)',
+                        quarantined_count,
+                        subject_id,
+                        len(ambiguous_names),
+                    )
+
+                parsed_snapshot = [
+                    (ext_id, name)
+                    for ext_id, name, name_norm in candidate_snapshot
+                    if name_norm not in ambiguous_names
+                ]
+                if not parsed_snapshot:
+                    fetch_errors.append({
+                        'subject_id': subject_id,
+                        'code': 'subject_snapshot_only_has_ambiguous_identities',
+                    })
+                    break
+                parsed_brand_ids = {
+                    ext_id for ext_id, _ in parsed_snapshot
+                }
                 for ext_id, name in parsed_snapshot:
                     all_brands[ext_id] = name
                     brand_subject_ids.setdefault(ext_id, set()).add(subject_id)
@@ -1036,7 +1128,8 @@ class BrandEngine:
         )
 
         brand_items = list(all_brands.items())
-        save_batch_size = 200
+        # Keep each SQLite writer window short enough for interactive writes.
+        save_batch_size = 50
         saved = 0
 
         # Prefetch the working set once. The old path performed up to four
@@ -1044,11 +1137,26 @@ class BrandEngine:
         marketplace_bindings = MarketplaceBrand.query.filter_by(
             marketplace_id=marketplace_id,
         ).all()
-        bindings_by_external_id = {
-            str(binding.marketplace_brand_id): binding
-            for binding in marketplace_bindings
-            if binding.marketplace_brand_id is not None
+        bindings_by_external_id = {}
+        bindings_by_id = {
+            binding.id: binding for binding in marketplace_bindings
         }
+
+        def register_external_identity(external_id, binding):
+            identity = str(int(external_id))
+            existing = bindings_by_external_id.get(identity)
+            if existing is not None and existing.id != binding.id:
+                raise ValueError(
+                    'marketplace brand external identity is bound to '
+                    'multiple canonical brands'
+                )
+            bindings_by_external_id[identity] = binding
+
+        for binding in marketplace_bindings:
+            if binding.marketplace_brand_id is not None:
+                register_external_identity(
+                    binding.marketplace_brand_id, binding,
+                )
         bindings_by_brand_id = {
             binding.brand_id: binding for binding in marketplace_bindings
         }
@@ -1068,7 +1176,28 @@ class BrandEngine:
             for link in existing_links
         }
 
+        # Alternative WB IDs are exact identities too. Load only identities
+        # present in this bounded upstream batch so a rename of an alternative
+        # category ID still resolves to the existing canonical brand.
+        current_external_ids = list(all_brands)
+        for chunk_start in range(0, len(current_external_ids), 500):
+            chunk = current_external_ids[chunk_start:chunk_start + 500]
+            identity_links = BrandCategoryLink.query.join(
+                MarketplaceBrand,
+                MarketplaceBrand.id == BrandCategoryLink.marketplace_brand_id,
+            ).filter(
+                MarketplaceBrand.marketplace_id == marketplace_id,
+                BrandCategoryLink.marketplace_external_brand_id.in_(chunk),
+            ).all()
+            for identity_link in identity_links:
+                binding = bindings_by_id.get(identity_link.marketplace_brand_id)
+                if binding is not None:
+                    register_external_identity(
+                        identity_link.marketplace_external_brand_id, binding,
+                    )
+
         def upsert_category_links(mp_brand, external_id):
+            exact_external_id = int(external_id)
             for subject_id in brand_subject_ids.get(external_id, ()):
                 key = (mp_brand.id, subject_id)
                 link = links_by_key.get(key)
@@ -1078,6 +1207,7 @@ class BrandEngine:
                     link = BrandCategoryLink(
                         marketplace_brand_id=mp_brand.id,
                         category_id=subject_id,
+                        marketplace_external_brand_id=exact_external_id,
                         category_name=category_name,
                         is_available=desired_available,
                         verified_at=sync_started_at,
@@ -1086,11 +1216,23 @@ class BrandEngine:
                     links_by_key[key] = link
                     stats['category_links_created'] += 1
                 else:
+                    if (
+                        link.marketplace_external_brand_id is not None
+                        and int(link.marketplace_external_brand_id)
+                        != exact_external_id
+                    ):
+                        raise ValueError(
+                            'category brand identity is ambiguous for one '
+                            'canonical brand'
+                        )
                     changed = (
                         link.is_available != desired_available
                         or link.category_name != category_name
+                        or link.marketplace_external_brand_id
+                        != exact_external_id
                     )
                     link.is_available = desired_available
+                    link.marketplace_external_brand_id = exact_external_id
                     link.category_name = category_name
                     link.verified_at = sync_started_at
                     if changed:
@@ -1164,135 +1306,251 @@ class BrandEngine:
             alias.is_active = True
             stats['aliases_reactivated'] += 1
 
+        def drop_rolled_back_cache_entries():
+            """Убирает из локальных кэшей объекты, откатившиеся вместе с
+            savepoint: их запись в БД не состоялась, и следующие бренды
+            батча не должны ссылаться на transient-объекты."""
+            def alive(obj):
+                return obj in db.session
+
+            for cache in (
+                brands_by_normalized_name,
+                brands_by_id,
+                aliases_by_normalized_name,
+                bindings_by_id,
+                bindings_by_brand_id,
+                bindings_by_external_id,
+                links_by_key,
+            ):
+                stale_keys = [
+                    key for key, obj in cache.items() if not alive(obj)
+                ]
+                for key in stale_keys:
+                    del cache[key]
+            marketplace_bindings[:] = [
+                binding for binding in marketplace_bindings if alive(binding)
+            ]
+
+        def commit_preserving_prefetched_state():
+            """End the SQLite transaction without expiring the read caches.
+
+            A normal SQLAlchemy commit expires every prefetched ORM row.  The
+            next item would then issue a SELECT before its UPDATE, recreating
+            a WAL read snapshot that can fail to upgrade with
+            SQLITE_BUSY_SNAPSHOT after any concurrent writer commits.
+            """
+            session = db.session()
+            previous = session.expire_on_commit
+            session.expire_on_commit = False
+            try:
+                session.commit()
+            finally:
+                session.expire_on_commit = previous
+
+        # All queries needed by the apply phase are complete.  End that read
+        # transaction before the first write while retaining the loaded ORM
+        # state.  This prevents a hours-old WAL snapshot from being upgraded
+        # to a writer after another background task has committed.
+        commit_preserving_prefetched_state()
+
+        mutation_stat_keys = (
+            'created', 'updated', 'mp_created', 'mp_updated',
+            'aliases_created', 'aliases_reactivated',
+            'category_links_created', 'category_links_updated',
+            'category_links_removed',
+        )
+        stop_saving = False
+
         for batch_start in range(0, len(brand_items), save_batch_size):
             batch = brand_items[batch_start:batch_start + save_batch_size]
+            batch_stats_before = {
+                key: stats[key] for key in mutation_stat_keys
+            }
+
+            # Make the outer transaction a writer before opening per-row
+            # savepoints.  Without an explicit BEGIN, SQLite can treat the
+            # first SAVEPOINT as the outer transaction and RELEASE commits it;
+            # a prior read snapshot can also fail its later write upgrade with
+            # SQLITE_BUSY_SNAPSHOT.  IMMEDIATE either claims the single writer
+            # slot now or lets this background run defer as one unit.
+            try:
+                db.session.execute(db.text('BEGIN IMMEDIATE'))
+            except Exception as e:
+                db.session.rollback()
+                stats['errors'] += 1
+                if _is_sqlite_write_contention(e):
+                    stats['db_contention'] += 1
+                    logger.warning(
+                        'Brand sync deferred before batch apply because the '
+                        'SQLite writer is busy; checkpoint was not advanced',
+                    )
+                else:
+                    logger.error('Failed to begin brand sync write batch: %s', e)
+                stop_saving = True
+                break
 
             for ext_id, name in batch:
+                item_stats_before = {
+                    key: stats[key] for key in mutation_stat_keys
+                }
                 try:
                     name_norm = normalize_for_comparison(name)
 
-                    # External WB ID is stable across a rename. Prefer it over
-                    # normalized display name so a rename updates, not duplicates.
-                    mp_brand = bindings_by_external_id.get(str(ext_id))
-                    if mp_brand:
-                        ensure_marketplace_alias(
-                            mp_brand.brand_id, name, name_norm,
-                        )
-                        previous_status = mp_brand.status
-                        if mp_brand.status == 'pending':
-                            mp_brand.status = 'verified'
-                            mp_brand.verified_at = sync_started_at
-                        desired_available = mp_brand.status == 'verified'
-                        if (
-                            mp_brand.marketplace_brand_name != name
-                            or previous_status != mp_brand.status
-                            or mp_brand.is_available != desired_available
-                        ):
-                            stats['mp_updated'] += 1
-                        mp_brand.marketplace_brand_name = name
-                        mp_brand.last_seen_at = sync_started_at
-                        mp_brand.is_available = desired_available
+                    # Savepoint изолирует row-local ошибку одного
+                    # бренда (например, constraint violation), чтобы
+                    # сессия осталась рабочей для остального батча.
+                    # SQLite BUSY/LOCKED ниже обрабатывается как ошибка
+                    # всей транзакции, а не одной строки.
+                    with db.session.begin_nested():
+                        # External WB ID is stable across a rename. Prefer
+                        # it over normalized display name so a rename
+                        # updates, not duplicates.
+                        mp_brand = bindings_by_external_id.get(str(ext_id))
+                        if mp_brand:
+                            ensure_marketplace_alias(
+                                mp_brand.brand_id, name, name_norm,
+                            )
+                            previous_status = mp_brand.status
+                            if mp_brand.status == 'pending':
+                                mp_brand.status = 'verified'
+                                mp_brand.verified_at = sync_started_at
+                            desired_available = mp_brand.status == 'verified'
+                            if (
+                                mp_brand.marketplace_brand_name != name
+                                or previous_status != mp_brand.status
+                                or mp_brand.is_available != desired_available
+                            ):
+                                stats['mp_updated'] += 1
+                            mp_brand.marketplace_brand_name = name
+                            mp_brand.last_seen_at = sync_started_at
+                            mp_brand.is_available = desired_available
+                            upsert_category_links(mp_brand, ext_id)
+                            continue
+
+                        # Глобальный бренд
+                        existing_alias = aliases_by_normalized_name.get(name_norm)
+                        brand = brands_by_normalized_name.get(name_norm)
+                        if brand is None and existing_alias is not None:
+                            if not existing_alias.is_active:
+                                raise ValueError(
+                                    f'inactive managed brand alias blocks {name!r}'
+                                )
+                            brand = brands_by_id.get(existing_alias.brand_id)
+                            if brand is None:
+                                raise ValueError(
+                                    f'canonical brand alias target is missing for {name!r}'
+                                )
+                        if brand:
+                            ensure_marketplace_alias(brand.id, name, name_norm)
+                            if brand.status == 'pending':
+                                brand.status = 'verified'
+                            brand.updated_at = datetime.utcnow()
+                            stats['updated'] += 1
+                        else:
+                            brand = Brand(
+                                name=name,
+                                name_normalized=name_norm,
+                                status='verified',
+                            )
+                            db.session.add(brand)
+                            db.session.flush()
+                            brands_by_normalized_name[name_norm] = brand
+                            brands_by_id[brand.id] = brand
+
+                            stats['created'] += 1
+
+                            ensure_marketplace_alias(brand.id, name, name_norm)
+
+                        # Привязка к маркетплейсу
+                        mp_brand = bindings_by_brand_id.get(brand.id)
+
+                        if not mp_brand:
+                            mp_brand = MarketplaceBrand(
+                                brand_id=brand.id,
+                                marketplace_id=marketplace_id,
+                                marketplace_brand_name=name,
+                                marketplace_brand_id=ext_id,
+                                status='verified',
+                                verified_at=sync_started_at,
+                                is_available=True,
+                                last_seen_at=sync_started_at,
+                            )
+                            db.session.add(mp_brand)
+                            db.session.flush()
+                            bindings_by_brand_id[brand.id] = mp_brand
+                            bindings_by_id[mp_brand.id] = mp_brand
+                            register_external_identity(ext_id, mp_brand)
+                            marketplace_bindings.append(mp_brand)
+                            stats['mp_created'] += 1
+                        else:
+                            previous_status = mp_brand.status
+                            if mp_brand.status == 'pending':
+                                mp_brand.status = 'verified'
+                                mp_brand.verified_at = sync_started_at
+                            desired_available = mp_brand.status == 'verified'
+                            changed = (
+                                not mp_brand.marketplace_brand_id
+                                or mp_brand.marketplace_brand_name != name
+                                or previous_status != mp_brand.status
+                                or mp_brand.is_available != desired_available
+                            )
+                            if not mp_brand.marketplace_brand_id:
+                                mp_brand.marketplace_brand_id = ext_id
+                            register_external_identity(ext_id, mp_brand)
+                            mp_brand.marketplace_brand_name = name
+                            mp_brand.last_seen_at = sync_started_at
+                            mp_brand.is_available = desired_available
+                            if changed:
+                                stats['mp_updated'] += 1
+
                         upsert_category_links(mp_brand, ext_id)
-                        continue
-
-                    # Глобальный бренд
-                    existing_alias = aliases_by_normalized_name.get(name_norm)
-                    brand = brands_by_normalized_name.get(name_norm)
-                    if brand is None and existing_alias is not None:
-                        if not existing_alias.is_active:
-                            raise ValueError(
-                                f'inactive managed brand alias blocks {name!r}'
-                            )
-                        brand = brands_by_id.get(existing_alias.brand_id)
-                        if brand is None:
-                            raise ValueError(
-                                f'canonical brand alias target is missing for {name!r}'
-                            )
-                    if brand:
-                        ensure_marketplace_alias(brand.id, name, name_norm)
-                        if brand.status == 'pending':
-                            brand.status = 'verified'
-                        brand.updated_at = datetime.utcnow()
-                        stats['updated'] += 1
-                    else:
-                        brand = Brand(
-                            name=name,
-                            name_normalized=name_norm,
-                            status='verified',
-                        )
-                        db.session.add(brand)
-                        db.session.flush()
-                        brands_by_normalized_name[name_norm] = brand
-                        brands_by_id[brand.id] = brand
-
-                        stats['created'] += 1
-
-                        ensure_marketplace_alias(brand.id, name, name_norm)
-
-                    # Привязка к маркетплейсу
-                    mp_brand = bindings_by_brand_id.get(brand.id)
-
-                    if (
-                        mp_brand
-                        and mp_brand.marketplace_brand_id is not None
-                        and str(mp_brand.marketplace_brand_id) != str(ext_id)
-                    ):
-                        raise ValueError(
-                            f'canonical brand {name!r} is already bound to '
-                            'another marketplace ID'
-                        )
-
-                    if not mp_brand:
-                        mp_brand = MarketplaceBrand(
-                            brand_id=brand.id,
-                            marketplace_id=marketplace_id,
-                            marketplace_brand_name=name,
-                            marketplace_brand_id=ext_id,
-                            status='verified',
-                            verified_at=sync_started_at,
-                            is_available=True,
-                            last_seen_at=sync_started_at,
-                        )
-                        db.session.add(mp_brand)
-                        db.session.flush()
-                        bindings_by_brand_id[brand.id] = mp_brand
-                        bindings_by_external_id[str(ext_id)] = mp_brand
-                        marketplace_bindings.append(mp_brand)
-                        stats['mp_created'] += 1
-                    else:
-                        previous_status = mp_brand.status
-                        if mp_brand.status == 'pending':
-                            mp_brand.status = 'verified'
-                            mp_brand.verified_at = sync_started_at
-                        desired_available = mp_brand.status == 'verified'
-                        changed = (
-                            not mp_brand.marketplace_brand_id
-                            or mp_brand.marketplace_brand_name != name
-                            or previous_status != mp_brand.status
-                            or mp_brand.is_available != desired_available
-                        )
-                        if not mp_brand.marketplace_brand_id:
-                            mp_brand.marketplace_brand_id = ext_id
-                            bindings_by_external_id[str(ext_id)] = mp_brand
-                        mp_brand.marketplace_brand_name = name
-                        mp_brand.last_seen_at = sync_started_at
-                        mp_brand.is_available = desired_available
-                        if changed:
-                            stats['mp_updated'] += 1
-
-                    upsert_category_links(mp_brand, ext_id)
 
                 except Exception as e:
+                    for key, value in item_stats_before.items():
+                        stats[key] = value
+                    if _is_sqlite_write_contention(e):
+                        # BUSY/LOCKED is transaction-wide infrastructure
+                        # contention, not malformed data in one brand.  A
+                        # savepoint cannot make a stale WAL snapshot writable.
+                        # Continuing here previously performed an O(N) cache
+                        # sweep and emitted a traceback for every remaining
+                        # brand, saturating the web process for hours.
+                        db.session.rollback()
+                        for key, value in batch_stats_before.items():
+                            stats[key] = value
+                        stats['errors'] += 1
+                        stats['db_contention'] += 1
+                        stop_saving = True
+                        logger.warning(
+                            'Brand sync deferred after SQLite write contention; '
+                            'checkpoint was not advanced',
+                        )
+                        break
                     logger.warning(f"Failed to save brand '{name}': {e}")
                     stats['errors'] += 1
+                    drop_rolled_back_cache_entries()
+
+            if stop_saving:
+                break
 
             # Коммитим батч
             try:
-                db.session.commit()
+                commit_preserving_prefetched_state()
             except Exception as e:
                 db.session.rollback()
-                logger.error(f"Failed to commit brand batch: {e}")
-                stats['errors'] += len(batch)
+                for key, value in batch_stats_before.items():
+                    stats[key] = value
+                stats['errors'] += 1
+                if _is_sqlite_write_contention(e):
+                    stats['db_contention'] += 1
+                    logger.warning(
+                        'Brand sync batch commit deferred after SQLite write '
+                        'contention; checkpoint was not advanced',
+                    )
+                else:
+                    logger.error(f"Failed to commit brand batch: {e}")
+                stop_saving = True
+                break
 
             saved += len(batch)
             update_progress(
@@ -1302,14 +1560,9 @@ class BrandEngine:
 
         save_succeeded = stats['errors'] == save_error_baseline
         if save_succeeded:
-            binding_external_ids = {
-                binding.id: int(binding.marketplace_brand_id)
-                for binding in marketplace_bindings
-                if binding.marketplace_brand_id is not None
-            }
             for link in existing_links:
                 upstream_ids = subject_brand_ids.get(int(link.category_id), set())
-                external_id = binding_external_ids.get(link.marketplace_brand_id)
+                external_id = link.marketplace_external_brand_id
                 if external_id not in upstream_ids:
                     if link.is_available:
                         stats['category_links_removed'] += 1
@@ -1372,6 +1625,8 @@ class BrandEngine:
                 f'Brand sweep checkpoint {checkpoint_next_index}/{total_cats}; '
                 f'errors={stats["errors"]}'
             )
+            if stats['db_contention']:
+                marketplace.brands_sync_error += '; deferred=sqlite_write_contention'
         db.session.commit()
         self.invalidate_cache()
 
@@ -1420,7 +1675,10 @@ class BrandEngine:
 
         if link and link.verified_at:
             age = (datetime.utcnow() - link.verified_at).total_seconds()
-            if age < 86400:
+            if age < 86400 and (
+                not link.is_available
+                or link.marketplace_external_brand_id is not None
+            ):
                 return link.is_available
 
         if not marketplace_client:
@@ -1435,24 +1693,56 @@ class BrandEngine:
             wb_brands = result.get('data', [])
 
             brand_alnum = normalize_alphanumeric(mp_brand.marketplace_brand_name)
-            is_available = any(
-                normalize_alphanumeric(wb.get('name', '')) == brand_alnum
-                for wb in wb_brands
-            )
+            exact_ids = set()
+            invalid_exact_identity = False
+            for wb_brand in wb_brands:
+                if normalize_alphanumeric(wb_brand.get('name', '')) != brand_alnum:
+                    continue
+                try:
+                    exact_id = wb_brand.get('id')
+                except AttributeError:
+                    invalid_exact_identity = True
+                    continue
+                if type(exact_id) is not int or exact_id <= 0:
+                    invalid_exact_identity = True
+                    continue
+                exact_ids.add(exact_id)
+
+            # A same-category name resolving to multiple provider IDs is not
+            # an exact identity and must not overwrite last-good evidence.
+            if invalid_exact_identity or len(exact_ids) > 1:
+                return None
+            is_available = len(exact_ids) == 1
             if not is_available and result.get('complete') is not True:
+                return None
+
+            exact_external_id = next(iter(exact_ids), None)
+            if (
+                is_available
+                and link
+                and link.marketplace_external_brand_id is not None
+                and int(link.marketplace_external_brand_id)
+                != exact_external_id
+            ):
                 return None
 
             if link:
                 link.is_available = is_available
                 link.verified_at = datetime.utcnow()
+                if is_available:
+                    link.marketplace_external_brand_id = exact_external_id
             else:
                 link = BrandCategoryLink(
                     marketplace_brand_id=marketplace_brand_id,
                     category_id=category_id,
+                    marketplace_external_brand_id=exact_external_id,
                     is_available=is_available,
                     verified_at=datetime.utcnow(),
                 )
                 db.session.add(link)
+
+            if is_available and mp_brand.marketplace_brand_id is None:
+                mp_brand.marketplace_brand_id = exact_external_id
 
             db.session.commit()
             return is_available
@@ -1467,7 +1757,10 @@ class BrandEngine:
 
     def merge_brands(self, source_brand_id: int, target_brand_id: int) -> dict:
         """Объединить source бренд в target. Переносит aliases, marketplace_brands, products."""
-        from models import db, Brand, BrandAlias, MarketplaceBrand, ImportedProduct, SupplierProduct
+        from models import (
+            db, Brand, BrandAlias, BrandCategoryLink, MarketplaceBrand,
+            ImportedProduct, SupplierProduct,
+        )
 
         source = Brand.query.get(source_brand_id)
         target = Brand.query.get(target_brand_id)
@@ -1479,6 +1772,42 @@ class BrandEngine:
 
         stats = {'aliases_moved': 0, 'mp_brands_moved': 0,
                  'imported_products_updated': 0, 'supplier_products_updated': 0}
+
+        # Preflight before mutating aliases/products. Two different exact IDs
+        # in one marketplace category cannot be collapsed into one safe link.
+        target_bindings = {
+            binding.marketplace_id: binding
+            for binding in MarketplaceBrand.query.filter_by(
+                brand_id=target_brand_id,
+            ).all()
+        }
+        for source_binding in MarketplaceBrand.query.filter_by(
+            brand_id=source_brand_id,
+        ).all():
+            target_binding = target_bindings.get(source_binding.marketplace_id)
+            if target_binding is None:
+                continue
+            target_links = {
+                int(link.category_id): link
+                for link in BrandCategoryLink.query.filter_by(
+                    marketplace_brand_id=target_binding.id,
+                ).all()
+            }
+            for source_link in BrandCategoryLink.query.filter_by(
+                marketplace_brand_id=source_binding.id,
+            ).all():
+                target_link = target_links.get(int(source_link.category_id))
+                if (
+                    target_link
+                    and source_link.marketplace_external_brand_id is not None
+                    and target_link.marketplace_external_brand_id is not None
+                    and int(source_link.marketplace_external_brand_id)
+                    != int(target_link.marketplace_external_brand_id)
+                ):
+                    raise ValueError(
+                        'Cannot merge brands with conflicting exact '
+                        'marketplace category identities'
+                    )
 
         # Переносим aliases
         for alias in BrandAlias.query.filter_by(brand_id=source_brand_id).all():
@@ -1500,13 +1829,19 @@ class BrandEngine:
             ).first()
             if existing:
                 # Переносим category_links на существующий
-                from models import BrandCategoryLink
                 for link in BrandCategoryLink.query.filter_by(marketplace_brand_id=mp_brand.id).all():
                     dup = BrandCategoryLink.query.filter_by(
                         marketplace_brand_id=existing.id,
                         category_id=link.category_id,
                     ).first()
                     if dup:
+                        if (
+                            dup.marketplace_external_brand_id is None
+                            and link.marketplace_external_brand_id is not None
+                        ):
+                            dup.marketplace_external_brand_id = (
+                                link.marketplace_external_brand_id
+                            )
                         db.session.delete(link)
                     else:
                         link.marketplace_brand_id = existing.id
@@ -1594,9 +1929,24 @@ class BrandEngine:
                         subject_id=link.category_id,
                     )
                     if result.get('valid') and result.get('exact_match'):
+                        try:
+                            matched_external_id = result['exact_match'].get('id')
+                        except AttributeError:
+                            all_conclusive = False
+                            continue
+                        if type(matched_external_id) is not int or (
+                            matched_external_id <= 0
+                        ) or (
+                            link.marketplace_external_brand_id is not None
+                            and int(link.marketplace_external_brand_id)
+                            != matched_external_id
+                        ):
+                            all_conclusive = False
+                            continue
                         any_valid = True
                         matched_brand = result['exact_match']
                         link.is_available = True
+                        link.marketplace_external_brand_id = matched_external_id
                         link.verified_at = datetime.utcnow()
                     elif result.get('complete') is True:
                         link.is_available = False
@@ -1619,11 +1969,17 @@ class BrandEngine:
                 else:
                     stats['errors'] += 1
 
+                # Коммит на каждый бренд: без него первый же autoflush в
+                # следующей итерации открывал write-транзакцию, которая жила
+                # через network validate_brand + sleep до конца ВСЕХ брендов,
+                # и параллельные писатели падали с «database is locked».
+                db.session.commit()
                 time.sleep(0.2)
 
             except Exception as e:
                 logger.warning(f"Revalidation failed for mp_brand '{mp_brand.marketplace_brand_name}': {e}")
                 stats['errors'] += 1
+                db.session.rollback()
 
         try:
             db.session.commit()

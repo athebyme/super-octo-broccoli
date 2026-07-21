@@ -1,8 +1,26 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import channel_bar %}
+{% from "macros/icons.html" import icon %}
 
 {% block title %}Финансы Ozon — Seller Hub{% endblock %}
 
 {% block content %}
+<style>
+  /* Переключатель периода на тёмном hero page-header (обе темы: header всегда тёмный) */
+  .mp-period-seg { display: flex; gap: 2px; padding: 3px; background: rgba(255,255,255,.12); border-radius: var(--r-sm); }
+  .mp-period-btn {
+    border: none; background: transparent; cursor: pointer;
+    padding: 5px 12px; border-radius: var(--r-xs);
+    font-size: 13px; font-weight: 500; color: rgba(255,255,255,.72);
+    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+  }
+  .mp-period-btn:hover { color: var(--text-on-accent); }
+  .mp-period-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+  .mp-period-btn:active { opacity: .85; }
+  .mp-period-btn--active { background: var(--text-on-accent); color: var(--bg-sidebar); box-shadow: var(--shadow-1); }
+  .mp-facts-table td { vertical-align: top; }
+</style>
+
 <div x-data="ozonFinancePage()" x-init="init()">
   <div class="sh-page-header">
     <div class="sh-page-header-content">
@@ -10,10 +28,10 @@
         <h1 class="sh-page-title">Финансы Ozon</h1>
         <p class="sh-page-subtitle">Проверяемые начисления по кабинету, валюте и источнику</p>
       </div>
-      <div class="sh-page-actions" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <div style="display:flex;background:rgba(255,255,255,.12);padding:3px;border-radius:7px">
-          <button @click="changePeriod('7d')" class="px-3 py-1.5 rounded text-sm" :class="period==='7d'?'bg-white text-gray-900 shadow':'text-white'">7 дней</button>
-          <button @click="changePeriod('30d')" class="px-3 py-1.5 rounded text-sm" :class="period==='30d'?'bg-white text-gray-900 shadow':'text-white'">30 дней</button>
+      <div class="sh-page-actions">
+        <div class="mp-period-seg" role="group" aria-label="Период">
+          <button type="button" @click="changePeriod('7d')" class="mp-period-btn" :class="period==='7d' ? 'mp-period-btn--active' : ''" :aria-pressed="period==='7d' ? 'true' : 'false'">7 дней</button>
+          <button type="button" @click="changePeriod('30d')" class="mp-period-btn" :class="period==='30d' ? 'mp-period-btn--active' : ''" :aria-pressed="period==='30d' ? 'true' : 'false'">30 дней</button>
         </div>
         <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="sync()" :disabled="syncing">
           <span x-text="syncing ? 'Читаем Ozon…' : (syncState && syncState.status==='running' ? 'Продолжить sync' : 'Обновить из Ozon')"></span>
@@ -23,35 +41,35 @@
   </div>
 
   <div style="max-width:1380px;margin:0 auto;padding:0 24px 40px">
-    <div class="sh-card" style="padding:16px;margin-bottom:20px">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <a href="{{ url_for('marketplace_analytics_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Обзор Ozon</a>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      {{ channel_bar(active='ozon', account_id=selected_account.id, wb_href=url_for('finances_page'), ozon_href=url_for('marketplace_finance.page'), carry='period') }}
+      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
         <a href="{{ url_for('marketplace_fulfillment.orders_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Заказы</a>
+        <a href="{{ url_for('marketplace_analytics_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Аналитика</a>
         <a href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы</a>
-        <span class="sh-btn sh-btn--primary sh-btn--sm" aria-current="page">Финансы</span>
-        <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:14px">Кабинет
-          <select class="sh-input" style="min-width:220px" @change="switchAccount($event.target.value)">
-            {% for account in ozon_accounts %}
-            <option value="{{ account.id }}" {% if account.id == selected_account.id %}selected{% endif %}>{{ account.label }} · {{ account.external_account_id }}</option>
-            {% endfor %}
-          </select>
-        </label>
-      </div>
-      <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border:1px solid #bfdbfe;border-radius:9px;background:#eff6ff;color:#1e40af;font-size:13px;line-height:1.5">
-        <span aria-hidden="true">ℹ️</span>
-        <span><strong>Это не P&amp;L и не прибыль.</strong> Итоги считаются только из <code>accruals[].total_amount</code>: положительные и отрицательные суммы показываются отдельно, net — их алгебраическая сумма внутри одной валюты. Детали fee поясняют операцию и никогда не суммируются второй раз. WB и разные валюты не объединяются.</span>
       </div>
     </div>
 
+    <div class="sh-alert sh-alert--info" role="note">
+      <div class="sh-alert-icon">{{ icon('info-circle', size=18) }}</div>
+      <div class="sh-alert-content"><strong>Это не P&amp;L и не прибыль.</strong> Итоги считаются только из <code>accruals[].total_amount</code>: положительные и отрицательные суммы показываются отдельно, net — их алгебраическая сумма внутри одной валюты. Детали fee поясняют операцию и никогда не суммируются второй раз. WB и разные валюты не объединяются.</div>
+    </div>
+
     <template x-if="error">
-      <div style="padding:14px 16px;margin-bottom:20px;border:1px solid #fecaca;background:#fef2f2;border-radius:10px;color:#b91c1c" x-text="error"></div>
+      <div class="sh-alert sh-alert--error" role="alert">
+        <div class="sh-alert-icon">{{ icon('x-circle', size=18) }}</div>
+        <div class="sh-alert-content" x-text="error"></div>
+      </div>
     </template>
 
     <template x-if="!error && syncState && syncState.status==='failed' && syncState.error_message">
-      <div style="padding:14px 16px;margin-bottom:20px;border:1px solid #fed7aa;background:#fff7ed;border-radius:10px;color:#9a3412">
-        <strong>Последнее обновление не завершилось.</strong>
-        <span x-text="' '+syncState.error_message"></span>
-        <span x-show="snapshotState"> Данные ниже взяты из последнего готового снимка.</span>
+      <div class="sh-alert sh-alert--warning" role="alert">
+        <div class="sh-alert-icon">{{ icon('warning', size=18) }}</div>
+        <div class="sh-alert-content">
+          <strong>Последнее обновление не завершилось.</strong>
+          <span x-text="' '+syncState.error_message"></span>
+          <span x-show="snapshotState"> Данные ниже взяты из последнего готового снимка.</span>
+        </div>
       </div>
     </template>
 
@@ -81,16 +99,16 @@
       </div>
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;color:var(--text-muted);font-size:12px">
         <span x-text="total.toLocaleString('ru-RU')+' начислений'"></span>
-        <span>•</span>
+        <span aria-hidden="true">•</span>
         <span x-text="syncLabel"></span>
         <template x-if="syncState && syncState.status==='running'">
-          <span style="color:#1d4ed8" x-text="'День '+syncState.current_date+' · '+syncState.page_count+' страниц · '+syncState.fact_count+' фактов'"></span>
+          <span style="color:var(--info)" x-text="'День '+syncState.current_date+' · '+syncState.page_count+' страниц · '+syncState.fact_count+' фактов'"></span>
         </template>
         <template x-if="coverage && snapshotState && !coverage.complete">
-          <span style="color:#b45309" x-text="'Снимок покрывает данные по '+dateOnly(coverage.snapshot_end)+'; недостающий хвост сейчас обновляется'"></span>
+          <span style="color:var(--warn)" x-text="'Снимок покрывает данные по '+dateOnly(coverage.snapshot_end)+'; недостающий хвост сейчас обновляется'"></span>
         </template>
         <template x-if="syncState && (syncState.unmatched_item_count || syncState.ambiguous_item_count)">
-          <span style="color:#b45309" x-text="'Без точной связи: '+syncState.unmatched_item_count+'; неоднозначных SKU: '+syncState.ambiguous_item_count"></span>
+          <span style="color:var(--warn)" x-text="'Без точной связи: '+syncState.unmatched_item_count+'; неоднозначных SKU: '+syncState.ambiguous_item_count"></span>
         </template>
       </div>
     </div>
@@ -101,94 +119,99 @@
           <strong x-text="summary.currency"></strong>
           <span style="font-size:12px;color:var(--text-muted)" x-text="summary.fact_count.toLocaleString('ru-RU')+' фактов источника'"></span>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
-          <div class="sh-card" style="padding:18px;border-left:4px solid #16a34a">
-            <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Положительные total_amount</div>
-            <div style="font-size:25px;font-weight:800;margin-top:6px;color:#15803d" x-text="money(summary.positive,summary.currency)"></div>
+        <div class="sh-stat-grid sh-stat-grid--3" style="margin-bottom:0">
+          <div class="sh-stat-card" style="border-left:3px solid var(--ok)">
+            <span class="sh-stat-label">Положительные total_amount</span>
+            <div class="sh-stat-value" style="color:var(--ok)" x-text="money(summary.positive,summary.currency)"></div>
           </div>
-          <div class="sh-card" style="padding:18px;border-left:4px solid #dc2626">
-            <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Отрицательные total_amount</div>
-            <div style="font-size:25px;font-weight:800;margin-top:6px;color:#b91c1c" x-text="money(summary.negative,summary.currency)"></div>
+          <div class="sh-stat-card" style="border-left:3px solid var(--danger)">
+            <span class="sh-stat-label">Отрицательные total_amount</span>
+            <div class="sh-stat-value" style="color:var(--danger)" x-text="money(summary.negative,summary.currency)"></div>
           </div>
-          <div class="sh-card" style="padding:18px;border-left:4px solid #2563eb">
-            <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em">Net = сумма total_amount</div>
-            <div style="font-size:25px;font-weight:800;margin-top:6px" x-text="money(summary.net,summary.currency)"></div>
+          <div class="sh-stat-card" style="border-left:3px solid var(--info)">
+            <span class="sh-stat-label">Net = сумма total_amount</span>
+            <div class="sh-stat-value" x-text="money(summary.net,summary.currency)"></div>
           </div>
         </div>
       </section>
     </template>
 
-    <div class="sh-card" style="overflow:hidden">
-      <div x-show="loading" style="padding:52px;text-align:center;color:var(--text-muted)">Загрузка…</div>
-      <div x-show="!loading && !items.length" style="padding:54px 24px;text-align:center">
-        <div style="font-size:18px;font-weight:700;margin-bottom:7px" x-text="syncState && syncState.status==='running' ? 'Снимок ещё собирается' : 'Финансовых фактов пока нет'"></div>
-        <div style="color:var(--text-muted);font-size:14px;margin-bottom:18px" x-text="syncState && syncState.status==='running' ? 'Частичный run скрыт: здесь появится только полностью проверенный снимок.' : 'Запустите read-only синхронизацию выбранного кабинета Ozon.'"></div>
-        <button class="sh-btn sh-btn--primary" @click="sync()" :disabled="syncing" x-text="syncState && syncState.status==='running' ? 'Продолжить' : 'Получить начисления'"></button>
-      </div>
+    <div x-show="loading" class="sh-card" style="padding:52px;text-align:center;color:var(--text-muted)">
+      <span class="sh-spinner sh-spinner--lg" role="status" aria-label="Загрузка"></span>
+      <div style="margin-top:12px">Загрузка…</div>
+    </div>
 
-      <div x-show="!loading && items.length" style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;min-width:1080px">
-          <thead>
-            <tr style="background:var(--surface-subtle);font-size:12px;color:var(--text-muted);text-align:left">
-              <th style="padding:12px 14px">Дата и accrual</th>
-              <th style="padding:12px 14px">Источник / связь</th>
-              <th style="padding:12px 14px">Категория</th>
-              <th style="padding:12px 14px">Поясняющие fee</th>
-              <th style="padding:12px 14px;text-align:right">Total amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template x-for="item in items" :key="item.id">
-              <tr style="border-top:1px solid var(--border);vertical-align:top">
-                <td style="padding:14px;min-width:190px">
-                  <div style="font-weight:700" x-text="dateOnly(item.fact_date)"></div>
-                  <div style="font-size:12px;color:var(--text-muted);margin-top:4px" x-text="'ID '+item.accrual_id"></div>
-                </td>
-                <td style="padding:14px;min-width:300px">
-                  <div style="font-weight:600" x-text="item.unit_number || 'Без номера документа'"></div>
-                  <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">
-                    <template x-for="line in item.items" :key="line.external_sku">
-                      <div style="font-size:12px">
-                        <span x-text="line.title || line.offer_id || ('SKU '+line.external_sku)"></span>
-                        <span :style="'margin-left:5px;color:'+(line.match_status==='matched'?'#15803d':'#b45309')" x-text="matchLabel(line.match_status)"></span>
-                      </div>
-                    </template>
-                    <span x-show="!item.items.length" style="font-size:12px;color:var(--text-muted)">Операция без SKU</span>
-                  </div>
-                </td>
-                <td style="padding:14px"><span class="sh-badge" x-text="categoryLabel(item.accrued_category)"></span></td>
-                <td style="padding:14px;min-width:280px">
-                  <template x-if="item.components.length">
-                    <details>
-                      <summary style="cursor:pointer;color:#2563eb;font-size:13px" x-text="item.components.length+' fee-компонентов'"></summary>
-                      <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
-                        <template x-for="component in item.components" :key="component.component_kind+'-'+component.external_type_id+'-'+(component.external_sku||'')">
-                          <div style="font-size:12px;display:flex;justify-content:space-between;gap:12px">
-                            <span x-text="component.type_name || ('Тип '+component.external_type_id)"></span>
-                            <span style="white-space:nowrap" x-text="money(component.amount,component.currency)"></span>
-                          </div>
-                        </template>
-                        <div style="font-size:11px;color:var(--text-muted)">Справочно: эти суммы не участвуют в повторном rollup.</div>
-                      </div>
-                    </details>
+    <div x-show="!loading && !items.length" class="sh-card">
+      <div class="sh-empty">
+        <div class="sh-empty-icon">{{ icon('currency', size=44, stroke=1.2) }}</div>
+        <p class="sh-empty-title" x-text="syncState && syncState.status==='running' ? 'Снимок ещё собирается' : 'Финансовых фактов пока нет'"></p>
+        <p class="sh-empty-desc" x-text="syncState && syncState.status==='running' ? 'Частичный run скрыт: здесь появится только полностью проверенный снимок.' : 'Запустите read-only синхронизацию выбранного кабинета Ozon.'"></p>
+        <button class="sh-btn sh-btn--primary sh-btn--sm" style="margin-top:16px" @click="sync()" :disabled="syncing" x-text="syncState && syncState.status==='running' ? 'Продолжить' : 'Получить начисления'"></button>
+      </div>
+    </div>
+
+    <div x-show="!loading && items.length" class="sh-table-wrap">
+      <table class="sh-table mp-facts-table" style="min-width:1080px">
+        <thead>
+          <tr>
+            <th>Дата и accrual</th>
+            <th>Источник / связь</th>
+            <th>Категория</th>
+            <th>Поясняющие fee</th>
+            <th class="text-right">Total amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="item in items" :key="item.id">
+            <tr>
+              <td style="min-width:190px">
+                <div style="font-weight:700" x-text="dateOnly(item.fact_date)"></div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:4px" x-text="'ID '+item.accrual_id"></div>
+              </td>
+              <td style="min-width:300px">
+                <div style="font-weight:600" x-text="item.unit_number || 'Без номера документа'"></div>
+                <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">
+                  <template x-for="line in item.items" :key="line.external_sku">
+                    <div style="font-size:12px">
+                      <span x-text="line.title || line.offer_id || ('SKU '+line.external_sku)"></span>
+                      <span :style="'margin-left:5px;color:'+(line.match_status==='matched'?'var(--ok)':'var(--warn)')" x-text="matchLabel(line.match_status)"></span>
+                    </div>
                   </template>
-                  <span x-show="!item.components.length" style="color:var(--text-muted)">—</span>
-                </td>
-                <td style="padding:14px;text-align:right;white-space:nowrap">
-                  <div style="font-size:16px;font-weight:800" :style="'color:'+(item.amount_sign==='positive'?'#15803d':(item.amount_sign==='negative'?'#b91c1c':'var(--text-primary)'))" x-text="money(item.total_amount,item.currency)"></div>
-                  <div style="font-size:10px;color:var(--text-muted);margin-top:4px" x-text="item.definition_code"></div>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-      </div>
+                  <span x-show="!item.items.length" style="font-size:12px;color:var(--text-muted)">Операция без SKU</span>
+                </div>
+              </td>
+              <td><span class="sh-badge" x-text="categoryLabel(item.accrued_category)"></span></td>
+              <td style="min-width:280px">
+                <template x-if="item.components.length">
+                  <details>
+                    <summary style="cursor:pointer;color:var(--accent);font-size:13px" x-text="item.components.length+' fee-компонентов'"></summary>
+                    <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+                      <template x-for="component in item.components" :key="component.component_kind+'-'+component.external_type_id+'-'+(component.external_sku||'')">
+                        <div style="font-size:12px;display:flex;justify-content:space-between;gap:12px">
+                          <span x-text="component.type_name || ('Тип '+component.external_type_id)"></span>
+                          <span style="white-space:nowrap" x-text="money(component.amount,component.currency)"></span>
+                        </div>
+                      </template>
+                      <div style="font-size:11px;color:var(--text-muted)">Справочно: эти суммы не участвуют в повторном rollup.</div>
+                    </div>
+                  </details>
+                </template>
+                <span x-show="!item.components.length" style="color:var(--text-muted)">—</span>
+              </td>
+              <td class="text-right" style="white-space:nowrap">
+                <div style="font-size:16px;font-weight:800" :style="'color:'+(item.amount_sign==='positive'?'var(--ok)':(item.amount_sign==='negative'?'var(--danger)':'var(--text)'))" x-text="money(item.total_amount,item.currency)"></div>
+                <div style="font-size:10px;color:var(--text-muted);margin-top:4px" x-text="item.definition_code"></div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
 
-      <div x-show="pages > 1" style="padding:14px;display:flex;justify-content:center;gap:10px;border-top:1px solid var(--border)">
-        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="page--;load()">Назад</button>
-        <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="page+' / '+pages"></span>
-        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="page++;load()">Далее</button>
-      </div>
+    <div x-show="!loading && items.length && pages > 1" style="display:flex;justify-content:center;align-items:center;gap:10px;padding:2px 0 8px">
+      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="page--;load()">Назад</button>
+      <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="page+' / '+pages"></span>
+      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="page++;load()">Далее</button>
     </div>
   </div>
 </div>
@@ -216,7 +239,6 @@ function ozonFinancePage() {
       if (['7d','30d'].includes(q.get('period'))) this.period=q.get('period');
       await this.load();
     },
-    switchAccount(id) { location.href='/marketplaces/finance?account_id='+encodeURIComponent(id)+'&period='+this.period; },
     changePeriod(value) { this.period=value; this.page=1; const u=new URL(location); u.searchParams.set('period',value); history.replaceState(null,'',u); this.load(); },
     applyFilters() { this.page=1; this.load(); },
     async load() {

@@ -162,6 +162,57 @@
 }
 
 /* ─────────────────────────────────────────────
+   Channel bar — переключатель каналов продаж
+   (Wildberries / кабинеты Ozon) одного концепта.
+   Рендерится макросом channel_bar() из mp_nav.
+   ───────────────────────────────────────────── */
+.sh-channel-bar {
+    display: inline-flex;
+    max-width: 100%;
+    padding: 3px;
+    gap: 2px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.sh-channel-bar::-webkit-scrollbar { display: none; }
+.sh-channel-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    border-radius: var(--r-sm);
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background-color var(--dur-1) var(--ease-out),
+                color var(--dur-1) var(--ease-out),
+                box-shadow var(--dur-1) var(--ease-out);
+}
+.sh-channel-tab:hover { color: var(--text); }
+.sh-channel-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.sh-channel-tab:active { opacity: 0.85; }
+.sh-channel-tab--active {
+    background: var(--bg-card);
+    color: var(--text);
+    box-shadow: var(--shadow-1);
+}
+.sh-channel-tab--ghost { color: var(--text-muted); }
+.sh-channel-tab--ghost:hover { color: var(--accent); }
+.sh-mp-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+.sh-mp-dot--wb { background: var(--mp-wb); }
+.sh-mp-dot--ozon { background: var(--mp-ozon); }
+
+/* ─────────────────────────────────────────────
    Chip / tag (статичный, кликабельный, удаляемый)
    ───────────────────────────────────────────── */
 .sh-chip {

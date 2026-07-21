@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import json
 import re
+import secrets
 from typing import Any, Optional, Tuple
 
 from sqlalchemy import func
@@ -34,7 +35,10 @@ from services.marketplace_adapters import (
     get_marketplace_registry,
 )
 from services.marketplace_adapters.base import MarketplaceAdapterError
-from services.marketplace_drafts import MarketplaceDraftService
+from services.marketplace_drafts import (
+    MarketplaceDraftError,
+    MarketplaceDraftService,
+)
 from services.marketplace_listings import (
     MarketplaceCatalogProtocolError,
     MarketplaceListingService,
@@ -1665,6 +1669,110 @@ class MarketplacePublicationService:
             )
         finally:
             cls._release_claim(claim)
+
+    @classmethod
+    def enqueue_bulk_publications(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        draft_ids: Any,
+        created_by_user_id: Optional[int],
+        now: Optional[datetime] = None,
+    ) -> dict:
+        """Поставить до 50 готовых черновиков в durable-очередь публикации.
+
+        Provider здесь не вызывается: операции создаются `queued` с
+        `next_poll_at=now`, а отправляет их существующий scheduler
+        (`poll_due_operations` с allow_submission по feature flags) под
+        account file claim, live preflight, квотой и single-attempt.
+        Ошибка одного черновика не блокирует остальные."""
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        if not isinstance(draft_ids, (list, tuple)) or not draft_ids:
+            raise MarketplacePublicationValidationError(
+                "Выберите хотя бы один черновик"
+            )
+        if len(draft_ids) > 50:
+            raise MarketplacePublicationValidationError(
+                "За один запуск можно поставить не более 50 черновиков"
+            )
+        prepared = []
+        seen = set()
+        for raw in draft_ids:
+            value = cls._positive_integer(raw, "draft_id")
+            if value in seen:
+                raise MarketplacePublicationValidationError(
+                    "В выборе есть повторяющиеся черновики"
+                )
+            seen.add(value)
+            prepared.append(value)
+        created_by_user_id = cls._validate_author(
+            seller_id=seller_id,
+            created_by_user_id=created_by_user_id,
+        )
+        current_time = now or datetime.utcnow()
+        queued = []
+        skipped = []
+
+        def _skip(draft_id: int, reason: str) -> None:
+            skipped.append({
+                "draft_id": draft_id,
+                "reason": cls._safe_text(reason, maximum=200)
+                or "Черновик не готов к публикации",
+            })
+
+        for draft_id in prepared:
+            try:
+                draft = MarketplaceDraftService.get_draft(
+                    seller_id=seller_id,
+                    draft_id=draft_id,
+                )
+            except MarketplaceDraftError as exc:
+                _skip(draft_id, str(exc))
+                continue
+            if draft.account_id != account_id:
+                _skip(draft_id, "Черновик относится к другому кабинету")
+                continue
+            if draft.published_listing_id is not None:
+                _skip(
+                    draft_id,
+                    "Черновик уже связан с Ozon listing; используйте "
+                    "full-state update",
+                )
+                continue
+            active = MarketplaceOperation.query.filter(
+                MarketplaceOperation.draft_id == draft.id,
+                MarketplaceOperation.status.in_(cls.ACTIVE_STATUSES),
+            ).first()
+            if active is not None:
+                _skip(draft_id, "По черновику уже есть активная операция")
+                continue
+            try:
+                draft, payload, _ = cls._publication_payload(
+                    seller_id=seller_id,
+                    draft_id=draft_id,
+                    expected_version=draft.version,
+                )
+                operation = cls._create_operation(
+                    draft=draft,
+                    payload=payload,
+                    idempotency_key=cls._idempotency_key(
+                        secrets.token_urlsafe(24)
+                    ),
+                    created_by_user_id=created_by_user_id,
+                    now=current_time,
+                )
+                db.session.commit()
+            except (MarketplaceDraftError, MarketplacePublicationError) as exc:
+                db.session.rollback()
+                _skip(draft_id, str(exc))
+                continue
+            queued.append({
+                "draft_id": draft_id,
+                "operation_id": operation.id,
+            })
+        return {"queued": queued, "skipped": skipped}
 
     @classmethod
     def start_update(

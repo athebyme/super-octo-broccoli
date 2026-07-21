@@ -1,50 +1,59 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import channel_bar %}
 
 {% block title %}Операции Ozon — Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+{% set status_labels = {
+    'queued': 'В очереди', 'submitting': 'Отправляется', 'submitted': 'Отправлено',
+    'polling': 'Проверяем статус', 'uncertain': 'Нужна сверка', 'succeeded': 'Успешно',
+    'partial': 'Частично', 'failed': 'Ошибка', 'cancelled': 'Отменено'
+} %}
+{% set kind_labels = {
+    'product_import': 'Создание карточки', 'product_import_rollback': 'Откат создания',
+    'product_update': 'Обновление карточки', 'product_update_rollback': 'Откат обновления',
+    'price_update': 'Изменение цены', 'stock_update': 'Изменение остатков',
+    'price_rollback': 'Откат цены', 'stock_rollback': 'Откат остатков'
+} %}
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
         <div>
-            <h1 class="text-2xl font-semibold" style="color:var(--text)">Операции Ozon</h1>
-            <p class="mt-1 text-sm" style="color:var(--text-secondary)">Durable-журнал публикаций, task polling и live reconciliation.</p>
+            <h1 class="sh-page-title">Операции Ozon</h1>
+            <p class="sh-page-subtitle">Журнал всех публикаций и изменений в Ozon: статусы задач и сверка результата.</p>
         </div>
-        <div class="flex gap-2">
-            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index') }}">Черновики</a>
-            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Листинги</a>
+        <div class="sh-page-actions">
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index') }}">Черновики</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Листинги</a>
         </div>
     </div>
+</div>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-    <div class="mt-4 rounded-md border px-4 py-3 text-sm"
-         style="border-color:var(--border);background:var(--bg-card);color:var(--text)">{{ message }}</div>
-    {% endfor %}
-    {% endwith %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    {{ channel_bar(
+        active='ozon' if filters.account_id else 'all',
+        account_id=filters.account_id,
+        all_href=url_for('marketplace_operations.index'),
+        all_label='Все кабинеты Ozon',
+        wb_href=url_for('product_sync_status_page'),
+        ozon_href=url_for('marketplace_operations.index')
+    ) }}
+
 
     <form method="get" class="sh-card p-4 mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <label class="block">
-            <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет</span>
-            <select name="account_id" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                    style="border-color:var(--border);color:var(--text)">
-                <option value="">Все</option>
-                {% for account in accounts %}
-                <option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>
-                {% endfor %}
-            </select>
-        </label>
+        {# Кабинет переключается channel bar-ом выше; форма только сохраняет его #}
+        {% if filters.account_id %}<input type="hidden" name="account_id" value="{{ filters.account_id }}">{% endif %}
         <label class="block">
             <span class="block text-xs mb-1" style="color:var(--text-muted)">Статус</span>
             <select name="status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                     style="border-color:var(--border);color:var(--text)">
                 <option value="">Все</option>
                 {% for status in ['queued', 'submitting', 'submitted', 'polling', 'uncertain', 'succeeded', 'partial', 'failed', 'cancelled'] %}
-                <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+                <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status_labels.get(status, status) }}</option>
                 {% endfor %}
             </select>
         </label>
         <div class="flex items-end justify-end">
-            <button class="sh-btn sh-btn--secondary" type="submit">Применить</button>
+            <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">Применить</button>
         </div>
     </form>
 
@@ -64,13 +73,13 @@
                         <span style="color:var(--accent)">Ozon</span>
                         <span>{{ operation.account.label if operation.account else 'кабинет удалён' }}</span>
                         <span>#{{ operation.id }}</span>
-                        <span>{{ operation.operation_kind }}</span>
+                        <span>{{ kind_labels.get(operation.operation_kind, operation.operation_kind) }}</span>
                     </div>
-                    <h2 class="mt-2 font-semibold break-all" style="color:var(--text)">{{ summary.get('offer_id', 'offer не сохранён') }}</h2>
-                    {% if operation.error_message %}<p class="mt-1 text-xs" style="color:var(--danger, #b42318)">{{ operation.error_message }}</p>{% endif %}
+                    <h2 class="mt-2 font-semibold break-all" style="color:var(--text)">{{ summary.get('offer_id', 'артикул не сохранён') }}</h2>
+                    {% if operation.error_message %}<p class="mt-1 text-xs" style="color:var(--danger)">{{ operation.error_message }}</p>{% endif %}
                 </div>
                 <div class="sm:text-right shrink-0">
-                    <div class="text-sm font-medium" style="color:var(--text)">{{ operation.status }}</div>
+                    <div class="text-sm font-medium" style="color:var(--text)">{{ status_labels.get(operation.status, operation.status) }}</div>
                     <div class="mt-1 text-xs" style="color:var(--text-muted)">{{ operation.created_at.strftime('%d.%m.%Y %H:%M:%S') if operation.created_at else '—' }}</div>
                 </div>
             </div>

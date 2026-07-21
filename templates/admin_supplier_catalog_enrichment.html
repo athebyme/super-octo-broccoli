@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}Массовое обогащение — {{ supplier.name }}{% endblock %}
+
+{% macro status_badge(status) -%}
+    {% set labels = {
+        'pending': 'В очереди', 'running': 'В работе', 'cancelling': 'Останавливается',
+        'completed': 'Завершён', 'partial': 'Нужна проверка', 'failed': 'Ошибка',
+        'cancelled': 'Остановлен'
+    } %}
+    {% set tone = 'green' if status == 'completed' else ('red' if status == 'failed' else ('yellow' if status in ['pending', 'running', 'cancelling', 'partial'] else 'gray')) %}
+    <span class="sh-badge sh-badge--sm sh-badge--{{ tone }}">{{ labels.get(status, status) }}</span>
+{%- endmacro %}
+
+{% block content %}
+<div class="sh-page" x-data="{ selected: [], allPage: false }">
+    <nav class="mb-4 text-sm" style="color:var(--text-muted)" aria-label="Хлебные крошки">
+        <a href="{{ url_for('admin_suppliers') }}" class="hover:underline">Поставщики</a>
+        <span class="mx-2" aria-hidden="true">/</span>
+        <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}" class="hover:underline">{{ supplier.name }}</a>
+        <span class="mx-2" aria-hidden="true">/</span><span>Массовое обогащение</span>
+    </nav>
+
+    <header class="sh-page-header">
+        <div class="sh-page-header-content">
+            <div>
+                <h1 class="sh-page-title">Массовое обогащение каталога</h1>
+                <p class="sh-page-subtitle">Исправление WB-категорий и дополнение общей карточки поставщика по актуальному справочнику</p>
+            </div>
+            <div class="sh-page-actions">
+                <a href="{{ url_for('admin_supplier_products', supplier_id=supplier.id) }}" class="sh-btn sh-btn--white-outline sh-btn--md">К товарам</a>
+            </div>
+        </div>
+    </header>
+
+    <div class="sh-alert sh-alert--info" role="note">
+        <div class="sh-alert-content">
+            <strong>Как это работает</strong>
+            <div>Агент может выбрать только конечную категорию из свежего справочника WB. Надёжные совпадения обновляются автоматически, спорные попадают на ручную проверку. Публикации в WB здесь нет.</div>
+        </div>
+    </div>
+
+    {% if not reference_status.usable %}
+    <div class="sh-alert sh-alert--warning" role="alert">
+        <div class="sh-alert-content">
+            <strong>Сначала обновите справочник WB</strong>
+            <div>Обработка заблокирована, пока конечные категории недоступны или устарели. Причина: {{ reference_status.reason or 'нет данных' }}.</div>
+            {% if reference_status.marketplace_id %}<a href="{{ url_for('marketplaces.categories', marketplace_id=reference_status.marketplace_id) }}" class="inline-block mt-2 underline">Открыть справочник категорий</a>{% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if active_run %}
+    <section class="sh-card" aria-label="Активный запуск">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+                <div class="flex flex-wrap items-center gap-2"><strong>Уже обрабатывается {{ active_run.total }} товаров</strong>{{ status_badge(active_run.status) }}</div>
+                <p class="mt-1 text-sm" style="color:var(--text-muted)">{{ active_run.processed }} обработано · {{ active_run.needs_review }} требуют проверки</p>
+            </div>
+            <a href="{{ url_for('admin_supplier_catalog_enrichment_run', supplier_id=supplier.id, run_id=active_run.id) }}" class="sh-btn sh-btn--primary sh-btn--md">Открыть запуск</a>
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="sh-stat-grid sh-stat-grid--3" aria-label="Сводка каталога">
+        <a href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, wb_category='Товары для взрослых') }}" class="sh-stat-card sh-stat-card--link">
+            <div class="sh-stat-label">Ошибочная родительская категория</div>
+            <div class="sh-stat-value" style="color:var(--warn)">{{ adult_parent_count }}</div>
+            <div class="sh-stat-footnote">«Товары для взрослых»</div>
+        </a>
+        <a href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, mapping_state='invalid') }}" class="sh-stat-card sh-stat-card--link">
+            <div class="sh-stat-label">Проблемный WB-маппинг</div>
+            <div class="sh-stat-value">{{ invalid_count }}</div>
+            <div class="sh-stat-footnote">Нет допустимого конечного subject_id</div>
+        </a>
+        <div class="sh-stat-card">
+            <div class="sh-stat-label">Справочник готов</div>
+            <div class="sh-stat-value">{{ reference_status.enabled_leaf_count }}</div>
+            <div class="sh-stat-footnote">Доступных конечных категорий WB</div>
+        </div>
+    </section>
+
+    <form method="GET" class="sh-filter-bar" aria-label="Фильтры товаров">
+        <input class="min-w-[220px] flex-1" type="search" name="search" value="{{ filters.search }}" placeholder="Название, артикул, бренд…" aria-label="Поиск товаров">
+        <select name="wb_category" aria-label="Категория WB">
+            <option value="">Любая категория WB</option>
+            <option value="__missing__" {{ 'selected' if filters.wb_category == '__missing__' }}>Категория не задана</option>
+            {% for name, count in category_rows %}
+            <option value="{{ name }}" {{ 'selected' if filters.wb_category == name }}>{{ name }} · {{ count }}</option>
+            {% endfor %}
+        </select>
+        <select name="source_category" aria-label="Категория поставщика">
+            <option value="">Любая категория поставщика</option>
+            {% for name, count in source_category_rows %}
+            <option value="{{ name }}" {{ 'selected' if filters.source_category == name }}>{{ name[:55] }} · {{ count }}</option>
+            {% endfor %}
+        </select>
+        <select name="mapping_state" aria-label="Состояние WB-маппинга">
+            <option value="">Любой WB-маппинг</option>
+            <option value="invalid" {{ 'selected' if filters.mapping_state == 'invalid' }}>Только проблемные</option>
+            <option value="valid" {{ 'selected' if filters.mapping_state == 'valid' }}>Только допустимые</option>
+        </select>
+        <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">Показать</button>
+    </form>
+
+    <form method="POST" action="{{ url_for('admin_supplier_catalog_enrichment_create', supplier_id=supplier.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% for key, value in filters.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+
+        <div class="sh-filter-bar" style="justify-content:space-between" aria-label="Настройки запуска">
+            <div class="flex flex-wrap items-center gap-3">
+                <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" x-model="allPage" @change="selected = allPage ? Array.from(document.querySelectorAll('.sce-product-check')).map(el => el.value) : []" aria-label="Выбрать все товары на странице">
+                    Все на странице
+                </label>
+                <span class="text-sm" style="color:var(--text-muted)" x-text="selected.length + ' выбрано'"></span>
+                <select name="mode" aria-label="Режим обогащения">
+                    <option value="category_only">Исправить категории · до {{ max_selection }}</option>
+                    <option value="category_and_characteristics">Категории + характеристики · до {{ max_characteristic_selection }}</option>
+                    <option value="characteristics_inference">Предположения (словарные, через ревью) · до {{ max_characteristic_selection }}</option>
+                </select>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button type="submit" name="selection_scope" value="selected" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="selected.length === 0" onclick="return confirm('Запустить обработку выбранных товаров?')" {% if active_run or not reference_status.usable %}disabled{% endif %}>Обработать выбранные</button>
+                <button type="submit" name="selection_scope" value="filtered" class="sh-btn sh-btn--primary sh-btn--sm" onclick="return confirm('Запустить обработку всех {{ pagination.total }} товаров по текущему фильтру?')" {% if active_run or not reference_status.usable or pagination.total == 0 %}disabled{% endif %}>Все по фильтру · {{ pagination.total }}</button>
+            </div>
+        </div>
+
+        <div class="sh-table-wrap">
+            <table class="sh-table">
+                <thead><tr><th style="width:42px"></th><th>Товар</th><th>Категория поставщика</th><th>Сейчас в WB</th><th>Версия</th></tr></thead>
+                <tbody>
+                {% for product in pagination.items %}
+                    <tr>
+                        <td><input type="checkbox" class="sce-product-check" name="product_ids" value="{{ product.id }}" :checked="selected.includes('{{ product.id }}')" @change="selected = $event.target.checked ? Array.from(new Set([...selected, '{{ product.id }}'])) : selected.filter(id => id !== '{{ product.id }}')" aria-label="Выбрать товар {{ product.title or product.id }}"></td>
+                        <td style="min-width:260px">
+                            <a class="font-medium hover:underline" href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}">{{ product.title or 'Без названия' }}</a>
+                            <div class="mt-1 text-xs" style="color:var(--text-muted)">ID {{ product.id }}{% if product.external_id %} · {{ product.external_id }}{% endif %}</div>
+                        </td>
+                        <td>{{ product.category or '—' }}</td>
+                        <td style="min-width:220px">
+                            {% if product.wb_category_name %}
+                            <span class="sh-badge sh-badge--sm {{ 'sh-badge--yellow' if product.wb_category_name == 'Товары для взрослых' else 'sh-badge--green' }}">{{ product.wb_category_name }}</span>
+                            <div class="mt-1 text-xs" style="color:var(--text-muted)">subject_id: {{ product.wb_subject_id or 'нет' }}</div>
+                            {% else %}<span style="color:var(--text-muted)">Не задана</span>{% endif %}
+                        </td>
+                        <td>v{{ product.content_revision or 1 }}</td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="5"><div class="sh-empty"><p class="sh-empty-title">По фильтру товаров нет</p><p class="sh-empty-desc">Измените условия поиска или сбросьте фильтры.</p></div></td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </form>
+
+    {% if pagination.pages > 1 %}
+    <nav class="sh-pagination" aria-label="Страницы товаров">
+        <span class="sh-pagination-info">{{ pagination.total }} товаров</span>
+        <div class="sh-pagination-buttons">
+            {% if pagination.has_prev %}<a class="sh-pagination-btn" href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, page=pagination.prev_num, **filters) }}">Назад</a>{% endif %}
+            <span class="sh-pagination-btn sh-pagination-btn--active" aria-current="page">{{ pagination.page }} / {{ pagination.pages }}</span>
+            {% if pagination.has_next %}<a class="sh-pagination-btn" href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, page=pagination.next_num, **filters) }}">Дальше</a>{% endif %}
+        </div>
+    </nav>
+    {% endif %}
+
+    {% if recent_runs %}
+    <section aria-labelledby="recent-runs-title">
+        <h2 id="recent-runs-title" class="sh-section-title">Последние запуски</h2>
+        <div class="sh-table-wrap">
+            <table class="sh-table">
+                <thead><tr><th>Запуск</th><th>Режим</th><th>Прогресс</th><th>Статус</th></tr></thead>
+                <tbody>
+                {% for run in recent_runs %}
+                <tr>
+                    <td><a class="font-medium hover:underline" href="{{ url_for('admin_supplier_catalog_enrichment_run', supplier_id=supplier.id, run_id=run.id) }}">{{ run.id[:8] }} · {{ run.total }} товаров</a></td>
+                    <td>{{ 'Категории + характеристики' if run.mode == 'category_and_characteristics' else ('Предположения' if run.mode == 'characteristics_inference' else 'Категории') }}</td>
+                    <td>{{ run.processed }}/{{ run.total }}</td>
+                    <td>{{ status_badge(run.status) }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}

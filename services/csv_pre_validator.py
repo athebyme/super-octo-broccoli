@@ -195,8 +195,12 @@ class CSVPreValidator:
             sample_item = {}
             if column_mapping:
                 for field_name, mapping in column_mapping.items():
+                    # Пропускаем служебные флаги (_include_unmapped) и
+                    # header-based имена колонок (резолвятся только парсером)
+                    if not isinstance(mapping, dict):
+                        continue
                     col_idx = mapping.get('column', 0)
-                    if col_idx < len(row):
+                    if isinstance(col_idx, int) and 0 <= col_idx < len(row):
                         sample_item[field_name] = row[col_idx].strip()
             else:
                 sample_item = {f'col_{i}': cell.strip() for i, cell in enumerate(row[:10])}
@@ -223,7 +227,7 @@ class CSVPreValidator:
                     col_name = f'column_{i}'
                     if column_mapping:
                         for field_name, mapping in column_mapping.items():
-                            if mapping.get('column') == i:
+                            if isinstance(mapping, dict) and mapping.get('column') == i:
                                 col_name = field_name
                                 break
                     result.field_fill_rates[col_name] = round(

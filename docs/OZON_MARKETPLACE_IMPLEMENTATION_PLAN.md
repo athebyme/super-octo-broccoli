@@ -179,8 +179,8 @@ unified chat
 
 ### 3.7 Аналитика и финансы
 
-- Product analytics читается только через manifest-bound `/v1/analytics/data`. Реализованный P8 contract запрашивает один dimension за раз (`sku`, затем `day`), фиксированный список метрик и bounded pagination; malformed/duplicate/NaN/negative response не сохраняется как завершённый snapshot.
-- Product analytics нормализуется в definition-tagged facts (`views`, `cart_additions`, `ordered_units`, `ordered_revenue_rub`, conversion/delivery/cancel/return metrics), сохраняя provider metric, unit, definition version и `cross_marketplace_comparable=false`.
+- Product analytics читается только через manifest-bound `/v1/analytics/data`. Актуальный P8 core-v2 contract запрашивает один dimension за раз (`sku`, затем `day`), non-deprecated `revenue + ordered_units` и bounded pagination; malformed/duplicate/NaN/negative response не сохраняется как завершённый snapshot.
+- Новые product analytics snapshots нормализуют definition-tagged `ordered_units` и `ordered_revenue_rub`, сохраняя provider metric, unit, definition version и `cross_marketplace_comparable=false`. Исторические facts удалённых метрик остаются в старых immutable snapshots, но `hits_view`, `hits_tocart`, `conv_tocart_percent`, `delivered_units`, `cancellations` и `returns` больше не запрашиваются после live `deprecated metrics used`; отсутствие не отображается нулём и не участвует в quality reasons.
 - Каждый analytics run привязан к exact seller/account/period. Failed partial run не заменяет last-good snapshot, а неоднозначный локальный SKU блокирует read до provider call. Unmatched Ozon SKU остаётся наблюдаемым фактом без fake listing.
 - Premium-only metrics обязаны возвращать `unavailable_by_plan`, а не нули.
 - По актуальному уведомлению Ozon от 14.07.2026 `/v3/finance/transaction/list` и `/v3/finance/transaction/totals` устаревают и будут отключены 08.09.2026. Новый adapter уже не содержит их даже как временный fallback.
@@ -526,6 +526,20 @@ drift блокируют page commit. Sweep проходит `ALL`, затем `
 listing остаётся available, а локальные unseen rows становятся unavailable
 только finalizer-ом полного run. Seller UI/API всегда начинает с
 `current_user.seller` и поддерживает marketplace/account/status filters.
+В current product info v3 `statuses.status_failed` валидируется как
+bounded failed-stage string: `""` означает, что failed stage нет, а любое
+непустое значение даёт normalized `error`; boolean coercion запрещён.
+`primary_image` в этом response приходит exact list из 0–1 URL и только
+после strict validation сворачивается в scalar `media.primary_image` read model.
+Top-level `sku=0` считается provider sentinel «ещё не назначен» и не попадает
+в identifiers; положительный integer SKU остаётся strict opaque identity.
+Product attributes v4 сохраняет значение характеристики целиком до 10 000
+символов (реальный description может превышать 5 000), при этом общий cap
+normalized listing snapshot остаётся 256 KiB; превышение fail-closed отклоняет page.
+Whitespace-only optional value трактуется как provider empty sentinel, но
+нестроковое значение по-прежнему отклоняется без coercion.
+Пустой complex container (`{}`/`attributes=null`) нормализуется в empty
+attributes list; прочая структурная type drift остаётся fail-closed.
 
 Definition of done: an existing Ozon catalog is visible, tenant-scoped and reconcilable without writes.
 

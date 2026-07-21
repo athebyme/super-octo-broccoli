@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import channel_bar %}
+{% from "macros/icons.html" import icon %}
 
 {% block title %}Мои товары — Seller Hub{% endblock %}
 
@@ -6,7 +8,7 @@
 <style>
     .my-stat-strip {
         display: grid;
-        grid-template-columns: repeat(5, 1fr);
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
         gap: 1px;
         background: var(--border);
         border: 1px solid var(--border);
@@ -58,14 +60,74 @@
 
     /* Batch import panel */
     .batch-phase-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-    .batch-phase-dot.done { background: #16a34a; }
-    .batch-phase-dot.active { background: #1a1a1a; animation: progress-pulse 1s ease-in-out infinite; }
-    .batch-phase-dot.pending { background: #d1d5db; }
+    .batch-phase-dot.done { background: var(--ok); }
+    .batch-phase-dot.active { background: var(--text); animation: progress-pulse 1s ease-in-out infinite; }
+    .batch-phase-dot.pending { background: var(--border); }
     .batch-item-row { transition: all 0.2s; }
     .batch-item-row:hover { background: var(--bg); }
     @keyframes slide-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
     .batch-item-enter { animation: slide-in 0.25s ease-out; }
     .batch-speed { font-variant-numeric: tabular-nums; }
+
+    /* «Тёплая редакция»: scoped-хелперы страницы вместо Tailwind-цветов */
+    .myp-surface { background: var(--bg-card); border-color: var(--border); }
+    .myp-t { color: var(--text); }
+    .myp-ts { color: var(--text-secondary); }
+    .myp-tm { color: var(--text-muted); }
+    .myp-ok { color: var(--ok); }
+    .myp-warn { color: var(--warn); }
+    .myp-danger { color: var(--danger); }
+    .myp-b { border-color: var(--border); }
+    .myp-link { color: var(--text); }
+    .myp-link:hover { color: var(--text-secondary); }
+    .myp-link-muted { color: var(--text-muted); }
+    .myp-link-muted:hover { color: var(--text-secondary); }
+    .myp-thead { background: var(--bg); }
+    .myp-rows tr + tr td { border-top: 1px solid var(--border); }
+    .myp-rows > tr:hover { background: var(--bg-hover); }
+    .myp-check { accent-color: var(--accent); }
+    .myp-thumb { background: var(--bg-hover); color: var(--text-muted); }
+    .myp-chip { border-color: var(--border); color: var(--text-secondary); }
+    .myp-chip--muted { color: var(--text-muted); }
+    .myp-btn-soft { background: var(--bg-hover); color: var(--text-secondary); }
+    .myp-btn-soft:hover { background: var(--border); color: var(--text); }
+    .myp-btn-del { border-color: var(--border); color: var(--text-secondary); }
+    .myp-btn-del:hover { border-color: var(--danger-border); color: var(--danger); }
+    .myp-cancel-btn { border-color: var(--danger-border); color: var(--danger); }
+    .myp-cancel-btn:hover { background: var(--danger-bg); border-color: var(--danger); }
+    .myp-menu { background: var(--bg-card); border-color: var(--border); box-shadow: var(--shadow-2); }
+    .myp-modal { background: var(--bg-card); border-color: var(--border); box-shadow: var(--shadow-3); }
+    .myp-menu-item { color: var(--text-secondary); }
+    .myp-menu-item:hover { background: var(--bg-hover); }
+    .myp-menu-item--accent { color: var(--accent); }
+    .myp-menu-item--accent:hover { background: var(--accent-light); }
+    .myp-dot-ok { background: var(--ok); }
+    .myp-dot-bad { background: var(--danger); }
+    .myp-dot-info { background: var(--info); }
+    .myp-dot-idle { background: var(--border); }
+    .myp-dot-strong { background: var(--text); }
+    .myp-dot-chart { background: var(--chart-5); }
+    .myp-bg-ok { background: var(--ok-bg); }
+    .myp-bg-bad { background: var(--danger-bg); }
+    .myp-bg-warn { background: var(--warn-bg); }
+    .myp-bg-soft { background: var(--bg-hover); }
+    .myp-progress-track { background: var(--bg-hover); }
+    .myp-progress-fill { background: var(--text); }
+    .myp-spin-badge { background: var(--text); color: var(--bg-card); }
+    .myp-page { border-color: var(--border); color: var(--text); }
+    .myp-page:hover { background: var(--bg-hover); }
+    .myp-page--active { background: var(--text); color: var(--bg-card); border-color: var(--text); }
+    .myp-btn-ozon-outline { border-color: var(--mp-ozon); color: var(--mp-ozon); }
+    .myp-btn-ozon-outline:hover { opacity: .8; }
+    .myp-tab-bad { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); border-bottom: 0; }
+    .myp-tab-ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); border-bottom: 0; }
+    .myp-tab-idle { color: var(--text-muted); }
+    .myp-tab-idle:hover { color: var(--text-secondary); }
+    .myp-btn-soft:focus-visible, .myp-btn-del:focus-visible, .myp-cancel-btn:focus-visible,
+    .myp-menu-item:focus-visible, .myp-tab-idle:focus-visible, .myp-link-muted:focus-visible {
+        outline: 2px solid var(--focus-ring);
+        outline-offset: 2px;
+    }
 </style>
 {% endblock %}
 
@@ -76,41 +138,34 @@
 
     <!-- Inline notification (replaces flash) -->
     <template x-if="notification">
-        <div x-transition class="mb-4 px-4 py-3 rounded-lg text-sm font-medium"
-             :class="notification.type === 'error' ? 'bg-red-50 text-red-800 border border-red-200' : notification.type === 'info' ? 'bg-blue-50 text-blue-800 border border-blue-200' : 'bg-green-50 text-green-800 border border-green-200'">
-            <div class="flex items-center justify-between">
+        <div x-transition class="sh-alert font-medium"
+             :class="notification.type === 'error' ? 'sh-alert--error' : notification.type === 'info' ? 'sh-alert--info' : 'sh-alert--success'">
+            <div class="flex items-center justify-between w-full">
                 <span x-text="notification.msg"></span>
                 <button @click="notification = null" class="ml-4 text-current opacity-50 hover:opacity-100">&times;</button>
             </div>
         </div>
     </template>
 
-    <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
-        <div class="relative">
-            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Мои товары</h1>
-            <p class="text-sm text-gray-400 mt-1">
-                {{ stats.total }} товаров | {{ stats.validated }} готово к WB | {{ stats.imported }} на WB
-                {% if not has_wb_key %}
-                | <span class="text-yellow-300">API ключ WB не настроен</span>
-                {% endif %}
-            </p>
+    <div class="sh-page-header">
+        <div class="sh-page-header-content">
+            <div>
+                <div class="flex items-center gap-2">
+                    <h1 class="sh-page-title">Мои товары</h1>
+                    {% include 'partials/card_journey_help.html' %}
+                </div>
+                <p class="sh-page-subtitle">
+                    {{ stats.total }} товаров · {{ stats.validated }} готово к WB · {{ stats.imported }} на WB{% if ozon_drafts_total %} · {{ ozon_drafts_total }} черновиков Ozon{% endif %}
+                    {% if not has_wb_key %}
+                    · <a href="{{ url_for('api_settings') }}" style="color:var(--warn);text-decoration:underline"
+                         title="Без ключа нельзя отправлять карточки на WB">API ключ WB не настроен — настроить →</a>
+                    {% endif %}
+                </p>
+            </div>
         </div>
     </div>
 
-    <nav class="bg-white rounded-lg border border-gray-200 p-3 mb-6" aria-label="Маркетплейс и кабинет">
-        <div class="flex flex-wrap items-center gap-2">
-            <span class="text-xs font-medium uppercase tracking-wide text-gray-400 mr-1">Каталог</span>
-            <span class="px-3 py-2 rounded-md bg-gray-900 text-white text-sm">Wildberries · подготовка</span>
-            {% for account in marketplace_accounts %}
-            <a href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=account.id) }}"
-               class="px-3 py-2 rounded-md border border-gray-200 text-gray-600 text-sm hover:bg-gray-50">
-                Ozon · {{ account.label }}
-            </a>
-            {% endfor %}
-            <a href="{{ url_for('marketplace_drafts.index') }}" class="ml-auto text-xs text-[var(--accent)] hover:underline">Ozon-черновики</a>
-        </div>
-        <p class="mt-2 text-xs text-gray-400">WB-статус этой страницы не используется как статус публикации Ozon: каждый кабинет имеет отдельный draft/listing.</p>
-    </nav>
+    {{ channel_bar(active='wb', wb_href=url_for('seller_my_products'), ozon_href=url_for('marketplace_drafts.index'), class='mb-6') }}
 
     <!-- Stats -->
     <div class="my-stat-strip mb-6">
@@ -134,21 +189,56 @@
             <p class="my-stat-label">Ошибки</p>
             <p class="my-stat-value">{{ stats.failed }}</p>
         </a>
+        {% if marketplace_accounts %}
+        <a href="{{ url_for('marketplace_drafts.index') }}" class="my-stat-card" title="Открыть черновики Ozon">
+            <p class="my-stat-label"><span class="sh-mp-dot sh-mp-dot--ozon" style="display:inline-block;vertical-align:middle;margin-right:4px"></span>Черновики Ozon</p>
+            <p class="my-stat-value">{{ ozon_drafts_total }}</p>
+        </a>
+        {% endif %}
+        {% if supplier_updates_count %}
+        <a href="{{ url_for('seller_my_products', updates=1) }}" class="my-stat-card {{ 'active' if updates_filter else '' }}"
+           title="Общие карточки поставщика обновились — заберите изменения себе">
+            <p class="my-stat-label">Обновления поставщика</p>
+            <p class="my-stat-value" style="color:var(--warn)">{{ supplier_updates_count }}</p>
+        </a>
+        {% endif %}
     </div>
 
+    {% if wb_cta_ids %}
+    <div class="sh-alert sh-alert--info mb-6" role="status">
+        <div class="flex flex-wrap items-center gap-3 justify-between">
+            <div>
+                <strong>Локальные карточки обновлены.</strong>
+                {{ wb_cta_ids|length }} из них опубликованы на WB — можно отправить
+                обновлённые характеристики на маркетплейс (отдельное подтверждение).
+            </div>
+            <form method="POST" action="{{ url_for('products_enrich_bulk') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="preset" value="characteristics">
+                {% for pid in wb_cta_ids %}
+                <input type="hidden" name="selected_ids" value="{{ pid }}">
+                {% endfor %}
+                <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm">
+                    Отправить характеристики на WB ({{ wb_cta_ids|length }})
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Search & Filters -->
-    <form method="GET" class="bg-white rounded-lg border border-gray-200 p-4 mb-6">
+    <form method="GET" class="myp-surface rounded-lg border p-4 mb-6">
         <input type="hidden" name="status" value="{{ status }}">
         <div class="flex flex-col sm:flex-row gap-3 sm:items-end">
             <div class="flex-1">
                 <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, бренду, ID..."
-                       class="w-full rounded-md border-gray-300 text-sm border px-3 py-2" aria-label="Поиск товаров">
+                       class="w-full rounded-md text-sm border px-3 py-2" aria-label="Поиск товаров">
             </div>
             <div class="flex gap-2 items-center flex-shrink-0">
-                <button type="submit" class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85">Найти</button>
+                <button type="submit" class="sh-btn sh-btn--primary sh-btn--md">Найти</button>
                 {% if active_filters or search %}
                 <a href="{{ url_for('seller_my_products', status=status) if status else url_for('seller_my_products') }}"
-                   class="px-3 py-2 border border-gray-300 text-gray-600 rounded-md text-sm font-medium hover:bg-gray-50">
+                   class="sh-btn sh-btn--secondary sh-btn--md">
                     Сбросить{% if active_filters %} ({{ active_filters }}){% endif %}
                 </a>
                 {% endif %}
@@ -156,9 +246,9 @@
         </div>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mt-3">
             <div>
-                <label for="filter-supplier" class="block text-xs text-gray-500 mb-1">Поставщик</label>
+                <label for="filter-supplier" class="block text-xs myp-tm mb-1">Поставщик</label>
                 <select id="filter-supplier" name="supplier" onchange="this.form.submit()"
-                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                        class="w-full rounded-md text-sm border px-2 py-2">
                     <option value="">Все</option>
                     {% for s_id, s_name, s_count in suppliers_list %}
                     <option value="{{ s_id }}" {{ 'selected' if supplier_filter == s_id|string else '' }}>{{ s_name }} ({{ s_count }})</option>
@@ -169,9 +259,9 @@
                 </select>
             </div>
             <div>
-                <label for="filter-brand" class="block text-xs text-gray-500 mb-1">Бренд</label>
+                <label for="filter-brand" class="block text-xs myp-tm mb-1">Бренд</label>
                 <select id="filter-brand" name="brand" onchange="this.form.submit()"
-                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                        class="w-full rounded-md text-sm border px-2 py-2">
                     <option value="">Все</option>
                     {% for b in brands_list %}
                     <option value="{{ b }}" {{ 'selected' if brand_filter == b else '' }}>{{ b }}</option>
@@ -180,9 +270,9 @@
                 </select>
             </div>
             <div>
-                <label for="filter-wb-category" class="block text-xs text-gray-500 mb-1">Категория WB</label>
+                <label for="filter-wb-category" class="block text-xs myp-tm mb-1">Категория WB</label>
                 <select id="filter-wb-category" name="wb_category" onchange="this.form.submit()"
-                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                        class="w-full rounded-md text-sm border px-2 py-2">
                     <option value="">Все</option>
                     {% for c in wb_categories_list %}
                     <option value="{{ c }}" {{ 'selected' if wb_category_filter == c else '' }}>{{ c }}</option>
@@ -191,18 +281,18 @@
                 </select>
             </div>
             <div>
-                <label for="filter-photos" class="block text-xs text-gray-500 mb-1">Фото</label>
+                <label for="filter-photos" class="block text-xs myp-tm mb-1">Фото</label>
                 <select id="filter-photos" name="has_photos" onchange="this.form.submit()"
-                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                        class="w-full rounded-md text-sm border px-2 py-2">
                     <option value="">Не важно</option>
                     <option value="yes" {{ 'selected' if has_photos == 'yes' else '' }}>Есть фото</option>
                     <option value="no" {{ 'selected' if has_photos == 'no' else '' }}>Без фото</option>
                 </select>
             </div>
             <div>
-                <label for="filter-stock" class="block text-xs text-gray-500 mb-1">Остаток</label>
+                <label for="filter-stock" class="block text-xs myp-tm mb-1">Остаток</label>
                 <select id="filter-stock" name="stock" onchange="this.form.submit()"
-                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                        class="w-full rounded-md text-sm border px-2 py-2">
                     <option value="">Не важно</option>
                     <option value="in_stock" {{ 'selected' if stock == 'in_stock' else '' }}>В наличии</option>
                     <option value="out_of_stock" {{ 'selected' if stock == 'out_of_stock' else '' }}>Нет в наличии</option>
@@ -210,9 +300,9 @@
                 </select>
             </div>
             <div>
-                <label for="filter-sort" class="block text-xs text-gray-500 mb-1">Сортировка</label>
+                <label for="filter-sort" class="block text-xs myp-tm mb-1">Сортировка</label>
                 <select id="filter-sort" name="sort" onchange="this.form.submit()"
-                        class="w-full rounded-md border-gray-300 text-sm border px-2 py-2 bg-white">
+                        class="w-full rounded-md text-sm border px-2 py-2">
                     <option value="">Сначала новые</option>
                     <option value="oldest" {{ 'selected' if sort == 'oldest' else '' }}>Сначала старые</option>
                     <option value="price_asc" {{ 'selected' if sort == 'price_asc' else '' }}>Цена: по возрастанию</option>
@@ -221,56 +311,112 @@
                 </select>
             </div>
             <div class="col-span-2 md:col-span-3 lg:col-span-2">
-                <span class="block text-xs text-gray-500 mb-1">Закупочная цена, &#8381;</span>
+                <span class="block text-xs myp-tm mb-1">Закупочная цена, &#8381;</span>
                 <div class="flex gap-2 items-center">
                     <input type="number" name="price_min" value="{{ price_min }}" placeholder="от" min="0" step="any"
-                           class="w-full rounded-md border-gray-300 text-sm border px-2 py-2" aria-label="Цена от">
-                    <span class="text-gray-400 text-sm">—</span>
+                           class="w-full rounded-md text-sm border px-2 py-2" aria-label="Цена от">
+                    <span class="myp-tm text-sm">—</span>
                     <input type="number" name="price_max" value="{{ price_max }}" placeholder="до" min="0" step="any"
-                           class="w-full rounded-md border-gray-300 text-sm border px-2 py-2" aria-label="Цена до">
+                           class="w-full rounded-md text-sm border px-2 py-2" aria-label="Цена до">
                 </div>
             </div>
         </div>
     </form>
 
     <!-- Bulk actions bar -->
-    <div class="bg-white rounded-t-lg border border-b-0 border-gray-200 px-4 py-3 flex items-center justify-between gap-2" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <div class="myp-surface rounded-t-lg border border-b-0 px-4 py-3 flex items-center justify-between gap-2" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         <div class="flex items-center gap-3">
             <label class="flex items-center gap-2">
                 <input type="checkbox" x-model="selectedAll"
                        @change="selected = selectedAll ? [...document.querySelectorAll('[data-product-id]')].map(el => parseInt(el.dataset.productId)) : []"
-                       class="rounded border-gray-300 text-gray-900">
-                <span class="text-sm text-gray-600">Все на странице</span>
+                       class="rounded myp-check">
+                <span class="text-sm myp-ts">Все на странице</span>
             </label>
-            <span class="text-sm text-gray-400" x-text="selected.length + ' выбрано'"></span>
+            <span class="text-sm myp-tm" x-text="selected.length + ' выбрано'"></span>
         </div>
         <div class="flex gap-2 flex-shrink-0">
+            <button @click="openInfographicCampaign()" :disabled="selected.length === 0"
+                    class="sh-btn sh-btn--accent sh-btn--md"
+                    title="Создать локальную очередь инфографики по выбранным товарам; публикации на WB не будет">
+                <span class="sh-btn-icon">{{ icon('image', size=16) }}</span>
+                Инфографика<span x-show="selected.length" x-text="' (' + selected.length + ')'" ></span>
+            </button>
             {% if has_wb_key %}
             <button @click="pushBulkToWB()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
-                    class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md text-sm font-medium hover:opacity-85 disabled:opacity-40">
+                    class="sh-btn sh-btn--primary sh-btn--md">
                 <span x-show="!activeJob || activeJob.status === 'completed' || activeJob.status === 'failed' || activeJob.status === 'cancelled'">Отправить на WB (батч)</span>
                 <span x-show="activeJob && (activeJob.status === 'pending' || activeJob.status === 'running')" class="flex items-center gap-2">
                     <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                     Отправка...
                 </span>
             </button>
+            <button @click="startWbAudit()" :disabled="selected.length === 0 || wbAuditRunning"
+                    class="sh-btn sh-btn--secondary sh-btn--md"
+                    title="Живая сверка выбранных карточек с WB: существование, фото, какие характеристики реально загрузились. Расхождения фиксируются в карточках.">
+                <span x-show="!wbAuditRunning">Сверить с WB</span>
+                <span x-show="wbAuditRunning" class="flex items-center gap-2">
+                    <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    Ревизия...
+                </span>
+            </button>
             <button @click="checkBulk()" :disabled="selected.length === 0 || bulkChecking"
-                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-50 disabled:opacity-40">
+                    class="sh-btn sh-btn--secondary sh-btn--md">
                 <span x-show="!bulkChecking">Проверить на WB</span>
                 <span x-show="bulkChecking" class="flex items-center gap-2">
                     <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                     Проверка...
                 </span>
             </button>
+            <button @click="openBulkPhotoUpdate()"
+                    :disabled="selectedWbProductIds.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
+                    class="sh-btn sh-btn--accent sh-btn--md"
+                    title="Перейти к подтверждению массового обновления фотографий выбранных карточек WB">
+                <span class="sh-btn-icon">{{ icon('image', size=16) }}</span>
+                Обновить фото<span x-show="selectedWbProductIds.length" x-text="' (' + selectedWbProductIds.length + ')'" ></span>
+            </button>
+            {% endif %}
+            <form method="POST" action="{{ url_for('my_products_refresh_from_supplier') }}" class="inline-flex">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <template x-for="id in selected" :key="'ref-' + id">
+                    <input type="hidden" name="selected_ids" :value="id">
+                </template>
+                <button type="submit" :disabled="selected.length === 0"
+                        class="sh-btn sh-btn--secondary sh-btn--md"
+                        title="Скопировать свежие данные общей карточки поставщика в выбранные локальные карточки. WB и Ozon не вызываются.">
+                    Обновить из каталога<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
+                </button>
+            </form>
+            {% if marketplace_accounts %}
+            <form method="POST" action="{{ url_for('marketplace_drafts.bulk_prepare') }}" class="inline-flex items-center gap-2">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="validate" value="1">
+                {% if default_marketplace_account %}
+                <input type="hidden" name="account_id" value="{{ default_marketplace_account.id }}">
+                {% else %}
+                <select name="account_id" class="px-2 py-2 border rounded-md text-sm" aria-label="Кабинет Ozon">
+                    {% for account in marketplace_accounts %}
+                    <option value="{{ account.id }}" {{ 'selected' if account.is_default else '' }}>Ozon · {{ account.label }}</option>
+                    {% endfor %}
+                </select>
+                {% endif %}
+                <template x-for="id in selected" :key="id">
+                    <input type="hidden" name="imported_product_ids" :value="id">
+                </template>
+                <button type="submit" :disabled="selected.length === 0"
+                        class="sh-btn sh-btn--md myp-btn-ozon-outline"
+                        title="Создать и локально проверить Ozon-черновики для выбранных; публикации в Ozon не будет">
+                    Подготовить Ozon<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
+                </button>
+            </form>
             {% endif %}
             <button @click="deleteBulk()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
-                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:border-red-300 hover:text-red-600 disabled:opacity-40">
+                    class="sh-btn sh-btn--secondary sh-btn--md myp-btn-del">
                 Удалить выбранные
             </button>
             <!-- AI Агенты -->
             <div x-data="bulkAiAgents()">
                 <button @click="toggle()" type="button"
-                        class="px-4 py-2 border border-gray-300 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-50 disabled:opacity-40 flex items-center gap-1.5">
+                        class="sh-btn sh-btn--secondary sh-btn--md">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                     AI-агенты
                     <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
@@ -280,35 +426,35 @@
                     <div x-show="open" x-transition.opacity class="fixed inset-0 z-[100] flex items-center justify-center"
                          style="background:rgba(0,0,0,0.3)">
                         <div @click.away="open=false" x-show="open" x-transition
-                             class="bg-white rounded-lg shadow-xl border border-gray-200 w-80 max-w-[90vw]">
-                            <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                                <p class="text-sm font-medium text-gray-900">AI-обработка</p>
-                                <button @click="open=false" class="text-gray-400 hover:text-gray-600">
+                             class="myp-modal rounded-lg border w-80 max-w-[90vw]">
+                            <div class="px-4 py-3 border-b myp-b flex items-center justify-between">
+                                <p class="text-sm font-medium myp-t">AI-обработка</p>
+                                <button @click="open=false" class="myp-link-muted">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                                 </button>
                             </div>
                             <template x-if="loading">
                                 <div class="p-6 text-center">
-                                    <svg class="w-5 h-5 mx-auto text-gray-400 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                    <svg class="w-5 h-5 mx-auto myp-tm animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                                 </div>
                             </template>
                             <template x-if="!loading && actions.length === 0">
                                 <div class="p-6 text-center">
-                                    <p class="text-sm text-gray-500">Нет доступных агентов</p>
-                                    <a href="/agents" class="text-sm text-gray-900 hover:underline mt-2 inline-block">Активировать</a>
+                                    <p class="text-sm myp-ts">Нет доступных агентов</p>
+                                    <a href="/agents" class="text-sm myp-t hover:underline mt-2 inline-block">Активировать</a>
                                 </div>
                             </template>
                             <div x-show="!loading && (actions.length > 0 || pipelines.length > 0)" class="py-2">
                                 <template x-if="pipelines.length > 0">
-                                    <div class="border-b border-gray-100 pb-1 mb-1">
-                                        <p class="px-4 py-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">Pipeline</p>
+                                    <div class="border-b myp-b pb-1 mb-1">
+                                        <p class="px-4 py-1 text-[10px] font-medium myp-tm uppercase tracking-wider">Pipeline</p>
                                         <template x-for="p in pipelines" :key="p.id">
                                             <button @click="submitPipeline(p)" type="button"
-                                                    class="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
-                                                <span class="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0"></span>
+                                                    class="w-full text-left px-4 py-2.5 text-sm myp-menu-item flex items-center gap-2.5">
+                                                <span class="w-2 h-2 rounded-full myp-dot-chart flex-shrink-0"></span>
                                                 <div>
                                                     <span x-text="p.label" class="font-medium"></span>
-                                                    <span class="text-xs text-gray-400 ml-1" x-text="p.description"></span>
+                                                    <span class="text-xs myp-tm ml-1" x-text="p.description"></span>
                                                 </div>
                                             </button>
                                         </template>
@@ -316,11 +462,11 @@
                                 </template>
                                 <template x-if="actions.length > 0">
                                     <div>
-                                        <p class="px-4 py-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">Отдельные агенты</p>
+                                        <p class="px-4 py-1 text-[10px] font-medium myp-tm uppercase tracking-wider">Отдельные агенты</p>
                                         <template x-for="action in actions" :key="action.agent_id">
                                             <button @click="submitBulk(action)" type="button"
-                                                    class="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
-                                                <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0"></span>
+                                                    class="w-full text-left px-4 py-2.5 text-sm myp-menu-item flex items-center gap-2.5">
+                                                <span class="w-2 h-2 rounded-full myp-dot-ok flex-shrink-0"></span>
                                                 <span x-text="action.label_batch"></span>
                                             </button>
                                         </template>
@@ -336,70 +482,70 @@
 
     <!-- ═══════════ BATCH IMPORT PROGRESS PANEL ═══════════ -->
     <template x-if="activeJob">
-        <div class="bg-white border-x border-gray-200 overflow-hidden">
+        <div class="myp-surface border-x overflow-hidden">
             <!-- RUNNING / PENDING state -->
             <template x-if="activeJob.status === 'pending' || activeJob.status === 'running'">
                 <div class="px-5 py-4">
                     <!-- Header row -->
                     <div class="flex items-center justify-between mb-3">
                         <div class="flex items-center gap-3">
-                            <div class="w-8 h-8 rounded-full bg-[#0a0a0a] flex items-center justify-center flex-shrink-0">
-                                <svg class="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            <div class="w-8 h-8 rounded-full myp-spin-badge flex items-center justify-center flex-shrink-0">
+                                <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                             </div>
                             <div>
-                                <p class="text-sm font-medium text-gray-900" x-text="batchPhaseLabel()"></p>
-                                <p class="text-xs text-gray-400" x-text="batchSubDetail()"></p>
+                                <p class="text-sm font-medium myp-t" x-text="batchPhaseLabel()"></p>
+                                <p class="text-xs myp-tm" x-text="batchSubDetail()"></p>
                             </div>
                         </div>
                         <div class="flex items-center gap-4 text-xs">
                             <div class="text-right">
-                                <span class="batch-speed text-gray-500" x-text="formatElapsed(bulkElapsed)"></span>
+                                <span class="batch-speed myp-tm" x-text="formatElapsed(bulkElapsed)"></span>
                                 <template x-if="batchETA() > 0">
-                                    <span class="text-gray-400 ml-2" x-text="'~' + formatElapsed(batchETA()) + ' ост.'"></span>
+                                    <span class="myp-tm ml-2" x-text="'~' + formatElapsed(batchETA()) + ' ост.'"></span>
                                 </template>
                             </div>
                             <button @click="cancelJob()"
-                                    class="px-2.5 py-1 rounded border border-red-200 text-red-500 hover:bg-red-50 hover:border-red-300 transition-colors text-xs font-medium">
+                                    class="px-2.5 py-1 rounded border myp-cancel-btn transition-colors text-xs font-medium">
                                 Отменить
                             </button>
                         </div>
                     </div>
 
                     <!-- Progress bar -->
-                    <div class="w-full bg-gray-100 rounded-full h-2 overflow-hidden mb-3">
-                        <div class="h-full bg-[#0a0a0a] rounded-full transition-all duration-700 ease-out"
+                    <div class="w-full myp-progress-track rounded-full h-2 overflow-hidden mb-3">
+                        <div class="h-full myp-progress-fill rounded-full transition-all duration-700 ease-out"
                              :style="'width:' + batchPercent() + '%'"></div>
                     </div>
 
                     <!-- Phase indicators -->
-                    <div class="flex items-center gap-4 text-xs text-gray-500 mb-3">
+                    <div class="flex items-center gap-4 text-xs myp-tm mb-3">
                         <template x-for="(ph, i) in batchPhases()" :key="i">
                             <div class="flex items-center gap-1.5">
                                 <span class="batch-phase-dot" :class="ph.cls"></span>
-                                <span :class="ph.cls === 'active' ? 'text-gray-900 font-medium' : ''" x-text="ph.label"></span>
+                                <span :class="ph.cls === 'active' ? 'myp-t font-medium' : ''" x-text="ph.label"></span>
                             </div>
                         </template>
                     </div>
 
                     <!-- Live items list (last 5) -->
                     <template x-if="activeJob.progress && activeJob.progress.items && activeJob.progress.items.length > 0">
-                        <div class="border-t border-gray-100 pt-2 space-y-0.5 max-h-32 overflow-y-auto">
+                        <div class="border-t myp-b pt-2 space-y-0.5 max-h-32 overflow-y-auto">
                             <template x-for="(it, i) in activeJob.progress.items.slice(-8).reverse()" :key="it.product_id">
                                 <div class="batch-item-row batch-item-enter flex items-center justify-between px-2 py-1 rounded text-xs">
                                     <div class="flex items-center gap-2 min-w-0">
                                         <span class="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                                              :class="it.status === 'success' ? 'bg-green-500' : it.status === 'failed' ? 'bg-red-500' : 'bg-gray-300'"></span>
-                                        <span class="text-gray-700 truncate" x-text="it.title || ('ID ' + it.product_id)"></span>
+                                              :class="it.status === 'success' ? 'myp-dot-ok' : it.status === 'failed' ? 'myp-dot-bad' : 'myp-dot-idle'"></span>
+                                        <span class="myp-ts truncate" x-text="it.title || ('ID ' + it.product_id)"></span>
                                     </div>
                                     <div class="flex items-center gap-2 flex-shrink-0 ml-2">
                                         <template x-if="it.nm_id">
-                                            <span class="text-gray-400" x-text="'nmID ' + it.nm_id"></span>
+                                            <span class="myp-tm" x-text="'nmID ' + it.nm_id"></span>
                                         </template>
                                         <template x-if="it.error">
-                                            <span class="text-red-500 truncate max-w-[200px]" x-text="it.error"></span>
+                                            <span class="myp-danger truncate max-w-[200px]" x-text="it.error"></span>
                                         </template>
                                         <template x-if="it.status === 'success' && !it.error">
-                                            <span class="text-green-600">OK</span>
+                                            <span class="myp-ok">OK</span>
                                         </template>
                                     </div>
                                 </div>
@@ -407,21 +553,21 @@
                         </div>
                     </template>
 
-                    <p class="text-xs text-gray-400 mt-2">Батч-режим: все карточки одним запросом. Можно уйти со страницы.</p>
+                    <p class="text-xs myp-tm mt-2">Батч-режим: все карточки одним запросом. Можно уйти со страницы.</p>
                 </div>
             </template>
 
             <!-- CANCELLED state -->
             <template x-if="activeJob.status === 'cancelled'">
-                <div class="px-5 py-3 flex items-center gap-4 bg-orange-50/50">
-                    <div class="w-6 h-6 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
-                        <svg class="w-3.5 h-3.5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                <div class="px-5 py-3 flex items-center gap-4 myp-bg-warn">
+                    <div class="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0" style="background:var(--warn-border)">
+                        <svg class="w-3.5 h-3.5 myp-warn" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     </div>
                     <div class="flex-1 text-sm">
-                        <span class="text-orange-700 font-medium">Импорт отменён</span>
-                        <span class="text-gray-500 ml-3" x-text="'Отправлено ' + (activeJob.succeeded || 0) + ' из ' + activeJob.total"></span>
+                        <span class="myp-warn font-medium">Импорт отменён</span>
+                        <span class="myp-tm ml-3" x-text="'Отправлено ' + (activeJob.succeeded || 0) + ' из ' + activeJob.total"></span>
                     </div>
-                    <button @click="dismissJob()" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+                    <button @click="dismissJob()" class="text-xs myp-link-muted">Скрыть</button>
                 </div>
             </template>
 
@@ -431,34 +577,34 @@
                     <!-- Summary cards -->
                     <div class="flex items-center gap-3 mb-3">
                         <div class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
-                             :class="activeJob.succeeded > 0 ? 'bg-green-100' : 'bg-red-100'">
+                             :class="activeJob.succeeded > 0 ? 'myp-bg-ok' : 'myp-bg-bad'">
                             <template x-if="activeJob.succeeded > 0">
-                                <svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                <svg class="w-4 h-4 myp-ok" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                             </template>
                             <template x-if="!activeJob.succeeded">
-                                <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                <svg class="w-4 h-4 myp-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                             </template>
                         </div>
                         <div class="flex-1">
-                            <p class="text-sm font-medium text-gray-900">Импорт завершён</p>
-                            <p class="text-xs text-gray-500" x-text="formatElapsed(bulkElapsed)"></p>
+                            <p class="text-sm font-medium myp-t">Импорт завершён</p>
+                            <p class="text-xs myp-tm" x-text="formatElapsed(bulkElapsed)"></p>
                         </div>
-                        <button @click="dismissJob()" class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">Скрыть</button>
+                        <button @click="dismissJob()" class="text-xs myp-link-muted px-2 py-1">Скрыть</button>
                     </div>
 
                     <!-- Stats row -->
                     <div class="grid grid-cols-3 gap-2 mb-3">
-                        <div class="bg-green-50 rounded-lg px-3 py-2 text-center">
-                            <p class="text-lg font-semibold text-green-700 batch-speed" x-text="activeJob.succeeded || 0"></p>
-                            <p class="text-[10px] text-green-600 uppercase tracking-wider">Отправлено</p>
+                        <div class="myp-bg-ok rounded-lg px-3 py-2 text-center">
+                            <p class="text-lg font-semibold myp-ok batch-speed" x-text="activeJob.succeeded || 0"></p>
+                            <p class="text-[10px] myp-ok uppercase tracking-wider">Отправлено</p>
                         </div>
-                        <div class="bg-red-50 rounded-lg px-3 py-2 text-center">
-                            <p class="text-lg font-semibold text-red-600 batch-speed" x-text="activeJob.failed_count || 0"></p>
-                            <p class="text-[10px] text-red-500 uppercase tracking-wider">Ошибки</p>
+                        <div class="myp-bg-bad rounded-lg px-3 py-2 text-center">
+                            <p class="text-lg font-semibold myp-danger batch-speed" x-text="activeJob.failed_count || 0"></p>
+                            <p class="text-[10px] myp-danger uppercase tracking-wider">Ошибки</p>
                         </div>
-                        <div class="bg-gray-50 rounded-lg px-3 py-2 text-center">
-                            <p class="text-lg font-semibold text-gray-700 batch-speed" x-text="activeJob.total || 0"></p>
-                            <p class="text-[10px] text-gray-500 uppercase tracking-wider">Всего</p>
+                        <div class="myp-bg-soft rounded-lg px-3 py-2 text-center">
+                            <p class="text-lg font-semibold myp-ts batch-speed" x-text="activeJob.total || 0"></p>
+                            <p class="text-[10px] myp-tm uppercase tracking-wider">Всего</p>
                         </div>
                     </div>
 
@@ -466,15 +612,15 @@
                     <template x-if="batchItems().length > 0">
                         <div x-data="{tab: 'errors'}">
                             <!-- Tabs -->
-                            <div class="flex gap-1 mb-2 border-b border-gray-100">
+                            <div class="flex gap-1 mb-2 border-b myp-b">
                                 <button @click="tab = 'errors'"
                                         class="px-3 py-1.5 text-xs font-medium rounded-t transition-colors"
-                                        :class="tab === 'errors' ? 'bg-red-50 text-red-700 border border-b-0 border-red-200' : 'text-gray-400 hover:text-gray-600'">
+                                        :class="tab === 'errors' ? 'myp-tab-bad' : 'myp-tab-idle'">
                                     <span x-text="'Ошибки (' + batchItems().filter(i => i.status !== 'success').length + ')'"></span>
                                 </button>
                                 <button @click="tab = 'success'"
                                         class="px-3 py-1.5 text-xs font-medium rounded-t transition-colors"
-                                        :class="tab === 'success' ? 'bg-green-50 text-green-700 border border-b-0 border-green-200' : 'text-gray-400 hover:text-gray-600'">
+                                        :class="tab === 'success' ? 'myp-tab-ok' : 'myp-tab-idle'">
                                     <span x-text="'Успешные (' + batchItems().filter(i => i.status === 'success').length + ')'"></span>
                                 </button>
                             </div>
@@ -482,41 +628,41 @@
                             <!-- Error items -->
                             <div x-show="tab === 'errors'" class="space-y-1 max-h-60 overflow-y-auto">
                                 <template x-for="it in batchItems().filter(i => i.status !== 'success')" :key="it.product_id">
-                                    <div class="flex items-start gap-2 px-3 py-2 rounded-lg bg-red-50/60 text-xs">
-                                        <svg class="w-3.5 h-3.5 text-red-400 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+                                    <div class="flex items-start gap-2 px-3 py-2 rounded-lg myp-bg-bad text-xs">
+                                        <svg class="w-3.5 h-3.5 myp-danger mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
                                         <div class="min-w-0 flex-1">
                                             <a :href="'/my-products/' + it.product_id + '/edit'"
-                                               class="font-medium text-gray-900 hover:underline block truncate"
+                                               class="font-medium myp-t hover:underline block truncate"
                                                x-text="it.title || ('ID ' + it.product_id)"></a>
-                                            <p class="text-red-600 mt-0.5" x-text="it.error"></p>
+                                            <p class="myp-danger mt-0.5" x-text="it.error"></p>
                                         </div>
                                     </div>
                                 </template>
                                 <template x-if="batchItems().filter(i => i.status !== 'success').length === 0">
-                                    <p class="text-xs text-gray-400 py-2 text-center">Ошибок нет</p>
+                                    <p class="text-xs myp-tm py-2 text-center">Ошибок нет</p>
                                 </template>
                             </div>
 
                             <!-- Success items -->
                             <div x-show="tab === 'success'" class="space-y-1 max-h-60 overflow-y-auto">
                                 <template x-for="it in batchItems().filter(i => i.status === 'success')" :key="it.product_id">
-                                    <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-50/60 text-xs">
-                                        <svg class="w-3.5 h-3.5 text-green-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-                                        <span class="text-gray-700 truncate" x-text="it.title || ('ID ' + it.product_id)"></span>
+                                    <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg myp-bg-ok text-xs">
+                                        <svg class="w-3.5 h-3.5 myp-ok flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                                        <span class="myp-ts truncate" x-text="it.title || ('ID ' + it.product_id)"></span>
                                         <template x-if="it.nm_id">
-                                            <span class="text-gray-400 ml-auto flex-shrink-0" x-text="'nmID ' + it.nm_id"></span>
+                                            <span class="myp-tm ml-auto flex-shrink-0" x-text="'nmID ' + it.nm_id"></span>
                                         </template>
                                     </div>
                                 </template>
                                 <template x-if="batchItems().filter(i => i.status === 'success').length === 0">
-                                    <p class="text-xs text-gray-400 py-2 text-center">Нет успешных</p>
+                                    <p class="text-xs myp-tm py-2 text-center">Нет успешных</p>
                                 </template>
                             </div>
                         </div>
                     </template>
 
                     <template x-if="activeJob.error_message">
-                        <div class="text-xs text-red-600 mt-2 px-3 py-2 bg-red-50 rounded-lg" x-text="activeJob.error_message"></div>
+                        <div class="text-xs myp-danger mt-2 px-3 py-2 myp-bg-bad rounded-lg" x-text="activeJob.error_message"></div>
                     </template>
                 </div>
             </template>
@@ -525,40 +671,40 @@
 
     <!-- WB Check Results Panel -->
     <template x-if="checkResults">
-        <div class="bg-white border-x border-gray-200 px-4 py-3">
+        <div class="myp-surface border-x px-4 py-3">
             <div class="flex items-center justify-between mb-2">
-                <h3 class="text-sm font-medium text-gray-900">Результаты проверки на WB</h3>
-                <button @click="checkResults = null" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+                <h3 class="text-sm font-medium myp-t">Результаты проверки на WB</h3>
+                <button @click="checkResults = null" class="text-xs myp-link-muted">Скрыть</button>
             </div>
             <div class="flex items-center gap-4 text-sm mb-2">
-                <span class="text-gray-600" x-text="'Всего: ' + checkResults.total"></span>
-                <span class="text-red-600" x-text="'Без фото: ' + checkResults.no_photos"></span>
-                <span class="text-orange-600" x-text="'Без цены: ' + checkResults.no_price"></span>
-                <span class="text-green-600" x-text="'OK: ' + (checkResults.total - checkResults.with_issues)"></span>
+                <span class="myp-ts" x-text="'Всего: ' + checkResults.total"></span>
+                <span class="myp-danger" x-text="'Без фото: ' + checkResults.no_photos"></span>
+                <span class="myp-warn" x-text="'Без цены: ' + checkResults.no_price"></span>
+                <span class="myp-ok" x-text="'OK: ' + (checkResults.total - checkResults.with_issues)"></span>
             </div>
             <template x-if="checkResults.results && checkResults.results.length > 0">
                 <div class="max-h-60 overflow-y-auto space-y-1">
                     <template x-for="(item, i) in checkResults.results" :key="i">
                         <div class="flex items-center justify-between py-1 px-2 rounded text-xs"
-                             :class="item.issues.length > 0 ? 'bg-red-50' : 'bg-green-50'">
+                             :class="item.issues.length > 0 ? 'myp-bg-bad' : 'myp-bg-ok'">
                             <div class="flex items-center gap-2">
-                                <span class="text-gray-500" x-text="'nmID: ' + item.nm_id"></span>
-                                <span class="text-gray-700 truncate max-w-xs" x-text="item.title"></span>
+                                <span class="myp-tm" x-text="'nmID: ' + item.nm_id"></span>
+                                <span class="myp-ts truncate max-w-xs" x-text="item.title"></span>
                             </div>
                             <div class="flex items-center gap-2">
                                 <template x-if="item.issues.length > 0">
-                                    <span class="text-red-600" x-text="item.issues.join(', ')"></span>
+                                    <span class="myp-danger" x-text="item.issues.join(', ')"></span>
                                 </template>
                                 <template x-if="item.issues.length === 0">
-                                    <span class="text-green-600">OK</span>
+                                    <span class="myp-ok">OK</span>
                                 </template>
                                 <template x-if="item.has_photos === false">
                                     <button @click="reuploadPhotos(item.product_id)"
-                                            class="px-2 py-0.5 bg-gray-900 text-white rounded text-xs hover:opacity-80">Фото</button>
+                                            class="sh-btn sh-btn--primary px-2 py-0.5 text-xs">Фото</button>
                                 </template>
                                 <template x-if="item.has_price === false">
                                     <button @click="reuploadPrice(item.product_id)"
-                                            class="px-2 py-0.5 bg-gray-900 text-white rounded text-xs hover:opacity-80">Цена</button>
+                                            class="sh-btn sh-btn--primary px-2 py-0.5 text-xs">Цена</button>
                                 </template>
                             </div>
                         </div>
@@ -570,29 +716,29 @@
 
     <!-- Single Card Check Result -->
     <template x-if="singleCheckResult">
-        <div class="bg-white border-x border-gray-200 px-4 py-3">
+        <div class="myp-surface border-x px-4 py-3">
             <div class="flex items-center justify-between mb-2">
-                <h3 class="text-sm font-medium text-gray-900" x-text="'Проверка: ' + (singleCheckResult.title || 'nmID ' + singleCheckResult.nm_id)"></h3>
-                <button @click="singleCheckResult = null" class="text-xs text-gray-400 hover:text-gray-600">Скрыть</button>
+                <h3 class="text-sm font-medium myp-t" x-text="'Проверка: ' + (singleCheckResult.title || 'nmID ' + singleCheckResult.nm_id)"></h3>
+                <button @click="singleCheckResult = null" class="text-xs myp-link-muted">Скрыть</button>
             </div>
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
                 <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full" :class="singleCheckResult.has_photos ? 'bg-green-500' : 'bg-red-500'"></span>
+                    <span class="w-2 h-2 rounded-full" :class="singleCheckResult.has_photos ? 'myp-dot-ok' : 'myp-dot-bad'"></span>
                     <span x-text="'Фото: ' + singleCheckResult.photos_count"></span>
                 </div>
                 <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full" :class="singleCheckResult.has_price ? 'bg-green-500' : 'bg-red-500'"></span>
+                    <span class="w-2 h-2 rounded-full" :class="singleCheckResult.has_price ? 'myp-dot-ok' : 'myp-dot-bad'"></span>
                     <span x-text="singleCheckResult.has_price ? 'Цена: ' + singleCheckResult.price + ' руб.' : 'Цена: нет'"></span>
                 </div>
                 <div class="flex items-center gap-2" x-show="singleCheckResult.characteristics_count !== undefined">
-                    <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                    <span class="w-2 h-2 rounded-full myp-dot-info"></span>
                     <span x-text="'Хар-ки: ' + singleCheckResult.characteristics_count"></span>
                 </div>
             </div>
             <template x-if="singleCheckResult.issues && singleCheckResult.issues.length > 0">
                 <div class="mt-2 space-y-1">
                     <template x-for="(issue, i) in singleCheckResult.issues" :key="i">
-                        <div class="text-xs text-red-600 flex items-center gap-1">
+                        <div class="text-xs myp-danger flex items-center gap-1">
                             <svg class="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
                             <span x-text="issue"></span>
                         </div>
@@ -603,151 +749,236 @@
     </template>
 
     <!-- Products list -->
-    <div class="bg-white border border-gray-200 rounded-b-lg" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <div class="myp-surface border rounded-b-lg" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
         {% if pagination.items %}
         <table class="w-full text-sm" style="min-width:900px">
-            <thead class="bg-gray-50">
+            <thead class="myp-thead">
                 <tr>
                     <th class="px-3 py-2 text-left w-8"></th>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Фото</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Товар</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Бренд</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Категория WB</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Цена</th>
-                    <th class="px-3 py-2 text-left text-xs font-medium text-gray-500">Остаток</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-gray-500">Статус</th>
-                    <th class="px-3 py-2 text-center text-xs font-medium text-gray-500">Действия</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium myp-tm">Фото</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium myp-tm">Товар</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium myp-tm">Бренд</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium myp-tm">Категория WB</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium myp-tm">Цена</th>
+                    <th class="px-3 py-2 text-left text-xs font-medium myp-tm">Остаток</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium myp-tm">Каналы</th>
+                    <th class="px-3 py-2 text-center text-xs font-medium myp-tm">Действия</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody class="myp-rows">
                 {% for p in pagination.items %}
-                <tr class="hover:bg-gray-50" data-product-id="{{ p.id }}">
+                <tr data-product-id="{{ p.id }}">
                     <td class="px-3 py-2">
                         <input type="checkbox"
                                :checked="selected.includes({{ p.id }})"
                                @change="selected = $event.target.checked ? [...selected, {{ p.id }}] : selected.filter(id => id !== {{ p.id }})"
-                               class="rounded border-gray-300 text-gray-900">
+                               class="rounded myp-check">
                     </td>
                     <td class="px-3 py-2">
                         {% set photos = p.photo_urls %}
                         {% if photos and photos != '[]' %}
-                        <div class="w-10 h-10 rounded bg-gray-100 overflow-hidden flex-shrink-0">
+                        <div class="w-10 h-10 rounded myp-thumb overflow-hidden flex-shrink-0">
                             <img src="{{ url_for('serve_imported_product_photo', product_id=p.id, photo_idx=0) }}"
                                  class="w-full h-full object-cover" onerror="this.style.display='none'" alt="">
                         </div>
                         {% else %}
-                        <div class="w-10 h-10 rounded bg-gray-100 flex items-center justify-center text-gray-300 flex-shrink-0">
+                        <div class="w-10 h-10 rounded myp-thumb flex items-center justify-center flex-shrink-0">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                         </div>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2">
                         <a href="{{ url_for('seller_product_wb_preview', product_id=p.id) }}"
-                           class="text-sm font-medium text-gray-900 hover:text-gray-600 line-clamp-2">
+                           class="text-sm font-medium myp-link line-clamp-2">
                             {{ p.title or 'Без названия' }}
                         </a>
-                        <p class="text-xs text-gray-400">{{ p.external_id }}</p>
+                        <p class="text-xs myp-tm">{{ p.external_id }}
+                            {% if updates_map.get(p.id) %}
+                            <span class="sh-badge sh-badge--yellow sh-badge--sm" title="Общая карточка поставщика обновилась — заберите изменения кнопкой «Обновить из каталога»">Обновление</span>
+                            {% endif %}
+                            {% set audit = wb_audit_map.get(p.id) if wb_audit_map else none %}
+                            {% if audit and audit.status == 'not_found' %}
+                            <span class="sh-badge sh-badge--red sh-badge--sm" title="WB-ревизия: карточка не найдена в каталоге WB">WB: не найдена</span>
+                            {% elif audit and audit.status == 'diverged' %}
+                            {% set audit_chars = audit.characteristics or {} %}
+                            <span class="sh-badge sh-badge--yellow sh-badge--sm"
+                                  title="WB-ревизия: {{ 'нет фото; ' if not audit.photos_count }}{{ audit_chars.missing_on_wb ~ ' характеристик не долетело; ' if audit_chars.missing_on_wb }}{{ audit_chars.diverged ~ ' отличается; ' if audit_chars.diverged }}подробности в превью карточки">WB: расхождения</span>
+                            {% endif %}
+                        </p>
                     </td>
-                    <td class="px-3 py-2 text-sm text-gray-600">
+                    <td class="px-3 py-2 text-sm myp-ts">
                         {{ p.brand or '—' }}
                         {% if p.resolved_brand_id %}
                             {% set cat_ok = brand_category_map.get(p.id) %}
                             {% if cat_ok is sameas true %}
-                            <span class="inline-block w-1.5 h-1.5 bg-green-600 rounded-full ml-1" title="Бренд подтверждён в категории"></span>
+                            <span class="inline-block w-1.5 h-1.5 myp-dot-ok rounded-full ml-1" title="Бренд подтверждён в категории"></span>
                             {% elif cat_ok is sameas false %}
-                            <span class="inline-block w-1.5 h-1.5 bg-red-500 rounded-full ml-1" title="Бренд недоступен в категории"></span>
+                            <span class="inline-block w-1.5 h-1.5 myp-dot-bad rounded-full ml-1" title="Бренд недоступен в категории"></span>
                             {% else %}
-                            <span class="inline-block w-1.5 h-1.5 bg-gray-900 rounded-full ml-1" title="Бренд подтверждён"></span>
+                            <span class="inline-block w-1.5 h-1.5 myp-dot-strong rounded-full ml-1" title="Бренд подтверждён"></span>
                             {% endif %}
                         {% endif %}
                     </td>
-                    <td class="px-3 py-2 text-sm text-gray-600">
-                        {% if p.mapped_wb_category %}
+                    <td class="px-3 py-2 text-sm myp-ts">
+                        {% set update = updates_info.get(p.id) if updates_info else none %}
+                        {% if update and update.new_category %}
+                        <span class="text-xs myp-tm" style="text-decoration:line-through">{{ (p.mapped_wb_category or 'Не определена')[:22] }}</span>
+                        <span class="text-xs" style="color:var(--warn)">→</span>
+                        <span class="text-xs font-medium" style="color:var(--text)"
+                              title="Новая категория в общей карточке поставщика — заберите кнопкой «Обновить из каталога»">{{ update.new_category[:25] }}</span>
+                        {% elif p.mapped_wb_category %}
                         <span class="text-xs">{{ p.mapped_wb_category[:25] }}</span>
                         {% else %}
-                        <span class="text-xs text-gray-400">Не определена</span>
+                        <span class="text-xs myp-tm">Не определена</span>
+                        {% endif %}
+                        {% if update and update.chars_count %}
+                        <div class="text-xs relative" style="color:var(--warn)"
+                             x-data="supplierDiff({{ p.id }})"
+                             @mouseenter="show()" @mouseleave="hideSoon()">
+                            <span class="cursor-help underline decoration-dotted" tabindex="0"
+                                  @focus="show()" @blur="hideSoon()"
+                                  aria-label="Показать, что изменится при обновлении из каталога">+{{ update.chars_count }} характеристик</span>
+                            <div x-show="visible" x-cloak
+                                 class="absolute left-0 top-full mt-1 w-80 max-h-72 overflow-y-auto rounded-lg border p-3 text-xs"
+                                 style="background:var(--bg-card);border-color:var(--border);color:var(--text);z-index:40;box-shadow:var(--shadow-2)"
+                                 @mouseenter="cancelHide()" @mouseleave="hideSoon()">
+                                <template x-if="loading"><span style="color:var(--text-muted)">Загрузка…</span></template>
+                                <template x-if="error"><span style="color:var(--danger)" x-text="error"></span></template>
+                                <template x-if="diff">
+                                    <div class="space-y-1.5 text-left">
+                                        <template x-if="diff.category">
+                                            <div><span style="color:var(--text-muted)">Категория:</span>
+                                                <s style="color:var(--text-muted)" x-text="diff.category.current || '—'"></s>
+                                                → <b x-text="diff.category.new"></b></div>
+                                        </template>
+                                        <template x-if="diff.added.length">
+                                            <div>
+                                                <div class="font-medium" style="color:var(--ok)">Добавится:</div>
+                                                <template x-for="item in diff.added" :key="'a-' + item.name">
+                                                    <div><span x-text="item.name"></span><span style="color:var(--text-secondary)" x-text="': ' + item.value"></span></div>
+                                                </template>
+                                            </div>
+                                        </template>
+                                        <template x-if="diff.changed.length">
+                                            <div>
+                                                <div class="font-medium" style="color:var(--warn)">Изменится:</div>
+                                                <template x-for="item in diff.changed" :key="'c-' + item.name">
+                                                    <div><span x-text="item.name"></span>:
+                                                        <s style="color:var(--text-muted)" x-text="item.old"></s>
+                                                        → <span x-text="item.new"></span></div>
+                                                </template>
+                                            </div>
+                                        </template>
+                                        <div style="color:var(--text-muted)" x-text="'Без изменений: ' + diff.unchanged_count"></div>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-sm">
                         {% if p.supplier_price %}
                         <span class="font-medium">{{ '%.0f' | format(p.supplier_price) }} &#8381;</span>
                         {% else %}
-                        <span class="text-gray-400">—</span>
+                        <span class="myp-tm">—</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2">
                         {% if p.supplier_quantity is not none and p.supplier_quantity > 0 %}
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-xs font-medium text-gray-600">{{ p.supplier_quantity }}</span>
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded border myp-chip text-xs font-medium">{{ p.supplier_quantity }}</span>
                         {% elif p.supplier_quantity is not none %}
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded border border-gray-200 text-xs font-medium text-gray-400">0</span>
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded border myp-chip myp-chip--muted text-xs font-medium">0</span>
                         {% else %}
-                        <span class="text-gray-400 text-xs">—</span>
+                        <span class="myp-tm text-xs">—</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-center">
-                        {% if p.import_status == 'imported' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-900">На WB</span>
-                        {% elif p.import_status == 'validated' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">Готов</span>
-                        {% elif p.import_status == 'failed' %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--danger-bg);color:var(--danger)" title="{{ p.import_error or '' }}">Ошибка</span>
-                        {% else %}
-                        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--warn-bg);color:var(--warn)">Ожидает</span>
-                        {% endif %}
+                        <div class="inline-flex flex-col items-center gap-1">
+                            {% if p.import_status == 'imported' %}
+                            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--ok-bg);color:var(--ok)"><span class="sh-mp-dot sh-mp-dot--wb"></span>На WB</span>
+                            {% elif p.import_status == 'validated' %}
+                            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--bg-hover);color:var(--text-secondary)"><span class="sh-mp-dot sh-mp-dot--wb"></span>Готов к WB</span>
+                            {% elif p.import_status == 'failed' %}
+                            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--danger-bg);color:var(--danger)" title="{{ p.import_error or '' }}"><span class="sh-mp-dot sh-mp-dot--wb"></span>Ошибка WB</span>
+                            {% else %}
+                            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--warn-bg);color:var(--warn)"><span class="sh-mp-dot sh-mp-dot--wb"></span>Ожидает</span>
+                            {% endif %}
+                            {% for d in ozon_drafts_map.get(p.id, []) %}
+                            <a href="{{ url_for('marketplace_drafts.detail', draft_id=d.id) }}"
+                               class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium hover:opacity-80"
+                               title="Ozon · {{ d.account_label }} — открыть черновик"
+                               {% if d.status == 'published' %}style="background:var(--ok-bg);color:var(--ok)"
+                               {% elif d.status == 'ready' %}style="background:var(--info-bg);color:var(--info)"
+                               {% elif d.status == 'blocked' %}style="background:var(--danger-bg);color:var(--danger)"
+                               {% elif d.status == 'needs_category' %}style="background:var(--warn-bg);color:var(--warn)"
+                               {% else %}style="background:var(--bg-hover);color:var(--text-secondary)"{% endif %}>
+                                <span class="sh-mp-dot sh-mp-dot--ozon"></span>
+                                {%- if d.status == 'published' %}На Ozon
+                                {%- elif d.status == 'ready' %}Готов к Ozon
+                                {%- elif d.status == 'blocked' %}Заблокирован
+                                {%- elif d.status == 'needs_category' %}Нет категории
+                                {%- elif d.status == 'archived' %}Архив Ozon
+                                {%- else %}Черновик Ozon{% endif %}
+                            </a>
+                            {% endfor %}
+                        </div>
                     </td>
                     <td class="px-3 py-2 text-center whitespace-nowrap">
                         <a href="{{ url_for('seller_product_wb_preview', product_id=p.id) }}"
-                           class="inline-flex items-center px-2.5 py-1 bg-gray-100 text-gray-700 rounded text-xs font-medium hover:bg-gray-200">
+                           class="inline-flex items-center px-2.5 py-1 myp-btn-soft rounded text-xs font-medium">
                             WB карточка
                         </a>
                         {% if default_marketplace_account %}
+                        {% set default_account_draft = ozon_drafts_map.get(p.id, []) | selectattr('account_id', 'equalto', default_marketplace_account.id) | list %}
+                        {% if not default_account_draft %}
                         <form method="post" action="{{ url_for('marketplace_drafts.create') }}" class="inline">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="account_id" value="{{ default_marketplace_account.id }}">
                             <input type="hidden" name="imported_product_id" value="{{ p.id }}">
                             <input type="hidden" name="validate" value="1">
                             <button type="submit"
-                                    class="inline-flex items-center px-2.5 py-1 border border-blue-200 text-blue-700 rounded text-xs font-medium hover:bg-blue-50 ml-1"
+                                    class="inline-flex items-center px-2.5 py-1 border rounded text-xs font-medium ml-1 myp-btn-ozon-outline"
                                     title="Подготовить и локально проверить для {{ default_marketplace_account.label }}; публикации в Ozon не будет">
                                 Подготовить Ozon
                             </button>
                         </form>
                         {% endif %}
+                        {% endif %}
                         {% if p.import_status == 'imported' and p.product_id %}
                         <div class="relative inline-flex items-center ml-1" x-data="{open: false}" @click.away="open = false">
                             <button @click="open = !open"
-                                    class="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs font-medium hover:bg-gray-200"
+                                    class="inline-flex items-center px-2 py-1 myp-btn-soft rounded text-xs font-medium"
                                     title="Действия с карточкой WB">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01"/></svg>
                             </button>
                             <div x-show="open" x-transition
-                                 class="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1"
+                                 class="absolute right-0 top-full mt-1 w-48 myp-menu border rounded-lg z-20 py-1"
                                  style="display:none;">
                                 <button @click="open=false; checkCard({{ p.id }})"
-                                        class="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        class="w-full text-left px-3 py-1.5 text-xs myp-menu-item flex items-center gap-2">
+                                    <svg class="w-3.5 h-3.5 myp-tm" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                     Проверить на WB
                                 </button>
                                 <button @click="open=false; reuploadPhotos({{ p.id }})"
-                                        class="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                        class="w-full text-left px-3 py-1.5 text-xs myp-menu-item flex items-center gap-2">
+                                    <svg class="w-3.5 h-3.5 myp-tm" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
                                     Перезалить фото
                                 </button>
                                 <button @click="open=false; reuploadPrice({{ p.id }})"
-                                        class="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        class="w-full text-left px-3 py-1.5 text-xs myp-menu-item flex items-center gap-2">
+                                    <svg class="w-3.5 h-3.5 myp-tm" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                                     Перезалить цену
                                 </button>
-                                <hr class="my-1 border-gray-100">
+                                <hr class="my-1" style="border-color:var(--border-light)">
                                 <a href="{{ url_for('product_enrich', product_id=p.product_id) }}"
                                    @click="open=false"
-                                   class="w-full text-left px-3 py-1.5 text-xs text-purple-700 hover:bg-purple-50 flex items-center gap-2 font-medium">
-                                    <svg class="w-3.5 h-3.5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                                   class="w-full text-left px-3 py-1.5 text-xs myp-menu-item myp-menu-item--accent flex items-center gap-2 font-medium">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
                                     Обогатить от поставщика
                                 </a>
                                 <button @click="open=false; enrichCard({{ p.id }})"
-                                        class="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                        class="w-full text-left px-3 py-1.5 text-xs myp-menu-item flex items-center gap-2">
+                                    <svg class="w-3.5 h-3.5 myp-tm" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                                     Обогатить из AI
                                 </button>
                             </div>
@@ -756,7 +987,7 @@
                         <form method="POST" action="{{ url_for('seller_delete_imported_product', product_id=p.id) }}"
                               class="inline" onsubmit="return confirm('Удалить товар? Он станет доступен для повторного импорта.')">
                             <button type="submit"
-                                    class="inline-flex items-center px-2.5 py-1 border border-gray-200 text-gray-500 rounded text-xs font-medium hover:border-red-300 hover:text-red-600 ml-1"
+                                    class="inline-flex items-center px-2.5 py-1 border myp-btn-del rounded text-xs font-medium ml-1"
                                     title="Удалить из моих товаров">
                                 Удалить
                             </button>
@@ -769,12 +1000,12 @@
         {% else %}
         <div class="text-center py-12">
             {% if active_filters or search %}
-            <p class="text-gray-500">Ничего не найдено по заданным фильтрам</p>
+            <p class="myp-tm">Ничего не найдено по заданным фильтрам</p>
             <a href="{{ url_for('seller_my_products', status=status) if status else url_for('seller_my_products') }}"
-               class="text-gray-900 text-sm hover:underline mt-2 inline-block">Сбросить фильтры</a>
+               class="myp-link text-sm hover:underline mt-2 inline-block">Сбросить фильтры</a>
             {% else %}
-            <p class="text-gray-500">Нет импортированных товаров</p>
-            <a href="{{ url_for('supplier_catalog') }}" class="text-gray-900 text-sm hover:underline mt-2 inline-block">Перейти в каталог поставщиков &rarr;</a>
+            <p class="myp-tm">Нет импортированных товаров</p>
+            <a href="{{ url_for('supplier_catalog') }}" class="myp-link text-sm hover:underline mt-2 inline-block">Перейти в каталог поставщиков &rarr;</a>
             {% endif %}
         </div>
         {% endif %}
@@ -783,26 +1014,26 @@
     <!-- Pagination -->
     {% if pagination.pages > 1 %}
     <div class="mt-6 flex items-center justify-between">
-        <p class="text-sm text-gray-700">
+        <p class="text-sm myp-ts">
             {{ pagination.page * pagination.per_page - pagination.per_page + 1 }}—{{ [pagination.page * pagination.per_page, pagination.total]|min }}
             из {{ pagination.total }}
         </p>
         <nav class="flex gap-1">
             {% if pagination.has_prev %}
             <a href="{{ url_for('seller_my_products', page=pagination.prev_num, **page_args) }}"
-               class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&laquo;</a>
+               class="px-3 py-2 text-sm border myp-page rounded-md">&laquo;</a>
             {% endif %}
             {% for p in pagination.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
                 {% if p %}
                 <a href="{{ url_for('seller_my_products', page=p, **page_args) }}"
-                   class="px-3 py-2 text-sm border rounded-md {{ 'bg-[#1a1a1a] text-white border-[#1a1a1a]' if p == pagination.page else 'border-gray-300 hover:bg-gray-50' }}">{{ p }}</a>
+                   class="px-3 py-2 text-sm border rounded-md {{ 'myp-page--active' if p == pagination.page else 'myp-page' }}">{{ p }}</a>
                 {% else %}
-                <span class="px-2 py-2 text-gray-400">...</span>
+                <span class="px-2 py-2 myp-tm">...</span>
                 {% endif %}
             {% endfor %}
             {% if pagination.has_next %}
             <a href="{{ url_for('seller_my_products', page=pagination.next_num, **page_args) }}"
-               class="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50">&raquo;</a>
+               class="px-3 py-2 text-sm border myp-page rounded-md">&raquo;</a>
             {% endif %}
         </nav>
     </div>
@@ -811,28 +1042,28 @@
     <!-- Import History -->
     {% if recent_imports %}
     <div class="mt-8">
-        <h2 class="text-lg font-medium text-gray-900 mb-3">История загрузок</h2>
-        <div class="bg-white border border-gray-200 rounded-lg" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+        <h2 class="text-lg font-medium myp-t mb-3">История загрузок</h2>
+        <div class="myp-surface border rounded-lg" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
             <table class="w-full text-sm" style="min-width:650px">
-                <thead class="bg-gray-50">
+                <thead class="myp-thead">
                     <tr>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Товар</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Дата</th>
-                        <th class="px-4 py-2 text-center text-xs font-medium text-gray-500">Результат</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500">Детали</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium myp-tm">Товар</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium myp-tm">Дата</th>
+                        <th class="px-4 py-2 text-center text-xs font-medium myp-tm">Результат</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium myp-tm">Детали</th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-100">
+                <tbody class="myp-rows">
                     {% for imp in recent_imports %}
-                    <tr class="hover:bg-gray-50">
+                    <tr>
                         <td class="px-4 py-2">
                             <a href="{{ url_for('seller_product_wb_preview', product_id=imp.id) }}"
-                               class="text-sm text-gray-900 hover:text-gray-600">
+                               class="text-sm myp-link">
                                 {{ (imp.title or 'Без названия')[:40] }}
                             </a>
-                            <span class="text-xs text-gray-400 ml-1">#{{ imp.external_id }}</span>
+                            <span class="text-xs myp-tm ml-1">#{{ imp.external_id }}</span>
                         </td>
-                        <td class="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">
+                        <td class="px-4 py-2 text-xs myp-tm whitespace-nowrap">
                             {% if imp.imported_at %}
                             {{ imp.imported_at.strftime('%d.%m %H:%M') }}
                             {% elif imp.updated_at %}
@@ -841,12 +1072,12 @@
                         </td>
                         <td class="px-4 py-2 text-center">
                             {% if imp.import_status == 'imported' %}
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700">OK</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium myp-bg-ok myp-ok">OK</span>
                             {% else %}
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700">Ошибка</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium myp-bg-bad myp-danger">Ошибка</span>
                             {% endif %}
                         </td>
-                        <td class="px-4 py-2 text-xs text-gray-500 max-w-xs truncate" title="{{ imp.import_error or 'Успешно загружен на WB' }}">
+                        <td class="px-4 py-2 text-xs myp-tm max-w-xs truncate" title="{{ imp.import_error or 'Успешно загружен на WB' }}">
                             {% if imp.import_error %}
                             {{ imp.import_error[:80] }}
                             {% elif imp.wb_nm_id %}
@@ -869,14 +1100,26 @@ function myProductsPage() {
     return {
         selectedAll: false,
         selected: [],
+        wbProductMap: {
+            {% for p in pagination.items %}
+            {{ p.id }}: {{ p.product_id if p.import_status == 'imported' and p.product_id else 'null' }}{% if not loop.last %},{% endif %}
+            {% endfor %}
+        },
         activeJob: null,
         bulkElapsed: 0,
         notification: null,
         checkResults: null,
         singleCheckResult: null,
         bulkChecking: false,
+        wbAuditRunning: false,
         _pollTimer: null,
         _elapsedTimer: null,
+
+        get selectedWbProductIds() {
+            return [...new Set(this.selected
+                .map(id => this.wbProductMap[id])
+                .filter(id => Number.isInteger(id) && id > 0))];
+        },
 
         init() {
             // Check for active/recent job in localStorage
@@ -1087,6 +1330,65 @@ function myProductsPage() {
             this.stopPolling();
         },
 
+        openBulkPhotoUpdate() {
+            const ids = this.selectedWbProductIds;
+            if (!ids.length) {
+                this.showNotification('Среди выбранных товаров нет опубликованных карточек WB', 'warning');
+                return;
+            }
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '{{ url_for("products_enrich_bulk") }}';
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+            if (csrfToken) {
+                const csrf = document.createElement('input');
+                csrf.type = 'hidden';
+                csrf.name = 'csrf_token';
+                csrf.value = csrfToken;
+                form.appendChild(csrf);
+            }
+            ids.forEach(id => {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'selected_ids';
+                input.value = String(id);
+                form.appendChild(input);
+            });
+            document.body.appendChild(form);
+            form.submit();
+        },
+
+        openInfographicCampaign() {
+            const ids = [...new Set(this.selected.filter(id => Number.isInteger(id) && id > 0))];
+            if (!ids.length) return;
+            if (ids.length > 200) {
+                this.showNotification('За одну кампанию можно выбрать не более 200 товаров', 'warning');
+                return;
+            }
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '{{ url_for("infographic_campaign_new") }}';
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+            if (csrfToken) {
+                const csrf = document.createElement('input');
+                csrf.type = 'hidden';
+                csrf.name = 'csrf_token';
+                csrf.value = csrfToken;
+                form.appendChild(csrf);
+            }
+            ids.forEach(id => {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'product_ids';
+                input.value = String(id);
+                form.appendChild(input);
+            });
+            document.body.appendChild(form);
+            form.submit();
+        },
+
         deleteBulk() {
             if (!this.selected.length) return;
             if (!confirm('Удалить ' + this.selected.length + ' товаров? Они станут доступны для повторного импорта.')) return;
@@ -1167,6 +1469,33 @@ function myProductsPage() {
             }
         },
 
+        async startWbAudit() {
+            if (!this.selected.length) return;
+            this.wbAuditRunning = true;
+            try {
+                const r = await fetch('/my-products/wb-audit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                    },
+                    body: JSON.stringify({product_ids: this.selected})
+                });
+                const data = await r.json();
+                if (r.ok && data.success) {
+                    this.showNotification(
+                        'Ревизия запущена: ' + data.total + ' карточек сверяются с WB. ' +
+                        'Расхождения появятся бейджами после обновления страницы.', 'info');
+                } else {
+                    this.showNotification(data.error || 'Ошибка запуска ревизии', 'error');
+                }
+            } catch(e) {
+                this.showNotification('Ошибка: ' + e.message, 'error');
+            } finally {
+                this.wbAuditRunning = false;
+            }
+        },
+
         async checkBulk() {
             if (!this.selected.length) return;
             this.bulkChecking = true;
@@ -1193,6 +1522,45 @@ function myProductsPage() {
         showNotification(msg, type) {
             this.notification = {msg, type};
             if (type !== 'info') setTimeout(() => this.notification = null, 5000);
+        }
+    };
+}
+
+function supplierDiff(productId) {
+    return {
+        visible: false,
+        loading: false,
+        error: null,
+        diff: null,
+        _hideTimer: null,
+        show() {
+            this.cancelHide();
+            this.visible = true;
+            if (!this.diff && !this.loading) this.load();
+        },
+        hideSoon() {
+            this.cancelHide();
+            this._hideTimer = setTimeout(() => { this.visible = false; }, 200);
+        },
+        cancelHide() {
+            if (this._hideTimer) { clearTimeout(this._hideTimer); this._hideTimer = null; }
+        },
+        async load() {
+            this.loading = true;
+            this.error = null;
+            try {
+                const r = await fetch('/my-products/' + productId + '/supplier-diff');
+                const data = await r.json();
+                if (r.ok && data.success) {
+                    this.diff = data;
+                } else {
+                    this.error = data.error || 'Не удалось загрузить сравнение';
+                }
+            } catch (e) {
+                this.error = 'Ошибка загрузки';
+            } finally {
+                this.loading = false;
+            }
         }
     };
 }

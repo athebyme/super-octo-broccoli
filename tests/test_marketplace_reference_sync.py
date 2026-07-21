@@ -1498,6 +1498,226 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
             resolution.marketplace_brand_name, 'Renamed Brand',
         )
 
+    def test_brand_sync_row_flush_failure_is_isolated_to_one_brand(self):
+        """Ошибка данных одной строки не переводит весь батч в rollback."""
+        from sqlalchemy.exc import IntegrityError
+
+        self.add_category(
+            401, 'Brand category', is_enabled=True, is_available=True,
+        )
+        engine = BrandEngine(self.app)
+        self.client.brand_result = {
+            'data': [
+                {'id': 9101, 'name': 'Good One'},
+                {'id': 9102, 'name': 'Bad Brand'},
+                {'id': 9103, 'name': 'Good Two'},
+            ],
+            'complete': True,
+            'errors': [],
+        }
+
+        real_flush = db.session.flush
+        state = {'failed': False}
+
+        def flaky_flush(*args, **kwargs):
+            pending_bad = any(
+                isinstance(obj, Brand) and obj.name == 'Bad Brand'
+                for obj in db.session.new
+            )
+            if pending_bad and not state['failed']:
+                state['failed'] = True
+                raise IntegrityError(
+                    'INSERT INTO brands', {}, Exception('constraint failed'),
+                )
+            return real_flush(*args, **kwargs)
+
+        with patch.object(db.session, 'flush', flaky_flush):
+            stats = engine.sync_marketplace_brands(
+                self.marketplace.id, self.client,
+            )
+
+        self.assertTrue(state['failed'])
+        self.assertEqual(stats['errors'], 1)
+        self.assertEqual(stats['mp_created'], 2)
+        saved_names = sorted(
+            binding.marketplace_brand_name
+            for binding in MarketplaceBrand.query.all()
+        )
+        self.assertEqual(saved_names, ['Good One', 'Good Two'])
+        self.assertEqual(Brand.query.filter_by(name='Bad Brand').count(), 0)
+        # Ошибка сохранения не двигает checkpoint и не даёт ложный success.
+        self.assertEqual(self.marketplace.brands_sync_status, 'partial')
+
+        # Сессия осталась рабочей: следующий запуск досохраняет бренд.
+        second = engine.sync_marketplace_brands(
+            self.marketplace.id, self.client,
+        )
+        self.assertEqual(second['errors'], 0)
+        self.assertEqual(MarketplaceBrand.query.count(), 3)
+        self.assertEqual(self.marketplace.brands_sync_status, 'success')
+
+    def test_brand_sync_database_lock_aborts_without_error_storm(self):
+        """SQLite contention is one run-level defer, never one error per row."""
+        from sqlalchemy.exc import OperationalError
+
+        self.add_category(
+            401, 'Brand category', is_enabled=True, is_available=True,
+        )
+        engine = BrandEngine(self.app)
+        self.client.brand_result = {
+            'data': [
+                {'id': 9201, 'name': 'Good One'},
+                {'id': 9202, 'name': 'Locked Brand'},
+                {'id': 9203, 'name': 'Must Not Be Attempted'},
+            ],
+            'complete': True,
+            'errors': [],
+        }
+
+        real_flush = db.session.flush
+        state = {'failed': False, 'attempted_tail': False}
+
+        def locked_flush(*args, **kwargs):
+            pending_names = {
+                obj.name for obj in db.session.new if isinstance(obj, Brand)
+            }
+            if 'Must Not Be Attempted' in pending_names:
+                state['attempted_tail'] = True
+            if 'Locked Brand' in pending_names and not state['failed']:
+                state['failed'] = True
+                raise OperationalError(
+                    'INSERT INTO brands', {}, Exception('database is locked'),
+                )
+            return real_flush(*args, **kwargs)
+
+        with patch.object(db.session, 'flush', locked_flush):
+            stats = engine.sync_marketplace_brands(
+                self.marketplace.id, self.client,
+            )
+
+        self.assertTrue(state['failed'])
+        self.assertFalse(state['attempted_tail'])
+        self.assertEqual(stats['errors'], 1)
+        self.assertEqual(stats['db_contention'], 1)
+        # The outer batch is rolled back, including rows flushed before BUSY.
+        self.assertEqual(stats['mp_created'], 0)
+        self.assertEqual(MarketplaceBrand.query.count(), 0)
+        self.assertEqual(Brand.query.count(), 0)
+        self.assertEqual(self.marketplace.brands_sync_status, 'partial')
+        self.assertIn(
+            'deferred=sqlite_write_contention',
+            self.marketplace.brands_sync_error,
+        )
+
+        # Durable checkpoint stays put; a later uncontended run applies the
+        # complete category snapshot idempotently.
+        second = engine.sync_marketplace_brands(
+            self.marketplace.id, self.client,
+        )
+        self.assertEqual(second['errors'], 0)
+        self.assertEqual(MarketplaceBrand.query.count(), 3)
+        self.assertEqual(self.marketplace.brands_sync_status, 'success')
+
+    def test_brand_sync_keeps_exact_external_id_per_category(self):
+        self.add_category(
+            403, 'First brand scope', is_enabled=True, is_available=True,
+        )
+        self.add_category(
+            404, 'Second brand scope', is_enabled=True, is_available=True,
+        )
+        self.client.brand_result = {
+            'data': [
+                {'id': 9101, 'name': 'One Touch'},
+                {'id': 9102, 'name': 'One Touch'},
+            ],
+            'subject_brands': {
+                403: [{'id': 9101, 'name': 'One Touch'}],
+                404: [{'id': 9102, 'name': 'One Touch'}],
+            },
+            'completed_subject_ids': [403, 404],
+            'complete': True,
+            'errors': [],
+        }
+        engine = BrandEngine(self.app)
+
+        first = engine.sync_marketplace_brands(
+            self.marketplace.id, self.client,
+        )
+        second = engine.sync_marketplace_brands(
+            self.marketplace.id, self.client,
+        )
+
+        self.assertEqual(first['errors'], 0)
+        self.assertEqual(second['errors'], 0)
+        self.assertEqual(Brand.query.count(), 1)
+        self.assertEqual(MarketplaceBrand.query.count(), 1)
+        binding = MarketplaceBrand.query.one()
+        links = {
+            link.category_id: link
+            for link in BrandCategoryLink.query.filter_by(
+                marketplace_brand_id=binding.id,
+            ).all()
+        }
+        self.assertEqual(set(links), {403, 404})
+        self.assertEqual(
+            links[403].marketplace_external_brand_id, 9101,
+        )
+        self.assertEqual(
+            links[404].marketplace_external_brand_id, 9102,
+        )
+        self.assertTrue(links[403].is_available)
+        self.assertTrue(links[404].is_available)
+
+        engine.invalidate_cache()
+        first_scope = engine.resolve(
+            'One Touch', marketplace_id=self.marketplace.id, category_id=403,
+        )
+        second_scope = engine.resolve(
+            'One Touch', marketplace_id=self.marketplace.id, category_id=404,
+        )
+        self.assertEqual(first_scope.marketplace_brand_ext_id, 9101)
+        self.assertEqual(second_scope.marketplace_brand_ext_id, 9102)
+
+    def test_brand_sync_quarantines_same_category_identity_ambiguity(self):
+        self.add_category(
+            406, 'Ambiguous brand scope', is_enabled=True, is_available=True,
+        )
+        self.client.brand_result = {
+            'data': [
+                {'id': 9201, 'name': 'Same Brand'},
+                {'id': 9202, 'name': 'same   brand'},
+                {'id': 9203, 'name': 'Safe Brand'},
+            ],
+            'subject_brands': {
+                406: [
+                    {'id': 9201, 'name': 'Same Brand'},
+                    {'id': 9202, 'name': 'same   brand'},
+                    {'id': 9203, 'name': 'Safe Brand'},
+                ],
+            },
+            'completed_subject_ids': [406],
+            'complete': True,
+            'errors': [],
+        }
+
+        stats = BrandEngine(self.app).sync_marketplace_brands(
+            self.marketplace.id, self.client,
+        )
+
+        self.assertEqual(stats['errors'], 0)
+        self.assertEqual(stats['category_identity_conflicts'], 1)
+        self.assertEqual(stats['category_identities_quarantined'], 2)
+        self.assertEqual(BrandCategoryLink.query.count(), 1)
+        self.assertEqual(MarketplaceBrand.query.count(), 1)
+        link = BrandCategoryLink.query.one()
+        self.assertEqual(link.marketplace_external_brand_id, 9203)
+        self.assertTrue(link.is_available)
+        self.assertEqual(
+            MarketplaceBrand.query.one().marketplace_brand_name,
+            'Safe Brand',
+        )
+        self.assertEqual(self.marketplace.brands_sync_status, 'success')
+
     def test_brand_sync_rename_does_not_take_over_manual_alias(self):
         self.add_category(
             402, 'Brand category', is_enabled=True, is_available=True,
@@ -1702,6 +1922,107 @@ class MarketplaceReferenceSyncTestCase(unittest.TestCase):
             marketplace_brand_id=binding.id,
             category_id=601,
         ).first())
+
+    def test_category_validation_persists_exact_identity_and_rejects_drift(self):
+        brand = Brand(
+            name='Exact Category Brand',
+            name_normalized='exact category brand',
+            status='verified',
+        )
+        db.session.add(brand)
+        db.session.flush()
+        binding = MarketplaceBrand(
+            brand_id=brand.id,
+            marketplace_id=self.marketplace.id,
+            marketplace_brand_name=brand.name,
+            status='verified',
+            is_available=True,
+        )
+        db.session.add(binding)
+        db.session.commit()
+        client = MagicMock()
+        client.search_brands.return_value = {
+            'data': [{'id': 9602, 'name': 'Exact Category Brand'}],
+            'complete': True,
+        }
+        engine = BrandEngine(self.app)
+
+        self.assertTrue(engine.validate_brand_for_category(
+            binding.id, 602, marketplace_client=client,
+        ))
+        link = BrandCategoryLink.query.filter_by(
+            marketplace_brand_id=binding.id,
+            category_id=602,
+        ).one()
+        self.assertEqual(link.marketplace_external_brand_id, 9602)
+        self.assertEqual(binding.marketplace_brand_id, 9602)
+
+        link.verified_at = datetime.utcnow() - timedelta(days=2)
+        db.session.commit()
+        client.search_brands.return_value = {
+            'data': [{'id': 9603, 'name': 'Exact Category Brand'}],
+            'complete': True,
+        }
+        self.assertIsNone(engine.validate_brand_for_category(
+            binding.id, 602, marketplace_client=client,
+        ))
+        db.session.refresh(link)
+        self.assertEqual(link.marketplace_external_brand_id, 9602)
+
+    def test_brand_merge_rejects_conflicting_category_identities(self):
+        source = Brand(
+            name='Merge source',
+            name_normalized='merge source',
+            status='verified',
+        )
+        target = Brand(
+            name='Merge target',
+            name_normalized='merge target',
+            status='verified',
+        )
+        db.session.add_all([source, target])
+        db.session.flush()
+        source_binding = MarketplaceBrand(
+            brand_id=source.id,
+            marketplace_id=self.marketplace.id,
+            marketplace_brand_name=source.name,
+            marketplace_brand_id=9701,
+            status='verified',
+            is_available=True,
+        )
+        target_binding = MarketplaceBrand(
+            brand_id=target.id,
+            marketplace_id=self.marketplace.id,
+            marketplace_brand_name=target.name,
+            marketplace_brand_id=9702,
+            status='verified',
+            is_available=True,
+        )
+        db.session.add_all([source_binding, target_binding])
+        db.session.flush()
+        db.session.add_all([
+            BrandCategoryLink(
+                marketplace_brand_id=source_binding.id,
+                category_id=603,
+                marketplace_external_brand_id=9701,
+                is_available=True,
+            ),
+            BrandCategoryLink(
+                marketplace_brand_id=target_binding.id,
+                category_id=603,
+                marketplace_external_brand_id=9702,
+                is_available=True,
+            ),
+        ])
+        db.session.commit()
+
+        with self.assertRaisesRegex(ValueError, 'conflicting exact'):
+            BrandEngine(self.app).merge_brands(source.id, target.id)
+
+        self.assertEqual(Brand.query.filter(
+            Brand.id.in_([source.id, target.id]),
+        ).count(), 2)
+        self.assertEqual(BrandCategoryLink.query.count(), 2)
 
     def test_unexpected_brand_sync_error_never_leaves_running_status(self):
         self.add_category(701, 'Failure scope', is_enabled=True, is_available=True)

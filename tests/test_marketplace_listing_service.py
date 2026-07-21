@@ -104,7 +104,7 @@ class SyntheticCatalogAdapter:
                 "statuses": {
                     "is_created": True,
                     "status": "processed",
-                    "status_failed": False,
+                    "status_failed": "",
                 },
                 "visibility_details": {
                     "active_product": not archived,
@@ -357,6 +357,133 @@ class MarketplaceListingServiceTest(unittest.TestCase):
                     "last_id": "",
                 }
             })
+
+    def test_current_product_info_failed_stage_is_a_bounded_string(self):
+        def response(
+            status_failed,
+            moderate_status="",
+            primary_image=None,
+            sku=0,
+        ):
+            return {
+                "items": [{
+                    "id": 101,
+                    "offer_id": "offer-active",
+                    "primary_image": (
+                        ["https://img.test/primary.jpg"]
+                        if primary_image is None else primary_image
+                    ),
+                    "sku": sku,
+                    "statuses": {
+                        "is_created": True,
+                        "status": "new",
+                        "status_failed": status_failed,
+                        "moderate_status": moderate_status,
+                    },
+                }],
+            }
+
+        healthy = MarketplaceListingService.normalize_product_info(
+            response("")
+        )["101"]
+        self.assertEqual(healthy["statuses"]["status_failed"], "")
+        self.assertNotIn("sku", healthy["identifiers"])
+        self.assertEqual(
+            healthy["media"]["primary_image"],
+            "https://img.test/primary.jpg",
+        )
+
+        failed = MarketplaceListingService.normalize_product_info(
+            response("imported", "declined")
+        )["101"]
+        self.assertEqual(failed["statuses"]["status_failed"], "imported")
+        normalized, _, _ = MarketplaceListingService._normalize_status(
+            archived=False,
+            statuses=failed["statuses"],
+            visibility={},
+            errors=[],
+        )
+        self.assertEqual(normalized, "error")
+
+        identified = MarketplaceListingService.normalize_product_info(
+            response("", sku=7654321)
+        )["101"]
+        self.assertEqual(identified["identifiers"]["sku"], "7654321")
+
+        with self.assertRaisesRegex(
+            MarketplaceCatalogProtocolError,
+            "status_failed must be a string",
+        ):
+            MarketplaceListingService.normalize_product_info(response(False))
+        with self.assertRaisesRegex(
+            MarketplaceCatalogProtocolError,
+            "primary_image must be a bounded list",
+        ):
+            MarketplaceListingService.normalize_product_info(
+                response("", primary_image="https://img.test/legacy.jpg")
+            )
+        with self.assertRaisesRegex(
+            MarketplaceCatalogProtocolError,
+            "sku must be positive",
+        ):
+            MarketplaceListingService.normalize_product_info(
+                response("", sku=-1)
+            )
+
+    def test_current_product_attributes_accepts_bounded_long_text(self):
+        def response(value, *, complex_attributes=None):
+            return {
+                "result": [{
+                    "id": 101,
+                    "offer_id": "offer-active",
+                    "attributes": [{
+                        "id": 4191,
+                        "complex_id": 0,
+                        "values": [{"value": value}],
+                    }],
+                    "complex_attributes": (
+                        [] if complex_attributes is None else complex_attributes
+                    ),
+                    "barcodes": [],
+                    "images": [],
+                }],
+                "total": 1,
+                "last_id": "",
+            }
+
+        live_sized_value = "x" * 5976
+        page = MarketplaceListingService.normalize_product_attributes_page(
+            response(live_sized_value)
+        )
+        self.assertEqual(
+            page["items"]["101"]["attributes"][0]["values"][0]["value"],
+            live_sized_value,
+        )
+
+        blank_page = MarketplaceListingService.normalize_product_attributes_page(
+            response(" \r\n\t ")
+        )
+        self.assertIsNone(
+            blank_page["items"]["101"]["attributes"][0]["values"][0]["value"]
+        )
+
+        empty_complex_page = (
+            MarketplaceListingService.normalize_product_attributes_page(
+                response("value", complex_attributes=[{}])
+            )
+        )
+        self.assertEqual(
+            empty_complex_page["items"]["101"]["complex_attributes"],
+            [{"attributes": []}],
+        )
+
+        with self.assertRaisesRegex(
+            MarketplaceCatalogProtocolError,
+            "exceeds 10000 characters",
+        ):
+            MarketplaceListingService.normalize_product_attributes_page(
+                response("x" * 10001)
+            )
 
     def test_current_v5_price_fields_are_kept_and_deprecated_fields_are_dropped(self):
         page = MarketplaceListingService.normalize_prices_page({

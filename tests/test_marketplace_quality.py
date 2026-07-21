@@ -24,7 +24,8 @@ from services.marketplace_quality import (
     MarketplaceQualityService,
     MarketplaceQualityValidationError,
 )
-from services.ozon_analytics_contracts import METRIC_BY_CODE
+from services.marketplace_analytics import MarketplaceAnalyticsService
+from services.ozon_analytics_contracts import METRIC_BY_CODE, request_fingerprint
 
 
 class MarketplaceQualityServiceTest(unittest.TestCase):
@@ -175,7 +176,11 @@ class MarketplaceQualityServiceTest(unittest.TestCase):
             period_end=date(2026, 7, 15),
             status="completed",
             phase="completed",
-            request_fingerprint="f" * 64,
+            request_fingerprint=request_fingerprint(
+                period_start=date(2026, 6, 16),
+                period_end=date(2026, 7, 15),
+            ),
+            contract_version=MarketplaceAnalyticsService.CONTRACT_VERSION,
             metrics_json="[]",
             totals_json="{}",
             started_at=self.now,
@@ -283,6 +288,27 @@ class MarketplaceQualityServiceTest(unittest.TestCase):
         self.assertIn("ozon_no_analytics_signal", codes)
         self.assertNotIn("ozon_low_views", codes)
         self.assertIsNone(assessment.analytics_sync_id)
+
+    def test_core_analytics_does_not_infer_deprecated_metrics_as_zero(self):
+        MarketplaceMetricFact.query.filter(
+            MarketplaceMetricFact.sync_id == self.analytics.id,
+            MarketplaceMetricFact.metric_code != "ordered_units",
+        ).delete(synchronize_session=False)
+        db.session.commit()
+
+        MarketplaceQualityService.recompute_account(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            listing_ids=[self.listing.id],
+            limit=1,
+            now=self.now,
+        )
+        assessment = MarketplaceQualityAssessment.query.one()
+        codes = {item["code"] for item in json.loads(assessment.reasons_json)}
+        self.assertNotIn("ozon_low_views", codes)
+        self.assertNotIn("ozon_high_cancellation_rate", codes)
+        self.assertNotIn("ozon_high_return_rate", codes)
+        self.assertEqual(assessment.analytics_sync_id, self.analytics.id)
 
     def test_explicit_listing_ids_cannot_be_silently_paginated(self):
         with self.assertRaises(MarketplaceQualityValidationError):

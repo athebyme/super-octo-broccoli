@@ -28,6 +28,10 @@
     <div class="mb-6 flex justify-between items-center">
         <div></div>
         <div class="flex gap-2">
+            <a href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id) }}"
+               class="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
+                Массовое обогащение
+            </a>
             <a href="{{ url_for('admin_supplier_smart_parser', supplier_id=supplier.id) }}"
                class="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">
                 Smart Parser

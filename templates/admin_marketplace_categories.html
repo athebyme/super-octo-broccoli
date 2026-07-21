@@ -3,41 +3,66 @@
 {% block title %}Категории {{ marketplace.name }} - Seller Hub{% endblock %}
 
 {% block content %}
+<style>
+    .mpcat-crumbs { color: var(--text-muted); font-size: 12px; margin-bottom: 12px; }
+    .mpcat-crumbs a { color: var(--text-secondary); text-decoration: none; }
+    .mpcat-crumbs a:hover { color: var(--accent); }
+    .mpcat-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; }
+    .mpcat-group-toggle {
+        display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
+        text-align: left; background: none; border: none; padding: 0; cursor: pointer;
+        color: var(--text); font: inherit;
+    }
+    .mpcat-group-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--r-xs); }
+    .mpcat-group-toggle > svg { color: var(--text-muted); flex-shrink: 0; }
+    .mpcat-group-name { font-size: 13px; font-weight: 600; color: var(--text); }
+    .mpcat-bulk-btn {
+        font-size: 12px; font-weight: 500; padding: 4px 8px;
+        border: none; border-radius: 6px; background: none; cursor: pointer; white-space: nowrap;
+    }
+    .mpcat-bulk-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .mpcat-bulk-btn:active { transform: translateY(1px); }
+    .mpcat-bulk-btn--on { color: var(--ok); }
+    .mpcat-bulk-btn--on:hover { background: var(--ok-bg); }
+    .mpcat-bulk-btn--off { color: var(--danger); }
+    .mpcat-bulk-btn--off:hover { background: var(--danger-bg); }
+    .mpcat-scroll { overflow-x: auto; border-top: 1px solid var(--border); }
+    .mpcat-name { font-weight: 500; color: var(--text); }
+    .mpcat-id { color: var(--text-muted); font-family: ui-monospace, monospace; font-size: 12px; }
+    .mpcat-sync { font-size: 11px; color: var(--text-muted); }
+    .mpcat-sync--failed { color: var(--danger); }
+    .mpcat-ok-note { color: var(--ok); font-size: 11px; font-weight: 400; }
+    .mpcat-req { color: var(--danger); }
+</style>
+
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
      x-data="categoriesManager({{ marketplace.id }})">
-    <!-- Hero Banner -->
-    <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
-        <div class="relative">
-            <nav class="flex mb-3" aria-label="Breadcrumb">
-                <ol class="flex items-center space-x-2 text-sm text-gray-400">
-                    <li><a href="{{ url_for('marketplaces.index') }}" class="hover:text-white">Маркетплейсы</a></li>
-                    <li><svg class="flex-shrink-0 h-4 w-4 text-gray-500" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd"
-                                d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
-                                clip-rule="evenodd" />
-                        </svg></li>
-                    <li class="font-medium text-white">{{ marketplace.name }}</li>
-                </ol>
-            </nav>
-            <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Категории</h1>
-            <p class="mt-2 text-sm text-gray-400">
-                {{ total_count }} категорий в {{ grouped_categories|length }} группах
-                <span class="ml-2 text-gray-300 font-medium" x-show="enabledCount > 0" x-cloak>
-                    (<span x-text="enabledCount"></span> включено для AI)
-                </span>
-            </p>
-            <div class="flex items-center space-x-3 mt-4">
+    <nav class="mpcat-crumbs" aria-label="Breadcrumb">
+        <a href="{{ url_for('marketplaces.index') }}">Маркетплейсы</a>
+        <span aria-hidden="true"> / </span>
+        <span>{{ marketplace.name }}</span>
+    </nav>
+
+    <!-- Page header -->
+    <div class="sh-page-header">
+        <div class="sh-page-header-content">
+            <div>
+                <h1 class="sh-page-title">Категории</h1>
+                <p class="sh-page-subtitle">
+                    {{ total_count }} категорий в {{ grouped_categories|length }} группах
+                    <span class="ml-2" x-show="enabledCount > 0" x-cloak>
+                        (<span x-text="enabledCount"></span> включено для AI)
+                    </span>
+                </p>
+            </div>
+            <div class="sh-page-actions">
                 <button @click="syncAllEnabled()"
                     :disabled="syncing"
-                    class="inline-flex items-center px-3 py-2 bg-white text-[#1a1a1a] rounded-md text-sm font-medium hover:bg-gray-100 disabled:opacity-50 disabled:cursor-wait">
-                    <svg x-show="syncing" class="animate-spin -ml-1 mr-2 h-4 w-4 text-[#1a1a1a]" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                    </svg>
+                    class="sh-btn sh-btn--white sh-btn--md">
+                    <span x-show="syncing" class="sh-spinner sh-spinner--sm" aria-hidden="true"></span>
                     <span x-text="syncing ? 'Синхронизация...' : 'Синхронизировать включённые'"></span>
                 </button>
-                <button @click="expandAll = !expandAll"
-                    class="inline-flex items-center px-3 py-2 bg-white/10 text-white rounded-md text-sm font-medium hover:bg-white/20">
+                <button @click="expandAll = !expandAll" class="sh-btn sh-btn--white-outline sh-btn--md">
                     <span x-text="expandAll ? 'Свернуть все' : 'Развернуть все'"></span>
                 </button>
             </div>
@@ -45,148 +70,134 @@
     </div>
 
     <!-- Search Form -->
-    <div class="bg-white rounded-xl border border-gray-200 shadow-sm mb-6 p-4">
-        <form method="GET" action="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}"
-            class="flex items-center max-w-lg">
-            <div class="relative flex-grow">
-                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                </div>
-                <input type="text" name="search" value="{{ search }}"
-                    class="focus:ring-indigo-500 focus:border-indigo-500 block w-full pl-10 sm:text-sm border-gray-300 rounded-md"
-                    placeholder="Поиск по категории или группе...">
-            </div>
-            <button type="submit"
-                class="ml-3 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700">Найти</button>
-            {% if search %}
-            <a href="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}"
-                class="ml-2 inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">Сброс</a>
-            {% endif %}
-        </form>
-    </div>
-
-    <!-- Toast -->
-    <div x-show="toast.show" x-transition x-cloak
-        :class="toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-green-50 border-green-200 text-green-800'"
-        class="fixed bottom-4 right-4 z-50 border rounded-lg px-4 py-3 shadow-lg text-sm flex items-center max-w-md">
-        <span x-text="toast.message"></span>
-    </div>
+    <form method="GET" action="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}"
+        class="sh-filter-bar" role="search">
+        <label class="sr-only" for="mpcat-search">Поиск по категории или группе</label>
+        <input id="mpcat-search" type="text" name="search" value="{{ search }}"
+            class="flex-1" style="min-width:220px"
+            placeholder="Поиск по категории или группе...">
+        <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm">Найти</button>
+        {% if search %}
+        <a href="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}"
+            class="sh-btn sh-btn--ghost sh-btn--sm">Сброс</a>
+        {% endif %}
+    </form>
 
     <!-- Categories Tree -->
     {% if grouped_categories %}
     <div class="space-y-3">
         {% for parent_name, children in grouped_categories.items() %}
         {% set group_key = parent_name if parent_name != 'Без родителя' else '__none__' %}
-        <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+        <div class="sh-card sh-card--flush overflow-hidden" style="margin-bottom:0"
              x-data="{ open: expandAll || {{ 'true' if search else 'false' }} }"
              x-effect="if (expandAll) open = true">
             <!-- Parent group header -->
-            <div class="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors">
-                <button @click="open = !open" class="flex items-center space-x-3 flex-1 text-left">
-                    <svg class="h-5 w-5 text-gray-400 transform transition-transform" :class="{ 'rotate-90': open }"
+            <div class="mpcat-group-head">
+                <button @click="open = !open" class="mpcat-group-toggle" :aria-expanded="open">
+                    <svg class="h-5 w-5 transform transition-transform" :class="{ 'rotate-90': open }"
                         fill="currentColor" viewBox="0 0 20 20">
                         <path fill-rule="evenodd"
                             d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
                             clip-rule="evenodd" />
                     </svg>
-                    <span class="text-sm font-semibold text-gray-900">{{ parent_name }}</span>
-                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-                        {{ children|length }}
-                    </span>
+                    <span class="mpcat-group-name">{{ parent_name }}</span>
+                    <span class="sh-badge sh-badge--sm sh-badge--blue">{{ children|length }}</span>
                     {% set enabled_in_group = children|selectattr('is_enabled')|list|length %}
                     {% if enabled_in_group > 0 %}
-                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                        {{ enabled_in_group }} вкл
-                    </span>
+                    <span class="sh-badge sh-badge--sm sh-badge--green">{{ enabled_in_group }} вкл</span>
                     {% endif %}
                 </button>
-                <div class="flex items-center space-x-2 ml-4">
+                <div class="flex items-center gap-1 ml-4">
                     <button @click="toggleGroup('{{ group_key|e }}', true)"
-                        class="text-xs text-green-600 hover:text-green-800 font-medium px-2 py-1 rounded hover:bg-green-50"
+                        class="mpcat-bulk-btn mpcat-bulk-btn--on"
                         title="Включить все в группе">Вкл. все</button>
                     <button @click="toggleGroup('{{ group_key|e }}', false)"
-                        class="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50"
+                        class="mpcat-bulk-btn mpcat-bulk-btn--off"
                         title="Выключить все в группе">Выкл. все</button>
                 </div>
             </div>
 
             <!-- Children categories table -->
             <div x-show="open" x-collapse x-cloak>
-                <table class="min-w-full divide-y divide-gray-200">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="w-16 px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Вкл</th>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">ID</th>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Название</th>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-36">Характеристики</th>
-                            <th class="px-6 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">Синхронизация</th>
-                            <th class="px-6 py-2 w-28"><span class="sr-only">Действия</span></th>
-                        </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-100">
-                        {% for cat in children %}
-                        <tr class="hover:bg-gray-50 transition-opacity"
-                            :class="{ 'opacity-50': !enabled[{{ cat.id }}] }"
-                            x-data="{ charCount: {{ cat.characteristics_count or 0 }}, syncStatus: '' }">
-                            <td class="px-4 py-3 text-center">
-                                <button @click="toggleCategory({{ cat.id }}, $data)"
-                                    :disabled="toggling[{{ cat.id }}] || (!available[{{ cat.id }}] && !enabled[{{ cat.id }}])"
-                                    class="relative inline-flex flex-shrink-0 h-5 w-9 border-2 border-transparent rounded-full cursor-pointer transition-colors ease-in-out duration-200 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-indigo-500 disabled:opacity-50"
-                                    :class="enabled[{{ cat.id }}] ? 'bg-indigo-600' : 'bg-gray-200'"
-                                    role="switch" :aria-checked="enabled[{{ cat.id }}]">
-                                    <span class="pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform ring-0 transition ease-in-out duration-200"
-                                        :class="enabled[{{ cat.id }}] ? 'translate-x-4' : 'translate-x-0'"></span>
-                                </button>
-                            </td>
-                            <td class="px-6 py-3 whitespace-nowrap text-sm text-gray-400 font-mono">{{ cat.subject_id }}</td>
-                            <td class="px-6 py-3 text-sm font-medium text-gray-900">
-                                {{ cat.subject_name }}
-                                {% if not cat.is_available %}
-                                <span class="ml-2 text-xs text-red-600 font-normal">Недоступна в WB</span>
-                                {% endif %}
-                                <span x-show="syncStatus" x-text="syncStatus" x-cloak
-                                    class="ml-2 text-xs text-green-600 font-normal"></span>
-                            </td>
-                            <td class="px-6 py-3 whitespace-nowrap">
-                                <template x-if="charCount > 0">
-                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                        <span x-text="charCount"></span>
-                                        {% if cat.required_count %}<span class="ml-1 text-red-600">({{ cat.required_count }} обяз.)</span>{% endif %}
+                <div class="mpcat-scroll">
+                    <table class="sh-table" style="min-width:760px">
+                        <thead>
+                            <tr>
+                                <th class="text-center" style="width:58px">Вкл</th>
+                                <th style="width:90px">ID</th>
+                                <th>Название</th>
+                                <th style="width:150px">Характеристики</th>
+                                <th style="width:170px">Синхронизация</th>
+                                <th style="width:110px"><span class="sr-only">Действия</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for cat in children %}
+                            <tr :class="{ 'opacity-50': !enabled[{{ cat.id }}] }"
+                                x-data="{ charCount: {{ cat.characteristics_count or 0 }}, syncStatus: '' }">
+                                <td class="text-center">
+                                    <label class="sh-toggle">
+                                        <input type="checkbox"
+                                            :checked="enabled[{{ cat.id }}]"
+                                            @change="toggleCategory({{ cat.id }}, $data)"
+                                            :disabled="toggling[{{ cat.id }}] || (!available[{{ cat.id }}] && !enabled[{{ cat.id }}])"
+                                            aria-label="Включить категорию {{ cat.subject_name }}">
+                                        <span class="sh-toggle-track"><span class="sh-toggle-thumb"></span></span>
+                                    </label>
+                                </td>
+                                <td class="mpcat-id whitespace-nowrap">{{ cat.subject_id }}</td>
+                                <td>
+                                    <span class="mpcat-name">{{ cat.subject_name }}</span>
+                                    {% if not cat.is_available %}
+                                    <span class="sh-badge sh-badge--sm sh-badge--gray ml-2">Недоступна в WB</span>
+                                    {% endif %}
+                                    <span x-show="syncStatus" x-text="syncStatus" x-cloak
+                                        class="mpcat-ok-note ml-2"></span>
+                                </td>
+                                <td class="whitespace-nowrap">
+                                    <template x-if="charCount > 0">
+                                        <span class="sh-badge sh-badge--sm sh-badge--green">
+                                            <span x-text="charCount"></span>
+                                            {% if cat.required_count %}<span class="mpcat-req">({{ cat.required_count }} обяз.)</span>{% endif %}
+                                        </span>
+                                    </template>
+                                    <template x-if="charCount === 0">
+                                        <span class="sh-badge sh-badge--sm sh-badge--gray">0</span>
+                                    </template>
+                                </td>
+                                <td class="mpcat-sync whitespace-nowrap">
+                                    {{ cat.characteristics_synced_at.strftime('%d.%m.%Y %H:%M') if cat.characteristics_synced_at else 'Никогда' }}
+                                    <span class="block {% if cat.characteristics_sync_status == 'failed' %}mpcat-sync--failed{% endif %}">
+                                        {{ cat.characteristics_sync_status or 'not_synced' }} · v{{ cat.characteristics_version or 0 }}
                                     </span>
-                                </template>
-                                <template x-if="charCount === 0">
-                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">0</span>
-                                </template>
-                            </td>
-                            <td class="px-6 py-3 whitespace-nowrap text-xs text-gray-500">
-                                {{ cat.characteristics_synced_at.strftime('%d.%m.%Y %H:%M') if cat.characteristics_synced_at else 'Никогда' }}
-                                <span class="block {% if cat.characteristics_sync_status == 'failed' %}text-red-600{% endif %}">
-                                    {{ cat.characteristics_sync_status or 'not_synced' }} · v{{ cat.characteristics_version or 0 }}
-                                </span>
-                            </td>
-                            <td class="px-6 py-3 whitespace-nowrap text-right text-sm font-medium">
-                                <a href="{{ url_for('marketplaces.category_detail', category_id=cat.id) }}"
-                                    class="text-indigo-600 hover:text-indigo-900">Настроить</a>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                                </td>
+                                <td class="text-right whitespace-nowrap">
+                                    <a href="{{ url_for('marketplaces.category_detail', category_id=cat.id) }}"
+                                        class="sh-btn sh-btn--ghost sh-btn--sm">Настроить</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
         {% endfor %}
     </div>
     {% else %}
-    <div class="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-12 text-center text-gray-500 text-sm">
-        {% if search %}
-        Ничего не найдено по запросу "{{ search }}".
-        <a href="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}" class="text-indigo-600 hover:text-indigo-900 ml-1">Сбросить поиск</a>
-        {% else %}
-        Нет категорий. Запустите синхронизацию каталога.
-        {% endif %}
+    <div class="sh-card sh-card--flush">
+        <div class="sh-empty">
+            {% if search %}
+            <p class="sh-empty-title">Ничего не найдено по запросу "{{ search }}"</p>
+            <p class="sh-empty-desc">
+                <a href="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}"
+                    style="color:var(--accent)">Сбросить поиск</a>
+            </p>
+            {% else %}
+            <p class="sh-empty-title">Нет категорий</p>
+            <p class="sh-empty-desc">Запустите синхронизацию каталога.</p>
+            {% endif %}
+        </div>
     </div>
     {% endif %}
 </div>
@@ -211,7 +222,6 @@ function categoriesManager(marketplaceId) {
             {% endfor %}
             {% endfor %}
         },
-        toast: { show: false, message: '', type: 'success' },
 
         get enabledCount() {
             return Object.entries(this.enabled)
@@ -295,10 +305,7 @@ function categoriesManager(marketplaceId) {
         },
 
         showToast(msg, type = 'success') {
-            this.toast.message = msg;
-            this.toast.type = type;
-            this.toast.show = true;
-            setTimeout(() => { this.toast.show = false; }, 4000);
+            Alpine.store('toasts')[type === 'error' ? 'error' : 'success'](msg);
         }
     }
 }

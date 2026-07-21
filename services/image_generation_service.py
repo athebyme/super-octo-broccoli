@@ -60,9 +60,9 @@ class ImageProvider(Enum):
 PROVIDER_CONFIG = {
     ImageProvider.OPENROUTER: {
         "name": "OpenRouter",
-        "description": "Dedicated image API: Gemini image и Grok Imagine",
+        "description": "Dedicated image API: Gemini image, GPT Image и Grok Imagine",
         "api_url": "https://openrouter.ai/api/v1/images",
-        "price_per_image": "$0.034-0.10",
+        "price_per_image": "$0.034-0.21",
         "max_size": "2K",
         "supports_reference": True,
         "recommended": True
@@ -198,6 +198,9 @@ class ImageGenerationConfig:
     openrouter_api_key: str = ""
     openrouter_model: str = "google/gemini-3.1-flash-lite-image"
     openrouter_resolution: str = "1K"
+    openrouter_aspect_ratio: str = "3:4"
+    openrouter_quality: Optional[str] = None
+    openrouter_background: Optional[str] = None
     # OpenAI specific
     openai_model: str = "dall-e-3"
     openai_quality: str = "standard"  # standard или hd
@@ -343,17 +346,23 @@ class ImageGenerationConfig:
             key = os.environ.get('OPENROUTER_API_KEY', '')
             if not key:
                 return None
+            model = (
+                os.environ.get('OPENROUTER_IMAGE_MODEL')
+                or 'google/gemini-3.1-flash-lite-image'
+            )
+            is_gpt_image_2 = model == 'openai/gpt-image-2'
             return cls(
                 provider=provider,
                 api_key=key,
                 openrouter_api_key=key,
-                openrouter_model=(
-                    os.environ.get('OPENROUTER_IMAGE_MODEL')
-                    or 'google/gemini-3.1-flash-lite-image'
-                ),
+                openrouter_model=model,
                 openrouter_resolution=(
-                    os.environ.get('OPENROUTER_IMAGE_RESOLUTION') or '1K'
+                    '' if is_gpt_image_2
+                    else (os.environ.get('OPENROUTER_IMAGE_RESOLUTION') or '1K')
                 ),
+                openrouter_aspect_ratio='' if is_gpt_image_2 else '3:4',
+                openrouter_quality='medium' if is_gpt_image_2 else None,
+                openrouter_background='opaque' if is_gpt_image_2 else None,
                 proxy_enabled=bool(_get_proxy_config()),
             )
         if provider == ImageProvider.GEN_API:
@@ -521,6 +530,7 @@ class OpenRouterImageGenerator(ImageGenerator):
         "google/gemini-3.1-flash-lite-image": 14,
         "google/gemini-3.1-flash-image": 14,
         "x-ai/grok-imagine-image-quality": 3,
+        "openai/gpt-image-2": 16,
     }
 
     def __init__(self, config: ImageGenerationConfig):
@@ -586,9 +596,15 @@ class OpenRouterImageGenerator(ImageGenerator):
             "model": model,
             "prompt": prompt,
             "n": 1,
-            "resolution": self.config.openrouter_resolution,
-            "aspect_ratio": "3:4",
         }
+        if self.config.openrouter_resolution:
+            payload["resolution"] = self.config.openrouter_resolution
+        if self.config.openrouter_aspect_ratio:
+            payload["aspect_ratio"] = self.config.openrouter_aspect_ratio
+        if self.config.openrouter_quality:
+            payload["quality"] = self.config.openrouter_quality
+        if self.config.openrouter_background:
+            payload["background"] = self.config.openrouter_background
         if references:
             payload["input_references"] = [
                 {"type": "image_url", "image_url": {"url": url}}
@@ -596,9 +612,10 @@ class OpenRouterImageGenerator(ImageGenerator):
             ]
         try:
             logger.info(
-                "OpenRouter image request model=%s resolution=%s refs=%s proxy=%s",
+                "OpenRouter image request model=%s resolution=%s quality=%s refs=%s proxy=%s",
                 model,
-                self.config.openrouter_resolution,
+                self.config.openrouter_resolution or "provider-default",
+                self.config.openrouter_quality or "provider-default",
                 len(references),
                 bool(self.proxies),
             )

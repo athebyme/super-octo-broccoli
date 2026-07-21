@@ -356,6 +356,48 @@
 </div>
 {% endmacro %}
 
+{# ─── Channel bar: каналы продаж одного концепта (WB / кабинеты Ozon).
+     Табы строятся из глобального mp_nav (context processor services/marketplace_nav.py).
+     При выключенном MARKETPLACE_OZON_ENABLED не рендерит ничего — WB-страницы
+     выглядят как раньше.
+     active: 'wb' | 'ozon' | 'all'; account_id — id активного кабинета при active=='ozon'.
+     wb_href / all_href — ссылки WB-страницы и объединённого вида (опциональны).
+     ozon_href — базовый URL Ozon-страницы концепта БЕЗ account_id (макрос сам
+     добавит ?account_id=N на каждый активный кабинет). ─── #}
+{% macro channel_bar(active='wb', wb_href=None, ozon_href=None, all_href=None, account_id=None, wb_label='Wildberries', all_label='Все каналы', connect_href=None, carry=None, class='') %}
+{# carry: имена query-параметров через запятую (например 'period'), которые
+   sh-ui.js переносит из текущего URL в ссылку таба при клике — фильтры вроде
+   периода не сбрасываются при переключении кабинета. #}
+{% set nav = mp_nav() if mp_nav is defined else none %}
+{% if nav and nav.ozon_enabled %}
+<nav class="sh-channel-bar{% if class %} {{ class }}{% endif %}"{% if carry %} data-carry="{{ carry }}"{% endif %} aria-label="Каналы продаж">
+    {% if all_href %}
+    <a href="{{ all_href }}" class="sh-channel-tab{% if active == 'all' %} sh-channel-tab--active{% endif %}"{% if active == 'all' %} aria-current="page"{% endif %}>{{ all_label }}</a>
+    {% endif %}
+    {% if wb_href %}
+    <a href="{{ wb_href }}" class="sh-channel-tab{% if active == 'wb' %} sh-channel-tab--active{% endif %}"{% if active == 'wb' %} aria-current="page"{% endif %}>
+        <span class="sh-mp-dot sh-mp-dot--wb" aria-hidden="true"></span>{{ wb_label }}
+    </a>
+    {% endif %}
+    {% if ozon_href %}
+        {% if nav.accounts %}
+            {% for acc in nav.accounts %}
+            {% set is_current = active == 'ozon' and acc.id == account_id %}
+            <a href="{{ ozon_href }}{{ '&' if '?' in ozon_href else '?' }}account_id={{ acc.id }}"
+               class="sh-channel-tab{% if is_current %} sh-channel-tab--active{% endif %}"{% if is_current %} aria-current="page"{% endif %}>
+                <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>Ozon{% if nav.accounts|length > 1 %} · {{ acc.label }}{% endif %}
+            </a>
+            {% endfor %}
+        {% else %}
+            <a href="{{ connect_href or url_for('api_settings') }}" class="sh-channel-tab sh-channel-tab--ghost">
+                <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>Подключить Ozon
+            </a>
+        {% endif %}
+    {% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
+
 {# ─── Chip / tag ─── #}
 {% macro chip(text, tone='', href=None, active=False, on_remove=None) %}
 {% if href %}<a href="{{ href }}" class="sh-chip{% if active %} sh-chip--active{% endif %}">{% else %}<span class="sh-chip{% if active %} sh-chip--active{% endif %}{% if on_remove %} sh-chip--clickable{% endif %}">{% endif %}

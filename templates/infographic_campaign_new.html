@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Новая кампания инфографики · Seller Hub{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='infographic-campaigns.css', v='20260717-1') }}">
+{% endblock %}
+
+{% block content %}
+<div class="ic-shell">
+  <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-wide" style="color:var(--accent)">Массовая фотостудия</p>
+      <h1 class="mt-1 text-2xl font-semibold" style="color:var(--text)">Новая кампания</h1>
+      <p class="mt-1 text-sm" style="color:var(--text-secondary)">Проверьте готовность выборки и задайте единый визуальный шаблон.</p>
+    </div>
+    <a class="sh-btn sh-btn--secondary" href="{{ url_for('seller_my_products') }}">Изменить выборку</a>
+  </div>
+
+  <nav class="ic-tabs mt-5" aria-label="Разделы фотостудии">
+    <a class="ic-tab" href="{{ url_for('image_lab_page') }}">Штучная работа</a>
+    <a class="ic-tab is-active" href="{{ url_for('infographic_campaign_list') }}">Кампании</a>
+  </nav>
+
+  {% if error %}
+  <div class="mt-5 rounded-lg border px-4 py-3 text-sm" style="border-color:var(--danger);color:var(--danger);background:var(--bg-card)">{{ error }}</div>
+  {% endif %}
+
+  {% if product_ids %}
+  <form method="post" action="{{ url_for('infographic_campaign_create') }}" class="mt-5 space-y-5">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% for product_id in product_ids %}<input type="hidden" name="product_ids" value="{{ product_id }}">{% endfor %}
+
+    <section class="sh-card p-5">
+      <div class="flex flex-col gap-4 md:flex-row md:items-end">
+        <label class="block flex-1">
+          <span class="block text-xs mb-1" style="color:var(--text-muted)">Название кампании</span>
+          <input class="ic-filter w-full" type="text" name="name" maxlength="160" placeholder="Например, Летняя коллекция · 17 июля">
+        </label>
+        <label class="block w-full md:w-52">
+          <span class="block text-xs mb-1" style="color:var(--text-muted)">Слайдов на товар</span>
+          <select class="ic-filter w-full" name="slide_limit">
+            {% for count in range(2, 9) %}<option value="{{ count }}" {{ 'selected' if count == 6 else '' }}>{{ count }}</option>{% endfor %}
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section>
+      <div class="flex items-end justify-between gap-3 mb-3">
+        <div>
+          <h2 class="text-base font-semibold" style="color:var(--text)">Единый шаблон</h2>
+          <p class="mt-1 text-xs" style="color:var(--text-muted)">Текст строится только по фактам карточки; товар остаётся исходным композитом.</p>
+        </div>
+      </div>
+      <div class="ic-template-grid">
+        {% for template in templates %}
+        <label class="ic-template">
+          <input type="radio" name="template_key" value="{{ template.key }}" {{ 'checked' if loop.first else '' }}>
+          <strong class="block pr-7" style="color:var(--text)">{{ template.label }}</strong>
+          <span class="block mt-2 text-xs leading-5" style="color:var(--text-secondary)">{{ template.description }}</span>
+          <span class="ic-palette" aria-label="Палитра">
+            {% for color in template.palette %}<span style="background:{{ color }}"></span>{% endfor %}
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section>
+      <div class="ic-metrics mb-3">
+        <div class="ic-metric"><span class="ic-metric-label">Выбрано</span><strong class="ic-metric-value">{{ products|length }}</strong></div>
+        <div class="ic-metric"><span class="ic-metric-label">Готово к очереди</span><strong class="ic-metric-value">{{ ready_count }}</strong></div>
+        <div class="ic-metric"><span class="ic-metric-label">С замечаниями</span><strong class="ic-metric-value">{{ blocked_count }}</strong></div>
+        <div class="ic-metric"><span class="ic-metric-label">Лимит выборки</span><strong class="ic-metric-value">200</strong></div>
+        <div class="ic-metric"><span class="ic-metric-label">Оценка API</span><strong class="ic-metric-value">0 ₽</strong></div>
+      </div>
+      <div class="ic-table-wrap">
+        <table class="ic-table">
+          <thead><tr><th>ID</th><th>Товар</th><th>Фото</th><th>Факты</th><th>Готовность</th></tr></thead>
+          <tbody>
+            {% for product in products %}
+            <tr>
+              <td>#{{ product.id }}</td>
+              <td><span class="ic-product-title">{{ product.title }}</span><span class="block mt-1 text-xs" style="color:var(--text-muted)">{{ product.category or 'Категория не указана' }}</span></td>
+              <td>{{ product.photo_count }}</td>
+              <td>{{ product.fact_count }}</td>
+              <td>
+                {% if product.ready %}
+                <span class="ic-status ic-status--approved">Готов</span>
+                {% else %}
+                <span class="ic-status ic-status--blocked">Нужны данные</span>
+                <span class="block mt-1 text-xs" style="color:var(--danger)">{{ product.reasons|join(', ') }}</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="flex flex-col gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between" style="border-color:var(--border)">
+      <p class="text-xs max-w-2xl" style="color:var(--text-muted)">Запуск создаст локальную очередь. Карточки с нехваткой данных будут отмечены как заблокированные и не остановят остальные.</p>
+      <button class="sh-btn sh-btn--primary" type="submit" {% if ready_count == 0 %}disabled{% endif %}>Создать и запустить · {{ ready_count }}</button>
+    </div>
+  </form>
+  {% else %}
+  <div class="sh-card ic-empty mt-5">
+    <strong class="block" style="color:var(--text)">Сначала выберите товары</strong>
+    <span class="block mt-2 text-sm">Мастер принимает точную выборку до 200 карточек.</span>
+    <a class="sh-btn sh-btn--primary mt-4" href="{{ url_for('seller_my_products') }}">Открыть «Мои товары»</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

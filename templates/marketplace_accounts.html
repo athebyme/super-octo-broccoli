@@ -3,29 +3,20 @@
 {% block title %}Кабинеты маркетплейсов — Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-5xl mx-auto px-4 sm:px-6 py-6">
-    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-6">
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
         <div>
-            <h1 class="text-2xl font-semibold" style="color:var(--text)">Кабинеты маркетплейсов</h1>
-            <p class="mt-1 text-sm" style="color:var(--text-secondary)">
-                Подключения принадлежат только вашему продавцу. Секретные ключи нельзя посмотреть после сохранения.
-            </p>
+            <h1 class="sh-page-title">Кабинеты маркетплейсов</h1>
+            <p class="sh-page-subtitle">Подключения принадлежат только вашему продавцу. Секретные ключи нельзя посмотреть после сохранения.</p>
         </div>
-        <div class="flex items-center gap-2 self-start sm:self-auto">
-            {% if ozon_enabled %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index') }}">Каталог</a>{% endif %}
-            <span class="text-xs px-2 py-1 rounded border"
-                  style="color:var(--text-muted);border-color:var(--border)">Ozon · read-only catalog</span>
+        <div class="sh-page-actions">
+            {% if ozon_enabled %}<a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index') }}">Каталог</a>{% endif %}
+            <span class="sh-badge sh-badge--sm sh-badge--gray">Ozon · каталог только для чтения</span>
         </div>
     </div>
+</div>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% for category, message in messages %}
-    <div class="mb-4 rounded-md border px-4 py-3 text-sm"
-         style="border-color:var(--border);background:var(--bg-card);color:var(--text)">
-        {{ message }}
-    </div>
-    {% endfor %}
-    {% endwith %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 py-6">
 
     {% if not ozon_enabled %}
     <div class="rounded-md border px-4 py-4 text-sm"
@@ -39,7 +30,7 @@
                 <h2 id="ozon-connect-title" class="text-base font-semibold" style="color:var(--text)">Добавить кабинет Ozon</h2>
                 <p class="text-xs mt-1" style="color:var(--text-muted)">Client-Id не является секретом; API key хранится только в зашифрованном виде.</p>
             </div>
-            <span class="text-xs font-medium uppercase tracking-wide" style="color:var(--accent)">Ozon</span>
+            <span class="inline-flex items-center gap-1.5 text-xs" style="color:var(--text-muted)"><span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>Ozon</span>
         </div>
         <form method="post" action="{{ url_for('marketplace_accounts.create_ozon') }}"
               class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -88,19 +79,19 @@
                     <div class="min-w-0">
                         <div class="flex flex-wrap items-center gap-2">
                             <h3 class="font-semibold truncate" style="color:var(--text)">{{ account.label }}</h3>
-                            <span class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">{{ account.marketplace.code }}</span>
+                            <span class="inline-flex items-center gap-1.5 text-xs" style="color:var(--text-muted)"><span class="sh-mp-dot sh-mp-dot--{{ account.marketplace.code }}" aria-hidden="true"></span>{{ account.marketplace.code | upper }}</span>
                             {% if account.is_default %}
-                            <span class="text-xs rounded border px-2 py-0.5" style="border-color:var(--accent);color:var(--accent)">Основной</span>
+                            <span class="sh-badge sh-badge--sm sh-badge--blue">Основной</span>
                             {% endif %}
                         </div>
                         <p class="text-sm mt-1" style="color:var(--text-secondary)">Client-Id: {{ account.external_account_id }}</p>
                         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs" style="color:var(--text-muted)">
                             <span>
                                 Статус:
-                                {% if status == 'connected' %}<strong style="color:var(--success, #16803c)">подключён</strong>
-                                {% elif status == 'invalid' %}<strong style="color:var(--danger, #b42318)">ключ отклонён</strong>
+                                {% if status == 'connected' %}<span class="sh-badge sh-badge--sm sh-badge--green">подключён</span>
+                                {% elif status == 'invalid' %}<strong style="color:var(--danger)">ключ отклонён</strong>
                                 {% elif status == 'disconnected' %}<strong>отключён</strong>
-                                {% elif status == 'error' %}<strong style="color:var(--warning, #b54708)">ошибка проверки</strong>
+                                {% elif status == 'error' %}<strong style="color:var(--warn)">ошибка проверки</strong>
                                 {% else %}<strong>не проверен</strong>{% endif %}
                             </span>
                             {% if account.connection_checked_at %}
@@ -109,7 +100,7 @@
                             <span>{{ 'Ключ сохранён' if account.has_credentials else 'Ключ удалён' }}</span>
                         </div>
                         {% if account.last_error_message %}
-                        <p class="mt-2 text-xs" style="color:var(--danger, #b42318)">{{ account.last_error_message }}</p>
+                        <p class="mt-2 text-xs" style="color:var(--danger)">{{ account.last_error_message }}</p>
                         {% endif %}
                     </div>
                     <div class="flex flex-wrap gap-2 sm:justify-end">

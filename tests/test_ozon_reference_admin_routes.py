@@ -242,6 +242,26 @@ class OzonReferenceAdminRoutesTest(unittest.TestCase):
         self.assertEqual(mixed.status_code, 400)
         update.assert_not_called()
 
+    def test_toggle_accepts_exact_boolean_and_returns_service_result(self):
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.marketplaces.OzonReferenceService.set_product_type_enabled",
+            return_value={
+                "success": True,
+                "is_enabled": True,
+                "synced": True,
+                "attributes_count": 12,
+            },
+        ) as toggle:
+            response = self.client.post(
+                f"/admin/marketplaces/ozon/types/{self.product_type_id}/toggle",
+                json={"is_enabled": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["is_enabled"])
+        toggle.assert_called_once_with(self.product_type_id, True)
+
     def test_required_attribute_cannot_be_disabled(self):
         user_patch, login_patch = self._auth()
         with user_patch, login_patch:

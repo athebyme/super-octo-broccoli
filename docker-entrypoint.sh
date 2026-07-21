@@ -136,6 +136,7 @@ python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace 
 python migrations/migrate_add_marketplace_accounts.py /app/data/seller_platform.db
 python migrations/migrate_add_ozon_references.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_reference_freshness.py /app/data/seller_platform.db
+python migrations/migrate_add_brand_category_external_id.py /app/data/seller_platform.db
 python migrations/migrate_add_wb_dictionary_provenance.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_listings.py \
   /app/data/seller_platform.db --backfill-limit 200
@@ -154,6 +155,7 @@ python migrations/migrate_add_marketplace_inbox.py /app/data/seller_platform.db
 python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
 python migrations/add_ai_job_heartbeat.py || echo "⚠️ AI job heartbeat migration skipped (already applied or error)"
 python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"
+python migrations/migrate_add_supplier_catalog_enrichment.py /app/data/seller_platform.db
 python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
 python migrations/migrate_add_card_quality_v2.py /app/data/seller_platform.db
 python migrations/migrate_add_agent_chat.py /app/data/seller_platform.db || echo "⚠️ Unified agent chat migration skipped (already applied or error)"
@@ -164,8 +166,20 @@ python migrations/migrate_add_image_generation_lab.py /app/data/seller_platform.
 python migrations/migrate_add_image_lab_reference_watermark.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_angle_synthesis.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_marketplace_target.py /app/data/seller_platform.db
+python migrations/migrate_add_infographic_campaigns.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_media_publications.py /app/data/seller_platform.db
+python migrations/migrate_add_bestseller_image_recommendations.py /app/data/seller_platform.db
 python migrations/migrate_add_content_factory_marketplace_scope.py /app/data/seller_platform.db
+python migrations/migrate_add_social_account_publish_health.py /app/data/seller_platform.db
 python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db || echo "⚠️ Sexopt supplier migration skipped (already applied or error)"
+# Fail-fast: добавляет колонки, которые ORM читает сразу после старта
+python migrations/migrate_andrey_feed_full_ingest.py /app/data/seller_platform.db
+# Fail-fast: rebuild CHECK mode обогащения + items.inference_json
+python migrations/migrate_add_enrichment_inference.py /app/data/seller_platform.db
+# Fail-fast: габариты упаковки из characteristics_json переезжают в dimensions_json
+python migrations/migrate_clean_characteristic_dimensions.py /app/data/seller_platform.db
+# Fail-fast: ORM читает колонки WB-ревизии сразу после старта
+python migrations/migrate_add_wb_card_audit.py /app/data/seller_platform.db
 DATABASE_PATH=/app/data/seller_platform.db python migrations/migrate_add_competitor_monitoring.py || echo "⚠️ Competitor monitoring migration skipped (already applied or error)"
 unset SKIP_SCHEDULER
 
@@ -282,11 +296,14 @@ server.serve_forever()
 PYREDIRECT
 fi
 
+# 2 workers x 8 threads = 16 слотов. 2x2=4 слота забивались медленными
+# фото-прокси запросами и платформа висела целиком (инцидент 2026-07-20).
+# Число процессов не меняем: advisory lock планировщика рассчитан на них.
 exec gunicorn \
   --bind 0.0.0.0:${PORT} \
   --timeout 600 \
-  --workers 2 \
-  --threads 2 \
+  --workers "${GUNICORN_WORKERS:-2}" \
+  --threads "${GUNICORN_THREADS:-8}" \
   --worker-class gthread \
   --access-logfile - \
   --error-logfile - \

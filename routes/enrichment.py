@@ -4,12 +4,16 @@
 """
 import json
 import logging
+from datetime import datetime, timedelta
 
 from flask import render_template, request, redirect, url_for, flash, jsonify, abort, Response, send_file
 from flask_login import login_required, current_user
 
 from models import Product, ImportedProduct, EnrichmentJob
-from services.supplier_enrichment import get_enrichment_service
+from services.supplier_enrichment import (
+    WbMediaOperationBusy,
+    get_enrichment_service,
+)
 
 logger = logging.getLogger(__name__)
 MAX_SUPPLIER_BULK_PRODUCTS = 200
@@ -27,10 +31,36 @@ def _bounded_unique_product_ids(raw_ids, limit=MAX_SUPPLIER_BULK_PRODUCTS):
             raise ValueError(
                 f'product_ids[{index}] must be a positive integer'
             )
-        if value not in seen:
-            normalized.append(value)
-            seen.add(value)
+        if value in seen:
+            raise ValueError('product_ids must not contain duplicates')
+        normalized.append(value)
+        seen.add(value)
     return normalized
+
+
+def _parse_form_product_ids(raw_ids):
+    """Strict bounded parser for the HTML bulk-selection handoff."""
+    if not raw_ids:
+        raise ValueError('Не выбрано ни одной карточки')
+    if len(raw_ids) > MAX_SUPPLIER_BULK_PRODUCTS:
+        raise ValueError(
+            f'За один запуск можно выбрать не более '
+            f'{MAX_SUPPLIER_BULK_PRODUCTS} карточек'
+        )
+
+    parsed = []
+    for index, raw_value in enumerate(raw_ids):
+        if (
+            not isinstance(raw_value, str)
+            or not raw_value.isascii()
+            or not raw_value.isdigit()
+        ):
+            raise ValueError(f'Некорректный ID карточки в позиции {index + 1}')
+        value = int(raw_value)
+        if value <= 0:
+            raise ValueError(f'Некорректный ID карточки в позиции {index + 1}')
+        parsed.append(value)
+    return _bounded_unique_product_ids(parsed)
 
 
 def register_enrichment_routes(app):
@@ -464,38 +494,56 @@ def register_enrichment_routes(app):
     @app.route('/products/enrich-bulk', methods=['POST'])
     @login_required
     def products_enrich_bulk():
-        """Запуск страницы массового обогащения."""
+        """Страница подтверждения массового обновления карточек."""
         if not current_user.seller:
             flash('У вас нет профиля продавца', 'danger')
             return redirect(url_for('dashboard'))
 
-        selected_ids = request.form.getlist('selected_ids')
-        if not selected_ids:
-            flash('Не выбрано ни одной карточки', 'warning')
-            return redirect(url_for('products_list'))
-
         seller_id = current_user.seller.id
-        product_ids = []
-        for pid in selected_ids:
-            try:
-                pid_int = int(pid)
-                p = Product.query.filter_by(id=pid_int, seller_id=seller_id).first()
-                if p:
-                    product_ids.append(pid_int)
-            except (ValueError, TypeError):
-                pass
-
-        if not product_ids:
-            flash('Выбранные карточки не найдены', 'warning')
+        try:
+            requested_ids = _parse_form_product_ids(
+                request.form.getlist('selected_ids')
+            )
+        except ValueError as exc:
+            flash(str(exc), 'warning')
             return redirect(url_for('products_list'))
 
-        # Предварительный анализ: сколько карточек имеют данные поставщика
+        owned_ids = {
+            product.id
+            for product in Product.query.filter(
+                Product.seller_id == seller_id,
+                Product.id.in_(requested_ids),
+            ).all()
+        }
+        if owned_ids != set(requested_ids):
+            flash(
+                'Часть выбранных карточек недоступна. '
+                'Обновите список и повторите выбор.',
+                'warning',
+            )
+            return redirect(url_for('products_list'))
+
+        # Сохраняем порядок выбора и одним bounded preflight определяем,
+        # для скольких карточек доступны данные/фото поставщика.
+        product_ids = list(requested_ids)
         service = get_enrichment_service()
-        matched_count = 0
-        for pid in product_ids[:100]:
-            p = Product.query.filter_by(id=pid, seller_id=seller_id).first()
-            if p and service.find_supplier_data(p, seller_id):
-                matched_count += 1
+        availability = service.check_enrichment_availability(
+            product_ids, seller_id
+        )
+        matched_count = sum(
+            1 for product_id in product_ids
+            if availability.get(product_id, {}).get('available')
+        )
+        photo_ready_count = sum(
+            1 for product_id in product_ids
+            if availability.get(product_id, {}).get('photo_count', 0) > 0
+        )
+
+        # Явный preset из CTA «Отправить характеристики»; default экрана
+        # (только фото) не меняется
+        preset = request.form.get('preset', '').strip()
+        if preset not in ('characteristics',):
+            preset = ''
 
         return render_template(
             'products_enrich_bulk.html',
@@ -503,6 +551,8 @@ def register_enrichment_routes(app):
             product_ids_json=json.dumps(product_ids),
             count=len(product_ids),
             matched_count=matched_count,
+            photo_ready_count=photo_ready_count,
+            preset=preset,
         )
 
     @app.route('/api/products/enrich-bulk/start', methods=['POST'])
@@ -528,14 +578,19 @@ def register_enrichment_routes(app):
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
 
-        allowed_fields = {'title', 'brand', 'description', 'characteristics', 'dimensions', 'photos'}
+        allowed_fields = {
+            'title', 'brand', 'description',
+            'characteristics', 'dimensions', 'photos',
+        }
         if not isinstance(fields, list):
             return jsonify({'error': 'fields must be an array'}), 400
-        fields = list(dict.fromkeys(
-            field for field in fields if field in allowed_fields
-        ))
-        if not fields:
-            return jsonify({'error': 'No valid fields'}), 400
+        if not fields or any(
+            not isinstance(field, str) or field not in allowed_fields
+            for field in fields
+        ):
+            return jsonify({'error': 'fields contains an unsupported value'}), 400
+        if len(set(fields)) != len(fields):
+            return jsonify({'error': 'fields must not contain duplicates'}), 400
         if photo_strategy not in {'replace', 'append', 'only_if_empty'}:
             return jsonify({'error': 'Invalid photo_strategy'}), 400
 
@@ -547,24 +602,39 @@ def register_enrichment_routes(app):
                 Product.id.in_(product_ids),
             ).all()
         }
-        valid_ids = [pid for pid in product_ids if pid in available_ids]
+        if available_ids != set(product_ids):
+            return jsonify({
+                'error': 'Some selected products are unavailable; refresh the list and try again'
+            }), 409
 
-        if not valid_ids:
-            return jsonify({'error': 'No valid products found'}), 400
-
-        from services.wb_api_client import WildberriesAPIClient
-        try:
-            wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
-        except Exception as e:
-            return jsonify({'error': f'WB client error: {e}'}), 500
+        active_job = (
+            EnrichmentJob.query
+            .filter(
+                EnrichmentJob.seller_id == seller_id,
+                EnrichmentJob.status.in_(('pending', 'running')),
+                # Legacy threads have no durable recovery. Do not let a stale
+                # crashed row block photo updates forever; the worker refreshes
+                # updated_at after every card in current runs.
+                EnrichmentJob.updated_at >= (
+                    datetime.utcnow() - timedelta(hours=2)
+                ),
+            )
+            .order_by(EnrichmentJob.created_at.desc())
+            .first()
+        )
+        if active_job:
+            return jsonify({
+                'error': 'Массовое обновление уже выполняется',
+                'job_id': active_job.id,
+            }), 409
 
         service = get_enrichment_service()
         job_id = service.start_bulk_enrichment(
-            valid_ids, fields, photo_strategy,
-            current_user.seller, wb_client
+            product_ids, fields, photo_strategy,
+            current_user.seller,
         )
 
-        return jsonify({'job_id': job_id, 'total': len(valid_ids)})
+        return jsonify({'job_id': job_id, 'total': len(product_ids)})
 
     @app.route('/api/products/enrich-bulk/<job_id>/status', methods=['GET'])
     @login_required
@@ -593,7 +663,9 @@ def register_enrichment_routes(app):
             'failed': job.failed,
             'skipped': job.skipped,
             'progress_pct': round(job.processed / job.total * 100) if job.total else 0,
-            'results': results[-50:],
+            # Запуск ограничен 200 карточками, поэтому весь bounded отчёт можно
+            # вернуть сразу: пользователь видит результат каждой выбранной строки.
+            'results': results[:MAX_SUPPLIER_BULK_PRODUCTS],
         })
 
     # =========================================================================
@@ -793,8 +865,12 @@ def register_enrichment_routes(app):
         from services.wb_api_client import WildberriesAPIClient
         try:
             wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
-            upload_results = wb_client.upload_photos_to_card(
-                product.nm_id, cached_paths, seller_id=current_user.seller.id
+            service = get_enrichment_service()
+            upload_results = service.upload_photos_to_card_locked(
+                wb_client,
+                seller_id=current_user.seller.id,
+                nm_id=product.nm_id,
+                photo_paths=cached_paths,
             )
             uploaded = sum(1 for r in upload_results if r.get('success'))
             return jsonify({
@@ -803,6 +879,8 @@ def register_enrichment_routes(app):
                 'total': len(cached_paths),
                 'failed': len(cached_paths) - uploaded,
             })
+        except WbMediaOperationBusy as e:
+            return jsonify({'success': False, 'error': str(e)}), 409
         except Exception as e:
             logger.error(f"[Enrich] Photo upload error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500

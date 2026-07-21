@@ -18,7 +18,7 @@ import tempfile
 import re
 from typing import Dict, List, Optional, Tuple
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 logger = logging.getLogger(__name__)
 
@@ -559,132 +559,175 @@ def _build_overlay_html(
     design: Dict,
     bg_image_b64: Optional[str] = None,
     product_photo_b64: Optional[str] = None,
-    slide_index: int = 0
+    slide_index: int = 0,
 ) -> str:
-    """Строит HTML с AI-сгенерированным фоном и текстовым оверлеем."""
-    slide_type = slide.get('type', 'hero')
-    title = html.escape(str(slide.get('title', '')))
-    subtitle = html.escape(str(slide.get('subtitle', '')))
-    bullets = [html.escape(str(value)) for value in (slide.get('bullets') or [])]
-    color_palette = design.get('color_palette', [])
+    """Build a catalog-style overlay with hero hierarchy or grouped fact cards."""
+    del product_photo_b64  # Foreground is already restored pixel-for-pixel locally.
+    slide_type = str(slide.get('type') or 'hero')
+    eyebrow = html.escape(str(slide.get('eyebrow') or ''))
+    title = html.escape(str(slide.get('title') or ''))
+    subtitle = html.escape(str(slide.get('subtitle') or ''))
+    color_palette = design.get('color_palette') or []
     font_style = design.get('font_style', 'modern')
-
     font_family = {
         'modern': "'Inter', 'Segoe UI', system-ui, sans-serif",
         'classic': "'Georgia', 'Times New Roman', serif",
-        'bold': "'Impact', 'Arial Black', sans-serif",
-        'elegant': "'Playfair Display', 'Georgia', serif",
+        'bold': "'Arial Black', 'Segoe UI', sans-serif",
+        'elegant': "'Georgia', 'Times New Roman', serif",
     }.get(font_style, "'Inter', 'Segoe UI', system-ui, sans-serif")
-
-    primary = _safe_color(color_palette[0], '#6366f1') if color_palette else '#6366f1'
-    accent = _safe_color(color_palette[1], '#8b5cf6') if len(color_palette) > 1 else '#8b5cf6'
-
-    # Фон: AI-картинка или градиент
+    primary = _safe_color(color_palette[0], '#173f2a') if color_palette else '#173f2a'
+    accent = _safe_color(color_palette[1], '#e0a52b') if len(color_palette) > 1 else '#e0a52b'
+    surface = _safe_color(color_palette[3], '#ffffff') if len(color_palette) > 3 else '#ffffff'
     if bg_image_b64:
         bg_style = f'background:url(data:image/png;base64,{bg_image_b64}) center/cover no-repeat;'
     else:
-        bg_gradient = _get_slide_bg_gradient(slide_type, color_palette)
-        bg_style = f'background:{bg_gradient};'
+        bg_style = f'background:{_get_slide_bg_gradient(slide_type, color_palette)};'
 
-    # Панель существует только в зарезервированной верхней зоне. Она никогда
-    # не накрывает foreground и не меняет цвет/фактуру товара.
-    overlay_style = 'height:258px;background:linear-gradient(180deg, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.48) 78%, rgba(0,0,0,0) 100%);'
+    raw_cards = slide.get('facts') if isinstance(slide.get('facts'), list) else []
+    # Old durable v1 rows become one properly styled card instead of the old
+    # giant label/value strip.
+    if not raw_cards and slide_type != 'hero' and (title or subtitle):
+        raw_cards = [{'label': slide.get('title') or '', 'value': slide.get('subtitle') or ''}]
+        title = ''
+        subtitle = ''
+    cards = []
+    for raw in raw_cards[:4]:
+        if not isinstance(raw, dict):
+            continue
+        label = html.escape(str(raw.get('label') or ''))
+        value = html.escape(str(raw.get('value') or ''))
+        if label and value:
+            cards.append((label, value))
 
-    # Фото товара — компактно, поверх фона
-    photo_html = ''
-    if product_photo_b64 and slide_type in ('hero', 'application', 'characteristics'):
-        photo_html = f'''
-        <div style="position:absolute;top:60px;right:40px;
-                    width:280px;height:350px;border-radius:20px;overflow:hidden;
-                    box-shadow:0 20px 40px rgba(0,0,0,0.4);border:3px solid rgba(255,255,255,0.2);">
-            <img src="data:image/jpeg;base64,{product_photo_b64}"
-                 style="width:100%;height:100%;object-fit:cover;" />
-        </div>'''
-
-    # Бейдж
-    type_labels = {
-        'hero': 'ГЛАВНОЕ', 'problem': 'ПРОБЛЕМА', 'advantages': 'ПРЕИМУЩЕСТВО',
-        'characteristics': 'ХАРАКТЕРИСТИКИ', 'application': 'ПРИМЕНЕНИЕ',
-        'bundling': 'КОМПЛЕКТАЦИЯ', 'trust': 'ГАРАНТИЯ', 'usage': 'ПРИМЕНЕНИЕ',
-    }
-    badge_text = html.escape(type_labels.get(slide_type, 'ФАКТ'))
-
-    # Буллеты
-    items_html = ''
-    if bullets:
-        items = ''.join(
-            f'<li style="margin-bottom:10px;padding-left:10px;position:relative;">'
-            f'<span style="position:absolute;left:-18px;color:{accent};">&#10003;</span>'
-            f'{b}</li>'
-            for b in bullets[:5]
+    if slide_type == 'hero':
+        title_length = len(str(slide.get('title') or ''))
+        title_size = 42 if title_length <= 52 else 35 if title_length <= 90 else 30 if title_length <= 125 else 26
+        eyebrow_html = (
+            f'<span class="eyebrow">{eyebrow}</span>' if eyebrow else ''
         )
-        items_html = f'''
-        <ul style="list-style:none;padding:0;margin:18px 0 0 22px;font-size:20px;
-                   line-height:1.5;color:#ffffff;font-weight:500;">
-            {items}
-        </ul>'''
+        copy_html = f'''
+        <section id="safe-copy" data-fit class="hero-panel">
+            <div class="hero-topline">
+                <span class="catalog-label">КАТАЛОГ</span>
+                {eyebrow_html}
+            </div>
+            <h1 id="slide-title" style="font-size:{title_size}px">{title}</h1>
+            <div class="accent-line"></div>
+            {f'<p class="hero-subtitle">{subtitle}</p>' if subtitle else ''}
+        </section>'''
+    else:
+        count = len(cards)
+        card_html = []
+        for label, value in cards:
+            raw_length = len(html.unescape(value))
+            value_size = 28 if raw_length <= 28 else 23 if raw_length <= 58 else 19 if raw_length <= 105 else 16
+            card_html.append(f'''
+                <article class="fact-card" data-fit>
+                    <div class="fact-label">{label}</div>
+                    <div class="fact-value" style="font-size:{value_size}px">{value}</div>
+                </article>''')
+        grid_class = 'single' if count == 1 else 'pair' if count == 2 else 'quad'
+        copy_html = f'''
+        <section id="safe-copy" class="facts-panel">
+            <header class="facts-heading">
+                <div>
+                    <div class="catalog-label dark">ТОЧНЫЕ ДАННЫЕ</div>
+                    <h1>Характеристики</h1>
+                </div>
+                <span class="fact-count">Фактов: {count}</span>
+            </header>
+            <div class="fact-grid {grid_class}">{''.join(card_html)}</div>
+        </section>'''
 
-    title_size = max(22, 38 - max(0, len(title) - 42) // 10)
-
+    slide_number = max(1, int(slide.get('number') or slide_index + 1))
     return f'''<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8">
-<style>* {{ margin:0; padding:0; box-sizing:border-box; }}</style>
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ width:{WB_WIDTH}px; height:{WB_HEIGHT}px; overflow:hidden; }}
+.hero-panel {{ position:absolute; z-index:10; left:30px; right:30px; top:28px;
+    height:326px; overflow:hidden; padding:28px 32px 25px; border-radius:30px;
+    background:linear-gradient(135deg, {primary} 0%, {primary}ee 72%, #111111e8 100%);
+    border:1px solid rgba(255,255,255,.22); box-shadow:0 22px 50px rgba(0,0,0,.18); }}
+.hero-topline {{ display:flex; align-items:center; gap:10px; min-height:27px; margin-bottom:17px; }}
+.catalog-label {{ display:inline-flex; align-items:center; border-radius:999px; padding:6px 11px;
+    background:{accent}; color:#171717; font-size:11px; line-height:1; font-weight:900; letter-spacing:1.6px; }}
+.catalog-label.dark {{ background:{primary}; color:#fff; }}
+.eyebrow {{ min-width:0; max-width:620px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+    border:1px solid rgba(255,255,255,.28); border-radius:999px; padding:5px 11px;
+    color:rgba(255,255,255,.9); font-size:12px; font-weight:700; letter-spacing:.25px; }}
+.hero-panel h1 {{ max-width:780px; color:#fff; font-weight:900; line-height:1.03;
+    letter-spacing:-.8px; overflow-wrap:anywhere; }}
+.accent-line {{ width:76px; height:5px; margin:14px 0 12px; border-radius:5px; background:{accent}; }}
+.hero-subtitle {{ color:rgba(255,255,255,.9); font-size:21px; line-height:1.25; font-weight:650; overflow-wrap:anywhere; }}
+.facts-panel {{ position:absolute; z-index:10; left:30px; right:30px; top:27px; height:482px; overflow:hidden; }}
+.facts-heading {{ height:79px; display:flex; align-items:center; justify-content:space-between; gap:24px;
+    padding:0 5px 12px; }}
+.facts-heading h1 {{ margin-top:8px; color:{primary}; font-size:34px; line-height:1; font-weight:900; letter-spacing:-.6px; }}
+.fact-count {{ flex:none; border:1px solid {primary}33; border-radius:999px; padding:8px 13px;
+    background:{surface}d9; color:{primary}; font-size:13px; font-weight:800; }}
+.fact-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }}
+.fact-grid.single {{ grid-template-columns:1fr; }}
+.fact-card {{ position:relative; min-width:0; height:181px; overflow:hidden; padding:21px 23px 18px;
+    border-radius:23px; background:{surface}f2; border:1px solid {primary}24;
+    box-shadow:0 13px 30px rgba(17,24,39,.11); }}
+.fact-card::before {{ content:''; position:absolute; left:0; top:0; bottom:0; width:7px; background:{accent}; }}
+.fact-grid.quad .fact-card {{ height:187px; }}
+.fact-grid.single .fact-card {{ height:225px; padding:28px 30px; }}
+.fact-label {{ color:{primary}; font-size:12px; line-height:1.2; font-weight:900; letter-spacing:1.15px;
+    text-transform:uppercase; overflow-wrap:anywhere; margin-bottom:13px; }}
+.fact-value {{ color:#181b1f; line-height:1.12; font-weight:850; letter-spacing:-.25px; overflow-wrap:anywhere; }}
+.slide-index {{ position:absolute; z-index:12; right:25px; bottom:24px; width:46px; height:46px;
+    border-radius:50%; display:flex; align-items:center; justify-content:center; background:{primary}; color:#fff;
+    font-size:14px; font-weight:900; box-shadow:0 8px 22px rgba(0,0,0,.16); }}
+</style>
 </head>
-<body style="width:{WB_WIDTH}px;height:{WB_HEIGHT}px;overflow:hidden;margin:0;">
-<div style="width:{WB_WIDTH}px;height:{WB_HEIGHT}px;{bg_style}
-            position:relative;overflow:hidden;font-family:{font_family};">
-
-    <!-- Gradient overlay for readability -->
-    <div style="position:absolute;top:0;left:0;right:0;{overlay_style}"></div>
-
-    {photo_html}
-
-    <!-- Badge -->
-    <div style="position:absolute;top:28px;left:40px;z-index:10;
-                background:rgba(255,255,255,0.15);backdrop-filter:blur(8px);
-                border-radius:8px;padding:5px 14px;border:1px solid rgba(255,255,255,0.2);">
-        <span style="font-size:11px;font-weight:700;letter-spacing:2px;color:#ffffff;">
-            {badge_text}
-        </span>
-    </div>
-
-    <!-- Content in the foreground-free top safe zone -->
-    <div id="safe-copy" style="position:absolute;left:40px;right:40px;top:78px;
-                max-height:165px;overflow:hidden;z-index:10;">
-        <h1 id="slide-title" style="font-size:{title_size}px;font-weight:900;color:#ffffff;
-                   line-height:1.08;letter-spacing:-0.3px;
-                   overflow-wrap:anywhere;
-                   margin-bottom:12px;text-shadow:0 2px 8px rgba(0,0,0,0.3);">
-            {title}
-        </h1>
-        <div style="width:60px;height:4px;background:{accent};border-radius:3px;margin-bottom:14px;"></div>
-        {f'<p style="font-size:20px;font-weight:500;color:rgba(255,255,255,0.85);line-height:1.4;text-shadow:0 1px 4px rgba(0,0,0,0.3);">{subtitle}</p>' if subtitle else ''}
-        {items_html}
-    </div>
-
-    <!-- Bottom accent bar -->
-    <div style="position:absolute;bottom:0;left:0;right:0;height:5px;
-                background:linear-gradient(90deg, {primary}, {accent});"></div>
-</div>
+<body>
+<main style="width:{WB_WIDTH}px;height:{WB_HEIGHT}px;{bg_style}position:relative;overflow:hidden;font-family:{font_family};">
+    {copy_html}
+    <div class="slide-index">{slide_number}</div>
+    <div style="position:absolute;left:0;right:0;bottom:0;height:7px;background:linear-gradient(90deg,{primary},{accent});"></div>
+</main>
 </body>
 </html>'''
 
 
-def _template_background_bytes(design: Dict) -> bytes:
-    """Text-free deterministic fallback; safe even when image/OCR APIs fail."""
+def _template_background_bytes(
+    design: Dict,
+    slide_type: str = 'hero',
+    slide_index: int = 0,
+) -> bytes:
+    """Text-free deterministic catalog set with depth and product pedestal."""
     palette = design.get("color_palette") or []
-    top_hex = _safe_color(palette[0], "#232323") if palette else "#232323"
-    bottom_hex = _safe_color(palette[2], "#f4efe7") if len(palette) > 2 else "#f4efe7"
-    top = tuple(int(top_hex[index:index + 2], 16) for index in (1, 3, 5))
-    bottom = tuple(int(bottom_hex[index:index + 2], 16) for index in (1, 3, 5))
+    primary_hex = _safe_color(palette[0], "#173f2a") if palette else "#173f2a"
+    accent_hex = _safe_color(palette[1], "#e0a52b") if len(palette) > 1 else "#e0a52b"
+    base_hex = _safe_color(palette[2], "#edf4e8") if len(palette) > 2 else "#edf4e8"
+    primary = tuple(int(primary_hex[index:index + 2], 16) for index in (1, 3, 5))
+    accent = tuple(int(accent_hex[index:index + 2], 16) for index in (1, 3, 5))
+    base = tuple(int(base_hex[index:index + 2], 16) for index in (1, 3, 5))
+    white = (255, 255, 255)
     strip = Image.new("RGB", (1, WB_HEIGHT))
     pixels = strip.load()
     for y in range(WB_HEIGHT):
-        ratio = y / max(WB_HEIGHT - 1, 1)
-        color = tuple(round(a + (b - a) * ratio) for a, b in zip(top, bottom))
+        ratio = min(1.0, y / max(WB_HEIGHT * .82, 1))
+        color = tuple(round(a + (b - a) * ratio * .72) for a, b in zip(base, white))
         pixels[0, y] = color
-    image = strip.resize((WB_WIDTH, WB_HEIGHT), Image.Resampling.NEAREST)
+    image = strip.resize((WB_WIDTH, WB_HEIGHT), Image.Resampling.NEAREST).convert('RGBA')
+    layer = Image.new('RGBA', image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    shift = (slide_index % 3) * 34
+    if slide_type == 'hero':
+        draw.ellipse((80 - shift, 475, 820 - shift, 1215), fill=(*accent, 30))
+        draw.ellipse((205 + shift, 560, 735 + shift, 1090), outline=(*primary, 45), width=4)
+        draw.rounded_rectangle((122, 1015, 778, 1145), radius=65, fill=(*primary, 20))
+    else:
+        draw.ellipse((-140 + shift, 545, 520 + shift, 1205), fill=(*primary, 22))
+        draw.ellipse((430 - shift, 610, 1040 - shift, 1220), fill=(*accent, 27))
+        draw.rounded_rectangle((175, 1040, 725, 1148), radius=54, fill=(*primary, 24))
+    for x in range(70, WB_WIDTH, 152):
+        draw.ellipse((x, 1138, x + 6, 1144), fill=(*primary, 60))
+    image = Image.alpha_composite(image, layer).convert('RGB')
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()
@@ -740,6 +783,7 @@ def render_hybrid_slides(
     product_photos: Optional[List] = None,
     product_title: str = '',
     supplier_product_id: int = None,
+    source_photo_bytes: Optional[bytes] = None,
     max_slides: int = 10
 ) -> List[Dict]:
     """Production render: verified copy + empty AI background + unchanged RGB."""
@@ -764,7 +808,14 @@ def render_hybrid_slides(
         }]
     slides = rich_content.get('slides', [])[:max(1, min(max_slides, 10))]
     design = rich_content.get('design_recommendations', {})
-    source_bytes = _fetch_product_photo_bytes(supplier_product_id, product_photos)
+    source_bytes = source_photo_bytes or _fetch_product_photo_bytes(
+        supplier_product_id, product_photos,
+    )
+    if source_bytes:
+        try:
+            Image.open(io.BytesIO(source_bytes)).verify()
+        except Exception:
+            source_bytes = None
     if not source_bytes:
         return [{
             'slide_number': 0,
@@ -798,9 +849,17 @@ def render_hybrid_slides(
         except Exception as exc:
             background_note = str(exc)
         if background is None:
-            background = _template_background_bytes(design)
+            background = _template_background_bytes(design, str(
+                slide.get('type') or 'hero'
+            ), i)
         try:
-            composite = compose_identity_preserving(background, source_bytes)
+            is_fact_slide = slide.get('type') in {'fact_grid', 'characteristics'}
+            composite = compose_identity_preserving(
+                background,
+                source_bytes,
+                top_reserved_ratio=.45 if is_fact_slide else .31,
+                max_width_ratio=.68 if is_fact_slide else .82,
+            )
             prepared.append({
                 'slide': slide,
                 'slide_number': slide_num,
@@ -857,8 +916,11 @@ def render_hybrid_slides(
                     page.set_content(markup, wait_until='domcontentloaded')
                     page.wait_for_timeout(300)
                     clipped = page.evaluate("""() => {
-                        const el = document.getElementById('safe-copy');
-                        return !el || el.scrollHeight > el.clientHeight;
+                        const root = document.getElementById('safe-copy');
+                        if (!root || root.scrollHeight > root.clientHeight) return true;
+                        return [...document.querySelectorAll('[data-fit]')].some(
+                            el => el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth
+                        );
                     }""")
                     if clipped:
                         page.close()

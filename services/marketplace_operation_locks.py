@@ -1,4 +1,4 @@
-"""Process-shared account locks for marketplace side-effect lifecycles."""
+"""Process-shared locks for marketplace side-effect lifecycles."""
 
 import fcntl
 import os
@@ -28,15 +28,19 @@ def _ensure_lock_directory() -> None:
             )
 
 
-def try_account_operation_lock(account_id: Any) -> Optional[Any]:
+def _positive_integer(value: Any, field_name: str) -> int:
     if (
-        not isinstance(account_id, int)
-        or isinstance(account_id, bool)
-        or account_id <= 0
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value <= 0
     ):
-        raise ValueError("account_id must be a positive integer")
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
+
+
+def _try_operation_lock(scope: str, scope_id: int) -> Optional[Any]:
     _ensure_lock_directory()
-    path = os.path.join(LOCK_DIRECTORY, f"account-{account_id}.lock")
+    path = os.path.join(LOCK_DIRECTORY, f"{scope}-{scope_id}.lock")
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, 0o600)
@@ -54,10 +58,33 @@ def try_account_operation_lock(account_id: Any) -> Optional[Any]:
     return lock_file
 
 
-def release_account_operation_lock(lock_file: Any) -> None:
+def try_account_operation_lock(account_id: Any) -> Optional[Any]:
+    return _try_operation_lock(
+        "account",
+        _positive_integer(account_id, "account_id"),
+    )
+
+
+def try_wb_seller_media_lock(seller_id: Any) -> Optional[Any]:
+    """Serialize every WB photo/gallery write for one seller on this host."""
+    return _try_operation_lock(
+        "wb-media-seller",
+        _positive_integer(seller_id, "seller_id"),
+    )
+
+
+def release_marketplace_operation_lock(lock_file: Any) -> None:
     if lock_file is None:
         return
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     finally:
         lock_file.close()
+
+
+def release_account_operation_lock(lock_file: Any) -> None:
+    release_marketplace_operation_lock(lock_file)
+
+
+def release_wb_seller_media_lock(lock_file: Any) -> None:
+    release_marketplace_operation_lock(lock_file)

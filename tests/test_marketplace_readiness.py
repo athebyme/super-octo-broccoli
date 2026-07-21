@@ -310,7 +310,7 @@ class MarketplaceReadinessTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Готовность маркетплейсов", html)
         self.assertIn("Pilot Ozon", html)
-        self.assertIn("parity exact", html)
+        self.assertIn("данные совпадают", html)
         self.assertNotIn("must-not-leak-ciphertext", html)
         self.assertNotIn("must-not-leak-client-id", html)
 

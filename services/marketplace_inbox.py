@@ -85,6 +85,8 @@ class MarketplaceInboxService:
     CONTRACT_VERSION = "ozon-inbox-status-v1"
     WINDOW_DAYS = 90
     CACHE_TTL = timedelta(minutes=15)
+    ACCESS_DENIED_COOLDOWN = timedelta(hours=24)
+    ACCESS_DENIED_ERROR_CODE = "ozon_inbox_access_denied"
     STALE_RUNNING_AFTER = timedelta(minutes=30)
     MAX_PAGES_PER_CALL = 10
     MAX_COMPLETED_SYNCS = 12
@@ -630,7 +632,22 @@ class MarketplaceInboxService:
         return len(expired)
 
     @staticmethod
-    def _safe_error(exc: Exception) -> Tuple[str, str]:
+    def _is_provider_access_denied(exc: Exception) -> bool:
+        """Recognize endpoint-level denial without trusting free-form text."""
+        return bool(
+            isinstance(exc, OzonAPIError)
+            and not exc.retriable
+            and str(exc.code or "").strip().casefold() == "7"
+        )
+
+    @classmethod
+    def _safe_error(cls, exc: Exception) -> Tuple[str, str]:
+        if cls._is_provider_access_denied(exc):
+            return cls.ACCESS_DENIED_ERROR_CODE, (
+                "Ozon не подтвердил доступ к этому разделу для текущей "
+                "подписки. Автоматические попытки приостановлены на 24 часа; "
+                "после изменения подписки доступ можно перепроверить вручную."
+            )
         if isinstance(exc, OzonAPIError):
             return str(exc.code or "ozon_inbox_error")[:100], str(exc)[:1000]
         if isinstance(exc, OzonFeedbackContractError):
@@ -841,6 +858,34 @@ class MarketplaceInboxService:
         ).first()
 
     @classmethod
+    def access_denied_retry_after(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        source_kind: str,
+        now: Optional[datetime] = None,
+    ) -> Optional[datetime]:
+        """Return a durable scheduler cooldown for a live access denial."""
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        source_kind = cls._kind(source_kind)
+        latest = cls._latest_attempt(
+            seller_id=seller_id,
+            account_id=account_id,
+            source_kind=source_kind,
+        )
+        if (
+            latest is None
+            or latest.status != "failed"
+            or latest.error_code != cls.ACCESS_DENIED_ERROR_CODE
+            or latest.completed_at is None
+        ):
+            return None
+        retry_after = latest.completed_at + cls.ACCESS_DENIED_COOLDOWN
+        return retry_after if retry_after > (now or datetime.utcnow()) else None
+
+    @classmethod
     def list_items(
         cls,
         *,
@@ -948,6 +993,11 @@ class MarketplaceInboxService:
             account_id=account.id,
             source_kind=source_kind,
         )
+        access_denied_retry_after = cls.access_denied_retry_after(
+            seller_id=account.seller_id,
+            account_id=account.id,
+            source_kind=source_kind,
+        )
         credential_expired = bool(
             account.credential_expires_at
             and account.credential_expires_at <= datetime.utcnow()
@@ -988,6 +1038,11 @@ class MarketplaceInboxService:
                 "credential_expired": credential_expired,
                 "local_drafts_only": True,
                 "provider_send_enabled": False,
+                "live_access_denied": access_denied_retry_after is not None,
+                "automatic_retry_after": (
+                    access_denied_retry_after.isoformat(timespec="seconds") + "Z"
+                    if access_denied_retry_after is not None else None
+                ),
             },
             "period": {
                 "start": period_start.isoformat(),

@@ -29,6 +29,7 @@ from services.marketplace_inbox import (
     MarketplaceInboxService,
     MarketplaceReplyGenerationError,
 )
+from services.ozon_api_client import OzonAPIError
 
 
 SYNTHETIC_CREDENTIALS = MarketplaceCredentials(
@@ -136,6 +137,18 @@ class ResumableInboxAdapter(SyntheticInboxAdapter):
                 "last_id": None,
             }
         return {"reviews": [], "has_next": False, "last_id": None}
+
+
+class AccessDeniedInboxAdapter(SyntheticInboxAdapter):
+    def read_reviews(self, credentials, payload):
+        assert credentials == SYNTHETIC_CREDENTIALS
+        self.calls.append(("review", payload))
+        raise OzonAPIError(
+            "synthetic subscription denial",
+            code="7",
+            status_code=400,
+            retriable=False,
+        )
 
 
 class BulkInboxAdapter(SyntheticInboxAdapter):
@@ -396,6 +409,36 @@ class MarketplaceInboxServiceTest(unittest.TestCase):
         self.assertEqual(run.status, "failed")
         self.assertEqual(run.error_code, "ozon_inbox_protocol_error")
         self.assertEqual(MarketplaceInboxItem.query.count(), 0)
+
+    def test_provider_access_denial_sets_durable_scheduler_cooldown(self):
+        now = datetime(2026, 7, 15, 12, 0, 0)
+        with self.assertRaises(MarketplaceInboxProtocolError):
+            self._sync(AccessDeniedInboxAdapter(), now=now)
+
+        run = MarketplaceInboxSync.query.one()
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(
+            run.error_code,
+            MarketplaceInboxService.ACCESS_DENIED_ERROR_CODE,
+        )
+        self.assertNotIn("synthetic subscription denial", run.error_message)
+        self.assertEqual(
+            MarketplaceInboxService.access_denied_retry_after(
+                seller_id=self.seller.id,
+                account_id=self.account.id,
+                source_kind="review",
+                now=now,
+            ),
+            now + MarketplaceInboxService.ACCESS_DENIED_COOLDOWN,
+        )
+        self.assertIsNone(
+            MarketplaceInboxService.access_denied_retry_after(
+                seller_id=self.seller.id,
+                account_id=self.account.id,
+                source_kind="review",
+                now=now + MarketplaceInboxService.ACCESS_DENIED_COOLDOWN,
+            )
+        )
 
     def test_completed_sweep_removes_customer_text_older_than_retention_window(self):
         expired = MarketplaceInboxItem(

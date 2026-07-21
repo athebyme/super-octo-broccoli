@@ -437,7 +437,7 @@ def toggle_ozon_type(product_type_id):
     ):
         return jsonify({
             'success': False,
-            'error': 'Ожидается только boolean is_enabled',
+            'error': 'Ожидается только логическое поле is_enabled',
         }), 400
     result = OzonReferenceService.set_product_type_enabled(
         product_type_id,

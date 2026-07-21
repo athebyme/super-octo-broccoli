@@ -125,6 +125,40 @@ class OzonReferenceService:
             return None
         return cls._text(value, field_name, maximum=maximum)
 
+    @staticmethod
+    def _optional_display_text(
+        value: Any,
+        field_name: str,
+        *,
+        maximum: int,
+    ) -> Optional[str]:
+        """Normalize provider prose while keeping structural fields strict.
+
+        Ozon attribute descriptions legitimately contain tabs and line breaks.
+        They are display-only prose, so canonical whitespace is safe here. Other
+        ASCII control characters remain invalid and still reject the snapshot.
+        """
+        if value in (None, ""):
+            return None
+        if not isinstance(value, str):
+            raise OzonReferenceValidationError(
+                f"Ozon {field_name} must be a string"
+            )
+        if len(value) > maximum:
+            raise OzonReferenceValidationError(
+                f"Ozon {field_name} exceeds {maximum} characters"
+            )
+        if any(
+            (ord(character) < 32 and character not in "\t\n\r")
+            or ord(character) == 127
+            for character in value
+        ):
+            raise OzonReferenceValidationError(
+                f"Ozon {field_name} contains control characters"
+            )
+        normalized = " ".join(value.split())
+        return normalized or None
+
     @classmethod
     def _external_optional_integer(
         cls,
@@ -641,7 +675,7 @@ class OzonReferenceService:
                     f"attribute[{index}].name",
                     maximum=500,
                 ),
-                "description": cls._optional_text(
+                "description": cls._optional_display_text(
                     item.get("description"),
                     f"attribute[{index}].description",
                     maximum=10_000,
@@ -981,7 +1015,7 @@ class OzonReferenceService:
                 "external_value_id": external_id,
                 "value": value,
                 "value_normalized": cls.normalize_value(value),
-                "info": cls._optional_text(
+                "info": cls._optional_display_text(
                     item.get("info"),
                     f"value[{index}].info",
                     maximum=10_000,
@@ -1281,7 +1315,7 @@ class OzonReferenceService:
         now: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         if not isinstance(is_enabled, bool):
-            return {"success": False, "error": "is_enabled must be a boolean"}
+            return {"success": False, "error": "is_enabled должен быть boolean"}
         product_type = MarketplaceProductType.query.filter_by(
             id=product_type_id,
         ).first()
@@ -1291,7 +1325,10 @@ class OzonReferenceService:
             or not product_type.is_available
             or not product_type.category.is_available
         ):
-            return {"success": False, "error": "Available Ozon product type not found"}
+            return {
+                "success": False,
+                "error": "Доступный тип товара Ozon не найден",
+            }
         synced = False
         if is_enabled and not cls.reference_is_fresh(product_type, now=now):
             result = cls.sync_attributes(
@@ -1303,7 +1340,10 @@ class OzonReferenceService:
             if not result.get("success"):
                 return {
                     "success": False,
-                    "error": result.get("error") or "Ozon schema sync failed",
+                    "error": (
+                        result.get("error")
+                        or "Не удалось загрузить схему атрибутов Ozon"
+                    ),
                 }
             synced = True
             product_type = MarketplaceProductType.query.filter_by(

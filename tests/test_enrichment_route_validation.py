@@ -3,6 +3,7 @@
 
 import os
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -19,15 +20,32 @@ class EnrichmentRouteValidationTestCase(unittest.TestCase):
     def setUp(self):
         self.http = self.app.test_client()
 
-    def test_bulk_ids_are_strict_bounded_and_deduplicated(self):
+    def test_bulk_ids_are_strict_bounded_unique(self):
         from routes.enrichment import _bounded_unique_product_ids
 
-        self.assertEqual(_bounded_unique_product_ids([3, 1, 3]), [3, 1])
+        self.assertEqual(_bounded_unique_product_ids([3, 1]), [3, 1])
+        with self.assertRaises(ValueError):
+            _bounded_unique_product_ids([3, 1, 3])
         for invalid in ([True], ['1'], [0], [-1], '1'):
             with self.assertRaises(ValueError):
                 _bounded_unique_product_ids(invalid)
         with self.assertRaises(ValueError):
             _bounded_unique_product_ids(list(range(1, 202)))
+
+    def test_bulk_photo_confirmation_defaults_to_photos_only_refresh(self):
+        template = (
+            Path(__file__).resolve().parents[1]
+            / 'templates'
+            / 'products_enrich_bulk.html'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('photos: true', template)
+        for field in (
+            'title', 'description', 'characteristics', 'dimensions', 'brand'
+        ):
+            self.assertIn(f'{field}: false', template)
+        self.assertIn("photoStrategy: 'replace'", template)
+        self.assertIn('Подтвердить обновление фото', template)
 
     def test_invalid_characteristics_block_selective_photo_upload(self):
         seller = MagicMock()

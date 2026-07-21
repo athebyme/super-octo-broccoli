@@ -31,6 +31,12 @@ _product_cache = {}
 _cache_lock = threading.Lock()
 CACHE_TTL_SECONDS = 300  # 5 минут
 
+# Even a "continuous" monitor needs a bounded pause.  Once all products are
+# served from the five-minute cache, a zero pause turns the loop into a tight
+# SQLite/logging spin without producing fresher observations.
+MIN_CYCLE_PAUSE_SECONDS = 60
+MAX_CYCLE_PAUSE_SECONDS = 3600
+
 # Активные мониторинг-треды: {seller_id: threading.Event}
 _stop_events = {}
 _monitor_threads = {}
@@ -39,6 +45,18 @@ _threads_lock = threading.Lock()
 # Маппинг vol -> basket номер (обновлено март 2026)
 # Маппинг корзин консолидирован в services/wb_media.py (самообучающийся
 # резолвер: проверенная таблица + разовая проба CDN с вечным кешем).
+
+
+def normalize_cycle_pause_seconds(value):
+    """Return the safe, persisted interval between full monitor cycles."""
+    try:
+        pause = int(value)
+    except (TypeError, ValueError):
+        pause = MIN_CYCLE_PAUSE_SECONDS
+    return max(
+        MIN_CYCLE_PAUSE_SECONDS,
+        min(MAX_CYCLE_PAUSE_SECONDS, pause),
+    )
 
 
 def _get_basket_base_url(nm_id):
@@ -1038,8 +1056,9 @@ def start_competitor_monitor_loop(seller_id, flask_app):
                         ).first()
 
                         if not settings or not settings.is_enabled:
-                            settings.is_running = False
-                            db.session.commit()
+                            if settings:
+                                settings.is_running = False
+                                db.session.commit()
                             logger.info(f"[Seller {seller_id}] Мониторинг выключен, выходим")
                             break
 
@@ -1079,10 +1098,25 @@ def start_competitor_monitor_loop(seller_id, flask_app):
                         settings = CompetitorMonitorSettings.query.filter_by(
                             seller_id=seller_id
                         ).first()
-                        pause = settings.pause_between_cycles_seconds if settings else 60
+                        pause = normalize_cycle_pause_seconds(
+                            settings.pause_between_cycles_seconds
+                            if settings else MIN_CYCLE_PAUSE_SECONDS
+                        )
+                        if (
+                            settings
+                            and settings.pause_between_cycles_seconds != pause
+                        ):
+                            logger.warning(
+                                "[Seller %s] Небезопасная пауза мониторинга %r "
+                                "нормализована до %sс",
+                                seller_id,
+                                settings.pause_between_cycles_seconds,
+                                pause,
+                            )
+                            settings.pause_between_cycles_seconds = pause
+                            db.session.commit()
 
-                    if pause > 0:
-                        stop_event.wait(timeout=pause)
+                    stop_event.wait(timeout=pause)
 
                 except Exception as e:
                     logger.error(f"[Seller {seller_id}] Ошибка в цикле мониторинга: {e}")
@@ -1127,11 +1161,17 @@ def check_and_restart_monitor_loops(flask_app):
         for settings in enabled_settings:
             with _threads_lock:
                 thread = _monitor_threads.get(settings.seller_id)
-                if thread is None or not thread.is_alive():
-                    logger.info(
-                        f"[Seller {settings.seller_id}] Перезапуск мониторинг-треда"
-                    )
-                    start_competitor_monitor_loop(settings.seller_id, flask_app)
+                needs_restart = thread is None or not thread.is_alive()
+
+            # start_competitor_monitor_loop() takes _threads_lock itself.  It
+            # must run after the check lock is released; threading.Lock is not
+            # re-entrant and the previous nested call deadlocked this
+            # scheduler job forever.
+            if needs_restart:
+                logger.info(
+                    f"[Seller {settings.seller_id}] Перезапуск мониторинг-треда"
+                )
+                start_competitor_monitor_loop(settings.seller_id, flask_app)
 
 
 def stop_all_monitor_loops():

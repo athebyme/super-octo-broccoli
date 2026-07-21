@@ -1513,15 +1513,30 @@ class MarketplaceService:
         errors = []
         changed = 0
 
+        # Фаза 1: только сеть, сессия чистая. Нельзя интерливить fetch с
+        # записью: SELECT после первой незакоммиченной записи autoflush-ем
+        # открывает SQLite write-транзакцию, и она держится через сетевые
+        # вызовы (до 30с таймаута каждый) — параллельные писатели падают
+        # с «database is locked».
+        fetched = {}
         for index, (d_type, fetcher) in enumerate(dirs_to_fetch.items()):
             if index:
                 sleep_fn(cls.CHARACTERISTIC_REQUEST_INTERVAL_SECONDS)
+            try:
+                fetched[d_type] = fetcher()
+            except Exception as e:
+                fetched[d_type] = e
+
+        # Фаза 2: валидация и запись без сетевых вызовов, один commit.
+        for d_type in dirs_to_fetch:
             directory = MarketplaceDirectory.query.filter_by(
                 marketplace_id=marketplace_id,
                 directory_type=d_type,
             ).first()
             try:
-                res = fetcher()
+                res = fetched[d_type]
+                if isinstance(res, Exception):
+                    raise res
                 items = cls._wb_data_list(res, f'{d_type} directory')
                 if not items:
                     raise ValueError('empty upstream directory snapshot')

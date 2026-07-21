@@ -15,6 +15,13 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+STALE_PUBLISHING_TIMEOUT = timedelta(minutes=30)
+STALE_PUBLISHING_BATCH_SIZE = 100
+STALE_PUBLISHING_ERROR = (
+    "Результат публикации неизвестен: выполнение не завершилось за 30 минут. "
+    "Проверьте соцсеть перед ручным повтором."
+)
+
 
 # ================================================================
 # Автогенерация контента
@@ -180,6 +187,45 @@ def _auto_generate_for_factory(factory, now, db):
 # Автопубликация контента
 # ================================================================
 
+def recover_stale_publishing_items(db, now=None, limit=None):
+    """Fail closed for abandoned publish claims without retrying provider writes."""
+    from models import ContentItem
+
+    now = now or datetime.utcnow()
+    cutoff = now - STALE_PUBLISHING_TIMEOUT
+    batch_size = max(
+        1,
+        min(STALE_PUBLISHING_BATCH_SIZE, int(limit or STALE_PUBLISHING_BATCH_SIZE)),
+    )
+    candidate_ids = [
+        row[0]
+        for row in ContentItem.query.with_entities(ContentItem.id).filter(
+            ContentItem.status == 'publishing',
+            ContentItem.updated_at < cutoff,
+        ).order_by(
+            ContentItem.updated_at.asc(),
+            ContentItem.id.asc(),
+        ).limit(batch_size).all()
+    ]
+    if not candidate_ids:
+        return 0
+
+    recovered = ContentItem.query.filter(
+        ContentItem.id.in_(candidate_ids),
+        ContentItem.status == 'publishing',
+        ContentItem.updated_at < cutoff,
+    ).update(
+        {
+            'status': 'failed',
+            'error_message': STALE_PUBLISHING_ERROR,
+            'updated_at': now,
+        },
+        synchronize_session=False,
+    )
+    db.session.commit()
+    return int(recovered or 0)
+
+
 def auto_publish_content(flask_app):
     """
     Основная функция автопубликации.
@@ -187,8 +233,16 @@ def auto_publish_content(flask_app):
     """
     with flask_app.app_context():
         try:
-            from models import db, ContentFactory, ContentItem, SocialAccount
-            from services.content_publishers import get_publisher
+            from models import db, ContentFactory
+
+            now = datetime.utcnow()
+            recovered = recover_stale_publishing_items(db, now=now)
+            if recovered:
+                logger.warning(
+                    "Auto-publish reconciled %s stale publishing item(s) "
+                    "without provider retry",
+                    recovered,
+                )
 
             # Находим все активные фабрики с включённой автопубликацией
             factories = ContentFactory.query.filter_by(
@@ -198,8 +252,6 @@ def auto_publish_content(flask_app):
 
             if not factories:
                 return
-
-            now = datetime.utcnow()
 
             for factory in factories:
                 try:
@@ -224,6 +276,11 @@ def _auto_publish_for_factory(factory, now, db):
     """Публикует следующий одобренный пост для фабрики, если пришло время."""
     from models import ContentItem, SocialAccount
     from services.content_publishers import get_publisher
+    from services.social_account_publish_health import (
+        automatic_publish_is_blocked,
+        clear_publish_failure,
+        record_publish_failure,
+    )
 
     interval = factory.publish_interval_minutes or 60
 
@@ -253,6 +310,14 @@ def _auto_publish_for_factory(factory, now, db):
         logger.warning(f"Auto-publish: no account for factory {factory.id} ({factory.platform})")
         return
 
+    if automatic_publish_is_blocked(account):
+        logger.debug(
+            "Auto-publish skipped quarantined account=%s code=%s",
+            account.id,
+            account.last_error_code,
+        )
+        return
+
     # Находим следующий одобренный пост (FIFO)
     item = ContentItem.query.filter_by(
         factory_id=factory.id,
@@ -267,7 +332,13 @@ def _auto_publish_for_factory(factory, now, db):
         updated = ContentItem.query.filter(
             ContentItem.id == item.id,
             ContentItem.status == 'approved',
-        ).update({'status': 'publishing'}, synchronize_session='fetch')
+        ).update(
+            {
+                'status': 'publishing',
+                'social_account_id': account.id,
+            },
+            synchronize_session='fetch',
+        )
         db.session.commit()
         if not updated:
             logger.info(f"Auto-publish: item {item.id} already picked up by another process")
@@ -284,7 +355,7 @@ def _auto_publish_for_factory(factory, now, db):
             item.external_post_url = result.external_post_url
             item.error_message = result.error  # Может быть warning о фото
             account.last_used_at = now
-            account.last_error = None
+            clear_publish_failure(account)
             factory.last_auto_publish_at = now
             logger.info(
                 f"Auto-published item {item.id} to {factory.platform} "
@@ -293,8 +364,13 @@ def _auto_publish_for_factory(factory, now, db):
         else:
             item.status = 'failed'
             item.error_message = result.error
-            account.last_error = result.error
-            logger.warning(f"Auto-publish failed for item {item.id}: {result.error}")
+            record_publish_failure(account, result, now=now)
+            logger.warning(
+                "Auto-publish failed for item %s: code=%s terminal=%s",
+                item.id,
+                result.error_code or 'unknown',
+                bool(result.terminal),
+            )
 
         db.session.commit()
 

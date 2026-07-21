@@ -24,6 +24,109 @@ from services.pricing_engine import calculate_price
 
 logger = logging.getLogger(__name__)
 
+# Словарь алиасов: наши названия характеристик -> WB названия (lowercase).
+# Решает проблему несовпадения имён между данными поставщика и WB API.
+# Сначала пробуется точное имя, затем явный семантический алиас.
+# Значение — строка либо список строк-кандидатов: WB называет одну и ту же
+# характеристику по-разному в разных категориях (например «Тип элемента
+# питания» и «Питание»); применяется первый кандидат, присутствующий в
+# live-схеме предмета.
+# ВАЖНО: каждый кандидат должен быть ТОЧНЫМ именем WB-характеристики (lowercase).
+# Substring/fuzzy/prefix совпадения нельзя автоматически применять перед WB.
+CHAR_ALIASES = {
+    # === Цвет ===
+    'цвет товара': 'цвет',
+    'цвета': 'цвет',
+    'основной цвет': 'цвет',
+
+    # === Материал / Состав ===
+    # WB называет по-разному в разных категориях; алиас применим только
+    # когда его полное целевое имя присутствует в live-схеме.
+    'материал товара': 'материал изделия',
+    'основной материал': 'материал изделия',
+    'состав материала': 'материал изделия',
+
+    # === Страна ===
+    'страна': 'страна производства',
+    'страна-производитель': 'страна производства',
+    'страна изготовления': 'страна производства',
+    'страна изготовитель': 'страна производства',
+    'производство': 'страна производства',
+    'made in': 'страна производства',
+
+    # === Пол ===
+    'пол товара': 'пол',
+    'целевой пол': 'пол',
+
+    # === Комплектация ===
+    'комплектация товара': 'комплектация',
+    'в комплекте': 'комплектация',
+
+    # === Размеры / Габариты ===
+    # WB категории могут использовать специфические полные имена.
+    'длина товара': 'длина',
+    'длина изделия': 'длина',
+    'общая длина': 'длина',
+    'рабочая длина': 'рабочая длина',
+    'диаметр товара': 'диаметр',
+
+    # === Вес ===
+    'вес товара': 'вес товара без упаковки (г)',
+    'масса': 'вес товара без упаковки (г)',
+    'вес изделия': 'вес товара без упаковки (г)',
+    'вес нетто': 'вес товара без упаковки (г)',
+
+    # === Объем ===
+    'объем товара': 'объем',
+    'объём': 'объем',
+
+    # === Количество ===
+    'количество в упаковке': 'количество предметов в упаковке (шт.)',
+    'кол-во в упаковке': 'количество предметов в упаковке (шт.)',
+    'кол-во': 'количество предметов в упаковке (шт.)',
+    'количество штук': 'количество предметов в упаковке (шт.)',
+
+    # === Режимы ===
+    'количество скоростей': 'количество режимов',
+    'кол-во режимов': 'количество режимов',
+    'количество режимов вибрации': 'количество режимов',
+
+    # === Питание ===
+    # WB: «Тип элемента питания» в одних категориях, «Питание» в других
+    # (например Вибраторы 5067 — проверено live-схемой 2026-07-18)
+    'тип питания': ['тип элемента питания', 'питание'],
+    'питание': 'тип элемента питания',
+    'батарейки': ['тип элемента питания', 'питание'],
+    'элемент питания': ['тип элемента питания', 'питание'],
+    'тип батареек': ['тип элемента питания', 'питание'],
+
+    # === Особенности ===
+    # WB: "Особенности секс игрушки", "Особенности презерватива".
+    'особенности товара': 'особенности',
+    'feature': 'особенности',
+    'описание особенностей': 'особенности',
+
+    # === Упаковка ===
+    'вид упаковки': 'упаковка',
+    'тип упаковки': 'упаковка',
+
+    # === Прочее ===
+    'водонепроницаемость': 'водонепроницаемый',
+    'защита от воды': 'водонепроницаемый',
+
+    # === Ширина ===
+    'ширина товара': 'ширина предмета',
+    'ширина изделия': 'ширина предмета',
+
+    # === Текстура (для презервативов) ===
+    'текстура': 'текстура презерватива',
+    'поверхность': 'текстура презерватива',
+
+    # === Аромат ===
+    'запах': 'аромат',
+    'аромат товара': 'аромат',
+}
+
 
 def _normalize_wb_size(size_str: str) -> Optional[str]:
     """
@@ -1583,10 +1686,22 @@ class WBProductImporter:
                 [wb_subject_id], client=self.api_client,
             )
             if not refresh.get('success'):
+                detail = (
+                    refresh.get('error') or refresh.get('errors')
+                    or 'неизвестная ошибка'
+                )
+                if 'отсутствует в актуальном WB-кэше' in str(detail):
+                    # Категория-заглушка/устаревшая: подсказываем продавцу
+                    # конкретное действие вместо технической диагностики
+                    raise ValueError(
+                        "Категория карточки устарела и недоступна на WB "
+                        f"(subjectID={wb_subject_id}). Если у карточки в "
+                        "«Моих товарах» есть бейдж «Обновление» — нажмите "
+                        "«Обновить из каталога» и повторите отправку."
+                    )
                 raise ValueError(
                     f"Не удалось актуализировать справочники WB для "
-                    f"subject_id={wb_subject_id}: "
-                    f"{refresh.get('error') or refresh.get('errors') or 'неизвестная ошибка'}"
+                    f"subject_id={wb_subject_id}: {detail}"
                 )
             # Reference refresh invalidates every per-run validator object.
             self._wb_validation_cache = {}
@@ -1629,6 +1744,38 @@ class WBProductImporter:
 
         self._category_sizes_cache[wb_subject_id] = False
         return False
+
+    def _preview_category_supports_sizes(
+        self,
+        wb_subject_id: int,
+        *,
+        source_has_sizes: bool,
+    ) -> Tuple[Optional[bool], Optional[str]]:
+        """Best-effort size projection for the read-only WB preview.
+
+        A product without source sizes does not need the category schema at
+        all.  When sizes do exist, an unavailable reference cache must keep the
+        preview page readable, but it must not be presented as a confirmed
+        sizeless category.  Provider writes continue to call the strict
+        ``_category_supports_sizes`` method directly.
+        """
+        if not source_has_sizes:
+            return False, None
+
+        try:
+            return self._category_supports_sizes(wb_subject_id), None
+        except ValueError as exc:
+            logger.warning(
+                "WB preview could not verify size schema for product subject_id=%s: %s",
+                wb_subject_id,
+                exc,
+            )
+            return (
+                None,
+                "Размеры есть в исходных данных, но справочник WB "
+                "временно недоступен. Перед отправкой проверка будет "
+                "выполнена повторно."
+            )
 
     @staticmethod
     def _sanitize_country(country: str) -> str:
@@ -2263,102 +2410,8 @@ class WBProductImporter:
 
                 wb_chars_by_name[char_name.lower()] = char
 
-        # Словарь алиасов: наши названия характеристик -> WB названия
-        # Решает проблему несовпадения имён между данными поставщика и WB API
-        # Алиасы строят маппинг: наше_название -> wb_название (lowercased).
-        # Сначала пробуем точное имя, затем явный семантический алиас.
-        # ВАЖНО: алиас должен указывать на ТОЧНОЕ имя WB-характеристики (lowercase).
-        # Substring/fuzzy/prefix совпадения нельзя автоматически применять перед WB.
-        _CHAR_ALIASES = {
-            # === Цвет ===
-            'цвет товара': 'цвет',
-            'цвета': 'цвет',
-            'основной цвет': 'цвет',
-
-            # === Материал / Состав ===
-            # WB называет по-разному в разных категориях; алиас применим только
-            # когда его полное целевое имя присутствует в live-схеме.
-            'материал товара': 'материал изделия',
-            'основной материал': 'материал изделия',
-            'состав материала': 'материал изделия',
-
-            # === Страна ===
-            'страна': 'страна производства',
-            'страна-производитель': 'страна производства',
-            'страна изготовления': 'страна производства',
-            'страна изготовитель': 'страна производства',
-            'производство': 'страна производства',
-            'made in': 'страна производства',
-
-            # === Пол ===
-            'пол товара': 'пол',
-            'целевой пол': 'пол',
-
-            # === Комплектация ===
-            'комплектация товара': 'комплектация',
-            'в комплекте': 'комплектация',
-
-            # === Размеры / Габариты ===
-            # WB категории могут использовать специфические полные имена.
-            'длина товара': 'длина',
-            'длина изделия': 'длина',
-            'общая длина': 'длина',
-            'рабочая длина': 'рабочая длина',
-            'диаметр товара': 'диаметр',
-
-            # === Вес ===
-            'вес товара': 'вес товара без упаковки (г)',
-            'масса': 'вес товара без упаковки (г)',
-            'вес изделия': 'вес товара без упаковки (г)',
-            'вес нетто': 'вес товара без упаковки (г)',
-
-            # === Объем ===
-            'объем товара': 'объем',
-            'объём': 'объем',
-
-            # === Количество ===
-            'количество в упаковке': 'количество предметов в упаковке (шт.)',
-            'кол-во в упаковке': 'количество предметов в упаковке (шт.)',
-            'кол-во': 'количество предметов в упаковке (шт.)',
-            'количество штук': 'количество предметов в упаковке (шт.)',
-
-            # === Режимы ===
-            'количество скоростей': 'количество режимов',
-            'кол-во режимов': 'количество режимов',
-            'количество режимов вибрации': 'количество режимов',
-
-            # === Питание ===
-            'тип питания': 'тип элемента питания',
-            'питание': 'тип элемента питания',
-            'батарейки': 'тип элемента питания',
-            'элемент питания': 'тип элемента питания',
-
-            # === Особенности ===
-            # WB: "Особенности секс игрушки", "Особенности презерватива".
-            'особенности товара': 'особенности',
-            'feature': 'особенности',
-            'описание особенностей': 'особенности',
-
-            # === Упаковка ===
-            'вид упаковки': 'упаковка',
-            'тип упаковки': 'упаковка',
-
-            # === Прочее ===
-            'водонепроницаемость': 'водонепроницаемый',
-            'защита от воды': 'водонепроницаемый',
-
-            # === Ширина ===
-            'ширина товара': 'ширина предмета',
-            'ширина изделия': 'ширина предмета',
-
-            # === Текстура (для презервативов) ===
-            'текстура': 'текстура презерватива',
-            'поверхность': 'текстура презерватива',
-
-            # === Аромат ===
-            'запах': 'аромат',
-            'аромат товара': 'аромат',
-        }
+        # Алиасы имён характеристик — модульная константа CHAR_ALIASES выше.
+        _CHAR_ALIASES = CHAR_ALIASES
 
         result_characteristics = []
         used_char_ids = set()  # Дедупликация: не добавляем одну и ту же WB-характеристику дважды
@@ -2389,17 +2442,27 @@ class WBProductImporter:
                 if isinstance(char_value, str):
                     char_value = self._sanitize_country(char_value)
 
+            def _resolve_alias(name_lower: str):
+                # Значение алиаса — строка либо список точных WB-имён;
+                # применяется первый кандидат, найденный в live-схеме.
+                alias = _CHAR_ALIASES.get(name_lower)
+                if not alias:
+                    return None
+                candidates = [alias] if isinstance(alias, str) else alias
+                for candidate in candidates:
+                    found = wb_chars_by_name.get(candidate)
+                    if found:
+                        logger.debug(f"Характеристика '{name_lower}' -> алиас '{candidate}'")
+                        return found
+                return None
+
             # Находим соответствующую характеристику WB
             char_name_lower = char_name.lower().strip()
             wb_char = wb_chars_by_name.get(char_name_lower)
 
             # Шаг 1: Проверяем алиасы
             if not wb_char:
-                alias = _CHAR_ALIASES.get(char_name_lower)
-                if alias:
-                    wb_char = wb_chars_by_name.get(alias)
-                    if wb_char:
-                        logger.debug(f"Характеристика '{char_name}' -> алиас '{alias}'")
+                wb_char = _resolve_alias(char_name_lower)
 
             # Шаг 2: точное совпадение после удаления только единицы измерения.
             if not wb_char:
@@ -2407,9 +2470,7 @@ class WBProductImporter:
                 char_norm = _UNIT_RE.sub('', char_name_lower).strip()
                 if char_norm:
                     # Сначала пробуем алиас нормализованного имени
-                    alias = _CHAR_ALIASES.get(char_norm)
-                    if alias:
-                        wb_char = wb_chars_by_name.get(alias)
+                    wb_char = _resolve_alias(char_norm)
 
                     if not wb_char:
                         for wb_name, wb_data in wb_chars_by_name.items():
@@ -2928,61 +2989,70 @@ class WBProductImporter:
         except Exception as gm_err:
             logger.warning(f"Не удалось добавить глобальные медиа: {gm_err}")
 
-        # =============================================
-        # Стратегия 1 (приоритетная): File-based upload (media/file)
-        # Загружаем файлы напрямую через multipart — не зависит от PUBLIC_BASE_URL
-        # =============================================
-        if cached_photo_paths:
-            logger.info(f"Загружаем {len(cached_photo_paths)} фото (file upload) для nmID={nm_id}")
-            try:
-                results = self.api_client.upload_photos_to_card(
-                    nm_id=nm_id,
-                    photo_paths=cached_photo_paths,
-                    seller_id=self.seller.id
-                )
-                success_count = sum(1 for r in results if r.get('success'))
-                logger.info(f"Фото загружено для nmID={nm_id}: {success_count}/{len(cached_photo_paths)} успешно")
-                if success_count > 0:
-                    return  # Успех — выходим
-                else:
-                    logger.warning(f"File upload: 0/{len(cached_photo_paths)} фото загружено, пробуем URL-based")
-            except Exception as e:
-                logger.warning(f"File upload failed для nmID={nm_id}: {e}, пробуем URL-based")
-
-        # =============================================
-        # Стратегия 2 (fallback): URL-based upload (media/save)
-        # WB сам скачивает фото по публичным URL нашего сервера.
-        # Работает только если PUBLIC_BASE_URL доступен из интернета.
-        # =============================================
-        from flask import current_app
-        public_base_url = current_app.config.get('PUBLIC_BASE_URL', '')
-
-        if public_base_url:
-            from routes.photos import generate_public_photo_urls
-            public_urls = generate_public_photo_urls(imported_product)
-
-            if public_urls:
-                logger.info(
-                    f"Товар {imported_product.external_id}: загрузка {len(public_urls)} фото "
-                    f"через media/save (URL-based) для nmID={nm_id}"
-                )
-                logger.info(f"  Пример URL: {public_urls[0][:100]}...")
+        from services.marketplace_operation_locks import (
+            release_wb_seller_media_lock,
+            try_wb_seller_media_lock,
+        )
+        media_claim = try_wb_seller_media_lock(self.seller.id)
+        if media_claim is None:
+            raise RuntimeError('wb_media_operation_busy')
+        try:
+            # =============================================
+            # Стратегия 1 (приоритетная): File-based upload (media/file)
+            # Загружаем файлы напрямую через multipart — не зависит от PUBLIC_BASE_URL
+            # =============================================
+            if cached_photo_paths:
+                logger.info(f"Загружаем {len(cached_photo_paths)} фото (file upload) для nmID={nm_id}")
                 try:
-                    result = self.api_client.upload_photos_by_url(
+                    results = self.api_client.upload_photos_to_card(
                         nm_id=nm_id,
-                        photo_urls=public_urls,
+                        photo_paths=cached_photo_paths,
                         seller_id=self.seller.id
                     )
-                    logger.info(f"Фото отправлены по URL для nmID={nm_id}: {result}")
-                    return
+                    success_count = sum(1 for r in results if r.get('success'))
+                    logger.info(f"Фото загружено для nmID={nm_id}: {success_count}/{len(cached_photo_paths)} успешно")
+                    if success_count > 0:
+                        return  # Успех — выходим
+                    logger.warning(f"File upload: 0/{len(cached_photo_paths)} фото загружено, пробуем URL-based")
                 except Exception as e:
-                    logger.error(f"URL-based upload также failed для nmID={nm_id}: {e}")
+                    logger.warning(f"File upload failed для nmID={nm_id}: {e}, пробуем URL-based")
 
-        if not cached_photo_paths:
-            logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить для загрузки")
+            # =============================================
+            # Стратегия 2 (fallback): URL-based upload (media/save)
+            # WB сам скачивает фото по публичным URL нашего сервера.
+            # Работает только если PUBLIC_BASE_URL доступен из интернета.
+            # =============================================
+            from flask import current_app
+            public_base_url = current_app.config.get('PUBLIC_BASE_URL', '')
 
-        # Если ни одна стратегия не сработала — бросаем исключение для ретрая
-        raise Exception(f"Все стратегии загрузки фото провалились для nmID={nm_id}")
+            if public_base_url:
+                from routes.photos import generate_public_photo_urls
+                public_urls = generate_public_photo_urls(imported_product)
+
+                if public_urls:
+                    logger.info(
+                        f"Товар {imported_product.external_id}: загрузка {len(public_urls)} фото "
+                        f"через media/save (URL-based) для nmID={nm_id}"
+                    )
+                    logger.info(f"  Пример URL: {public_urls[0][:100]}...")
+                    try:
+                        result = self.api_client.upload_photos_by_url(
+                            nm_id=nm_id,
+                            photo_urls=public_urls,
+                            seller_id=self.seller.id
+                        )
+                        logger.info(f"Фото отправлены по URL для nmID={nm_id}: {result}")
+                        return
+                    except Exception as e:
+                        logger.error(f"URL-based upload также failed для nmID={nm_id}: {e}")
+
+            if not cached_photo_paths:
+                logger.warning(f"Товар {imported_product.external_id}: ни одно фото не удалось получить для загрузки")
+
+            # Если ни одна стратегия не сработала — бросаем исключение для ретрая
+            raise Exception(f"Все стратегии загрузки фото провалились для nmID={nm_id}")
+        finally:
+            release_wb_seller_media_lock(media_claim)
 
     def _ensure_photos_cached(self, photo_urls_raw: list, sp) -> list:
         """
@@ -3245,9 +3315,23 @@ class WBProductImporter:
             sizes_list = sizes_data
             has_real_sizes = len(sizes_list) > 0
 
-        # Проверяем, поддерживает ли WB-категория размеры
-        category_has_sizes = self._category_supports_sizes(imported_product.wb_subject_id)
-        if has_real_sizes and not category_has_sizes:
+        # Без исходных размеров preview не нужен живой/свежий WB schema.
+        # Если размеры есть, временная недоступность справочника
+        # оставляет страницу читаемой, но блокирует readiness.
+        category_has_sizes, sizes_reference_error = (
+            self._preview_category_supports_sizes(
+                imported_product.wb_subject_id,
+                source_has_sizes=has_real_sizes,
+            )
+        )
+        if sizes_reference_error:
+            issues.append({
+                'field': 'sizes',
+                'level': 'error',
+                'message': sizes_reference_error,
+            })
+            has_real_sizes = False
+        elif has_real_sizes and category_has_sizes is False:
             issues.append({
                 'field': 'sizes', 'level': 'warning',
                 'message': f'Категория WB безразмерная — размеры {sizes_list} будут проигнорированы'

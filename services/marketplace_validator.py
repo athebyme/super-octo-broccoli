@@ -980,6 +980,113 @@ _SUPPLIER_MATERIAL_CHARACTERISTIC_NAMES = (
 _SUPPLIER_GENDER_CHARACTERISTIC_NAMES = ('пол', 'пол товара')
 
 
+def partition_supplier_characteristic_input(
+    subject_id: Any,
+    values: Any,
+    *,
+    materials: Any = None,
+    gender: Any = None,
+    marketplace_code: str = 'wb',
+    validation_cache: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Развести supplier-вход до строгого билдера, не ослабляя валидацию.
+
+    Из name-keyed словаря supplier-характеристик:
+    - dimension-образные имена («Ширина упаковки, см», «Вес упаковки, кг»…)
+      уходят в отдельный ``dimensions`` (в WB это объект карточки, а не
+      характеристики) через общий детектор ``wb_content_payload``;
+    - имена, которых нет в актуальной WB-схеме категории, пропускаются с
+      явным отчётом ``skipped`` — необязательное отсутствующее в схеме поле
+      не должно fail-closed блокировать запись остальных характеристик;
+    - непроверяемая схема (stale/недоступная категория) НЕ фильтрует ничего:
+      вход возвращается как есть, строгий билдер честно откажет целиком.
+
+    Строгость значений/словарей/обязательных полей не меняется: результат
+    по-прежнему обязан пройти ``build_wb_supplier_characteristic_patch``.
+    """
+    validation_cache = validation_cache if validation_cache is not None else {}
+    result: Dict[str, Any] = {
+        'values': values,
+        'materials': materials,
+        'gender': gender,
+        'dimensions': {},
+        'skipped': [],
+    }
+
+    from services.wb_content_payload import extract_characteristics
+
+    extraction = None
+    if isinstance(values, dict):
+        extraction = extract_characteristics(values)
+        result['values'] = dict(extraction.values)
+        result['dimensions'] = dict(extraction.dimensions)
+        for dropped_name in extraction.dropped:
+            result['skipped'].append({
+                'name': dropped_name,
+                'reason': 'dimension_field',
+                'message': (
+                    f'«{dropped_name}» — габарит упаковки: отправляется в '
+                    'блок габаритов WB, а не в характеристики'
+                ),
+            })
+
+    marketplace, category, schema = _resolve_wb_schema(
+        subject_id, marketplace_code, validation_cache)
+    if not marketplace or not category or not schema:
+        # Схему проверить нельзя — ничего не фильтруем, строгий билдер
+        # вернёт конкретную fail-closed причину для всего патча.
+        return result
+
+    by_name = {_normalized_label(charc.name): charc for charc in schema}
+
+    if isinstance(result['values'], dict):
+        kept: Dict[str, Any] = {}
+        for raw_name, value in result['values'].items():
+            if str(raw_name).startswith('_'):
+                continue
+            if _normalized_label(raw_name) in by_name:
+                kept[str(raw_name)] = value
+            else:
+                result['skipped'].append({
+                    'name': str(raw_name),
+                    'reason': 'not_in_schema',
+                    'message': (
+                        f'«{raw_name}» пропущено: характеристики с таким '
+                        'именем нет в WB-схеме этой категории'
+                    ),
+                })
+        result['values'] = kept
+
+    def _semantic_mappable(aliases) -> bool:
+        return any(by_name.get(alias) for alias in aliases)
+
+    if result['materials'] not in (None, '', [], {}) and not _semantic_mappable(
+            _SUPPLIER_MATERIAL_CHARACTERISTIC_NAMES):
+        result['skipped'].append({
+            'name': 'Материал',
+            'reason': 'not_in_schema',
+            'message': (
+                '«Материал» пропущен: в WB-схеме этой категории нет '
+                'поддерживаемой точной характеристики материала/состава'
+            ),
+        })
+        result['materials'] = None
+
+    if result['gender'] not in (None, '', [], {}) and not _semantic_mappable(
+            _SUPPLIER_GENDER_CHARACTERISTIC_NAMES):
+        result['skipped'].append({
+            'name': 'Пол',
+            'reason': 'not_in_schema',
+            'message': (
+                '«Пол» пропущен: в WB-схеме этой категории нет '
+                'характеристики пола'
+            ),
+        })
+        result['gender'] = None
+
+    return result
+
+
 def build_wb_supplier_characteristic_patch(
     subject_id: Any,
     values: Any,

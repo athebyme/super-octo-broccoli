@@ -24,6 +24,7 @@ from io import StringIO
 from typing import Dict, List, Optional, Tuple
 
 import requests
+from sqlalchemy.orm import joinedload, selectinload
 
 from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
@@ -328,6 +329,27 @@ class SupplierCSVParser:
                     if isinstance(c, int):
                         max_col = max(max_col, c)
 
+        # Несмаппленные колонки заголовка: сохраняются в product['raw_extra'],
+        # чтобы данные фида не терялись безвозвратно (opt-in флагом маппинга).
+        unmapped_columns = {}
+        if has_header and header_index and mapping.get('_include_unmapped'):
+            mapped_idx = set()
+            for m in resolved_mapping.values():
+                if not isinstance(m, dict):
+                    continue
+                col = m.get('column')
+                if isinstance(col, int) and col >= 0:
+                    mapped_idx.add(col)
+                cols = m.get('columns')
+                if isinstance(cols, list):
+                    mapped_idx.update(c for c in cols if isinstance(c, int))
+                elif isinstance(cols, dict):
+                    mapped_idx.update(c for c in cols.keys() if isinstance(c, int))
+            unmapped_columns = {
+                idx: name for name, idx in header_index.items()
+                if idx not in mapped_idx
+            }
+
         for row_num, row in enumerate(reader, 1):
             try:
                 # Пропускаем заголовок если header ещё не был прочитан выше
@@ -337,7 +359,9 @@ class SupplierCSVParser:
                 if len(row) <= max_col:
                     continue
 
-                product = self._extract_fields_by_mapping(row, resolved_mapping)
+                product = self._extract_fields_by_mapping(
+                    row, resolved_mapping, unmapped_columns
+                )
                 if not product:
                     continue
 
@@ -415,7 +439,8 @@ class SupplierCSVParser:
 
         return resolved
 
-    def _extract_fields_by_mapping(self, row: list, mapping: dict) -> Optional[Dict]:
+    def _extract_fields_by_mapping(self, row: list, mapping: dict,
+                                   unmapped_columns: Optional[Dict[int, str]] = None) -> Optional[Dict]:
         """Извлечь поля из строки CSV по маппингу."""
         product = {}
 
@@ -425,6 +450,26 @@ class SupplierCSVParser:
 
             field_type = config.get('type', 'string')
             separator = config.get('separator', ',')
+
+            # list из нескольких колонок: значения объединяются по порядку
+            # колонок с дедупликацией (первая колонка — приоритетная)
+            if field_type == 'list' and isinstance(config.get('columns'), list):
+                merged = []
+                for col_idx in config['columns']:
+                    if isinstance(col_idx, int) and 0 <= col_idx < len(row):
+                        cell = row[col_idx].strip()
+                        if not cell:
+                            continue
+                        for part in cell.split(separator):
+                            value = part.strip()
+                            if value and value not in merged:
+                                merged.append(value)
+                if field_name == 'categories':
+                    product['all_categories'] = merged
+                    product['category'] = merged[0] if merged else ''
+                else:
+                    product[field_name] = merged
+                continue
 
             # --- Составные типы (несколько колонок) ---
             if field_type == 'stock_sum':
@@ -521,8 +566,24 @@ class SupplierCSVParser:
             del product['_extra_characteristics']
 
         if product.get('_extra_dimensions'):
-            product['dimensions'] = product['_extra_dimensions']
+            # dict {имя: значение} — так габариты читаются и WB dimension
+            # builder-ом, и marketplace fact pack (Ozon) как observed факт
+            product['dimensions'] = {
+                item['name']: item['value']
+                for item in product['_extra_dimensions']
+            }
             del product['_extra_dimensions']
+
+        # Несмаппленные колонки фида — bounded passthrough в original_data
+        if unmapped_columns:
+            raw_extra = {}
+            for col_idx, col_name in unmapped_columns.items():
+                if 0 <= col_idx < len(row):
+                    value = row[col_idx].strip()
+                    if value:
+                        raw_extra[col_name] = value
+            if raw_extra:
+                product['raw_extra'] = raw_extra
 
         # Валидация минимальных полей
         if not product.get('external_id') or not product.get('title'):
@@ -1482,6 +1543,95 @@ class SupplierService:
         return SupplierProduct.query.get(product_id)
 
     @staticmethod
+    def get_product_detail_fact_groups(product: SupplierProduct) -> dict:
+        """Build bounded, provenance-separated facts for seller catalog UI."""
+        observed = []
+        suggested = []
+        observed_names = set()
+        suggested_names = set()
+
+        def display_value(value) -> Optional[str]:
+            if value is None:
+                return None
+            if isinstance(value, bool):
+                return 'Да' if value else 'Нет'
+            if isinstance(value, (str, int, float)):
+                text = re.sub(r'\s+', ' ', str(value)).strip()
+                return text[:1000] if text else None
+            if isinstance(value, (list, tuple)):
+                parts = []
+                for entry in value:
+                    if not isinstance(entry, (str, int, float, bool)):
+                        continue
+                    text = display_value(entry)
+                    if text and text not in parts:
+                        parts.append(text)
+                    if len(parts) >= 20:
+                        break
+                joined = ', '.join(parts)
+                return joined[:1000] if joined else None
+            return None
+
+        def add_fact(target, seen_names, name, value):
+            label = re.sub(r'\s+', ' ', str(name or '')).strip()[:160]
+            normalized_name = label.casefold()
+            rendered_value = display_value(value)
+            if (
+                not label
+                or label.startswith('_')
+                or normalized_name in {'parsing_meta', 'meta'}
+                or normalized_name in seen_names
+                or not rendered_value
+                or len(target) >= 80
+            ):
+                return
+            seen_names.add(normalized_name)
+            target.append({'name': label, 'value': rendered_value})
+
+        for item in product.get_characteristics():
+            if isinstance(item, dict):
+                add_fact(
+                    observed,
+                    observed_names,
+                    item.get('name'),
+                    item.get('value'),
+                )
+
+        try:
+            dimensions = (
+                json.loads(product.dimensions_json)
+                if isinstance(product.dimensions_json, str)
+                else product.dimensions_json
+            )
+        except (TypeError, ValueError):
+            dimensions = {}
+        if isinstance(dimensions, dict):
+            for name, value in dimensions.items():
+                add_fact(observed, observed_names, name, value)
+
+        ai_parsed = product.get_ai_parsed_data()
+        if isinstance(ai_parsed, dict):
+            for name, value in ai_parsed.items():
+                add_fact(suggested, suggested_names, name, value)
+
+        ai_marketplace = product.get_ai_marketplace_data()
+        marketplace_characteristics = (
+            ai_marketplace.get('characteristics')
+            if isinstance(ai_marketplace, dict)
+            else None
+        )
+        if isinstance(marketplace_characteristics, dict):
+            for name, value in marketplace_characteristics.items():
+                add_fact(suggested, suggested_names, name, value)
+
+        return {
+            'observed': observed,
+            'suggested': suggested,
+            'observed_count': len(observed),
+            'suggested_count': len(suggested),
+        }
+
+    @staticmethod
     def update_product(product_id: int, data: dict) -> Optional[SupplierProduct]:
         """Обновить товар поставщика"""
         product = SupplierProduct.query.get(product_id)
@@ -1532,30 +1682,44 @@ class SupplierService:
 
     @staticmethod
     def get_product_stats(supplier_id: int) -> dict:
-        """Статистика по товарам поставщика"""
-        base = SupplierProduct.query.filter_by(supplier_id=supplier_id)
-        total = base.count()
+        """Статистика по товарам поставщика (один агрегатный запрос)"""
+        def _status_count(status: str):
+            return db.func.sum(db.case(
+                (SupplierProduct.status == status, 1), else_=0,
+            ))
+
+        row = db.session.query(
+            db.func.count(SupplierProduct.id),
+            _status_count('draft'),
+            _status_count('validated'),
+            _status_count('ready'),
+            _status_count('archived'),
+            db.func.sum(db.case(
+                (SupplierProduct.ai_validated.is_(True), 1), else_=0,
+            )),
+            db.func.sum(db.case(
+                (db.and_(
+                    SupplierProduct.photo_urls_json.isnot(None),
+                    SupplierProduct.photo_urls_json != '[]',
+                ), 1), else_=0,
+            )),
+            # distinct игнорирует NULL, nullif('') приравнивает пустую строку
+            db.func.count(db.distinct(
+                db.func.nullif(SupplierProduct.brand, ''))),
+            db.func.count(db.distinct(
+                db.func.nullif(SupplierProduct.category, ''))),
+        ).filter(SupplierProduct.supplier_id == supplier_id).one()
+
         return {
-            'total': total,
-            'draft': base.filter_by(status='draft').count(),
-            'validated': base.filter_by(status='validated').count(),
-            'ready': base.filter_by(status='ready').count(),
-            'archived': base.filter_by(status='archived').count(),
-            'ai_validated': base.filter_by(ai_validated=True).count(),
-            'with_photos': base.filter(
-                SupplierProduct.photo_urls_json.isnot(None),
-                SupplierProduct.photo_urls_json != '[]'
-            ).count(),
-            'brands': db.session.query(SupplierProduct.brand).filter(
-                SupplierProduct.supplier_id == supplier_id,
-                SupplierProduct.brand.isnot(None),
-                SupplierProduct.brand != ''
-            ).distinct().count(),
-            'categories': db.session.query(SupplierProduct.category).filter(
-                SupplierProduct.supplier_id == supplier_id,
-                SupplierProduct.category.isnot(None),
-                SupplierProduct.category != ''
-            ).distinct().count(),
+            'total': int(row[0] or 0),
+            'draft': int(row[1] or 0),
+            'validated': int(row[2] or 0),
+            'ready': int(row[3] or 0),
+            'archived': int(row[4] or 0),
+            'ai_validated': int(row[5] or 0),
+            'with_photos': int(row[6] or 0),
+            'brands': int(row[7] or 0),
+            'categories': int(row[8] or 0),
         }
 
     # -----------------------------------------------------------------------
@@ -1631,10 +1795,18 @@ class SupplierService:
     # -----------------------------------------------------------------------
 
     @staticmethod
-    def import_to_seller(seller_id: int, supplier_product_ids: List[int]) -> ImportResult:
+    def import_to_seller(
+        seller_id: int,
+        supplier_product_ids: List[int],
+        draft_account_ids: Optional[List[int]] = None,
+    ) -> ImportResult:
         """
         Импортировать товары из базы поставщика к продавцу.
         Копирует данные в ImportedProduct и сохраняет связь с SupplierProduct.
+
+        draft_account_ids — явно выбранные пользователем Ozon-кабинеты
+        (чекбоксы «Каналы» в каталоге): для них дополнительно готовятся
+        локальные черновики независимо от настроек авто-публикации.
         """
         result = ImportResult(total_requested=len(supplier_product_ids))
 
@@ -1644,8 +1816,11 @@ class SupplierService:
             result.error_messages.append("Продавец не найден")
             return result
 
-        # Получаем товары поставщика
-        supplier_products = SupplierProduct.query.filter(
+        # Получаем товары поставщика (supplier нужен каждой копии — eager,
+        # чтобы _copy_to_imported_product не делал SELECT на каждый товар)
+        supplier_products = SupplierProduct.query.options(
+            joinedload(SupplierProduct.supplier)
+        ).filter(
             SupplierProduct.id.in_(supplier_product_ids)
         ).all()
 
@@ -1747,6 +1922,50 @@ class SupplierService:
                     type(exc).__name__,
                 )
 
+        # Явно выбранные пользователем Ozon-кабинеты — дополнительно к
+        # авто-провижинингу выше и независимо от AutoPublishSettings.
+        # Детерминированный локальный путь без provider/LLM; ошибка одного
+        # кабинета не откатывает импорт и не блокирует остальные кабинеты.
+        if draft_source_ids and draft_account_ids:
+            from services.marketplace_drafts import (
+                MarketplaceDraftError,
+                MarketplaceDraftService,
+            )
+
+            source_ids = sorted(set(draft_source_ids))
+            chunk_size = MarketplaceDraftService.BULK_PREPARE_MAX_PRODUCTS
+            for account_id in dict.fromkeys(draft_account_ids):
+                for offset in range(0, len(source_ids), chunk_size):
+                    chunk = source_ids[offset:offset + chunk_size]
+                    try:
+                        prepared = MarketplaceDraftService.bulk_prepare(
+                            seller_id=seller_id,
+                            account_id=account_id,
+                            imported_product_ids=chunk,
+                            validate=False,
+                        )
+                        result.marketplace_drafts_created += prepared["created"]
+                        result.marketplace_drafts_existing += prepared["existing"]
+                        result.marketplace_draft_errors += prepared["failed"]
+                    except MarketplaceDraftError as exc:
+                        db.session.rollback()
+                        result.marketplace_draft_errors += len(chunk)
+                        result.error_messages.append(
+                            f"Ozon-кабинет {account_id}: {str(exc)[:100]}"
+                        )
+                    except Exception as exc:
+                        db.session.rollback()
+                        result.marketplace_draft_errors += len(chunk)
+                        result.error_messages.append(
+                            "Ozon-черновики выбранного кабинета требуют повторной подготовки"
+                        )
+                        logger.warning(
+                            "bulk_prepare для кабинета %s seller %s упал (%s)",
+                            account_id,
+                            seller_id,
+                            type(exc).__name__,
+                        )
+
         # Проверяем товары без фотографий и уведомляем продавца
         if result.imported > 0:
             try:
@@ -1769,7 +1988,9 @@ class SupplierService:
         """
         result = ImportResult()
 
-        q = ImportedProduct.query.filter(
+        q = ImportedProduct.query.options(
+            selectinload(ImportedProduct.supplier_product)
+        ).filter(
             ImportedProduct.seller_id == seller_id,
             ImportedProduct.supplier_product_id.isnot(None)
         )
@@ -1805,6 +2026,7 @@ class SupplierService:
                                           stock_status: str = None,
                                           wb_filter: str = None,
                                           ai_filter: str = None,
+                                          updates_only: bool = False,
                                           wb_existing_sp_ids: set = None):
         """Товары поставщика, доступные для импорта продавцу
 
@@ -1816,6 +2038,17 @@ class SupplierService:
         """
         q = SupplierProduct.query.filter_by(supplier_id=supplier_id)
         q = q.filter(SupplierProduct.status.in_(['draft', 'validated', 'ready']))
+
+        if updates_only:
+            stale_supplier_copy_exists = db.session.query(
+                ImportedProduct.id
+            ).filter(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.supplier_product_id == SupplierProduct.id,
+                ImportedProduct.supplier_content_revision
+                < SupplierProduct.content_revision,
+            ).exists()
+            q = q.filter(stale_supplier_copy_exists)
 
         # Фильтр по статусу на WB (uses pre-computed set including vendor_code matches)
         if wb_filter in ('on_wb', 'not_on_wb'):
@@ -1835,7 +2068,7 @@ class SupplierService:
                     q = q.filter(SupplierProduct.id.in_(wb_sp_subq))
                 else:
                     q = q.filter(~SupplierProduct.id.in_(wb_sp_subq))
-        elif not show_imported:
+        elif not show_imported and not updates_only:
             # Исключаем уже импортированные
             imported_sp_ids = db.session.query(ImportedProduct.supplier_product_id).filter(
                 ImportedProduct.seller_id == seller_id,
@@ -1874,7 +2107,20 @@ class SupplierService:
                 )
             )
 
-        return q.order_by(SupplierProduct.title).paginate(
+        # Сначала товары в наличии и с заполненными характеристиками,
+        # внутри групп — по бренду и названию
+        in_stock = db.case(
+            (SupplierProduct.supplier_quantity > 0, 1), else_=0,
+        )
+        enriched = db.case(
+            (SupplierProduct.ai_marketplace_json.isnot(None), 1), else_=0,
+        )
+        return q.order_by(
+            in_stock.desc(),
+            enriched.desc(),
+            db.nullslast(SupplierProduct.brand.asc()),
+            SupplierProduct.title.asc(),
+        ).paginate(
             page=page, per_page=per_page, error_out=False
         )
 
@@ -4169,14 +4415,22 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
         sp.materials_json = json.dumps(data['materials'], ensure_ascii=False)
     if 'barcodes' in data:
         sp.barcode = data['barcodes'][0] if data['barcodes'] else sp.barcode
+        if data['barcodes']:
+            sp.barcodes_json = json.dumps(data['barcodes'], ensure_ascii=False)
     if 'photo_urls' in data:
         sp.photo_urls_json = json.dumps(data['photo_urls'], ensure_ascii=False)
     if 'sizes_raw' in data and data['sizes_raw']:
         sp.sizes_json = json.dumps({'raw': data['sizes_raw']}, ensure_ascii=False)
 
-    # Оригинальные данные (для отката)
-    if not sp.original_data_json:
-        sp.original_data_json = json.dumps(data, ensure_ascii=False, default=str)
+    # Видео поставщика (прямая/embed ссылка)
+    video_url = data.get('video_url')
+    if isinstance(video_url, str) and video_url.startswith('http'):
+        sp.video_url = video_url[:500]
+
+    # Наблюдённые данные поставщика: освежаются каждым sync, включая
+    # raw_extra с несмаппленными колонками фида. Источник observed-фактов
+    # для marketplace fact pack (Ozon) и локального отката.
+    sp.original_data_json = json.dumps(data, ensure_ascii=False, default=str)
 
     # Цена из price_data (если есть)
     if price_data and sp.external_id:
@@ -4195,17 +4449,46 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
     if 'supplier_quantity' in data and data['supplier_quantity'] is not None:
         sp.supplier_quantity = data['supplier_quantity']
 
-    # РРЦ из CSV
-    if 'recommended_retail_price' in data and data['recommended_retail_price']:
+    # РРЦ из CSV; fallback-колонка (у andrey — retail_price_minsk) заполняет
+    # РРЦ только когда основная колонка пуста
+    if data.get('recommended_retail_price'):
         sp.recommended_retail_price = data['recommended_retail_price']
+    elif data.get('recommended_retail_price_fallback'):
+        sp.recommended_retail_price = data['recommended_retail_price_fallback']
 
-    # Характеристики из CSV (составной тип characteristics)
-    if 'characteristics' in data and data['characteristics']:
-        sp.characteristics_json = json.dumps(data['characteristics'], ensure_ascii=False)
+    # Характеристики из CSV (составной тип characteristics).
+    # Свежий парс перестраивает JSON целиком (условная перезапись оставляла
+    # однажды загрязнённые данные навсегда), а dimension-образные имена
+    # («Ширина упаковки, см» и т.п.) уходят в dimensions_json: в WB это
+    # отдельный объект габаритов карточки, а не характеристики.
+    extracted_dims_from_chars = {}
+    if 'characteristics' in data:
+        raw_chars = data['characteristics'] or {}
+        if isinstance(raw_chars, dict):
+            from services.wb_content_payload import extract_characteristics
+            extraction = extract_characteristics(raw_chars)
+            clean_chars = extraction.values
+            # dimensions_json хранит наблюдённый dict «имя: значение» фида,
+            # поэтому переносим под исходными именами колонок.
+            extracted_dims_from_chars = {
+                name: raw_chars[name]
+                for name in extraction.dropped
+                if name in raw_chars
+            }
+        else:
+            clean_chars = raw_chars
+        sp.characteristics_json = (
+            json.dumps(clean_chars, ensure_ascii=False) if clean_chars else None
+        )
 
-    # Габариты упаковки из CSV (составной тип dimensions)
-    if 'dimensions' in data and data['dimensions']:
-        sp.dimensions_json = json.dumps(data['dimensions'], ensure_ascii=False)
+    # Габариты упаковки из CSV (составной тип dimensions); явная колонка
+    # габаритов сильнее значений, извлечённых из характеристик.
+    if ('dimensions' in data and data['dimensions']) or extracted_dims_from_chars:
+        dims = dict(extracted_dims_from_chars)
+        explicit_dims = data.get('dimensions')
+        if isinstance(explicit_dims, dict):
+            dims.update(explicit_dims)
+        sp.dimensions_json = json.dumps(dims, ensure_ascii=False)
 
     # Контент хеш для отслеживания изменений
     content_str = f"{sp.title}|{sp.brand}|{sp.category}|{sp.supplier_price}"
@@ -4278,12 +4561,80 @@ def _update_supplier_product(sp: SupplierProduct, data: dict,
         pass
 
 
+def _supplier_characteristics_payload(sp: SupplierProduct) -> Optional[str]:
+    """Merge source characteristics with exact WB fields from the shared card."""
+    raw = []
+    if sp.characteristics_json:
+        try:
+            parsed = json.loads(sp.characteristics_json)
+            if isinstance(parsed, dict):
+                raw = [
+                    {'name': str(name), 'value': value}
+                    for name, value in parsed.items()
+                    if value not in (None, '', [])
+                ]
+            elif isinstance(parsed, list):
+                raw = [item for item in parsed if isinstance(item, dict)]
+        except (TypeError, ValueError):
+            raw = []
+
+    marketplace_fields = {}
+    if sp.ai_marketplace_json:
+        try:
+            parsed = json.loads(sp.ai_marketplace_json)
+            meta = parsed.get('_meta') if isinstance(parsed, dict) else None
+            if (
+                isinstance(parsed, dict)
+                and isinstance(meta, dict)
+                and meta.get('source') == 'supplier_catalog_enrichment'
+            ):
+                marketplace_fields = {
+                    str(name): value for name, value in parsed.items()
+                    if not str(name).startswith('_')
+                    and value not in (None, '', [])
+                }
+        except (TypeError, ValueError):
+            marketplace_fields = {}
+
+    positions = {
+        str(item.get('name')).strip().casefold(): index
+        for index, item in enumerate(raw)
+        if item.get('name')
+    }
+    for name, value in marketplace_fields.items():
+        key = name.strip().casefold()
+        normalized = {'name': name, 'value': value}
+        if key in positions:
+            raw[positions[key]] = normalized
+        else:
+            positions[key] = len(raw)
+            raw.append(normalized)
+    return json.dumps(raw, ensure_ascii=False) if raw else None
+
+
+def _supplier_barcodes_payload(sp: SupplierProduct) -> Optional[str]:
+    """Полный список штрихкодов поставщика как JSON list.
+
+    Fallback — единичный legacy sp.barcode."""
+    if sp.barcodes_json:
+        try:
+            parsed = json.loads(sp.barcodes_json)
+            if isinstance(parsed, list) and parsed:
+                return json.dumps(parsed, ensure_ascii=False)
+        except (TypeError, ValueError):
+            pass
+    if sp.barcode:
+        return json.dumps([sp.barcode], ensure_ascii=False)
+    return None
+
+
 def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedProduct:
     """Копировать данные из SupplierProduct в новый ImportedProduct"""
     imp = ImportedProduct(
         seller_id=seller_id,
         supplier_product_id=sp.id,
         supplier_id=sp.supplier_id,
+        supplier_content_revision=int(sp.content_revision or 1),
         external_id=sp.external_id,
         external_vendor_code=sp.vendor_code,
         source_type=sp.supplier.code if sp.supplier else 'unknown',
@@ -4302,9 +4653,10 @@ def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedPr
         materials=sp.materials_json,
         photo_urls=sp.photo_urls_json,
         processed_photos=sp.processed_photos_json,
-        barcodes=json.dumps([sp.barcode], ensure_ascii=False) if sp.barcode else None,
-        characteristics=sp.characteristics_json,
+        barcodes=_supplier_barcodes_payload(sp),
+        characteristics=_supplier_characteristics_payload(sp),
         supplier_price=sp.supplier_price,
+        recommended_retail_price=sp.recommended_retail_price,
         supplier_quantity=sp.supplier_quantity,
         import_status='pending',
         original_data=sp.original_data_json,
@@ -4335,23 +4687,39 @@ def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedPr
 
 def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) -> None:
     """Обновить ImportedProduct из SupplierProduct (sync)"""
+    category_changed = imp.wb_subject_id != sp.wb_subject_id
     imp.title = sp.title or imp.title
+    imp.description = sp.description or sp.ai_description or imp.description
     imp.brand = sp.brand or imp.brand
     if sp.resolved_brand_id and not imp.resolved_brand_id:
         imp.resolved_brand_id = sp.resolved_brand_id
         imp.brand_status = 'exact'
     imp.category = sp.category or imp.category
     imp.all_categories = sp.all_categories or imp.all_categories
-    imp.mapped_wb_category = sp.wb_category_name or imp.mapped_wb_category
-    imp.wb_subject_id = sp.wb_subject_id or imp.wb_subject_id
-    imp.category_confidence = sp.category_confidence or imp.category_confidence
+    imp.mapped_wb_category = sp.wb_category_name
+    imp.wb_subject_id = sp.wb_subject_id
+    imp.category_confidence = sp.category_confidence or 0.0
     imp.country = sp.country or imp.country
     imp.gender = sp.gender or imp.gender
     imp.colors = sp.colors_json or imp.colors
     imp.sizes = sp.sizes_json or imp.sizes
     imp.materials = sp.materials_json or imp.materials
+    shared_characteristics = _supplier_characteristics_payload(sp)
+    # Explicit seller sync mirrors the current shared characteristic fact pack,
+    # including removals caused by a reviewed category rollback.
+    imp.characteristics = shared_characteristics
+    if category_changed:
+        imp.ai_attributes = None
     imp.supplier_price = sp.supplier_price if sp.supplier_price is not None else imp.supplier_price
     imp.supplier_quantity = sp.supplier_quantity if sp.supplier_quantity is not None else imp.supplier_quantity
+    if sp.recommended_retail_price is not None:
+        imp.recommended_retail_price = sp.recommended_retail_price
+    barcodes_payload = _supplier_barcodes_payload(sp)
+    if barcodes_payload:
+        imp.barcodes = barcodes_payload
+    # Свежие наблюдённые данные поставщика (raw_extra, габариты, РРЦ и т.д.)
+    if sp.original_data_json:
+        imp.original_data = sp.original_data_json
 
     # Обновляем фото (общие для всех продавцов)
     if sp.photo_urls_json:
@@ -4367,6 +4735,7 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
     if sp.ai_bullets_json and not imp.ai_bullets:
         imp.ai_bullets = sp.ai_bullets_json
 
+    imp.supplier_content_revision = int(sp.content_revision or 1)
     imp.updated_at = datetime.utcnow()
 
 

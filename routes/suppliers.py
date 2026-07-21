@@ -10,7 +10,7 @@ from functools import wraps
 
 from flask import (
     Blueprint, render_template, redirect, url_for, flash,
-    request, abort, jsonify, current_app
+    request, abort, jsonify, current_app, session
 )
 from flask_login import login_required, current_user
 
@@ -1615,19 +1615,34 @@ def register_supplier_routes(app):
         """Список доступных поставщиков для продавца"""
         seller = current_user.seller
         connections = SupplierService.get_seller_suppliers(seller.id)
+        supplier_ids = [c.supplier_id for c in connections]
+
+        # Прогреваем identity map одним SELECT — lazy conn.supplier дальше
+        # не ходит в БД; счётчики импорта берём одним group_by вместо
+        # COUNT-запроса на каждого поставщика.
+        if supplier_ids:
+            Supplier.query.filter(Supplier.id.in_(supplier_ids)).all()
+            imported_counts = dict(
+                db.session.query(
+                    ImportedProduct.supplier_id,
+                    db.func.count(ImportedProduct.id),
+                ).filter(
+                    ImportedProduct.seller_id == seller.id,
+                    ImportedProduct.supplier_id.in_(supplier_ids),
+                ).group_by(ImportedProduct.supplier_id).all()
+            )
+        else:
+            imported_counts = {}
 
         suppliers_data = []
         for conn in connections:
             supplier = conn.supplier
             stats = SupplierService.get_product_stats(supplier.id)
-            imported_count = ImportedProduct.query.filter_by(
-                seller_id=seller.id, supplier_id=supplier.id
-            ).count()
             suppliers_data.append({
                 'supplier': supplier,
                 'connection': conn,
                 'stats': stats,
-                'imported_count': imported_count,
+                'imported_count': imported_counts.get(supplier.id, 0),
             })
 
         return render_template('supplier_catalog.html',
@@ -1656,6 +1671,7 @@ def register_supplier_routes(app):
         page = request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         show_imported = request.args.get('show_imported', '0') == '1'
+        updates_only = request.args.get('updates_only', '0') == '1'
         # По умолчанию показываем только товары в наличии
         stock_status = request.args.get('stock_status', 'in_stock').strip()
         if stock_status not in ('in_stock', 'out_of_stock', 'all'):
@@ -1672,64 +1688,83 @@ def register_supplier_routes(app):
 
         # on_wb подразумевает show_imported=True (товары на WB всегда импортированы)
         # not_on_wb — не подразумевает, чтобы скрывать импортированные но не на WB
-        effective_show_imported = show_imported or wb_filter == 'on_wb'
-
-        # Получаем ID уже импортированных товаров
-        imported_sp_ids = set(
-            row[0] for row in db.session.query(ImportedProduct.supplier_product_id).filter(
-                ImportedProduct.seller_id == seller.id,
-                ImportedProduct.supplier_product_id.isnot(None)
-            ).all()
+        effective_show_imported = (
+            show_imported or wb_filter == 'on_wb' or updates_only
         )
 
-        # Получаем ID товаров, которые уже созданы на WB (есть product_id → есть nm_id)
-        wb_existing_sp_ids = set(
-            row[0] for row in db.session.query(ImportedProduct.supplier_product_id).filter(
-                ImportedProduct.seller_id == seller.id,
-                ImportedProduct.supplier_product_id.isnot(None),
-                ImportedProduct.product_id.isnot(None)
-            ).all()
-        )
+        stale_supplier_copy_exists = db.session.query(
+            ImportedProduct.id
+        ).filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.supplier_product_id == SupplierProduct.id,
+            ImportedProduct.supplier_content_revision
+            < SupplierProduct.content_revision,
+        ).exists()
+        supplier_update_count = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id == supplier_id,
+            stale_supplier_copy_exists,
+        ).count()
 
-        # Дополнительно: определяем товары на WB по совпадению артикула (vendor_code)
+        # Определение «уже на WB»: по связи ImportedProduct → Product и по
+        # совпадению вычисленного артикула. Полный проход по каталогу нужен
+        # только когда wb-фильтр реально фильтрует выборку; для бейджей
+        # достаточно товаров текущей страницы.
         from services.pricing_engine import resolve_vendor_code_settings, generate_vendor_code
 
         vc_pattern, vc_supplier_code, _ = resolve_vendor_code_settings(
             seller.id, supplier_id
         )
 
-        # Получаем все external_id и vendor_code поставщика и вычисляем артикулы WB
-        all_sp_data = db.session.query(
-            SupplierProduct.id, SupplierProduct.external_id, SupplierProduct.vendor_code
-        ).filter(
-            SupplierProduct.supplier_id == supplier_id,
-            ~SupplierProduct.id.in_(wb_existing_sp_ids) if wb_existing_sp_ids else True
-        ).all()
-        all_sp_external_ids = {row[0]: row[1] for row in all_sp_data}
-        all_sp_vendor_codes = {row[0]: row[2] for row in all_sp_data}
-        if all_sp_external_ids:
+        def _linked_wb_sp_ids(page_ids=None):
+            """SP этого поставщика, уже связанные с WB-карточкой продавца."""
+            q = db.session.query(ImportedProduct.supplier_product_id).join(
+                SupplierProduct,
+                SupplierProduct.id == ImportedProduct.supplier_product_id,
+            ).filter(
+                ImportedProduct.seller_id == seller.id,
+                ImportedProduct.product_id.isnot(None),
+                SupplierProduct.supplier_id == supplier_id,
+            )
+            if page_ids is not None:
+                q = q.filter(ImportedProduct.supplier_product_id.in_(page_ids))
+            return {row[0] for row in q.all()}
+
+        def _vendor_code_wb_sp_ids(exclude_ids, page_ids=None):
+            """SP, чей вычисленный артикул уже существует среди Product WB."""
+            q = db.session.query(
+                SupplierProduct.id,
+                SupplierProduct.external_id,
+                SupplierProduct.vendor_code,
+            ).filter(SupplierProduct.supplier_id == supplier_id)
+            if page_ids is not None:
+                q = q.filter(SupplierProduct.id.in_(page_ids))
+            if exclude_ids:
+                q = q.filter(~SupplierProduct.id.in_(exclude_ids))
             vc_to_sp = {}
-            for sp_id, ext_id in all_sp_external_ids.items():
+            for sp_id, ext_id, ext_vc in q.all():
                 vc = generate_vendor_code(
                     pattern=vc_pattern,
                     supplier_code=vc_supplier_code,
                     external_id=ext_id,
-                    external_vendor_code=str(all_sp_vendor_codes.get(sp_id) or ''),
+                    external_vendor_code=str(ext_vc or ''),
                     supplier=supplier,
                 )
                 if vc:
                     vc_to_sp[vc] = sp_id
+            if not vc_to_sp:
+                return set()
+            existing_vc = {
+                row[0] for row in db.session.query(Product.vendor_code).filter(
+                    Product.seller_id == seller.id,
+                    Product.vendor_code.in_(list(vc_to_sp.keys()))
+                ).all()
+            }
+            return {vc_to_sp[vc] for vc in existing_vc}
 
-            if vc_to_sp:
-                existing_vc = set(
-                    row[0] for row in db.session.query(Product.vendor_code).filter(
-                        Product.seller_id == seller.id,
-                        Product.vendor_code.in_(list(vc_to_sp.keys()))
-                    ).all()
-                )
-                for vc in existing_vc:
-                    if vc in vc_to_sp:
-                        wb_existing_sp_ids.add(vc_to_sp[vc])
+        wb_existing_sp_ids = set()
+        if wb_filter:
+            wb_existing_sp_ids = _linked_wb_sp_ids()
+            wb_existing_sp_ids |= _vendor_code_wb_sp_ids(wb_existing_sp_ids)
 
         pagination = SupplierService.get_available_products_for_seller(
             seller.id, supplier_id,
@@ -1738,23 +1773,107 @@ def register_supplier_routes(app):
             stock_status=effective_stock,
             wb_filter=wb_filter,
             ai_filter=ai_filter,
+            updates_only=updates_only,
             wb_existing_sp_ids=wb_existing_sp_ids
         )
+        page_sp_ids = [p.id for p in pagination.items]
+        if not wb_filter and page_sp_ids:
+            wb_existing_sp_ids = _linked_wb_sp_ids(page_sp_ids)
+            wb_existing_sp_ids |= _vendor_code_wb_sp_ids(
+                wb_existing_sp_ids, page_sp_ids)
+
+        # Статусы импорта/обновлений нужны только строкам текущей страницы
+        imported_revision_by_sp = {
+            row[0]: int(row[1] or 0)
+            for row in db.session.query(
+                ImportedProduct.supplier_product_id,
+                ImportedProduct.supplier_content_revision,
+            ).filter(
+                ImportedProduct.seller_id == seller.id,
+                ImportedProduct.supplier_product_id.in_(page_sp_ids),
+            ).all()
+        } if page_sp_ids else {}
+        imported_sp_ids = set(imported_revision_by_sp)
+        supplier_update_sp_ids = {
+            product.id for product in pagination.items
+            if product.id in imported_revision_by_sp
+            and int(product.content_revision or 1)
+            > imported_revision_by_sp[product.id]
+        }
 
         stats = SupplierService.get_product_stats(supplier_id)
         price_stock_stats = SupplierService.get_price_stock_stats(supplier_id)
+
+        # Каналы для блока «Подготовить Ozon» в форме импорта: активные
+        # кабинеты + отметка, какие уже покрыты авто-публикацией (для них
+        # черновики создаются при импорте автоматически).
+        ozon_import_accounts = []
+        ozon_auto_account_ids = set()
+        if current_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            ozon_import_accounts = SellerMarketplaceAccount.query.join(
+                Marketplace
+            ).filter(
+                SellerMarketplaceAccount.seller_id == seller.id,
+                SellerMarketplaceAccount.is_active.is_(True),
+                Marketplace.code == 'ozon',
+                Marketplace.is_active.is_(True),
+            ).order_by(
+                SellerMarketplaceAccount.is_default.desc(),
+                SellerMarketplaceAccount.label.asc(),
+            ).all()
+            if ozon_import_accounts:
+                from models import AutoPublishSettings
+                ozon_auto_account_ids = {
+                    row[0]
+                    for row in db.session.query(
+                        AutoPublishSettings.account_id
+                    ).filter(
+                        AutoPublishSettings.seller_id == seller.id,
+                        AutoPublishSettings.marketplace_code == 'ozon',
+                        AutoPublishSettings.is_enabled.is_(True),
+                        AutoPublishSettings.account_id.in_(
+                            [a.id for a in ozon_import_accounts]
+                        ),
+                    ).all()
+                }
+
+        # Индикатор «есть Ozon-черновик» для карточек страницы каталога
+        ozon_draft_sp_ids = set()
+        if ozon_import_accounts:
+            page_sp_ids = [p.id for p in pagination.items]
+            if page_sp_ids:
+                ozon_draft_sp_ids = {
+                    row[0]
+                    for row in db.session.query(
+                        ImportedProduct.supplier_product_id
+                    ).join(
+                        MarketplaceProductDraft,
+                        MarketplaceProductDraft.imported_product_id
+                        == ImportedProduct.id,
+                    ).filter(
+                        ImportedProduct.seller_id == seller.id,
+                        MarketplaceProductDraft.seller_id == seller.id,
+                        ImportedProduct.supplier_product_id.in_(page_sp_ids),
+                    ).all()
+                }
 
         return render_template('supplier_catalog_products.html',
                                supplier=supplier, pagination=pagination,
                                stats=stats, search=search,
                                show_imported=show_imported,
+                               updates_only=updates_only,
+                               supplier_update_count=supplier_update_count,
                                stock_status=stock_status,
                                wb_filter=wb_filter or '',
                                ai_filter=ai_filter or '',
                                price_stock_stats=price_stock_stats,
                                imported_sp_ids=imported_sp_ids,
+                               supplier_update_sp_ids=supplier_update_sp_ids,
                                wb_existing_sp_ids=wb_existing_sp_ids,
-                               connection=conn)
+                               connection=conn,
+                               ozon_import_accounts=ozon_import_accounts,
+                               ozon_auto_account_ids=ozon_auto_account_ids,
+                               ozon_draft_sp_ids=ozon_draft_sp_ids)
 
     @app.route('/supplier-catalog/<int:supplier_id>/products/<int:product_id>')
     @login_required
@@ -1780,9 +1899,14 @@ def register_supplier_routes(app):
             seller_id=seller.id, supplier_product_id=product_id
         ).first()
 
+        product_fact_groups = SupplierService.get_product_detail_fact_groups(
+            product
+        )
+
         return render_template('supplier_catalog_product_detail.html',
                                supplier=supplier, product=product,
-                               existing_import=existing_import)
+                               existing_import=existing_import,
+                               product_fact_groups=product_fact_groups)
 
     # -------------------------------------------------------------------
     # Импорт товаров к продавцу
@@ -1801,7 +1925,15 @@ def register_supplier_routes(app):
             flash('Не выбраны товары для импорта', 'warning')
             return _redirect_seller_supplier_catalog(supplier_id)
 
-        result = SupplierService.import_to_seller(seller.id, product_ids)
+        draft_account_ids = [
+            int(v) for v in request.form.getlist('draft_account_ids')
+            if v.isdigit()
+        ]
+        result = SupplierService.import_to_seller(
+            seller.id,
+            product_ids,
+            draft_account_ids=draft_account_ids or None,
+        )
 
         if result.success:
             marketplace_note = ''
@@ -1816,14 +1948,15 @@ def register_supplier_routes(app):
             flash(
                 f'Импортировано: {result.imported}, '
                 f'пропущено (дубли): {result.skipped}, '
-                f'ошибок: {result.errors}{marketplace_note}',
+                f'ошибок: {result.errors}{marketplace_note}. '
+                'Проверьте карточки и отправьте их на WB.',
                 'success'
                 if result.errors == 0 and result.marketplace_draft_errors == 0
                 else 'warning'
             )
-        else:
-            flash(f'Ошибка импорта: {"; ".join(result.error_messages[:3])}', 'danger')
-
+            # Следующий шаг живёт в «Моих товарах» — ведём продавца туда
+            return redirect(url_for('seller_my_products'))
+        flash(f'Ошибка импорта: {"; ".join(result.error_messages[:3])}', 'danger')
         return _redirect_seller_supplier_catalog(supplier_id)
 
     # -------------------------------------------------------------------
@@ -1847,12 +1980,24 @@ def register_supplier_routes(app):
         price_max = request.args.get('price_max', '').strip()
         sort = request.args.get('sort', '').strip()
 
+        updates_filter = request.args.get('updates', '').strip() == '1'
+
         query = ImportedProduct.query.filter_by(seller_id=seller.id)
         if status:
             query = query.filter_by(import_status=status)
-        else:
-            # По умолчанию скрываем товары уже загруженные на WB
+        elif not updates_filter:
+            # По умолчанию скрываем товары уже загруженные на WB;
+            # фильтр «обновления поставщика» показывает и опубликованные —
+            # именно их продавец дообогащает на маркетплейсе
             query = query.filter(ImportedProduct.import_status != 'imported')
+        if updates_filter:
+            query = query.join(
+                SupplierProduct,
+                SupplierProduct.id == ImportedProduct.supplier_product_id,
+            ).filter(
+                SupplierProduct.content_revision
+                > ImportedProduct.supplier_content_revision,
+            )
         if search:
             query = query.filter(
                 db.or_(
@@ -1937,6 +2082,93 @@ def register_supplier_routes(app):
             'imported': base_q.filter_by(import_status='imported').count(),
             'failed': base_q.filter_by(import_status='failed').count(),
         }
+
+        # Карточки, у которых общая карточка поставщика новее локальной копии
+        supplier_updates_count = db.session.query(
+            db.func.count(ImportedProduct.id),
+        ).join(
+            SupplierProduct,
+            SupplierProduct.id == ImportedProduct.supplier_product_id,
+        ).filter(
+            ImportedProduct.seller_id == seller.id,
+            SupplierProduct.content_revision
+            > ImportedProduct.supplier_content_revision,
+        ).scalar() or 0
+
+        # Флаг обновления для строк текущей страницы + явный дифф:
+        # что именно изменилось в общей карточке (категория, характеристики)
+        page_supplier_ids = {
+            p.supplier_product_id for p in pagination.items
+            if p.supplier_product_id
+        }
+        updates_map = {}
+        updates_info = {}
+        if page_supplier_ids:
+            fresh_rows = db.session.query(
+                SupplierProduct.id,
+                SupplierProduct.content_revision,
+                SupplierProduct.wb_subject_name,
+                SupplierProduct.ai_marketplace_json,
+            ).filter(SupplierProduct.id.in_(page_supplier_ids)).all()
+            fresh_map = {row[0]: row for row in fresh_rows}
+            for p in pagination.items:
+                row = fresh_map.get(p.supplier_product_id)
+                if row is None:
+                    updates_map[p.id] = False
+                    continue
+                _, sp_revision, sp_subject, sp_marketplace_json = row
+                has_update = bool(
+                    sp_revision is not None
+                    and sp_revision > (p.supplier_content_revision or 0)
+                )
+                updates_map[p.id] = has_update
+                if not has_update:
+                    continue
+                chars_count = 0
+                if sp_marketplace_json:
+                    try:
+                        parsed = json.loads(sp_marketplace_json)
+                        if isinstance(parsed, dict):
+                            chars_count = len(
+                                [k for k in parsed if not str(k).startswith('_')]
+                            )
+                    except (TypeError, ValueError):
+                        pass
+                updates_info[p.id] = {
+                    'new_category': (
+                        sp_subject
+                        if sp_subject
+                        and sp_subject != (p.mapped_wb_category or '')
+                        else None
+                    ),
+                    'chars_count': chars_count,
+                }
+
+        # Последняя WB-ревизия связанных опубликованных карточек страницы:
+        # бейдж расхождений в списке (see services/wb_card_audit.py)
+        wb_audit_map = {}
+        page_product_ids = {
+            p.product_id for p in pagination.items if p.product_id
+        }
+        if page_product_ids:
+            audit_rows = db.session.query(
+                Product.id, Product.wb_audit_json,
+            ).filter(
+                Product.id.in_(page_product_ids),
+                Product.seller_id == seller.id,
+                Product.wb_audit_json.isnot(None),
+            ).all()
+            audit_by_product = {}
+            for prod_id, audit_json in audit_rows:
+                try:
+                    parsed = json.loads(audit_json)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(parsed, dict):
+                    audit_by_product[prod_id] = parsed
+            for p in pagination.items:
+                if p.product_id in audit_by_product:
+                    wb_audit_map[p.id] = audit_by_product[p.product_id]
 
         # Данные для выпадающих фильтров (в рамках текущего продавца)
         suppliers_list = db.session.query(
@@ -2040,6 +2272,42 @@ def register_supplier_routes(app):
                 marketplace_accounts[0]
                 if len(marketplace_accounts) == 1 else None,
             )
+            # channel bar (mp_nav) переиспользует уже загруженные кабинеты
+            from services.marketplace_nav import prime_ozon_accounts_cache
+            prime_ozon_accounts_cache(marketplace_accounts)
+
+        # Ozon-черновики карточек текущей страницы (для колонки «Каналы»)
+        # и общий счётчик для стат-строки. Один bulk SELECT на страницу.
+        ozon_drafts_map = {}
+        ozon_drafts_total = 0
+        if marketplace_accounts:
+            account_ids = [account.id for account in marketplace_accounts]
+            account_labels = {
+                account.id: account.label for account in marketplace_accounts
+            }
+            page_ids = [p.id for p in pagination.items]
+            if page_ids:
+                draft_rows = MarketplaceProductDraft.query.filter(
+                    MarketplaceProductDraft.seller_id == seller.id,
+                    MarketplaceProductDraft.account_id.in_(account_ids),
+                    MarketplaceProductDraft.imported_product_id.in_(page_ids),
+                ).order_by(MarketplaceProductDraft.account_id.asc()).all()
+                for draft in draft_rows:
+                    ozon_drafts_map.setdefault(
+                        draft.imported_product_id, []
+                    ).append({
+                        'id': draft.id,
+                        'account_id': draft.account_id,
+                        'account_label': account_labels.get(
+                            draft.account_id, 'Ozon'
+                        ),
+                        'status': draft.status,
+                        'validation_status': draft.validation_status,
+                    })
+            ozon_drafts_total = MarketplaceProductDraft.query.filter(
+                MarketplaceProductDraft.seller_id == seller.id,
+                MarketplaceProductDraft.account_id.in_(account_ids),
+            ).count()
 
         return render_template(
             'seller_my_products.html',
@@ -2067,6 +2335,17 @@ def register_supplier_routes(app):
             brand_category_map=brand_category_map,
             marketplace_accounts=marketplace_accounts,
             default_marketplace_account=default_marketplace_account,
+            ozon_drafts_map=ozon_drafts_map,
+            ozon_drafts_total=ozon_drafts_total,
+            supplier_updates_count=supplier_updates_count,
+            updates_filter=updates_filter,
+            updates_map=updates_map,
+            updates_info=updates_info,
+            wb_audit_map=wb_audit_map,
+            wb_cta_ids=(
+                session.get('supplier_update_wb_ids') or []
+                if request.args.get('wb_ready', type=int) else []
+            ),
         )
 
     # -------------------------------------------------------------------
@@ -2139,6 +2418,20 @@ def register_supplier_routes(app):
         if linked_wb_nm_id is None and product.wb_nm_id is not None:
             linked_wb_nm_id = str(product.wb_nm_id)
 
+        # Последняя WB-ревизия связанной опубликованной карточки (если была)
+        wb_audit = None
+        wb_audited_at = None
+        if product.product_id:
+            linked_product = Product.query.filter_by(
+                id=product.product_id, seller_id=seller.id
+            ).first()
+            if linked_product and linked_product.wb_audit_json:
+                try:
+                    wb_audit = json.loads(linked_product.wb_audit_json)
+                    wb_audited_at = linked_product.wb_audited_at
+                except (TypeError, ValueError):
+                    wb_audit = None
+
         return render_template(
             'seller_wb_card_preview.html',
             product=product,
@@ -2150,6 +2443,8 @@ def register_supplier_routes(app):
             shared_ai_source=shared_ai_source,
             linked_wb_nm_id=linked_wb_nm_id,
             wb_projection_drift=wb_projection_drift,
+            wb_audit=wb_audit,
+            wb_audited_at=wb_audited_at,
         )
 
     # -------------------------------------------------------------------
@@ -2638,7 +2933,7 @@ def register_supplier_routes(app):
             return jsonify({'error': 'API ключ WB не настроен'}), 400
 
         from services.wb_api_client import WildberriesAPIClient
-        api = WildberriesAPIClient(seller.get_wb_api_key())
+        api = WildberriesAPIClient(seller.wb_api_key)
 
         result = {
             'nm_id': product.nm_id,
@@ -2835,6 +3130,22 @@ def register_supplier_routes(app):
 
         if marketplace_data and isinstance(marketplace_data, dict):
             charcs = marketplace_data.get('characteristics', [])
+            meta = marketplace_data.get('_meta')
+            if (
+                not charcs
+                and isinstance(meta, dict)
+                and meta.get('source') == 'supplier_catalog_enrichment'
+            ):
+                # The durable shared-catalog parser stores the current WB
+                # schema as a flat exact-name map. The API client will map it
+                # to charc_id and validate dictionaries against the live
+                # card's own subject before any provider write.
+                charcs = {
+                    name: value
+                    for name, value in marketplace_data.items()
+                    if not str(name).startswith('_')
+                    and value not in (None, '', [])
+                }
             if charcs:
                 updates['characteristics'] = charcs
                 updated_fields.append(f'характеристики ({len(charcs)} шт.)')
@@ -2878,7 +3189,7 @@ def register_supplier_routes(app):
 
         # Отправляем обновление на WB
         from services.wb_api_client import WildberriesAPIClient
-        api = WildberriesAPIClient(seller.get_wb_api_key())
+        api = WildberriesAPIClient(seller.wb_api_key)
 
         try:
             api.update_card(
@@ -3029,6 +3340,86 @@ def register_supplier_routes(app):
             return jsonify({'success': False, 'error': str(e)}), 500
 
     # -------------------------------------------------------------------
+    # WB-ревизия: live-сверка карточек с фиксацией расхождений
+    # -------------------------------------------------------------------
+    @app.route('/my-products/wb-audit', methods=['POST'])
+    @login_required
+    @seller_required
+    def seller_wb_audit_start():
+        """WB-ревизия выбранных карточек: live-сверка с фиксацией расхождений.
+
+        Принимает seller-owned ImportedProduct IDs (как остальные bulk-кнопки
+        «Моих товаров»), детерминированно переводит их в exact product_id и
+        запускает фоновую сверку до 200 карточек. Только read-вызовы WB.
+        """
+        import threading
+        import uuid as uuid_mod
+
+        from models import BackgroundJob
+        from services.wb_card_audit import (
+            AUDIT_JOB_TYPE, MAX_AUDIT_BATCH, run_audit_job,
+        )
+
+        seller = current_user.seller
+        if not seller.has_valid_api_key():
+            return jsonify({'success': False,
+                            'error': 'API ключ WB не настроен'}), 400
+
+        data = request.get_json(silent=True) or {}
+        raw_ids = data.get('product_ids') or []
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return jsonify({'success': False,
+                            'error': 'Не выбраны товары'}), 400
+        try:
+            raw_ids = [int(x) for x in raw_ids]
+        except (TypeError, ValueError):
+            return jsonify({'success': False,
+                            'error': 'Некорректные product_ids'}), 400
+        if len(raw_ids) > MAX_AUDIT_BATCH:
+            return jsonify({
+                'success': False,
+                'error': f'Не больше {MAX_AUDIT_BATCH} карточек за один запуск',
+            }), 400
+
+        imported = ImportedProduct.query.filter(
+            ImportedProduct.id.in_(raw_ids),
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.product_id.isnot(None),
+        ).all()
+        product_ids = sorted({imp.product_id for imp in imported})
+        if not product_ids:
+            return jsonify({
+                'success': False,
+                'error': 'Среди выбранных нет опубликованных на WB карточек',
+            }), 400
+
+        active = (BackgroundJob.query
+                  .filter_by(seller_id=seller.id, job_type=AUDIT_JOB_TYPE)
+                  .filter(BackgroundJob.status.in_(('pending', 'running')))
+                  .first())
+        if active:
+            return jsonify({'success': False, 'job_uid': active.job_uid,
+                            'error': 'Ревизия уже выполняется'}), 409
+
+        job_uid = uuid_mod.uuid4().hex
+        job = BackgroundJob(
+            job_uid=job_uid, seller_id=seller.id, job_type=AUDIT_JOB_TYPE,
+            status='pending', total=len(product_ids),
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        flask_app = current_app._get_current_object()
+        thread = threading.Thread(
+            target=run_audit_job,
+            args=(flask_app, job_uid, seller.id, product_ids),
+            daemon=True,
+        )
+        thread.start()
+        return jsonify({'success': True, 'job_uid': job_uid,
+                        'total': len(product_ids)})
+
+    # -------------------------------------------------------------------
     # Массовая проверка карточек на WB
     # -------------------------------------------------------------------
     @app.route('/my-products/wb-check-bulk', methods=['POST'])
@@ -3069,7 +3460,7 @@ def register_supplier_routes(app):
             return jsonify({'error': 'Не удалось найти nmID для выбранных товаров'}), 400
 
         from services.wb_api_client import WildberriesAPIClient
-        api = WildberriesAPIClient(seller.get_wb_api_key())
+        api = WildberriesAPIClient(seller.wb_api_key)
 
         results = []
         no_photos = 0
@@ -3134,17 +3525,170 @@ def register_supplier_routes(app):
         seller = current_user.seller
         supplier_id = request.form.get('supplier_id', type=int)
 
-        product_ids_raw = request.form.getlist('product_ids')
-        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()] if product_ids_raw else None
+        product_ids_raw = (
+            request.form.getlist('update_product_ids')
+            or request.form.getlist('product_ids')
+        )
+        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+
+        if not product_ids:
+            flash('Не выбраны карточки для обновления', 'warning')
+            return _redirect_seller_supplier_catalog(supplier_id)
 
         result = SupplierService.update_seller_products(seller.id, product_ids)
 
         flash(
-            f'Обновлено: {result.imported}, ошибок: {result.errors}',
+            f'Локально обновлено: {result.imported}, ошибок: {result.errors}. '
+            'Карточки WB не менялись; опубликованные товары можно отдельно '
+            'обогатить в разделе «Мои товары».',
             'success' if result.errors == 0 else 'warning'
         )
 
         return _redirect_seller_supplier_catalog(supplier_id)
+
+    @app.route('/my-products/<int:product_id>/supplier-diff')
+    @login_required
+    @seller_required
+    def my_products_supplier_diff(product_id):
+        """Наглядный диф «что подтянется при „Обновить из каталога"».
+
+        Read-only: сравнивает текущие характеристики локальной карточки с
+        актуальным набором общего каталога поставщика. Питает ховер-попап
+        бейджа «+N характеристик» в «Моих товарах».
+        """
+        from services.supplier_service import _supplier_characteristics_payload
+
+        seller = current_user.seller
+        imp = ImportedProduct.query.filter_by(
+            id=product_id, seller_id=seller.id
+        ).first_or_404()
+        sp = (
+            SupplierProduct.query.get(imp.supplier_product_id)
+            if imp.supplier_product_id else None
+        )
+        if not sp:
+            return jsonify({'success': False,
+                            'error': 'Нет связи с каталогом поставщика'}), 404
+
+        def _short(value):
+            if isinstance(value, list):
+                text = ', '.join(str(v) for v in value)
+            else:
+                text = str(value if value is not None else '')
+            return text[:120]
+
+        def _named_map(raw):
+            result = {}
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (TypeError, ValueError):
+                    return result
+            if isinstance(raw, dict):
+                for name, value in raw.items():
+                    if not str(name).startswith('_'):
+                        result[str(name)] = value
+            elif isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, dict) and item.get('name'):
+                        result[str(item['name'])] = item.get('value')
+            return result
+
+        current_map = _named_map(imp.characteristics)
+        fresh_map = _named_map(_supplier_characteristics_payload(sp))
+
+        added = []
+        changed = []
+        for name, value in fresh_map.items():
+            if name not in current_map:
+                added.append({'name': name, 'value': _short(value)})
+            elif _short(current_map[name]) != _short(value):
+                changed.append({
+                    'name': name,
+                    'old': _short(current_map[name]),
+                    'new': _short(value),
+                })
+        unchanged = len([
+            n for n in fresh_map
+            if n in current_map and _short(current_map[n]) == _short(fresh_map[n])
+        ])
+
+        new_category = None
+        if sp.wb_subject_name and sp.wb_subject_name != (imp.mapped_wb_category or ''):
+            new_category = {
+                'current': imp.mapped_wb_category or None,
+                'new': sp.wb_subject_name,
+            }
+
+        return jsonify({
+            'success': True,
+            'category': new_category,
+            'added': added[:30],
+            'changed': changed[:30],
+            'unchanged_count': unchanged,
+        })
+
+    @app.route('/my-products/refresh-from-supplier', methods=['POST'])
+    @login_required
+    @seller_required
+    def my_products_refresh_from_supplier():
+        """Обновить выбранные локальные карточки из общего каталога поставщика.
+
+        Локальное действие: WB/Ozon не вызываются. Опубликованным карточкам
+        после обновления предлагается отдельный подтверждаемый переход в
+        массовое обогащение характеристик."""
+        seller = current_user.seller
+        raw_ids = request.form.getlist('selected_ids')
+        ids = []
+        for raw in raw_ids:
+            if not raw.isdigit():
+                flash('Некорректный выбор карточек.', 'warning')
+                return redirect(url_for('seller_my_products'))
+            ids.append(int(raw))
+        ids = list(dict.fromkeys(ids))
+        if not ids or len(ids) > 200:
+            flash('Выберите от 1 до 200 карточек.', 'warning')
+            return redirect(url_for('seller_my_products'))
+
+        rows = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller.id,
+            ImportedProduct.id.in_(ids),
+        ).all()
+        if len(rows) != len(ids):
+            flash(
+                'Часть выбранных карточек недоступна. Обновите список.',
+                'warning',
+            )
+            return redirect(url_for('seller_my_products'))
+
+        supplier_product_ids = [
+            row.supplier_product_id for row in rows if row.supplier_product_id
+        ]
+        skipped = len(rows) - len(supplier_product_ids)
+        refreshed = 0
+        if supplier_product_ids:
+            result = SupplierService.update_seller_products(
+                seller.id, supplier_product_ids,
+            )
+            refreshed = result.imported
+
+        # Опубликованные на WB карточки из выбора — кандидаты на
+        # дообогащение характеристик отдельным подтверждаемым экраном
+        wb_product_ids = [
+            row.product_id for row in rows
+            if row.import_status == 'imported' and row.product_id
+        ]
+        session['supplier_update_wb_ids'] = wb_product_ids[:200]
+
+        message = f'Обновлено локальных карточек: {refreshed}.'
+        if skipped:
+            message += f' Без связи с каталогом поставщика: {skipped}.'
+        flash(message, 'success')
+        return redirect(url_for(
+            'seller_my_products',
+            refreshed=refreshed,
+            wb_ready=len(wb_product_ids),
+        ))
 
     # -------------------------------------------------------------------
     # Дашборд качества парсинга (HTML)
@@ -3732,26 +4276,44 @@ def register_supplier_routes(app):
             flash('Не выбраны товары для импорта', 'warning')
             return _redirect_seller_supplier_catalog(supplier_id)
 
+        draft_account_ids = [
+            int(v) for v in request.form.getlist('draft_account_ids')
+            if v.isdigit()
+        ]
         parser = SmartProductParser(supplier_id=supplier_id)
-        result = parser.smart_import_to_seller(seller.id, product_ids)
+        result = parser.smart_import_to_seller(
+            seller.id,
+            product_ids,
+            draft_account_ids=draft_account_ids or None,
+        )
 
         if result['success']:
             imp = result['import_result']
             parse = result['parse_result']
+            marketplace_note = ''
+            if imp.get('marketplace_drafts_created'):
+                marketplace_note += (
+                    f', Ozon-черновиков: {imp["marketplace_drafts_created"]}'
+                )
+            if imp.get('marketplace_draft_errors'):
+                marketplace_note += (
+                    f', Ozon требуют внимания: {imp["marketplace_draft_errors"]}'
+                )
             flash(
                 f'Импортировано: {imp["imported"]}, '
                 f'пропущено: {imp["skipped"]}, '
                 f'бренды определены: {parse["brand_resolved_count"]}, '
                 f'категории: {parse["category_mapped_count"]}, '
-                f'готовность: {parse["avg_readiness_score"]:.0f}%',
-                'success'
+                f'готовность: {parse["avg_readiness_score"]:.0f}%'
+                f'{marketplace_note}. Проверьте карточки и отправьте их на WB.',
+                'success' if not imp.get('marketplace_draft_errors') else 'warning'
             )
-        else:
-            flash(
-                f'Ошибка импорта: {"; ".join(result.get("import_result", {}).get("error_messages", [])[:3])}',
-                'danger'
-            )
-
+            # Следующий шаг живёт в «Моих товарах» — ведём продавца туда
+            return redirect(url_for('seller_my_products'))
+        flash(
+            f'Ошибка импорта: {"; ".join(result.get("import_result", {}).get("error_messages", [])[:3])}',
+            'danger'
+        )
         return _redirect_seller_supplier_catalog(supplier_id)
 
     # -------------------------------------------------------------------

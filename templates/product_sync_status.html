@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import channel_bar %}
 
 {% block title %}Статус синхронизации товаров{% endblock %}
 
@@ -16,6 +17,8 @@
             </a>
         </div>
     </div>
+
+    {{ channel_bar(active='wb', wb_href=url_for('product_sync_status_page'), ozon_href=url_for('marketplace_operations.index'), class='mb-6') }}
 
     <!-- Статус синхронизации -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">

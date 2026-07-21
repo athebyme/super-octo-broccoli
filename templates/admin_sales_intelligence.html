@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% block title %}Бестселлеры · Админ · Seller Hub{% endblock %}
+
+{% block content %}
+<style>
+  .sales-kpis { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+  .sales-kpi { border:1px solid var(--border); border-radius:8px; background:var(--bg-card); padding:16px; min-height:132px; }
+  .sales-kpi__top { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .sales-kpi__mark { width:34px; height:34px; border:1px solid var(--border); border-radius:8px; display:grid; place-items:center; font-size:12px; font-weight:800; color:var(--text); background:var(--bg-hover); }
+  .sales-kpi__value { margin-top:13px; font-size:24px; line-height:1.1; font-weight:750; letter-spacing:-.025em; color:var(--text); }
+  .sales-kpi__meta { margin-top:6px; font-size:12px; color:var(--text-secondary); }
+  .sales-filter-grid { display:grid; grid-template-columns:minmax(180px,1.2fr) repeat(3,minmax(140px,.7fr)) minmax(220px,1.4fr) auto; gap:10px; align-items:end; }
+  .sales-field span { display:block; margin-bottom:5px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); }
+  .sales-input { width:100%; min-height:40px; border:1px solid var(--border); border-radius:7px; background:var(--bg-card); color:var(--text); padding:8px 10px; font-size:13px; }
+  .sales-input:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .sales-table { width:100%; border-collapse:separate; border-spacing:0; min-width:1050px; }
+  .sales-table th { padding:10px 12px; border-bottom:1px solid var(--border); background:var(--bg-hover); color:var(--text-muted); font-size:10px; letter-spacing:.06em; text-transform:uppercase; text-align:left; white-space:nowrap; }
+  .sales-table td { padding:13px 12px; border-bottom:1px solid var(--border); vertical-align:top; color:var(--text); font-size:13px; }
+  .sales-table tr:last-child td { border-bottom:0; }
+  .sales-table tbody tr:hover td { background:var(--bg-hover); }
+  .sales-product { max-width:330px; }
+  .sales-product__title { font-weight:700; line-height:1.35; color:var(--text); }
+  .sales-product__meta { margin-top:5px; display:flex; flex-wrap:wrap; gap:5px 9px; color:var(--text-muted); font-size:11px; }
+  .sales-channel { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border); border-radius:999px; padding:3px 8px; font-size:11px; font-weight:700; white-space:nowrap; }
+  .sales-channel::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--accent); }
+  .sales-channel--ozon::before { background:#2563eb; }
+  .sales-score { min-width:124px; }
+  .sales-score__value { display:flex; align-items:baseline; justify-content:space-between; gap:8px; font-weight:800; }
+  .sales-score__track { height:5px; margin-top:7px; overflow:hidden; border-radius:999px; background:var(--bg-hover); }
+  .sales-score__fill { display:block; height:100%; border-radius:999px; background:var(--accent); }
+  .sales-score__reason { margin-top:7px; max-width:220px; font-size:10px; line-height:1.4; color:var(--text-muted); }
+  .sales-number { font-variant-numeric:tabular-nums; font-weight:700; white-space:nowrap; }
+  .sales-number small { display:block; margin-top:3px; font-weight:500; color:var(--text-muted); white-space:normal; }
+  .sales-media { display:flex; align-items:center; gap:8px; white-space:nowrap; }
+  .sales-photo-count { min-width:30px; height:30px; border:1px solid var(--border); border-radius:7px; display:grid; place-items:center; font-weight:800; background:var(--bg-hover); }
+  .sales-badge { display:inline-flex; align-items:center; border-radius:999px; padding:3px 8px; font-size:10px; font-weight:700; background:var(--bg-hover); color:var(--text-secondary); }
+  .sales-badge--good { background:var(--ok-bg); color:var(--ok); }
+  .sales-badge--warn { background:var(--warn-bg); color:var(--warn); }
+  .sales-badge--sent { background:var(--info-bg); color:var(--info); }
+  .sales-selection { position:sticky; bottom:12px; z-index:15; margin:12px; padding:11px 13px; border:1px solid var(--border); border-radius:8px; background:var(--bg-card); box-shadow:var(--shadow-2); display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .sales-check { width:17px; height:17px; accent-color:var(--accent); }
+  .sales-check:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .sales-pagination { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 16px; border-top:1px solid var(--border); color:var(--text-secondary); font-size:12px; }
+  @media(max-width:1100px){ .sales-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.sales-filter-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}.sales-field--search{grid-column:span 2} }
+  @media(max-width:720px){ .sales-kpis{grid-template-columns:1fr}.sales-filter-grid{grid-template-columns:1fr}.sales-field--search{grid-column:auto}.sales-selection{align-items:stretch;flex-direction:column}.sales-selection .sh-btn{width:100%} }
+</style>
+
+{% set selectable_keys = result['items']|selectattr('recommendable')|map(attribute='scope_key')|list %}
+<div class="max-w-7xl mx-auto px-4 py-6" x-data="{
+  selected: [],
+  selectable: {{ selectable_keys|tojson|forceescape }},
+  toggleAll() {
+    const top = this.selectable.slice(0, 50);
+    this.selected = this.selected.length === top.length && top.every(key => this.selected.includes(key)) ? [] : top;
+  }
+}">
+  <header class="sh-page-header">
+    <div class="sh-page-header-content">
+      <div>
+        <div class="text-xs font-semibold mb-1" style="color:var(--accent)">АДМИН · ПРОДАЖИ</div>
+        <h1 class="sh-page-title">Бестселлеры для улучшения</h1>
+        <p class="sh-page-subtitle">Сначала сильные товары, затем осознанная генерация. Здесь нет автоматических запусков и списаний.</p>
+      </div>
+      <div class="sh-page-actions">
+        <span class="sales-badge sales-badge--good">{{ result.candidate_count }} приоритетных</span>
+        <span class="sales-badge">{{ result.ready_count }} готовы к Фотостудии</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="sh-alert sh-alert--info mb-4" role="note">
+    <div class="sh-alert-content">
+      <strong>Сравнение без смешивания денег.</strong>
+      {{ result.comparison.message }} Балл «Приоритет» — рабочий ранг, а не прогноз роста продаж.
+    </div>
+  </div>
+  <details class="sh-card mb-4 p-4">
+    <summary class="cursor-pointer text-sm font-bold" style="color:var(--text)">Как формируются список и приоритет</summary>
+    <div class="mt-3 grid gap-2 text-xs leading-relaxed" style="color:var(--text-secondary)">
+      <p>В список попадают товары с локально синхронизированными продажами за выбранные 7 или 30 дней: для WB — нетто-продажи с учётом возвратов, для Ozon — последний завершённый снимок заказов. Товары без факта продаж в этом периоде сюда не входят.</p>
+      <p>Балл считается отдельно внутри каждого маркетплейса: 72% — сила продаж (65% ранг выручки и 35% ранг штук), 20% — нехватка фото, 8% — запас до Quality 100.</p>
+      <p>«Приоритетный» означает: индекс продаж не ниже 60 из 100, есть точная связь с внутренней карточкой и хотя бы одно исходное фото, а в галерее меньше пяти фото либо Quality ниже 75. Передать можно и другие готовые строки с положительными продажами; лимит 50 относится к одной отправке, а не ко всему списку.</p>
+    </div>
+  </details>
+  {% if result.truncated %}
+  <div class="sh-alert sh-alert--warning mb-4" role="alert">
+    <div class="sh-alert-content">Показано до 5 000 самых сильных товарных строк на каждый маркетплейс. Сузьте продавца или канал для полного рейтинга.</div>
+  </div>
+  {% endif %}
+
+  <section class="sales-kpis mb-4" aria-label="Сводка по маркетплейсам">
+    {% for summary in result.summaries %}
+    <article class="sales-kpi">
+      <div class="sales-kpi__top">
+        <div>
+          <div class="text-xs font-bold" style="color:var(--text)">{{ summary.marketplace_label }}</div>
+          <div class="text-[11px] mt-1" style="color:var(--text-muted)">{{ summary.seller_count }} продавцов · {{ summary.product_count }} товаров</div>
+        </div>
+        <div class="sales-kpi__mark">{{ 'WB' if summary.marketplace_code == 'wb' else 'O3' }}</div>
+      </div>
+      <div class="sales-kpi__value">{{ "{:,.0f}".format(summary.revenue_rub).replace(',', ' ') }} ₽</div>
+      <div class="sales-kpi__meta">
+        {{ summary.metric_revenue_label }} · {{ "{:,.0f}".format(summary.units).replace(',', ' ') }} {{ summary.metric_units_label }}
+        {% if summary.observed_at %}<br>Последний факт: {{ summary.observed_at.strftime('%d.%m.%Y %H:%M') }}{% endif %}
+      </div>
+    </article>
+    {% endfor %}
+    <article class="sales-kpi">
+      <div class="sales-kpi__top">
+        <div>
+          <div class="text-xs font-bold" style="color:var(--text)">Умный отбор</div>
+          <div class="text-[11px] mt-1" style="color:var(--text-muted)">Продажи 72% · фото 20% · Quality 8%</div>
+        </div>
+        <div class="sales-kpi__mark">TOP</div>
+      </div>
+      <div class="sales-kpi__value">{{ result.candidate_count }}</div>
+      <div class="sales-kpi__meta">товаров с сильными продажами и заметным потенциалом визуала</div>
+    </article>
+  </section>
+
+  <section class="sh-card mb-4">
+    <form method="get" action="{{ url_for('admin_sales.index') }}" class="p-4">
+      <div class="sales-filter-grid">
+        <label class="sales-field">
+          <span>Продавец</span>
+          <select name="seller_id" class="sales-input">
+            <option value="all">Все подключённые</option>
+            {% for seller in result.connected_sellers %}
+            <option value="{{ seller.id }}" {% if filters.seller_id == seller.id %}selected{% endif %}>
+              {{ seller.company_name }} · {{ seller.marketplaces|join(' + ')|upper }}
+            </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="sales-field">
+          <span>Маркетплейс</span>
+          <select name="marketplace" class="sales-input">
+            <option value="all" {% if filters.marketplace == 'all' %}selected{% endif %}>Все, раздельно</option>
+            <option value="wb" {% if filters.marketplace == 'wb' %}selected{% endif %}>Wildberries</option>
+            <option value="ozon" {% if filters.marketplace == 'ozon' %}selected{% endif %} {% if not result.include_ozon %}disabled{% endif %}>Ozon{% if not result.include_ozon %} · выключен{% endif %}</option>
+          </select>
+        </label>
+        <label class="sales-field">
+          <span>Период</span>
+          <select name="period" class="sales-input">
+            <option value="7d" {% if filters.period_code == '7d' %}selected{% endif %}>7 дней</option>
+            <option value="30d" {% if filters.period_code == '30d' %}selected{% endif %}>30 дней</option>
+          </select>
+        </label>
+        <label class="sales-field">
+          <span>Сортировка</span>
+          <select name="sort" class="sales-input">
+            <option value="opportunity" {% if filters.sort == 'opportunity' %}selected{% endif %}>По приоритету</option>
+            <option value="revenue" {% if filters.sort == 'revenue' %}selected{% endif %}>По выручке</option>
+            <option value="units" {% if filters.sort == 'units' %}selected{% endif %}>По штукам</option>
+            <option value="photos" {% if filters.sort == 'photos' %}selected{% endif %}>Меньше фото</option>
+            <option value="quality" {% if filters.sort == 'quality' %}selected{% endif %}>Ниже Quality</option>
+          </select>
+        </label>
+        <label class="sales-field sales-field--search">
+          <span>Поиск</span>
+          <input name="q" value="{{ filters.search }}" maxlength="160" class="sales-input" placeholder="Название, артикул, продавец или кабинет">
+        </label>
+        <button type="submit" class="sh-btn sh-btn--primary">Показать</button>
+      </div>
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <label class="flex items-center gap-2 text-xs" style="color:var(--text-secondary)">
+          <input type="checkbox" name="ready" value="1" class="sales-check" {% if filters.ready_only %}checked{% endif %}>
+          Только товары с точной связью и исходным фото
+        </label>
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="flex items-center gap-2 text-xs" style="color:var(--text-secondary)">
+            <span>На странице</span>
+            <select name="per_page" class="sales-input" style="width:auto;min-height:34px;padding:5px 28px 5px 8px">
+              {% for size in (25, 50, 100) %}<option value="{{ size }}" {% if filters.per_page == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+            </select>
+          </label>
+          <span class="text-xs" style="color:var(--text-muted)">Найдено {{ result.total }} · показано {{ result.pagination['from'] }}–{{ result.pagination.to }} · рекомендации сохраняются локально</span>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <form method="post" action="{{ url_for('admin_sales.create_recommendations') }}" class="sh-card overflow-hidden">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="period" value="{{ filters.period_code }}">
+    <input type="hidden" name="marketplace" value="{{ filters.marketplace }}">
+    <input type="hidden" name="seller_id" value="{{ filters.seller_id or 'all' }}">
+    <input type="hidden" name="q" value="{{ filters.search }}">
+    <input type="hidden" name="sort" value="{{ filters.sort }}">
+    <input type="hidden" name="ready" value="{{ 1 if filters.ready_only else 0 }}">
+    <input type="hidden" name="page" value="{{ result.pagination.page }}">
+    <input type="hidden" name="per_page" value="{{ filters.per_page }}">
+
+    {% if result['items'] %}
+    <div class="overflow-x-auto">
+      <table class="sales-table">
+        <thead>
+          <tr>
+            <th style="width:42px">
+              <button type="button" @click="toggleAll()" class="text-[10px] font-bold" :aria-label="selected.length ? 'Снять выбор' : 'Выбрать до 50 доступных'">До 50</button>
+            </th>
+            <th>Товар</th>
+            <th>Продавец / канал</th>
+            <th>Продажи</th>
+            <th>Выручка</th>
+            <th>Фото / Quality</th>
+            <th>Приоритет</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in result['items'] %}
+          <tr>
+            <td>
+              {% if row.recommendable %}
+              <input type="checkbox" name="row_keys" value="{{ row.scope_key }}" x-model="selected" class="sales-check" aria-label="Выбрать {{ row.title }}">
+              {% else %}
+              <input type="checkbox" class="sales-check" disabled title="{{ row.generation_blocker or 'Недоступно' }}">
+              {% endif %}
+            </td>
+            <td class="sales-product">
+              <div class="sales-product__title">{{ row.title }}</div>
+              <div class="sales-product__meta">
+                <span>{{ 'nmID' if row.marketplace_code == 'wb' else 'offer' }} {{ row.external_id }}</span>
+                {% if row.vendor_code and row.vendor_code != row.external_id %}<span>арт. {{ row.vendor_code }}</span>{% endif %}
+              </div>
+            </td>
+            <td>
+              <div class="font-semibold text-xs">{{ row.seller_company }}</div>
+              <div class="mt-2"><span class="sales-channel sales-channel--{{ row.marketplace_code }}">{{ row.marketplace_label }}</span></div>
+              {% if row.account_label %}<div class="mt-1 text-[10px]" style="color:var(--text-muted)">{{ row.account_label }}</div>{% endif %}
+            </td>
+            <td>
+              <div class="sales-number">{{ "{:,.0f}".format(row.units).replace(',', ' ') }}
+                <small>{{ row.metric_units_label }}</small>
+              </div>
+              {% if row.return_units %}<div class="mt-1 text-[10px]" style="color:var(--text-muted)">возвраты: {{ "{:,.0f}".format(row.return_units).replace(',', ' ') }}</div>{% endif %}
+            </td>
+            <td>
+              <div class="sales-number">{{ "{:,.0f}".format(row.revenue_rub).replace(',', ' ') }} ₽
+                <small>{{ row.metric_revenue_label }}</small>
+              </div>
+            </td>
+            <td>
+              <div class="sales-media">
+                <span class="sales-photo-count">{{ row.photo_count }}</span>
+                <span class="text-xs" style="color:var(--text-secondary)">фото</span>
+              </div>
+              {% if row.photo_source == 'wb_gallery' %}<div class="mt-1 text-[10px]" style="color:var(--text-muted)">из галереи WB</div>{% endif %}
+              <div class="mt-2">
+                {% if row.quality_score is not none %}
+                <span class="sales-badge {{ 'sales-badge--good' if row.quality_score >= 75 else 'sales-badge--warn' }}">Quality {{ row.quality_score|round|int }}</span>
+                {% else %}<span class="sales-badge">Quality —</span>{% endif %}
+              </div>
+            </td>
+            <td class="sales-score">
+              <div class="sales-score__value"><span>{{ row.opportunity_score }}</span><small class="text-[10px]" style="color:var(--text-muted)">/ 100</small></div>
+              <div class="sales-score__track"><span class="sales-score__fill" style="width:{{ row.opportunity_score }}%"></span></div>
+              <div class="sales-score__reason">{{ row.reason }}</div>
+            </td>
+            <td>
+              {% if row.recommendation and row.recommendation.status == 'recommended' %}
+              <span class="sales-badge sales-badge--sent">Уже у продавца</span>
+              {% elif row.recommendation and row.recommendation.status == 'completed' %}
+              <span class="sales-badge sales-badge--good">Завершено</span>
+              {% elif row.recommendable %}
+              <span class="sales-badge {{ 'sales-badge--good' if row.is_candidate else '' }}">{{ 'Приоритетный' if row.is_candidate else 'Можно передать' }}</span>
+              {% else %}
+              <span class="sales-badge sales-badge--warn" title="{{ row.generation_blocker }}">Нужна подготовка</span>
+              <div class="mt-1 max-w-[180px] text-[10px] leading-snug" style="color:var(--text-muted)">{{ row.generation_blocker }}</div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="sales-pagination">
+      <span>Показано {{ result.pagination['from'] }}–{{ result.pagination.to }} из {{ result.total }} · страница {{ result.pagination.page }}{% if result.pagination.pages %} из {{ result.pagination.pages }}{% endif %}</span>
+      <div class="flex gap-2">
+        {% if prev_url %}<a href="{{ prev_url }}" class="sh-btn sh-btn--secondary sh-btn--sm">Назад</a>{% endif %}
+        {% if next_url %}<a href="{{ next_url }}" class="sh-btn sh-btn--secondary sh-btn--sm">Дальше</a>{% endif %}
+      </div>
+    </div>
+
+    <div class="sales-selection" x-show="selected.length" x-cloak>
+      <div>
+        <div class="text-sm font-bold" style="color:var(--text)">Выбрано: <span x-text="selected.length"></span></div>
+        <div class="text-[11px] mt-1" style="color:var(--text-muted)">Продавцы увидят список в Фотостудии. Генерация и расход бюджета не начнутся.</div>
+        <div x-show="selected.length > 50" class="text-[11px] mt-1" style="color:var(--danger)">Оставьте не больше 50 товаров.</div>
+      </div>
+      <button type="submit" class="sh-btn sh-btn--primary" :disabled="selected.length === 0 || selected.length > 50">
+        Передать в Фотостудию
+      </button>
+    </div>
+    {% else %}
+    <div class="py-16 px-6 text-center">
+      <div class="mx-auto w-11 h-11 rounded-lg border flex items-center justify-center text-lg" style="border-color:var(--border);color:var(--text-muted)">↗</div>
+      <h2 class="mt-4 text-base font-bold" style="color:var(--text)">Продаж по этому срезу пока нет</h2>
+      <p class="mt-2 text-sm" style="color:var(--text-secondary)">Проверьте фильтры и наличие завершённой локальной синхронизации WB/Ozon.</p>
+    </div>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}

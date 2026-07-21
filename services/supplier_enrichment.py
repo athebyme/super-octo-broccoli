@@ -25,8 +25,40 @@ logger = logging.getLogger(__name__)
 PHOTO_CACHE_BASE = Path('data/photo_cache')
 
 
+class WbMediaOperationBusy(RuntimeError):
+    """Another WB photo/gallery write owns the seller-wide boundary."""
+
+
 class EnrichmentService:
-    """Сервис обогащения карточек WB данными от поставщика"""
+    """Supplier-driven WB card enrichment service."""
+
+    @staticmethod
+    def upload_photos_to_card_locked(
+        wb_client,
+        *,
+        seller_id: int,
+        nm_id: int,
+        photo_paths: List[str],
+    ):
+        """Run legacy multipart upload under the shared WB media lock."""
+        from services.marketplace_operation_locks import (
+            release_wb_seller_media_lock,
+            try_wb_seller_media_lock,
+        )
+
+        claim = try_wb_seller_media_lock(seller_id)
+        if claim is None:
+            raise WbMediaOperationBusy(
+                'Для продавца уже выполняется другая операция с фото WB'
+            )
+        try:
+            return wb_client.upload_photos_to_card(
+                nm_id,
+                photo_paths,
+                seller_id=seller_id,
+            )
+        finally:
+            release_wb_seller_media_lock(claim)
 
     # =========================================================================
     # MATCHING: Product → ImportedProduct
@@ -208,12 +240,7 @@ class EnrichmentService:
         for pid in product_ids:
             if pid in fk_map:
                 imp = fk_map[pid]
-                photo_count = 0
-                if imp.photo_urls:
-                    try:
-                        photo_count = len(json.loads(imp.photo_urls))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                photo_count = len(self._photo_source(imp)[0])
                 result[pid] = {
                     'available': True,
                     'imp_id': imp.id,
@@ -242,12 +269,7 @@ class EnrichmentService:
             for product in products:
                 imp = self.find_supplier_data(product, seller_id)
                 if imp:
-                    photo_count = 0
-                    if imp.photo_urls:
-                        try:
-                            photo_count = len(json.loads(imp.photo_urls))
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                    photo_count = len(self._photo_source(imp)[0])
                     result[product.id] = {
                         'available': True,
                         'imp_id': imp.id,
@@ -391,6 +413,67 @@ class EnrichmentService:
             return default
 
     @staticmethod
+    def _photo_url(photo: Any) -> Optional[str]:
+        if isinstance(photo, str):
+            return photo if photo.startswith(('http://', 'https://')) else None
+        if not isinstance(photo, dict):
+            return None
+        url = photo.get('sexoptovik') or photo.get('original') or photo.get('blur')
+        return url if isinstance(url, str) and url.startswith(('http://', 'https://')) else None
+
+    @staticmethod
+    def _photo_fallbacks(photo: Any, primary_url: str) -> List[str]:
+        if not isinstance(photo, dict):
+            return []
+        result = []
+        for key in ('blur', 'original'):
+            candidate = photo.get(key)
+            if (
+                isinstance(candidate, str)
+                and candidate.startswith(('http://', 'https://'))
+                and candidate != primary_url
+                and candidate not in result
+            ):
+                result.append(candidate)
+        return result
+
+    def _photo_source(self, imp) -> Tuple[List[Any], str, str]:
+        """Return the freshest exact supplier gallery and cache identity.
+
+        ImportedProduct.photo_urls is a staging copy and may lag behind the
+        shared supplier catalog. An exact supplier_product_id therefore wins;
+        the seller-owned import remains the authorization boundary.
+        """
+        photo_urls = self._safe_json_loads(
+            getattr(imp, 'photo_urls', None), []
+        )
+        if not isinstance(photo_urls, list):
+            photo_urls = []
+        supplier_type = getattr(imp, 'source_type', None) or 'unknown'
+        external_id = str(getattr(imp, 'external_id', None) or '')
+
+        supplier_product_id = getattr(imp, 'supplier_product_id', None)
+        if supplier_product_id:
+            from models import db, SupplierProduct
+
+            supplier_product = db.session.get(
+                SupplierProduct, supplier_product_id
+            )
+            if supplier_product is not None:
+                latest = supplier_product.get_photos()
+                if isinstance(latest, list) and latest:
+                    photo_urls = latest
+                external_id = str(
+                    supplier_product.external_id or external_id
+                )
+                supplier = getattr(supplier_product, 'supplier', None)
+                supplier_type = (
+                    getattr(supplier, 'code', None) or supplier_type
+                )
+
+        return photo_urls, supplier_type, external_id
+
+    @staticmethod
     def _parse_supplier_chars(chars_raw: Any) -> List[Dict]:
         """
         Парсит характеристики поставщика в список [{name, value}].
@@ -512,65 +595,54 @@ class EnrichmentService:
         }
 
     def _trigger_photo_cache(self, imp):
-        """Ставит все фото ImportedProduct в очередь фоновой загрузки"""
+        """Ставит актуальную exact supplier gallery в очередь кэша."""
         from services.photo_cache import get_photo_cache
-        if not imp.photo_urls:
-            return
-        try:
-            photo_urls = json.loads(imp.photo_urls)
-        except (json.JSONDecodeError, TypeError):
+        photo_urls, supplier_type, external_id = self._photo_source(imp)
+        if not photo_urls:
             return
 
         cache = get_photo_cache()
-        supplier_type = imp.source_type or 'unknown'
-        external_id = imp.external_id or ''
 
         for ph in photo_urls:
-            if not isinstance(ph, dict):
-                continue
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            url = self._photo_url(ph)
             if url and not cache.is_cached(supplier_type, external_id, url):
-                fallbacks = []
-                if ph.get('blur') and ph['blur'] != url:
-                    fallbacks.append(ph['blur'])
-                if ph.get('original') and ph['original'] != url:
-                    fallbacks.append(ph['original'])
-                cache.queue_download(supplier_type, external_id, url, fallback_urls=fallbacks)
+                cache.queue_download(
+                    supplier_type, external_id, url,
+                    fallback_urls=self._photo_fallbacks(ph, url),
+                )
 
     def _get_supplier_photo_list(self, imp) -> List[Dict]:
         """Возвращает список фото поставщика с serve URL и статусом кэша"""
         from services.photo_cache import get_photo_cache, get_supplier_photo_url
 
-        if not imp.photo_urls:
-            return []
-
-        try:
-            photo_urls = json.loads(imp.photo_urls)
-        except (json.JSONDecodeError, TypeError):
+        photo_urls, supplier_type, external_id = self._photo_source(imp)
+        if not photo_urls:
             return []
 
         cache = get_photo_cache()
         result = []
 
         for ph in photo_urls:
-            if not isinstance(ph, dict):
-                continue
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            url = self._photo_url(ph)
             if not url:
                 continue
 
-            is_cached = cache.is_cached(imp.source_type or 'unknown', imp.external_id or '', url)
+            is_cached = cache.is_cached(supplier_type, external_id, url)
             serve_url = get_supplier_photo_url(
-                imp.source_type or 'unknown',
-                imp.external_id or '',
+                supplier_type,
+                external_id,
                 url
             )
             result.append({
                 'original_url': url,
                 'serve_url': serve_url,
                 'cached': is_cached,
-                'blur': ph.get('blur'),
-                'has_original': bool(ph.get('original') or ph.get('sexoptovik')),
+                'blur': ph.get('blur') if isinstance(ph, dict) else None,
+                'has_original': bool(
+                    isinstance(ph, str)
+                    or ph.get('original')
+                    or ph.get('sexoptovik')
+                ),
             })
 
         return result
@@ -674,14 +746,23 @@ class EnrichmentService:
                 wb_updates['characteristics'] = mapped_chars
                 fields_applied.append('characteristics')
 
-        if 'dimensions' in fields and imp.ai_dimensions:
-            try:
-                dims = json.loads(imp.ai_dimensions)
-                if dims:
-                    wb_updates['dimensions'] = dims
-                    fields_applied.append('dimensions')
-            except (json.JSONDecodeError, TypeError):
-                pass
+        if 'dimensions' in fields:
+            dims = {}
+            if imp.ai_dimensions:
+                try:
+                    parsed_dims = json.loads(imp.ai_dimensions)
+                    if isinstance(parsed_dims, dict):
+                        dims.update(parsed_dims)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            # Наблюдённые габариты упаковки, исторически лежавшие среди
+            # характеристик поставщика: они сильнее AI-оценки.
+            if supplier_characteristics:
+                dims.update(
+                    supplier_characteristics.get('extracted_dimensions') or {})
+            if dims:
+                wb_updates['dimensions'] = dims
+                fields_applied.append('dimensions')
 
         # --- Обновление через WB API (текстовые поля) ---
         wb_sync_success = False
@@ -915,12 +996,28 @@ class EnrichmentService:
         product.updated_at = datetime.utcnow()
         db.session.commit()
 
+        photo_sync_success = int(photo_result.get('uploaded') or 0) > 0
+        skipped_characteristics = (
+            (supplier_characteristics or {}).get('skipped_characteristics')
+            or []
+        )
+
+        # Happy-path read-after-write: одиночный поток сразу сверяет
+        # live-состояние карточки на WB. Bulk делает это одним батчем
+        # в конце job, чтобы не удваивать запросы на каждую карточку.
+        wb_audit_entry = None
+        if (wb_sync_success or photo_sync_success) and not is_bulk:
+            from services.wb_card_audit import audit_single_card_after_write
+            wb_audit_entry = audit_single_card_after_write(seller, product)
+
         return {
             'success': not bool(errors),
             'fields_applied': fields_applied,
             'photos': photo_result,
+            'skipped_characteristics': skipped_characteristics,
+            'wb_audit': wb_audit_entry,
             'error': '; '.join(errors) if errors else None,
-            'wb_sync': wb_sync_success,
+            'wb_sync': wb_sync_success or photo_sync_success,
         }
 
     def _map_characteristics(
@@ -943,12 +1040,29 @@ class EnrichmentService:
 
         from services.marketplace_validator import (
             build_wb_supplier_characteristic_patch,
+            partition_supplier_characteristic_input,
         )
-        return build_wb_supplier_characteristic_patch(
+        # Общий кэш на оба вызова: иначе partition и строгий билдер грузят
+        # одну и ту же схему категории из БД дважды на карточку.
+        if validation_cache is None:
+            validation_cache = {}
+        # Габариты упаковки и вне-схемные необязательные имена отделяются до
+        # строгого билдера: они попадают в source['skipped_characteristics'] /
+        # source['extracted_dimensions'] и не блокируют валидные поля.
+        partition = partition_supplier_characteristic_input(
             subject_id,
             source['values'],
             materials=source['materials'],
             gender=source['gender'],
+            validation_cache=validation_cache,
+        )
+        source['skipped_characteristics'] = partition['skipped']
+        source['extracted_dimensions'] = partition['dimensions']
+        return build_wb_supplier_characteristic_patch(
+            subject_id,
+            partition['values'],
+            materials=partition['materials'],
+            gender=partition['gender'],
             validation_cache=validation_cache,
         )
 
@@ -1066,10 +1180,11 @@ class EnrichmentService:
 
         # Загружаем в WB
         try:
-            upload_results = wb_client.upload_photos_to_card(
-                product.nm_id,
-                cached_paths,
-                seller_id=seller.id
+            upload_results = self.upload_photos_to_card_locked(
+                wb_client,
+                seller_id=seller.id,
+                nm_id=product.nm_id,
+                photo_paths=cached_paths,
             )
             uploaded_count = sum(1 for r in upload_results if r.get('success'))
             failed_count = len(upload_results) - uploaded_count
@@ -1100,6 +1215,18 @@ class EnrichmentService:
                 'strategy': strategy,
                 'error': history.wb_error_message,
             }
+        except WbMediaOperationBusy as e:
+            db.session.rollback()
+            persisted_history = CardEditHistory.query.filter_by(
+                id=history_id,
+                product_id=product.id,
+                seller_id=seller.id,
+            ).first()
+            if persisted_history is not None:
+                persisted_history.wb_sync_status = 'failed'
+                persisted_history.wb_error_message = str(e)
+                db.session.commit()
+            return {'success': False, 'uploaded': 0, 'error': str(e)}
         except Exception as e:
             db.session.rollback()
             persisted_history = CardEditHistory.query.filter_by(
@@ -1145,20 +1272,15 @@ class EnrichmentService:
             logger.info(f"[Enrich] Photos skipped (strategy=only_if_empty, has {len(current_photos)} photos)")
             return {'skipped': True, 'reason': 'already_has_photos'}
 
-        if not imp.photo_urls:
-            return {'skipped': True, 'reason': 'no_supplier_photos'}
-
-        try:
-            photo_urls = json.loads(imp.photo_urls)
-        except (json.JSONDecodeError, TypeError):
-            return {'skipped': True, 'reason': 'invalid_photo_urls_json'}
+        photo_urls, supplier_type, external_id = self._photo_source(imp)
 
         if not photo_urls:
             return {'skipped': True, 'reason': 'empty_photo_list'}
 
+        from services.wb_api_client import MAX_WB_MEDIA_FILES
+        photo_urls = photo_urls[:MAX_WB_MEDIA_FILES]
+
         cache = get_photo_cache()
-        supplier_type = imp.source_type or 'unknown'
-        external_id = imp.external_id or ''
 
         # Получаем auth cookies для sexoptovik
         auth_cookies = None
@@ -1176,18 +1298,11 @@ class EnrichmentService:
         else:
             # SINGLE-РЕЖИМ: ставим в очередь + ждём (быстрее для одного товара)
             for ph in photo_urls:
-                if not isinstance(ph, dict):
-                    continue
-                url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+                url = self._photo_url(ph)
                 if url and not cache.is_cached(supplier_type, external_id, url):
-                    fallbacks = []
-                    if ph.get('blur') and ph['blur'] != url:
-                        fallbacks.append(ph['blur'])
-                    if ph.get('original') and ph['original'] != url:
-                        fallbacks.append(ph['original'])
                     cache.queue_download(supplier_type, external_id, url,
                                          auth_cookies=auth_cookies,
-                                         fallback_urls=fallbacks)
+                                         fallback_urls=self._photo_fallbacks(ph, url))
 
             cached_paths = self._wait_for_cached_photos(
                 photo_urls, supplier_type, external_id, cache, timeout=30
@@ -1196,12 +1311,43 @@ class EnrichmentService:
         if not cached_paths:
             return {'skipped': True, 'reason': 'photos_not_cached_after_timeout'}
 
+        # Multipart is the reliable path used by the working single-card flow.
+        # Preserve seller/category standard pins without relying on public URLs:
+        # compose their exact local files around the fresh supplier gallery.
+        try:
+            from flask import current_app
+            from models import get_min_photos, get_standard_media
+            from services.standard_photos import compose_card_photo_paths
+
+            media_dir = (
+                Path(current_app.root_path)
+                / 'data'
+                / 'global_media'
+                / str(seller.id)
+            )
+            composed_paths = compose_card_photo_paths(
+                cached_paths,
+                get_standard_media(seller.id, getattr(product, 'subject_id', None)),
+                media_dir,
+                get_min_photos(seller.id),
+            )
+            if composed_paths:
+                cached_paths = composed_paths
+        except Exception as exc:
+            # Standard media is optional; supplier photos must still proceed.
+            logger.warning(
+                '[Enrich] Could not compose standard photos for nmID=%s: %s',
+                product.nm_id,
+                exc,
+            )
+
         # Загружаем в WB
         try:
-            upload_results = wb_client.upload_photos_to_card(
-                product.nm_id,
-                cached_paths,
-                seller_id=seller.id
+            upload_results = self.upload_photos_to_card_locked(
+                wb_client,
+                seller_id=seller.id,
+                nm_id=product.nm_id,
+                photo_paths=cached_paths,
             )
             uploaded_count = sum(1 for r in upload_results if r.get('success'))
             failed_count = len(upload_results) - uploaded_count
@@ -1235,17 +1381,14 @@ class EnrichmentService:
         prev_count = 0
         stall_count = 0
 
-        total = sum(1 for ph in photo_urls if isinstance(ph, dict) and
-                    (ph.get('sexoptovik') or ph.get('original') or ph.get('blur')))
+        total = sum(1 for ph in photo_urls if self._photo_url(ph))
         if total == 0:
             return []
 
         while time.time() < deadline:
             cached_paths = []
             for ph in photo_urls:
-                if not isinstance(ph, dict):
-                    continue
-                url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+                url = self._photo_url(ph)
                 if not url:
                     continue
                 if cache.is_cached(supplier_type, external_id, url):
@@ -1295,9 +1438,7 @@ class EnrichmentService:
         cached_paths = []
 
         for ph in photo_urls:
-            if not isinstance(ph, dict):
-                continue
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            url = self._photo_url(ph)
             if not url:
                 continue
 
@@ -1307,17 +1448,11 @@ class EnrichmentService:
                 continue
 
             # Скачиваем синхронно с fallbacks
-            fallbacks = []
-            if ph.get('blur') and ph['blur'] != url:
-                fallbacks.append(ph['blur'])
-            if ph.get('original') and ph['original'] != url:
-                fallbacks.append(ph['original'])
-
             try:
                 success = cache.download_now(
                     supplier_type, external_id, url,
                     auth_cookies=auth_cookies,
-                    fallback_urls=fallbacks
+                    fallback_urls=self._photo_fallbacks(ph, url),
                 )
                 if success:
                     cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
@@ -1369,7 +1504,6 @@ class EnrichmentService:
         fields: List[str],
         photo_strategy: str,
         seller,
-        wb_client
     ) -> str:
         """
         Запускает массовое обогащение в фоновом потоке.
@@ -1414,11 +1548,20 @@ class EnrichmentService:
         # Запускаем в фоне
         thread = threading.Thread(
             target=self._run_bulk_job,
-            args=(job_id, product_ids, fields, photo_strategy, seller.id, seller.wb_api_key, flask_app),
+            args=(
+                job_id, list(product_ids), list(fields), photo_strategy,
+                seller.id, flask_app,
+            ),
             daemon=True,
             name=f'EnrichJob-{job_id[:8]}'
         )
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            logger.exception('[Enrich] Could not start bulk job %s', job_id)
+            job.status = 'failed'
+            db.session.commit()
+            return job_id
 
         logger.info(f"[Enrich] Bulk job {job_id} started: {len(product_ids)} products, fields={fields}")
         return job_id
@@ -1430,10 +1573,9 @@ class EnrichmentService:
         fields: List[str],
         photo_strategy: str,
         seller_id: int,
-        wb_api_key_encrypted: str,
         flask_app=None
     ):
-        """Фоновая задача массового обогащения"""
+        """Фоновая задача с изоляцией результата и commit на каждой карточке."""
         from models import db, EnrichmentJob, Product, Seller
         from services.wb_api_client import WildberriesAPIClient
 
@@ -1442,159 +1584,214 @@ class EnrichmentService:
             return
 
         with flask_app.app_context():
-            job = EnrichmentJob.query.get(job_id)
-            if not job:
-                logger.error(f"[Enrich] Job {job_id} not found")
-                return
-
-            job.status = 'running'
-            db.session.commit()
-
-            seller = Seller.query.get(seller_id)
-            if not seller:
-                job.status = 'failed'
-                db.session.commit()
-                return
-
-            # Создаём WB клиент
-            try:
-                wb_client = WildberriesAPIClient(seller.wb_api_key)
-            except Exception as e:
-                job.status = 'failed'
-                db.session.commit()
-                logger.error(f"[Enrich] WB client init failed: {e}")
-                return
-
-            # Создаём BulkEditHistory запись
             from models import BulkEditHistory
-            bulk_history = BulkEditHistory(
-                seller_id=seller_id,
-                operation_type='supplier_enrichment',
-                operation_params={
-                    'fields': fields,
-                    'photo_strategy': photo_strategy,
-                },
-                description='Обновление карточек данными поставщика',
-                status='in_progress',
-                total_products=len(product_ids),
-                success_count=0,
-                error_count=0,
-                errors_details=[],
-            )
-            db.session.add(bulk_history)
-            db.session.flush()
-            bulk_edit_id = bulk_history.id
-            db.session.commit()
 
             results = []
             succeeded = 0
             failed = 0
             skipped = 0
-            validation_cache = {}
+            bulk_edit_id = None
 
-            for i, product_id in enumerate(product_ids):
-                product = Product.query.filter_by(
-                    id=product_id,
+            try:
+                job = db.session.get(EnrichmentJob, job_id)
+                if not job:
+                    logger.error('[Enrich] Job %s not found', job_id)
+                    return
+
+                job.status = 'running'
+                job.updated_at = datetime.utcnow()
+                db.session.commit()
+
+                seller = db.session.get(Seller, seller_id)
+                if not seller:
+                    raise RuntimeError('seller_not_found')
+
+                wb_client = WildberriesAPIClient(seller.wb_api_key)
+
+                bulk_history = BulkEditHistory(
                     seller_id=seller_id,
-                ).first()
-                if not product:
-                    skipped += 1
-                    results.append({'product_id': product_id, 'status': 'skipped', 'reason': 'not_found'})
-                    job.processed = i + 1
-                    job.skipped = skipped
-                    continue
+                    operation_type='supplier_enrichment',
+                    operation_params={
+                        'fields': fields,
+                        'photo_strategy': photo_strategy,
+                    },
+                    description=(
+                        'Массовое обновление фото карточек от поставщика'
+                        if fields == ['photos']
+                        else 'Обновление карточек данными поставщика'
+                    ),
+                    status='in_progress',
+                    total_products=len(product_ids),
+                    success_count=0,
+                    error_count=0,
+                    errors_details=[],
+                )
+                db.session.add(bulk_history)
+                db.session.flush()
+                bulk_edit_id = bulk_history.id
+                db.session.commit()
 
-                imp = self.find_supplier_data(product, seller_id)
-                if not imp:
-                    skipped += 1
-                    results.append({
-                        'product_id': product_id,
-                        'nm_id': product.nm_id,
-                        'vendor_code': product.vendor_code,
-                        'status': 'skipped',
-                        'reason': 'no_supplier_data'
-                    })
-                    job.processed = i + 1
-                    job.skipped = skipped
-                    continue
-
-                try:
-                    result = self.apply_enrichment(
-                        product, imp, fields, photo_strategy,
-                        seller, wb_client, bulk_edit_id=bulk_edit_id,
-                        is_bulk=True,
-                        validation_cache=validation_cache,
-                    )
-
-                    if result['success']:
-                        succeeded += 1
-                        results.append({
-                            'product_id': product_id,
-                            'nm_id': product.nm_id,
-                            'vendor_code': product.vendor_code,
-                            'status': 'success',
-                            'fields_applied': result['fields_applied'],
-                        })
-                    else:
-                        failed += 1
-                        results.append({
-                            'product_id': product_id,
-                            'nm_id': product.nm_id,
-                            'vendor_code': product.vendor_code,
-                            'status': 'failed',
-                            'error': result.get('error'),
-                        })
-
-                except Exception as e:
-                    db.session.rollback()
-                    failed += 1
-                    logger.error(f"[Enrich] Error enriching product {product_id}: {e}")
-                    results.append({
+                validation_cache = {}
+                wb_written_ids = []
+                for index, product_id in enumerate(product_ids, start=1):
+                    product = Product.query.filter_by(
+                        id=product_id,
+                        seller_id=seller_id,
+                    ).first()
+                    row = {
                         'product_id': product_id,
                         'nm_id': getattr(product, 'nm_id', None),
                         'vendor_code': getattr(product, 'vendor_code', None),
-                        'status': 'failed',
-                        'error': str(e),
-                    })
+                    }
 
-                # Обновляем прогресс (коммит каждые 5 товаров для снижения нагрузки на БД)
-                job.processed = i + 1
+                    if not product:
+                        skipped += 1
+                        row.update(status='skipped', reason='not_found')
+                    else:
+                        imp = self.find_supplier_data(product, seller_id)
+                        if not imp:
+                            skipped += 1
+                            row.update(
+                                status='skipped',
+                                reason='no_supplier_data',
+                            )
+                        else:
+                            try:
+                                result = self.apply_enrichment(
+                                    product, imp, fields, photo_strategy,
+                                    seller, wb_client,
+                                    bulk_edit_id=bulk_edit_id,
+                                    is_bulk=True,
+                                    validation_cache=validation_cache,
+                                )
+                                applied = list(result.get('fields_applied') or [])
+                                if result.get('success') and applied:
+                                    succeeded += 1
+                                    if result.get('wb_sync'):
+                                        wb_written_ids.append(product.id)
+                                    row.update(
+                                        status='success',
+                                        fields_applied=applied,
+                                    )
+                                elif result.get('success'):
+                                    # A no-op is not an updated card. This is
+                                    # especially important for photo-only jobs:
+                                    # only_if_empty/no source used to be counted
+                                    # as a green success although WB was untouched.
+                                    skipped += 1
+                                    photos = result.get('photos') or {}
+                                    row.update(
+                                        status='skipped',
+                                        reason=(
+                                            photos.get('reason')
+                                            or 'nothing_to_update'
+                                        ),
+                                    )
+                                else:
+                                    failed += 1
+                                    row.update(
+                                        status='failed',
+                                        error=str(
+                                            result.get('error')
+                                            or 'WB не применил обновление'
+                                        )[:500],
+                                    )
+                            except Exception:
+                                db.session.rollback()
+                                failed += 1
+                                logger.exception(
+                                    '[Enrich] Product %s failed in bulk job %s',
+                                    product_id, job_id,
+                                )
+                                row.update(
+                                    status='failed',
+                                    error='Не удалось обработать карточку',
+                                )
+
+                    results.append(row)
+
+                    # Re-query after a per-card rollback and commit every row.
+                    # This makes progress durable and lets one bad card never
+                    # stop or hide the remaining mass update.
+                    job = db.session.get(EnrichmentJob, job_id)
+                    if not job:
+                        raise RuntimeError('job_disappeared')
+                    job.processed = index
+                    job.succeeded = succeeded
+                    job.failed = failed
+                    job.skipped = skipped
+                    job.results = json.dumps(results, ensure_ascii=False)
+                    job.updated_at = datetime.utcnow()
+                    db.session.commit()
+
+                job = db.session.get(EnrichmentJob, job_id)
+                job.status = 'done'
+                job.processed = len(product_ids)
                 job.succeeded = succeeded
                 job.failed = failed
                 job.skipped = skipped
-                if (i + 1) % 5 == 0 or (i + 1) == len(product_ids):
+                job.results = json.dumps(results, ensure_ascii=False)
+                job.updated_at = datetime.utcnow()
+
+                bulk_history = db.session.get(BulkEditHistory, bulk_edit_id)
+                bulk_history.status = 'completed'
+                bulk_history.success_count = succeeded
+                bulk_history.error_count = failed + skipped
+                bulk_history.errors_details = [
+                    item for item in results
+                    if item.get('status') != 'success'
+                ]
+                bulk_history.wb_synced = succeeded > 0
+                bulk_history.completed_at = datetime.utcnow()
+                db.session.commit()
+
+                logger.info(
+                    '[Enrich] Job %s done: %s succeeded, %s failed, '
+                    '%s skipped',
+                    job_id, succeeded, failed, skipped,
+                )
+
+                # WB-ревизия после батча: один bounded read-after-write
+                # проход по реально записанным карточкам. Ошибка сверки не
+                # меняет исход уже завершённого job.
+                if wb_written_ids:
+                    try:
+                        from services.wb_card_audit import audit_cards
+                        audit_cards(seller, wb_written_ids)
+                    except Exception:
+                        db.session.rollback()
+                        logger.exception(
+                            '[Enrich] Post-batch WB audit failed for job %s',
+                            job_id,
+                        )
+            except Exception:
+                db.session.rollback()
+                logger.exception('[Enrich] Bulk job %s failed', job_id)
+
+                job = db.session.get(EnrichmentJob, job_id)
+                if job:
+                    job.status = 'failed'
+                    job.processed = len(results)
+                    job.succeeded = succeeded
+                    job.failed = failed
+                    job.skipped = skipped
                     job.results = json.dumps(results, ensure_ascii=False)
-                    db.session.commit()
+                    job.updated_at = datetime.utcnow()
 
-                # Небольшая пауза чтобы не перегружать WB API
-                if (i + 1) % 10 == 0:
-                    time.sleep(1)
-
-            # Завершение
-            job.status = 'done'
-            job.processed = len(product_ids)
-            job.succeeded = succeeded
-            job.failed = failed
-            job.skipped = skipped
-            job.results = json.dumps(results, ensure_ascii=False)
-            job.updated_at = datetime.utcnow()
-
-            bulk_history.status = 'completed'
-            bulk_history.success_count = succeeded
-            bulk_history.error_count = failed + skipped
-            bulk_history.errors_details = [
-                item for item in results
-                if item.get('status') != 'success'
-            ]
-            bulk_history.wb_synced = succeeded > 0
-            bulk_history.completed_at = datetime.utcnow()
-
-            db.session.commit()
-
-            logger.info(
-                f"[Enrich] Job {job_id} done: "
-                f"{succeeded} succeeded, {failed} failed, {skipped} skipped"
-            )
+                if bulk_edit_id is not None:
+                    bulk_history = db.session.get(
+                        BulkEditHistory, bulk_edit_id
+                    )
+                    if bulk_history:
+                        bulk_history.status = 'failed'
+                        bulk_history.success_count = succeeded
+                        bulk_history.error_count = failed + skipped
+                        bulk_history.errors_details = [
+                            item for item in results
+                            if item.get('status') != 'success'
+                        ]
+                        bulk_history.completed_at = datetime.utcnow()
+                db.session.commit()
 
 
 # =========================================================================

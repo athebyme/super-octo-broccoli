@@ -687,7 +687,8 @@ class SmartProductParser:
         return True
 
     def smart_import_to_seller(self, seller_id: int,
-                               supplier_product_ids: List[int]) -> dict:
+                               supplier_product_ids: List[int],
+                               draft_account_ids: Optional[List[int]] = None) -> dict:
         """
         Умный импорт товаров к продавцу с предварительным парсингом.
 
@@ -705,7 +706,11 @@ class SmartProductParser:
         parse_result = self.parse_and_apply_bulk(supplier_product_ids)
 
         # Step 2: Import to seller
-        import_result = SupplierService.import_to_seller(seller_id, supplier_product_ids)
+        import_result = SupplierService.import_to_seller(
+            seller_id,
+            supplier_product_ids,
+            draft_account_ids=draft_account_ids,
+        )
 
         # Step 3: Post-import enrichment — resolve brands on ImportedProducts
         if import_result.success and import_result.imported > 0:
@@ -722,6 +727,9 @@ class SmartProductParser:
                 'skipped': import_result.skipped,
                 'errors': import_result.errors,
                 'error_messages': import_result.error_messages[:10],
+                'marketplace_drafts_created': import_result.marketplace_drafts_created,
+                'marketplace_drafts_existing': import_result.marketplace_drafts_existing,
+                'marketplace_draft_errors': import_result.marketplace_draft_errors,
             },
         }
 

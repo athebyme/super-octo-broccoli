@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "macros/components.html" import channel_bar %}
 {% block title %}Качество карточек - Seller Hub{% endblock %}
 {% block content %}
 <div x-data="cardQualityPage()" x-init="init()">
@@ -24,6 +25,8 @@
          class="sh-btn sh-btn--white-outline sh-btn--sm">📸 Дополнить фото</a>
     </div>
   </div></div>
+
+  {{ channel_bar(active='wb', wb_href=url_for('card_quality_page'), ozon_href=url_for('marketplace_quality_page'), class='mb-5') }}
 
   {# ── Сводная лента ── #}
   <div class="sh-card" style="margin-bottom:32px">

@@ -410,7 +410,9 @@ def resolve_exact_brand_categories(items: list[Mapping[str, Any]]) -> list[dict[
                     'status': 'found',
                     'brand_name': brand['name'],
                     'marketplace_brand_name': binding.marketplace_brand_name,
-                    'marketplace_brand_id': binding.marketplace_brand_id,
+                    'marketplace_brand_id': (
+                        link.marketplace_external_brand_id if link else None
+                    ),
                     'confidence': 1.0,
                     'category_available': link.is_available if link else None,
                 })

@@ -70,7 +70,10 @@ services:
       - IMAGE_LAB_PROVIDER_TIMEOUT=${IMAGE_LAB_PROVIDER_TIMEOUT:-180}
       - IMAGE_LAB_DATA_DIR=/app/data/image_lab
       - IMAGE_LAB_INLINE_WORKER=${IMAGE_LAB_INLINE_WORKER:-1}
+      - MEDIA_PUBLICATION_DATA_DIR=${MEDIA_PUBLICATION_DATA_DIR:-/app/data/image_lab/media_publications}
+      - MEDIA_PUBLICATION_INLINE_WORKER=${MEDIA_PUBLICATION_INLINE_WORKER:-1}
       - INFOGRAPHIC_REMBG_MODEL=${INFOGRAPHIC_REMBG_MODEL:-u2net}
+      - SUPPLIER_ENRICHMENT_LLM_CONCURRENCY=${SUPPLIER_ENRICHMENT_LLM_CONCURRENCY:-1}
     # Порты НЕ пробрасываем наружу — доступ только через Caddy
     expose:
       - "${SELLER_PORT:-5001}"
@@ -90,6 +93,8 @@ services:
       - SKIP_SCHEDULER=1
       - DATABASE_URL=sqlite:////app/data/seller_platform.db
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env file}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENROUTER_IMAGE_MODEL=${OPENROUTER_IMAGE_MODEL:-google/gemini-3.1-flash-lite-image}
       - OPENROUTER_IMAGE_RESOLUTION=${OPENROUTER_IMAGE_RESOLUTION:-1K}
@@ -106,6 +111,8 @@ services:
       - IMAGE_LAB_PROVIDER_TIMEOUT=${IMAGE_LAB_PROVIDER_TIMEOUT:-180}
       - IMAGE_LAB_DATA_DIR=/app/data/image_lab
       - IMAGE_LAB_INLINE_WORKER=0
+      - MEDIA_PUBLICATION_DATA_DIR=${MEDIA_PUBLICATION_DATA_DIR:-/app/data/image_lab/media_publications}
+      - MEDIA_PUBLICATION_INLINE_WORKER=0
       - INFOGRAPHIC_REMBG_MODEL=${INFOGRAPHIC_REMBG_MODEL:-u2net}
     volumes:
       - seller_platform_data:/app/data

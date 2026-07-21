@@ -2217,45 +2217,6 @@ class WildberriesAPIClient:
             logger.error(f"❌ Failed to get quarantine goods: {str(e)}")
             raise
 
-    def get_card_by_nm_id(
-        self,
-        nm_id: int,
-        log_to_db: bool = False,
-        seller_id: int = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Получить полную карточку товара по nmID
-
-        Args:
-            nm_id: Артикул WB (nmID)
-            log_to_db: Логировать запрос в БД
-            seller_id: ID продавца для логирования
-
-        Returns:
-            Полная карточка товара или None если не найдена
-        """
-        logger.info(f"🔍 Getting card by nmID={nm_id}")
-
-        try:
-            data = self.get_cards_list(
-                limit=1,
-                filter_nm_id=nm_id,
-                log_to_db=log_to_db,
-                seller_id=seller_id
-            )
-            cards = data.get('cards', [])
-
-            if not cards:
-                logger.warning(f"⚠️ Card nmID={nm_id} not found in WB API")
-                return None
-
-            card = cards[0]
-            logger.info(f"✅ Card nmID={nm_id} found: {card.get('vendorCode', 'N/A')}")
-            return card
-        except Exception as e:
-            logger.error(f"❌ Failed to get card nmID={nm_id}: {str(e)}")
-            raise
-
     def merge_cards(
         self,
         target_imt_id: int,

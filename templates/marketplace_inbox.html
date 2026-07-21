@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
+{% from "macros/components.html" import channel_bar %}
 
 {% block title %}Отзывы Ozon — Seller Hub{% endblock %}
 
@@ -29,17 +30,13 @@
 
   <div style="max-width:1320px;margin:0 auto;padding:0 24px 40px">
     <div class="sh-card" style="padding:16px;margin-bottom:20px">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <a href="{{ url_for('reviews_page') }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы WB</a>
-        <span class="sh-btn sh-btn--primary sh-btn--sm" aria-current="page">Отзывы Ozon</span>
-        <label style="margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--text-secondary);font-size:14px">Кабинет
-          <select class="sh-input" style="min-width:220px;max-width:100%" @change="switchAccount($event.target.value)">
-            {% for account in ozon_accounts %}
-            <option value="{{ account.id }}" {% if account.id == selected_account.id %}selected{% endif %}>{{ account.label }} · {{ account.external_account_id }}</option>
-            {% endfor %}
-          </select>
-        </label>
-      </div>
+      {{ channel_bar(
+          active='ozon',
+          account_id=selected_account.id,
+          wb_href=url_for('reviews_page'),
+          ozon_href=url_for('marketplace_inbox.page'),
+          carry='source_kind'
+      ) }}
       <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border:1px solid var(--info-border);border-radius:var(--r-md);background:var(--info-bg);color:var(--info);font-size:13px;line-height:1.5">
         <span aria-hidden="true">{{ icon('shield', size=18) }}</span>
         <span><strong>Ничего не отправляется в Ozon.</strong> Синхронизация вызывает только read endpoints. AI и быстрый шаблон сохраняют локальный черновик для проверки человеком; кнопки публикации в этом контуре нет.</span>
@@ -57,6 +54,13 @@
       <div style="padding:15px 17px;margin-bottom:20px;border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:var(--r-md);color:var(--warn);line-height:1.5">
         <strong x-text="!capability.account_ready ? 'Кабинет не готов к синхронизации.' : 'Метод недоступен для этого API key.'"></strong>
         <span x-text="!capability.account_ready ? ' Активируйте кабинет, сохраните credentials и повторно проверьте подключение.' : (sourceKind==='review' ? ' Перепроверьте подключение кабинета: Ozon Reviews API может требовать Premium Plus.' : ' Перепроверьте подключение кабинета: Ozon Questions API может требовать Premium Plus.')"></span>
+      </div>
+    </template>
+
+    <template x-if="capability && capability.live_access_denied">
+      <div style="padding:15px 17px;margin-bottom:20px;border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:var(--r-md);color:var(--warn);line-height:1.5">
+        <strong>Ozon отклонил доступ к разделу для текущей подписки.</strong>
+        <span> Автоматические попытки временно приостановлены, чтобы не повторять заведомо отклоняемый запрос. После изменения подписки нажмите «Обновить из Ozon» для ручной перепроверки.</span>
       </div>
     </template>
 
@@ -182,7 +186,6 @@ function ozonInboxPage() {
       if(['review','question'].includes(q.get('source_kind'))) this.sourceKind=q.get('source_kind');
       await this.load();
     },
-    switchAccount(id) { location.href='/marketplaces/reviews?account_id='+encodeURIComponent(id)+'&source_kind='+this.sourceKind; },
     changeKind(kind) {
       this.sourceKind=kind; this.status=''; this.search=''; this.page=1;
       const u=new URL(location); u.searchParams.set('source_kind',kind); history.replaceState(null,'',u);

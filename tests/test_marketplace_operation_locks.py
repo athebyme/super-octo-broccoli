@@ -5,7 +5,9 @@ import unittest
 
 from services.marketplace_operation_locks import (
     release_account_operation_lock,
+    release_wb_seller_media_lock,
     try_account_operation_lock,
+    try_wb_seller_media_lock,
 )
 
 
@@ -27,6 +29,27 @@ class MarketplaceOperationLockTest(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     try_account_operation_lock(value)
+
+    def test_wb_media_is_seller_exclusive_but_separate_from_account_scope(self):
+        media = try_wb_seller_media_lock(987654321)
+        self.assertIsNotNone(media)
+        try:
+            self.assertIsNone(try_wb_seller_media_lock(987654321))
+            account = try_account_operation_lock(987654321)
+            self.assertIsNotNone(account)
+            release_account_operation_lock(account)
+        finally:
+            release_wb_seller_media_lock(media)
+
+        repeated = try_wb_seller_media_lock(987654321)
+        self.assertIsNotNone(repeated)
+        release_wb_seller_media_lock(repeated)
+
+    def test_wb_seller_id_is_strict_positive_integer(self):
+        for value in (True, 0, -1, 1.0, "1", None):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    try_wb_seller_media_lock(value)
 
 
 if __name__ == "__main__":

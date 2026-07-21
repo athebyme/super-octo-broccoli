@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% block title %}Публикация медиа · {{ campaign.name }} · Seller Hub{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='infographic-campaigns.css', v='20260717-2') }}">
+{% endblock %}
+
+{% block content %}
+<div class="ic-shell" x-data="mediaPublicationWizard()">
+  <a class="inline-flex items-center gap-1 text-xs hover:underline" style="color:var(--text-muted)" href="{{ url_for('infographic_campaign_detail', campaign_id=campaign.id) }}">{{ icon('arrow-left', size=12) }} Назад к кампании</a>
+  <div class="mt-2 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold" style="color:var(--text)">Публикация одобренных слайдов</h1>
+      <p class="mt-1 text-sm" style="color:var(--text-secondary)">{{ campaign.name }} · сначала инфографика, затем текущая галерея</p>
+    </div>
+    {% if readiness %}
+    <span class="ic-status ic-status--ready">{{ readiness.approved_items }} товаров с одобренными слайдами</span>
+    {% endif %}
+  </div>
+
+  {% if error %}<div class="ic-notice mt-5" style="border-left-color:var(--danger)">{{ error }}</div>{% endif %}
+
+  {% if readiness %}
+  <div class="ic-notice mt-5">
+    Это только подготовка точного предпросмотра. До отдельного подтверждения Seller Hub не отправит ни одного provider write. Если общий лимит 30 фото превышен, в предпросмотре явно появится хвост текущей галереи, который будет убран.
+  </div>
+
+  {% if not readiness.public_host.ready %}
+  <div class="ic-notice mt-3" style="border-left-color:var(--warn)">
+    <strong style="color:var(--text)">Публичный хост не готов.</strong> {{ readiness.public_host.message }} Предпросмотр создать можно, подтвердить публикацию — только после настройки.
+  </div>
+  {% endif %}
+
+  <div class="mp-channel-grid mt-5">
+    <section class="mp-channel-card">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <div class="flex items-center gap-2"><h2 class="font-semibold" style="color:var(--text)">Wildberries</h2><span class="ic-status ic-status--approved">Доступно</span></div>
+          <p class="mt-2 text-sm" style="color:var(--text-secondary)">Точные цели: опубликованные WB-карточки, связанные с общей карточкой товара.</p>
+        </div>
+        <strong class="text-xl" style="color:var(--text)">{{ readiness.channels.wb.linked_items }}</strong>
+      </div>
+      <dl class="mp-constraint-list mt-4">
+        <div><dt>Порядок</dt><dd>одобренные → текущие</dd></div>
+        <div><dt>Лимит</dt><dd>{{ readiness.channels.wb.max_images }} изображений</dd></div>
+        <div><dt>Сверка</dt><dd>live read + visual hash</dd></div>
+        <div><dt>Откат</dt><dd>из durable-снимка</dd></div>
+      </dl>
+      <button type="button" class="sh-btn sh-btn--primary mt-5 w-full justify-center" :disabled="busy || !selection.length || {{ 'true' if readiness.channels.wb.linked_items == 0 else 'false' }}" @click="prepare('wb', null)">
+        <span x-show="!busy">Собрать точный предпросмотр WB</span><span x-show="busy">Читаем текущие галереи…</span>
+      </button>
+    </section>
+
+    <section class="mp-channel-card mp-channel-card--muted">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <div class="flex items-center gap-2"><h2 class="font-semibold" style="color:var(--text)">Ozon</h2><span class="ic-status ic-status--blocked">Следующий этап</span></div>
+          <p class="mt-2 text-sm" style="color:var(--text-secondary)">Exact target уже учитывает кабинет и listing. Прямой pictures write здесь специально выключен: он войдёт в существующую Ozon full-state operation.</p>
+        </div>
+      </div>
+      {% if readiness.channels.ozon.accounts %}
+      <div class="mt-4 space-y-2">
+        {% for account in readiness.channels.ozon.accounts %}
+        <div class="mp-account-row"><span>{{ account.label }}</span><span>{{ account.linked_items }} связ.</span></div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="mt-4 text-xs" style="color:var(--text-muted)">Для одобренных товаров пока нет точных связанных Ozon-листингов.</p>
+      {% endif %}
+      <button type="button" class="sh-btn sh-btn--secondary mt-5 w-full justify-center" disabled>Provider write не включён</button>
+    </section>
+  </div>
+
+  <div class="mt-5 flex flex-wrap items-center gap-3 text-xs" style="color:var(--text-secondary)">
+    <span><strong style="color:var(--text)" x-text="selection.length"></strong> товаров войдут в предпросмотр</span>
+    <button type="button" class="underline" @click="useAll()">Использовать все одобренные</button>
+    <span x-show="requestedCount" x-text="`В URL выбрано: ${requestedCount}`"></span>
+  </div>
+
+  {% if recent %}
+  <section class="mt-8">
+    <h2 class="text-sm font-semibold mb-3" style="color:var(--text)">Последние предпросмотры этой кампании</h2>
+    <div class="ic-table-wrap">
+      <table class="ic-table" style="min-width:680px">
+        <thead><tr><th>Канал</th><th>Статус</th><th>Карточки</th><th>Создан</th><th></th></tr></thead>
+        <tbody>
+          {% for row in recent %}
+          <tr><td>{{ row.marketplace_code|upper }}</td><td><span class="ic-status ic-status--{{ row.status }}">{{ row.status }}</span></td><td>{{ row.succeeded_items }}/{{ row.total_items }}</td><td>{{ row.created_at[:16].replace('T', ' ') if row.created_at else '—' }}</td><td><a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ row.url }}">Открыть</a></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+  {% endif %}
+</div>
+
+{% if readiness %}
+<script>
+window.MEDIA_PUBLICATION_WIZARD = {
+  campaignId: {{ campaign.id|tojson }},
+  approvedItemIds: {{ readiness.approved_item_ids|tojson }}
+};
+</script>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='marketplace-media-publications.js', v='20260717-1') }}"></script>
+{% endblock %}

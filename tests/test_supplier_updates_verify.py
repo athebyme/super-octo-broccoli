@@ -115,6 +115,18 @@ class TestSupplierUpdatesVerify(unittest.TestCase):
         self.assertEqual(report['items'][0]['status'], 'error')
         self.assertIn('Артикул продавца', report['items'][0]['errors'][0])
 
+    def test_empty_wb_gallery_overwrites_stale_local_photos(self):
+        # Карточка существует на WB, но без фото: локальный устаревший/фейковый
+        # список обязан замениться пустым состоянием, чтобы карточка вернулась
+        # в хаб дозагрузки, а не считалась укомплектованной.
+        p = self._product(1007, 'VC-1007', photos_json='[1, 2, 3, 4, 5]')
+        card = {'photos': []}
+        report = self._verify([p.id], {1007: card}, [])
+
+        self.assertEqual(report['items'][0]['wb_photos'], 0)
+        self.db.session.refresh(p)
+        self.assertEqual(json.loads(p.photos_json), [])
+
     def test_missing_card_reported_not_found(self):
         p = self._product(1003, 'VC-1003')
         report = self._verify([p.id], {}, [])

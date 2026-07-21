@@ -261,33 +261,54 @@ def evaluate_ozon_quality(
     )
 
     metric_values = dict(metrics or {})
-    if metrics is None:
+    if metrics is None or not metric_values:
         reasons.append(_reason("ozon_no_analytics_signal"))
     else:
-        views = float(metric_values.get("views", 0) or 0)
-        orders = float(metric_values.get("ordered_units", 0) or 0)
-        cart_conversion = float(
-            metric_values.get("cart_conversion_percent", 0) or 0
+        views_raw = metric_values.get("views")
+        orders_raw = metric_values.get("ordered_units")
+        conversion_raw = metric_values.get("cart_conversion_percent")
+        cancellations_raw = metric_values.get("cancelled_units")
+        delivered_raw = metric_values.get("delivered_units")
+        returns_raw = metric_values.get("returned_units")
+        views = float(views_raw or 0) if views_raw is not None else None
+        orders = float(orders_raw or 0) if orders_raw is not None else None
+        cart_conversion = (
+            float(conversion_raw or 0) if conversion_raw is not None else None
         )
-        cancellations = float(metric_values.get("cancelled_units", 0) or 0)
-        delivered = float(metric_values.get("delivered_units", 0) or 0)
-        returns = float(metric_values.get("returned_units", 0) or 0)
-        if views < 30:
+        cancellations = (
+            float(cancellations_raw or 0)
+            if cancellations_raw is not None else None
+        )
+        delivered = (
+            float(delivered_raw or 0) if delivered_raw is not None else None
+        )
+        returns = float(returns_raw or 0) if returns_raw is not None else None
+        if views is not None and views < 30:
             reasons.append(_reason(
                 "ozon_low_views",
                 details={"views": views, "threshold": 30},
             ))
-        if views >= 100 and cart_conversion < 4:
+        if (
+            views is not None
+            and cart_conversion is not None
+            and views >= 100
+            and cart_conversion < 4
+        ):
             reasons.append(_reason(
                 "ozon_low_cart_conversion",
                 details={"percent": cart_conversion, "threshold": 4},
             ))
-        if views >= 100 and orders == 0:
+        if views is not None and orders is not None and views >= 100 and orders == 0:
             reasons.append(_reason(
                 "ozon_no_orders",
                 details={"views": views},
             ))
-        if orders >= 5 and cancellations / orders * 100 > 30:
+        if (
+            orders is not None
+            and cancellations is not None
+            and orders >= 5
+            and cancellations / orders * 100 > 30
+        ):
             reasons.append(_reason(
                 "ozon_high_cancellation_rate",
                 details={
@@ -295,7 +316,12 @@ def evaluate_ozon_quality(
                     "threshold": 30,
                 },
             ))
-        if delivered >= 5 and returns / delivered * 100 > 20:
+        if (
+            delivered is not None
+            and returns is not None
+            and delivered >= 5
+            and returns / delivered * 100 > 20
+        ):
             reasons.append(_reason(
                 "ozon_high_return_rate",
                 details={

@@ -4367,7 +4367,11 @@ def internal_validate_brand():
         }
 
         result['marketplace_brand_name'] = mp_brand.marketplace_brand_name
-        result['marketplace_brand_id'] = mp_brand.marketplace_brand_id
+        result['marketplace_brand_id'] = (
+            category_link.marketplace_external_brand_id
+            if category_id and category_link
+            else mp_brand.marketplace_brand_id if not category_id else None
+        )
 
         if category_id:
             if category_link:

@@ -1,0 +1,72 @@
+{# Подсказка «Путь карточки»: кнопка «?» + слайдовер. Самодостаточный Alpine-компонент. #}
+<div x-data="{ journeyOpen: false }" class="inline-flex">
+    <button type="button" class="sh-icon-btn" @click="journeyOpen = true"
+            title="Как устроен путь карточки: какие действия и где доступны"
+            aria-label="Подсказка: путь карточки">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    </button>
+    <template x-if="journeyOpen">
+        <div class="sh-slideover sh-slideover--lg" x-trap.noscroll.inert="journeyOpen"
+             @keydown.escape.window="journeyOpen = false"
+             role="dialog" aria-modal="true" aria-label="Путь карточки: какие действия и где доступны">
+            <div class="sh-slideover-backdrop" @click="journeyOpen = false"></div>
+            <div class="sh-slideover-panel">
+                <div class="sh-slideover-header">
+                    <div style="min-width:0">
+                        <h2 class="sh-slideover-title">Путь карточки</h2>
+                        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">
+                            Зелёное — локально и безопасно · янтарное — запись в маркетплейс со своим подтверждением
+                        </div>
+                    </div>
+                    <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="journeyOpen = false">Закрыть</button>
+                </div>
+                <div class="sh-slideover-body" style="display:flex;flex-direction:column;gap:18px">
+
+                    <section>
+                        <h3 style="font-weight:700;font-size:14px;margin:0 0 8px">1 · Каталог поставщика
+                            <a href="{{ url_for('supplier_catalog') }}" style="font-weight:400;font-size:12px;color:var(--accent)">открыть →</a></h3>
+                        <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px">
+                            <li><b style="color:var(--text)">Импортировать к себе</b> — карточка появится здесь, в «Моих товарах» <span class="sh-badge sh-badge--green sh-badge--sm">локально</span></li>
+                            <li><b style="color:var(--text)">Обновить карточки</b> — забрать свежие данные для уже импортированных <span class="sh-badge sh-badge--green sh-badge--sm">локально</span></li>
+                        </ul>
+                    </section>
+
+                    <section>
+                        <h3 style="font-weight:700;font-size:14px;margin:0 0 8px">2 · Мои товары — вы здесь</h3>
+                        <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px">
+                            <li><b style="color:var(--text)">«Обновления поставщика · N»</b> — фильтр карточек, у которых общая карточка стала богаче</li>
+                            <li><b style="color:var(--text)">Обновить из каталога</b> — скопировать новые категории/характеристики в выбранные карточки <span class="sh-badge sh-badge--green sh-badge--sm">локально</span></li>
+                            <li><b style="color:var(--text)">Превью → Отправить на WB</b> — публикация новой карточки <span class="sh-badge sh-badge--yellow sh-badge--sm">запись в WB</span></li>
+                            <li><b style="color:var(--text)">Обновить фото · Инфографика · Подготовить Ozon</b> — массовые действия по выбранным</li>
+                        </ul>
+                    </section>
+
+                    <section>
+                        <h3 style="font-weight:700;font-size:14px;margin:0 0 8px">3 · Дообогащение опубликованных на WB</h3>
+                        <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px">
+                            <li>После «Обновить из каталога» появится баннер <b style="color:var(--text)">«Отправить характеристики на WB»</b> — экран подтверждения откроется с уже отмеченными характеристиками и габаритами <span class="sh-badge sh-badge--yellow sh-badge--sm">запись в WB</span></li>
+                            <li>Прогресс — в трее задач у колокольчика; каждая карточка со снапшотом и откатом</li>
+                        </ul>
+                    </section>
+
+                    <section>
+                        <h3 style="font-weight:700;font-size:14px;margin:0 0 8px">4 · Опубликованная карточка</h3>
+                        <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px">
+                            <li>Превью карточки: <b style="color:var(--text)">Открыть на WB ↗ · Настроить цену · Инфографика</b></li>
+                            <li><a href="/card-quality" style="color:var(--accent)">Качество карточек</a> покажет, что ещё улучшить, и передаст выбранное ИИ-помощнику</li>
+                        </ul>
+                    </section>
+
+                    <section>
+                        <h3 style="font-weight:700;font-size:14px;margin:0 0 8px">5 · Ozon</h3>
+                        <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px">
+                            <li><b style="color:var(--text)">Подготовить Ozon</b> здесь создаёт черновики; проверка и публикация — в <a href="/marketplaces/drafts/" style="color:var(--accent)">Черновиках Ozon</a> <span class="sh-badge sh-badge--yellow sh-badge--sm">запись в Ozon</span></li>
+                            <li>Черновики сами подхватывают обновлённые факты при следующей проверке</li>
+                        </ul>
+                    </section>
+
+                </div>
+            </div>
+        </div>
+    </template>
+</div>

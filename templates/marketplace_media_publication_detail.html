@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% block title %}Media-публикация #{{ publication.id }} · Seller Hub{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='infographic-campaigns.css', v='20260717-2') }}">
+{% endblock %}
+
+{% block content %}
+<div class="ic-shell" x-data="mediaPublicationPage()" x-init="init()">
+  <a class="inline-flex items-center gap-1 text-xs hover:underline" style="color:var(--text-muted)" :href="`/image-lab/campaigns/${publication.campaign_id}`">{{ icon('arrow-left', size=12) }} Назад к кампании</a>
+  <div class="mt-2 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+    <div>
+      <div class="flex flex-wrap items-center gap-2"><h1 class="text-2xl font-semibold" style="color:var(--text)">Media-публикация #<span x-text="publication.id"></span></h1><span class="ic-status" :class="'ic-status--' + publication.status" x-text="statusLabel(publication.status)"></span></div>
+      <p class="mt-1 text-sm" style="color:var(--text-secondary)"><span x-text="publication.marketplace_code.toUpperCase()"></span> · одобренная инфографика перед текущими фотографиями</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" class="sh-btn sh-btn--secondary" x-show="canCancel" :disabled="busy" @click="cancelPublication()">Отменить до write</button>
+      <button type="button" class="sh-btn sh-btn--primary" x-show="canConfirm" :disabled="busy || !confirmExact || !publicHost.ready" @click="confirmPublication()">Подтвердить и отправить</button>
+    </div>
+  </div>
+
+  <div class="ic-notice mt-5">
+    Ни один URL не отправляется автоматически. После подтверждения каждая карточка проходит повторный live preflight, один write без автоматического повтора и read-after-write сверку. Неоднозначный ответ остаётся в статусе «требует сверки».
+  </div>
+  <div x-show="!publicHost.ready" class="ic-notice mt-3" style="border-left-color:var(--warn)"><span x-text="publicHost.message"></span></div>
+
+  <div class="ic-metrics mt-5">
+    <div class="ic-metric"><span class="ic-metric-label">Всего карточек</span><strong class="ic-metric-value" x-text="publication.total_items"></strong></div>
+    <div class="ic-metric"><span class="ic-metric-label">Готовы</span><strong class="ic-metric-value" x-text="publication.ready_items"></strong></div>
+    <div class="ic-metric"><span class="ic-metric-label">В процессе</span><strong class="ic-metric-value" x-text="publication.queued_items + publication.uncertain_items"></strong></div>
+    <div class="ic-metric"><span class="ic-metric-label">Подтверждены</span><strong class="ic-metric-value" x-text="publication.succeeded_items"></strong></div>
+    <div class="ic-metric"><span class="ic-metric-label">Проблемы</span><strong class="ic-metric-value" x-text="publication.blocked_items + publication.failed_items"></strong></div>
+  </div>
+
+  <label x-show="canConfirm" class="mp-confirm-box mt-5">
+    <input type="checkbox" class="rounded" x-model="confirmExact">
+    <span>Я проверил показанный порядок для всех готовых карточек. Одобренные слайды будут первыми; отмеченный хвост текущей галереи будет удалён из-за лимита 30.</span>
+  </label>
+
+  <div class="ic-toolbar mt-5">
+    <label class="flex items-center gap-2 text-xs" style="color:var(--text-secondary)"><input type="checkbox" class="rounded" :checked="allRollbackSelected" @change="toggleRollback($event.target.checked)"><span x-text="rollbackSelection.length ? `${rollbackSelection.length} для отката` : 'Выбрать доступные для отката'"></span></label>
+    <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="!rollbackSelection.length || busy" @click="rollbackSelected()">Восстановить исходные галереи</button>
+    <span class="flex-1"></span>
+    <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="busy" @click="refresh()">Обновить статусы</button>
+  </div>
+
+  <div class="ic-table-wrap" style="border-radius:0 0 var(--r-md) var(--r-md)">
+    <table class="ic-table mp-publication-table">
+      <thead><tr><th class="w-10"></th><th>Карточка</th><th>Статус</th><th>Точный порядок после публикации</th></tr></thead>
+      <tbody>
+        <template x-for="operation in publication.operations" :key="operation.id">
+          <tr>
+            <td><input type="checkbox" class="rounded" :disabled="!operation.can_rollback" :value="operation.id" x-model.number="rollbackSelection" :aria-label="`Выбрать откат ${operation.title}`"></td>
+            <td class="min-w-[220px]"><strong class="ic-product-title" x-text="operation.title"></strong><span class="block mt-1 text-xs" style="color:var(--text-muted)" x-text="targetLabel(operation)"></span><span x-show="operation.dropped_count" class="block mt-2 text-xs" style="color:var(--danger)" x-text="`Будет убрано из хвоста: ${operation.dropped_count}`"></span></td>
+            <td class="min-w-[150px]"><span class="ic-status" :class="'ic-status--' + operation.status" x-text="statusLabel(operation.status)"></span><span x-show="operation.error" class="block mt-2 max-w-xs text-xs" style="color:var(--danger)" x-text="operation.error"></span><span x-show="operation.rollback" class="block mt-2 text-xs" style="color:var(--text-muted)" x-text="`Откат: ${statusLabel(operation.rollback.status)}`"></span></td>
+            <td>
+              <div class="mp-gallery-strip">
+                <template x-for="media in operation.proposed_media" :key="`${operation.id}-${media.position}`">
+                  <div class="mp-gallery-item"><div class="mp-gallery-image"><img :src="media.preview_url" :alt="`Позиция ${media.position}`" loading="lazy"><span class="ic-slide-number" x-text="media.position"></span></div><span class="mp-gallery-kind" :class="media.kind === 'generated' ? 'is-generated' : ''" x-text="media.kind === 'generated' ? 'инфографика' : 'текущее'"></span></div>
+                </template>
+              </div>
+              <div x-show="operation.dropped_media.length" class="mt-3"><span class="text-[11px]" style="color:var(--text-muted)">Не войдут из-за лимита:</span><div class="mp-gallery-strip mp-gallery-strip--dropped mt-1"><template x-for="media in operation.dropped_media" :key="`drop-${operation.id}-${media.baseline_position}`"><div class="mp-gallery-item"><div class="mp-gallery-image"><img :src="media.preview_url" alt="Удаляемое фото" loading="lazy"></div></div></template></div></div>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+window.MEDIA_PUBLICATION_BOOTSTRAP = {
+  publication: {{ publication|tojson }},
+  publicHost: {{ public_host|tojson }}
+};
+</script>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='marketplace-media-publications.js', v='20260717-1') }}"></script>
+{% endblock %}

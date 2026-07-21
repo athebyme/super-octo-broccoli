@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+
+{% block title %}Запуск обогащения — {{ supplier.name }}{% endblock %}
+
+{% macro status_badge(status, element_id='') -%}
+    {% set labels = {
+        'pending': 'В очереди', 'running': 'В работе', 'cancelling': 'Останавливается',
+        'cancelled': 'Остановлен', 'completed': 'Завершён', 'partial': 'Нужна проверка',
+        'failed': 'Ошибка', 'applied': 'Обновлено', 'unchanged': 'Без изменений',
+        'needs_review': 'Проверить', 'rolled_back': 'Отменено',
+        'rollback_conflict': 'Конфликт отката'
+    } %}
+    {% set tone = 'green' if status in ['completed', 'applied'] else ('red' if status in ['failed', 'rollback_conflict'] else ('yellow' if status in ['pending', 'running', 'cancelling', 'partial', 'needs_review'] else 'gray')) %}
+    <span{% if element_id %} id="{{ element_id }}"{% endif %} class="sh-badge sh-badge--sm sh-badge--{{ tone }}">{{ labels.get(status, status) }}</span>
+{%- endmacro %}
+
+{% block content %}
+{% set active = run.status in ['pending', 'running', 'cancelling'] %}
+<style>
+    .sce-progress-track { height: 8px; overflow: hidden; border-radius: 999px; background: var(--bg); }
+    .sce-progress-value { height: 100%; border-radius: 999px; background: var(--accent); transition: width .2s ease; }
+    .sce-category-search { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); }
+    .sce-category-search:focus-visible, .sce-category-option:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .sce-category-option { display: block; width: 100%; padding: 11px 4px; border: 0; border-bottom: 1px solid var(--border-light); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+    .sce-category-option:hover { background: var(--bg-hover); }
+</style>
+
+<div class="sh-page" x-data="{ categoryReviewOpen: false }" @open-category-review.window="categoryReviewOpen = true" @close-category-review.window="categoryReviewOpen = false">
+    <nav class="mb-4 text-sm" style="color:var(--text-muted)" aria-label="Хлебные крошки">
+        <a href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id) }}" class="hover:underline">Массовое обогащение</a>
+        <span class="mx-2" aria-hidden="true">/</span><span>Запуск {{ run.id[:8] }}</span>
+    </nav>
+
+    <header class="sh-page-header">
+        <div class="sh-page-header-content">
+            <div>
+                <h1 class="sh-page-title">Запуск на {{ run.total }} товаров</h1>
+                <p class="sh-page-subtitle">{{ supplier.name }} · {{ 'категории и новые WB-характеристики' if run.mode == 'category_and_characteristics' else 'исправление WB-категорий' }} · модель {{ run.model_used or '—' }}</p>
+            </div>
+            <div class="sh-page-actions">
+                {% if active %}
+                <form method="POST" action="{{ url_for('admin_supplier_catalog_enrichment_cancel', supplier_id=supplier.id, run_id=run.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="sh-btn sh-btn--white-outline sh-btn--md" onclick="return confirm('Остановить обработку? Уже применённые изменения сохранятся.')">Остановить</button>
+                </form>
+                {% endif %}
+                <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id) }}">К выбору товаров</a>
+            </div>
+        </div>
+    </header>
+
+    <section class="sh-card" id="run-summary" data-active="{{ '1' if active else '0' }}" data-status-url="{{ url_for('admin_supplier_catalog_enrichment_status', supplier_id=supplier.id, run_id=run.id) }}" aria-labelledby="run-summary-title">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div class="flex flex-wrap items-center gap-2">
+                <h2 id="run-summary-title" class="sr-only">Ход обработки</h2>
+                {{ status_badge(run.status, 'run-status') }}
+                <span id="run-current" class="text-sm" style="color:var(--text-muted)">{{ run.current_label or '' }}</span>
+            </div>
+            <span id="run-progress-label" class="text-sm font-medium">{{ run.processed }} / {{ run.total }}</span>
+        </div>
+        <div class="sce-progress-track" role="progressbar" aria-label="Прогресс запуска" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ run_data.progress }}">
+            <div id="run-progress" class="sce-progress-value" style="width:{{ run_data.progress }}%"></div>
+        </div>
+        <div class="sh-stat-grid sh-stat-grid--5 mt-5" style="margin-bottom:0">
+            <div class="sh-stat-card"><div class="sh-stat-label">Обновлено</div><div id="count-applied" class="sh-stat-value">{{ run.applied }}</div></div>
+            <div class="sh-stat-card"><div class="sh-stat-label">Без изменений</div><div id="count-unchanged" class="sh-stat-value">{{ run.unchanged }}</div></div>
+            <div class="sh-stat-card"><div class="sh-stat-label">Проверить</div><div id="count-review" class="sh-stat-value" style="color:var(--warn)">{{ run.needs_review }}</div></div>
+            <div class="sh-stat-card"><div class="sh-stat-label">Ошибки</div><div id="count-failed" class="sh-stat-value" style="color:var(--danger)">{{ run.failed }}</div></div>
+            <div class="sh-stat-card"><div class="sh-stat-label">Model-вызовы</div><div id="count-calls" class="sh-stat-value">{{ run.llm_calls }}</div><div class="sh-stat-footnote">лимит {{ run.llm_call_limit }}</div></div>
+        </div>
+    </section>
+
+    {% if run.error_message %}
+    <div class="sh-alert sh-alert--error" role="alert"><div class="sh-alert-content"><strong>Запуск остановлен с ошибкой</strong><div>{{ run.error_message }}</div></div></div>
+    {% endif %}
+
+    <nav class="sh-tabs" aria-label="Фильтр результатов">
+        {% for value, label in [('', 'Все'), ('needs_review', 'Требуют проверки'), ('applied', 'Обновлены'), ('unchanged', 'Без изменений'), ('failed', 'Ошибки'), ('rolled_back', 'Отменены')] %}
+        <a href="{{ url_for('admin_supplier_catalog_enrichment_run', supplier_id=supplier.id, run_id=run.id, status=value) }}" class="sh-tab {{ 'sh-tab--active' if current_status == value }}" {% if current_status == value %}aria-current="page"{% endif %}>{{ label }}</a>
+        {% endfor %}
+    </nav>
+
+    <div class="sh-table-wrap">
+        <table class="sh-table">
+            <thead><tr><th>#</th><th>Товар</th><th>Результат категории</th><th>Что сделано</th><th>Статус</th><th></th></tr></thead>
+            <tbody>
+            {% for item in pagination.items %}
+                {% set product = item.supplier_product %}
+                <tr>
+                    <td style="color:var(--text-muted)">{{ item.ordinal }}</td>
+                    <td style="min-width:240px">
+                        <a class="font-medium hover:underline" href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}">{{ product.title or 'Без названия' }}</a>
+                        <div class="mt-1 text-xs" style="color:var(--text-muted)">ID {{ product.id }} · общая версия v{{ product.content_revision or 1 }}</div>
+                    </td>
+                    <td style="min-width:260px">
+                        {% if item.proposed_subject_name %}
+                        <p class="font-medium">{{ item.proposed_subject_name }}</p>
+                        <p class="mt-1 text-xs" style="color:var(--text-muted)">subject_id {{ item.proposed_subject_id }}{% if item.confidence is not none %} · уверенность {{ (item.confidence * 100)|round|int }}%{% endif %}</p>
+                        {% else %}<span style="color:var(--text-muted)">Не определена</span>{% endif %}
+                        {% if item.evidence %}<p class="mt-2 text-xs">Основание: «{{ item.evidence[:180] }}»</p>{% endif %}
+                        {% if item.reasoning %}<p class="mt-1 text-xs" style="color:var(--text-muted)">{{ item.reasoning[:240] }}</p>{% endif %}
+                    </td>
+                    <td style="min-width:170px">
+                        {% if item.category_changed %}<div>Категория обновлена</div>{% endif %}
+                        {% if item.characteristics_changed %}<div>Характеристики дополнены</div>{% endif %}
+                        {% if not item.category_changed and not item.characteristics_changed %}<span style="color:var(--text-muted)">Записи нет</span>{% endif %}
+                    </td>
+                    <td style="min-width:170px">
+                        {{ status_badge(item.status) }}
+                        {% if item.error_message %}<p class="mt-2 text-xs" style="color:var(--danger)">{{ item.error_message[:260] }}</p>{% endif %}
+                    </td>
+                    <td class="text-right" style="min-width:200px">
+                        {% if item.status == 'needs_review' and inference_by_item and inference_by_item.get(item.id) %}
+                            <form method="POST" action="{{ url_for('admin_supplier_catalog_enrichment_apply_inference', supplier_id=supplier.id, run_id=run.id, item_id=item.id) }}" class="text-left">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                {% for suggestion in inference_by_item.get(item.id) %}
+                                <label class="flex items-start gap-2 mb-1 text-xs" style="cursor:pointer">
+                                    <input type="checkbox" name="field_names" value="{{ suggestion.name }}" class="mt-0.5">
+                                    <span>
+                                        <strong>{{ suggestion.name }}</strong>:
+                                        {{ suggestion.value if suggestion.value is string else suggestion.value|join(', ') }}
+                                        <span style="color:var(--text-muted)">({{ '%.0f'|format((suggestion.confidence or 0) * 100) }}%{% if suggestion.rationale %} — {{ suggestion.rationale[:120] }}{% endif %})</span>
+                                    </span>
+                                </label>
+                                {% endfor %}
+                                <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm mt-1" onclick="return confirm('Применить выбранные предположения к общей карточке?')">Применить выбранные</button>
+                            </form>
+                        {% elif item.status == 'needs_review' %}
+                            {% if item.proposed_subject_id %}
+                            <form method="POST" action="{{ url_for('admin_supplier_catalog_enrichment_apply_category', supplier_id=supplier.id, item_id=item.id) }}" class="inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="run_id" value="{{ run.id }}">
+                                <input type="hidden" name="subject_id" value="{{ item.proposed_subject_id }}">
+                                <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm" onclick="return confirm('Подтвердить эту конечную категорию?')">Подтвердить</button>
+                            </form>
+                            {% endif %}
+                            <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm mt-1" onclick='openCategoryReview({{ item.id }}, {{ run.id|tojson }}, {{ (product.title or "")|tojson }})'>Выбрать другую</button>
+                        {% elif item.status == 'applied' %}
+                            <form method="POST" action="{{ url_for('admin_supplier_catalog_enrichment_rollback', supplier_id=supplier.id, item_id=item.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="run_id" value="{{ run.id }}">
+                                <button type="submit" class="sh-btn sh-btn--secondary sh-btn--sm" onclick="return confirm('Откатить изменение этой общей карточки?')">Откатить</button>
+                            </form>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% else %}
+                <tr><td colspan="6"><div class="sh-empty"><p class="sh-empty-title">Нет строк с таким статусом</p><p class="sh-empty-desc">Выберите другой фильтр результатов.</p></div></td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if pagination.pages > 1 %}
+    <nav class="sh-pagination" aria-label="Страницы результатов">
+        <span class="sh-pagination-info">Страница {{ pagination.page }} из {{ pagination.pages }}</span>
+        <div class="sh-pagination-buttons">
+            {% if pagination.has_prev %}<a class="sh-pagination-btn" href="{{ url_for('admin_supplier_catalog_enrichment_run', supplier_id=supplier.id, run_id=run.id, status=current_status, page=pagination.prev_num) }}">Назад</a>{% endif %}
+            <span class="sh-pagination-btn sh-pagination-btn--active" aria-current="page">{{ pagination.page }}</span>
+            {% if pagination.has_next %}<a class="sh-pagination-btn" href="{{ url_for('admin_supplier_catalog_enrichment_run', supplier_id=supplier.id, run_id=run.id, status=current_status, page=pagination.next_num) }}">Дальше</a>{% endif %}
+        </div>
+    </nav>
+    {% endif %}
+
+    <div x-show="categoryReviewOpen" x-cloak class="sh-modal sh-modal--md" @keydown.escape.window="categoryReviewOpen = false" x-trap.noscroll.inert="categoryReviewOpen" role="dialog" aria-modal="true" aria-labelledby="category-review-title">
+        <div class="sh-backdrop" x-show="categoryReviewOpen" x-transition:enter="sh-backdrop-enter" x-transition:leave="sh-backdrop-leave" @click="categoryReviewOpen = false"></div>
+        <div class="sh-modal-panel" x-show="categoryReviewOpen" x-transition:enter="sh-modal-enter" x-transition:leave="sh-modal-leave" @click.stop>
+            <div class="sh-modal-header">
+                <div>
+                    <h2 id="category-review-title" class="sh-modal-title">Выбрать конечную категорию</h2>
+                    <p id="category-review-product-title" class="mt-1 text-sm" style="color:var(--text-muted)"></p>
+                </div>
+                <button type="button" class="sh-modal-close" @click="categoryReviewOpen = false" aria-label="Закрыть">×</button>
+            </div>
+            <div class="sh-modal-body">
+                <label for="category-review-search" class="text-sm font-medium">Поиск в свежем справочнике WB</label>
+                <input id="category-review-search" class="sce-category-search mt-2" type="search" placeholder="Например: анальные пробки" autocomplete="off">
+                <div id="category-review-results" class="mt-2 max-h-72 overflow-y-auto" aria-live="polite"></div>
+                <form id="category-review-form" method="POST" class="mt-4 hidden">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="run_id" id="category-review-run">
+                    <input type="hidden" name="subject_id" id="category-review-subject">
+                    <div class="p-3 text-sm" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm)">Выбрано: <strong id="category-review-choice"></strong></div>
+                    <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm mt-3" onclick="return confirm('Применить выбранную конечную категорию?')">Применить</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function(){
+    var statusLabels = {
+        pending: 'В очереди', running: 'В работе', cancelling: 'Останавливается',
+        cancelled: 'Остановлен', completed: 'Завершён', partial: 'Нужна проверка', failed: 'Ошибка'
+    };
+    function statusTone(status) {
+        if (status === 'completed') return 'green';
+        if (status === 'failed') return 'red';
+        if (['pending', 'running', 'cancelling', 'partial'].indexOf(status) >= 0) return 'yellow';
+        return 'gray';
+    }
+    var summary = document.getElementById('run-summary');
+    if (summary && summary.dataset.active === '1') {
+        var timer = setInterval(function(){
+            fetch(summary.dataset.statusUrl, {headers:{'Accept':'application/json'}})
+                .then(function(response){ if (!response.ok) throw new Error('status'); return response.json(); })
+                .then(function(data){
+                    var status = document.getElementById('run-status');
+                    status.textContent = statusLabels[data.status] || data.status;
+                    status.className = 'sh-badge sh-badge--sm sh-badge--' + statusTone(data.status);
+                    document.getElementById('run-current').textContent = data.current_label || '';
+                    document.getElementById('run-progress-label').textContent = data.processed + ' / ' + data.total;
+                    document.getElementById('run-progress').style.width = data.progress + '%';
+                    document.querySelector('.sce-progress-track').setAttribute('aria-valuenow', data.progress);
+                    document.getElementById('count-applied').textContent = data.applied;
+                    document.getElementById('count-unchanged').textContent = data.unchanged;
+                    document.getElementById('count-review').textContent = data.needs_review;
+                    document.getElementById('count-failed').textContent = data.failed;
+                    document.getElementById('count-calls').textContent = data.llm_calls;
+                    if (['completed','partial','failed','cancelled'].indexOf(data.status) >= 0) {
+                        clearInterval(timer);
+                        window.location.reload();
+                    }
+                }).catch(function(){});
+        }, 4000);
+    }
+
+    var input = document.getElementById('category-review-search');
+    var results = document.getElementById('category-review-results');
+    var form = document.getElementById('category-review-form');
+    var debounce;
+
+    function showMessage(message, danger) {
+        results.replaceChildren();
+        var text = document.createElement('p');
+        text.className = 'p-2 text-sm';
+        text.style.color = danger ? 'var(--danger)' : 'var(--text-muted)';
+        text.textContent = message;
+        results.appendChild(text);
+    }
+
+    window.openCategoryReview = function(itemId, runId, title){
+        form.action = '{{ url_for("admin_supplier_catalog_enrichment_apply_category", supplier_id=supplier.id, item_id=0) }}'.replace('/0/category', '/' + itemId + '/category');
+        document.getElementById('category-review-run').value = runId;
+        document.getElementById('category-review-product-title').textContent = title;
+        input.value = '';
+        results.replaceChildren();
+        form.classList.add('hidden');
+        window.dispatchEvent(new CustomEvent('open-category-review'));
+        setTimeout(function(){ input.focus(); }, 50);
+    };
+
+    input.addEventListener('input', function(){
+        clearTimeout(debounce);
+        debounce = setTimeout(searchCategories, 300);
+    });
+
+    function searchCategories(){
+        var query = input.value.trim();
+        if (query.length < 2) { results.replaceChildren(); return; }
+        showMessage('Ищу в справочнике…', false);
+        fetch('{{ url_for("admin_supplier_catalog_enrichment_category_search", supplier_id=supplier.id) }}?q=' + encodeURIComponent(query), {headers:{'Accept':'application/json'}})
+            .then(function(response){ return response.json().then(function(data){ if (!response.ok) throw new Error(data.error || 'Ошибка поиска'); return data; }); })
+            .then(function(data){
+                results.replaceChildren();
+                if (!data.categories || !data.categories.length) { showMessage('Ничего не найдено', false); return; }
+                data.categories.forEach(function(category){
+                    var button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'sce-category-option';
+                    var name = document.createElement('strong');
+                    name.textContent = category.subject_name;
+                    var context = document.createElement('span');
+                    context.className = 'block mt-1 text-xs';
+                    context.style.color = 'var(--text-muted)';
+                    context.textContent = (category.parent_name || 'Без родителя') + ' · subject_id ' + category.subject_id;
+                    button.append(name, context);
+                    button.addEventListener('click', function(){
+                        document.getElementById('category-review-subject').value = category.subject_id;
+                        document.getElementById('category-review-choice').textContent = category.subject_name + ' · ' + category.subject_id;
+                        form.classList.remove('hidden');
+                    });
+                    results.appendChild(button);
+                });
+            }).catch(function(error){ showMessage(error.message || 'Не удалось выполнить поиск', true); });
+    }
+})();
+</script>
+{% endblock %}

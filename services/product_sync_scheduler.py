@@ -266,6 +266,46 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True,
     )
 
+    # Admin supplier-card enrichment is durable: the HTTP request only
+    # creates exact run/item rows, while this bounded worker resumes them
+    # after a process restart. A per-supplier file claim also coordinates the
+    # immediate kick from the admin UI in the current singleton deployment.
+    scheduler.add_job(
+        func=lambda: process_supplier_catalog_enrichment_runs(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='supplier_catalog_enrichment',
+        name='Process durable shared supplier catalog enrichment runs',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Уведомление продавцам о свежих обновлениях общих карточек поставщика:
+    # локальный SQL-подсчёт без provider/LLM, не чаще одного раза в сутки
+    # на продавца (дедуп по заголовку за 24 часа).
+    scheduler.add_job(
+        func=lambda: notify_supplier_updates(flask_app),
+        trigger=IntervalTrigger(hours=6),
+        id='notify_supplier_updates',
+        name='Notify sellers about pending supplier card updates',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Reviewed media writes and their read-after-write reconciliation are
+    # durable even when the optional Image Lab worker profile is disabled.
+    # Per-target file claims make overlap with the immediate UI kick harmless.
+    scheduler.add_job(
+        func=lambda: process_marketplace_media_publications(flask_app),
+        trigger=IntervalTrigger(seconds=15),
+        id='marketplace_media_publications',
+        name='Process and reconcile reviewed marketplace media operations',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # P11 strangler maintenance never calls WB/Ozon.  Each seller advances by
     # at most 200 Product rows and a short DB lease prevents duplicate batches
     # if another worker/CLI overlaps the scheduler.
@@ -495,6 +535,90 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
     logger.info("✅ Product sync scheduler started")
 
     return scheduler
+
+
+def process_marketplace_media_publications(flask_app):
+    """Advance bounded reviewed media writes and safety reconciliation."""
+    from services.marketplace_media_publications import (
+        process_pending_once,
+        recover_stale_operations,
+    )
+    try:
+        recover_stale_operations(flask_app, limit=20)
+        process_pending_once(flask_app, limit=4)
+    except Exception:
+        logger.exception('Marketplace media publication scheduler tick failed')
+
+
+def process_supplier_catalog_enrichment_runs(flask_app):
+    """Advance a bounded number of durable admin enrichment runs."""
+    with flask_app.app_context():
+        from models import db
+        from services.supplier_catalog_enrichment import (
+            SupplierCatalogEnrichmentService,
+        )
+        try:
+            SupplierCatalogEnrichmentService.process_due_runs(limit=2)
+        except Exception:
+            logger.exception('Supplier catalog enrichment scheduler tick failed')
+        finally:
+            db.session.remove()
+
+
+SUPPLIER_UPDATES_NOTIFICATION_TITLE = 'Обновления карточек от поставщика'
+
+
+def notify_supplier_updates(flask_app):
+    """Разово в сутки сообщить продавцу о накопившихся обновлениях.
+
+    Только локальный SQL: сравнение content_revision общей карточки с
+    последней скопированной версией продавца. Ничего не изменяет."""
+    with flask_app.app_context():
+        from datetime import datetime, timedelta
+        from models import (
+            db, ImportedProduct, Notification, SupplierProduct,
+        )
+        try:
+            rows = db.session.query(
+                ImportedProduct.seller_id,
+                db.func.count(ImportedProduct.id),
+            ).join(
+                SupplierProduct,
+                SupplierProduct.id == ImportedProduct.supplier_product_id,
+            ).filter(
+                SupplierProduct.content_revision
+                > ImportedProduct.supplier_content_revision,
+            ).group_by(ImportedProduct.seller_id).all()
+            cutoff = datetime.utcnow() - timedelta(hours=24)
+            for seller_id, count in rows:
+                if not count:
+                    continue
+                recent = Notification.query.filter(
+                    Notification.seller_id == seller_id,
+                    Notification.title == SUPPLIER_UPDATES_NOTIFICATION_TITLE,
+                    Notification.created_at >= cutoff,
+                ).first()
+                if recent:
+                    continue
+                from seller_platform import create_notification
+                create_notification(
+                    seller_id=seller_id,
+                    category='info',
+                    title=SUPPLIER_UPDATES_NOTIFICATION_TITLE,
+                    message=(
+                        f'У {count} ваших карточек обновились общие данные '
+                        'поставщика (категории, характеристики, цены или фото). '
+                        'Откройте «Мои товары» → «Обновления поставщика», '
+                        'выберите карточки и нажмите «Обновить из каталога».'
+                    ),
+                    link='/my-products?updates=1',
+                )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception('Supplier updates notification tick failed')
+        finally:
+            db.session.remove()
 
 
 def check_and_sync_all_sellers(flask_app):
@@ -1571,6 +1695,13 @@ def sync_ozon_inbox_accounts(flask_app, limit=2):
                 ('question', 'questions_read'),
             ):
                 if required not in capabilities:
+                    continue
+                if MarketplaceInboxService.access_denied_retry_after(
+                    seller_id=account.seller_id,
+                    account_id=account.id,
+                    source_kind=source_kind,
+                    now=current_time,
+                ) is not None:
                     continue
                 running = MarketplaceInboxService._running_run(
                     seller_id=account.seller_id,

@@ -90,7 +90,13 @@ METRIC_BY_CODE = {item.metric_code: item for item in METRIC_DEFINITIONS}
 METRIC_BY_PROVIDER = {
     item.provider_metric: item for item in METRIC_DEFINITIONS
 }
-PROVIDER_METRICS = tuple(item.provider_metric for item in METRIC_DEFINITIONS)
+# Current `/v1/analytics/data` accepts only these non-deprecated metrics.  Keep
+# the full registry above so historical snapshots retain their definitions,
+# but never send deprecated names in a new provider request.
+REQUEST_METRIC_DEFINITIONS = METRIC_DEFINITIONS[:2]
+PROVIDER_METRICS = tuple(
+    item.provider_metric for item in REQUEST_METRIC_DEFINITIONS
+)
 DIMENSIONS = {"product": "sku", "day": "day"}
 PAGE_LIMIT = 1000
 MAX_OFFSET = 1_000_000
@@ -209,7 +215,7 @@ def request_fingerprint(
     period_end: Any,
 ) -> str:
     canonical = {
-        "contract": "ozon-analytics-v1",
+        "contract": "ozon-analytics-core-v2",
         "period_start": _date(period_start, "period_start").isoformat(),
         "period_end": _date(period_end, "period_end").isoformat(),
         "metrics": list(PROVIDER_METRICS),
@@ -285,7 +291,10 @@ def normalize_analytics_response(
             "analytics result.data must be a bounded list"
         )
     raw_totals = result.get("totals")
-    if not isinstance(raw_totals, list) or len(raw_totals) != len(METRIC_DEFINITIONS):
+    if (
+        not isinstance(raw_totals, list)
+        or len(raw_totals) != len(REQUEST_METRIC_DEFINITIONS)
+    ):
         raise OzonAnalyticsContractError(
             "analytics totals must match requested metrics exactly"
         )
@@ -295,7 +304,7 @@ def normalize_analytics_response(
             f"result.totals[{index}]",
             definition,
         )
-        for index, definition in enumerate(METRIC_DEFINITIONS)
+        for index, definition in enumerate(REQUEST_METRIC_DEFINITIONS)
     }
 
     rows = []
@@ -336,7 +345,10 @@ def normalize_analytics_response(
                 maximum=500,
             )
         raw_metrics = raw_row.get("metrics")
-        if not isinstance(raw_metrics, list) or len(raw_metrics) != len(METRIC_DEFINITIONS):
+        if (
+            not isinstance(raw_metrics, list)
+            or len(raw_metrics) != len(REQUEST_METRIC_DEFINITIONS)
+        ):
             raise OzonAnalyticsContractError(
                 f"result.data[{row_index}].metrics must match requested metrics exactly"
             )
@@ -346,7 +358,7 @@ def normalize_analytics_response(
                 f"result.data[{row_index}].metrics[{index}]",
                 definition,
             )
-            for index, definition in enumerate(METRIC_DEFINITIONS)
+            for index, definition in enumerate(REQUEST_METRIC_DEFINITIONS)
         }
         rows.append({
             "dimension_id": dimension_id,
@@ -379,4 +391,4 @@ def normalize_analytics_response(
 
 
 def metric_definitions_public() -> List[Dict[str, Any]]:
-    return [item.to_public_dict() for item in METRIC_DEFINITIONS]
+    return [item.to_public_dict() for item in REQUEST_METRIC_DEFINITIONS]

@@ -1305,7 +1305,9 @@ def api_tasks_tray():
     if not current_user.seller:
         return jsonify({'items': [], 'count': 0})
     from models import (BackgroundJob, AgentTask, AutoPublishRun,
-                        ImageGenerationExperiment, EnrichmentJob, PriceChangeBatch)
+                        ImageGenerationExperiment, InfographicCampaign,
+                        MarketplaceMediaPublication, EnrichmentJob,
+                        PriceChangeBatch)
     sid = current_user.seller.id
     items = []
 
@@ -1369,7 +1371,59 @@ def api_tasks_tray():
     except Exception:
         pass
 
-    # 5. EnrichmentJob — обогащение карточек
+    # 5. Массовые кампании инфографики
+    try:
+        for campaign in (InfographicCampaign.query
+                         .filter(InfographicCampaign.seller_id == sid,
+                                 InfographicCampaign.status.in_(['queued', 'running']))
+                         .order_by(InfographicCampaign.created_at.desc()).limit(5).all()):
+            items.append({
+                'kind': 'image',
+                'title': campaign.name or 'Кампания инфографики',
+                'status': campaign.status,
+                'progress': pct(
+                    campaign.completed_items + campaign.failed_items,
+                    campaign.total_items,
+                ),
+                'started_at': iso(campaign.started_at or campaign.created_at),
+                'link': f'/image-lab/campaigns/{campaign.id}',
+            })
+    except Exception:
+        pass
+
+    # 6. Подтверждённая массовая публикация медиа
+    try:
+        for publication in (MarketplaceMediaPublication.query
+                            .filter(
+                                MarketplaceMediaPublication.seller_id == sid,
+                                MarketplaceMediaPublication.status.in_([
+                                    'queued', 'running',
+                                ]),
+                            )
+                            .order_by(
+                                MarketplaceMediaPublication.created_at.desc(),
+                            ).limit(5).all()):
+            completed = (
+                publication.succeeded_items
+                + publication.failed_items
+                + publication.blocked_items
+            )
+            items.append({
+                'kind': 'publish',
+                'title': (
+                    f'Публикация медиа {publication.marketplace_code.upper()}'
+                ),
+                'status': publication.status,
+                'progress': pct(completed, publication.total_items),
+                'started_at': iso(
+                    publication.confirmed_at or publication.created_at
+                ),
+                'link': f'/image-lab/publications/{publication.id}',
+            })
+    except Exception:
+        pass
+
+    # 7. EnrichmentJob — обогащение карточек
     try:
         for j in (EnrichmentJob.query
                   .filter(EnrichmentJob.seller_id == sid,
@@ -1381,7 +1435,7 @@ def api_tasks_tray():
     except Exception:
         pass
 
-    # 6. PriceChangeBatch — применение цен в WB
+    # 8. PriceChangeBatch — применение цен в WB
     try:
         for b in (PriceChangeBatch.query
                   .filter(PriceChangeBatch.seller_id == sid, PriceChangeBatch.status == 'applying')
@@ -1392,7 +1446,7 @@ def api_tasks_tray():
     except Exception:
         pass
 
-    # 7. Синхронизация каталога (флаг на Seller)
+    # 9. Синхронизация каталога (флаг на Seller)
     try:
         if current_user.seller.api_sync_status == 'syncing':
             items.append({'kind': 'sync', 'title': 'Синхронизация каталога', 'status': 'running',
@@ -1749,6 +1803,25 @@ def products_list():
         except Exception as e:
             app.logger.debug(f"Supplier badge data failed: {e}")
 
+        # Ozon-каналы карточек страницы: компактная точка в списке WB-карточек
+        # (read-проекция через ImportedProduct → MarketplaceListing)
+        ozon_listings_map = {}
+        if app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            try:
+                page_ids = [p.id for p in products]
+                if page_ids:
+                    from services.marketplace_product_links import (
+                        MarketplaceProductLinkService,
+                    )
+                    ozon_listings_map = (
+                        MarketplaceProductLinkService.ozon_listings_for_products(
+                            seller_id=current_user.seller.id,
+                            product_ids=page_ids,
+                        )
+                    )
+            except Exception as e:
+                app.logger.debug(f"Ozon channel badge data failed: {e}")
+
         return render_template(
             'products.html',
             products=products,
@@ -1778,6 +1851,7 @@ def products_list():
             product_supplier_map=product_supplier_map,
             filter_supplier=filter_supplier,
             marketplace_read_state=marketplace_read_state,
+            ozon_listings_map=ozon_listings_map,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
@@ -2098,10 +2172,9 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     photo_count = max(photo_count_v1, photo_count_v2, photo_count_v3)
                     if photo_count == 0 and card_data.get('mediaFiles'):
                         photo_count = len(media) if media else 0
-                    # Если photo_count все еще 0, но есть nmID - предполагаем что есть хотя бы 1 фото
-                    # WB обычно требует минимум 1 фото для товара
-                    if photo_count == 0 and nm_id:
-                        photo_count = 5  # Предполагаем стандартное количество фото
+                    # Карточка без фото — наблюдённый факт WB. Ничего не
+                    # предполагаем: фабрикация счётчика скрывала такие карточки
+                    # из хаба дозагрузки фото и завышала quality score.
                     photo_indices = list(range(1, photo_count + 1)) if photo_count > 0 else []
                     photos_json = json.dumps(photo_indices) if photo_indices else None
 
@@ -6479,9 +6552,20 @@ register_supplier_updates_routes(app)
 from routes.suppliers import register_supplier_routes
 register_supplier_routes(app)
 
+from routes.supplier_catalog_enrichment import (
+    register_supplier_catalog_enrichment_routes,
+)
+register_supplier_catalog_enrichment_routes(app)
+
 # ============= ЛАБОРАТОРИЯ ГЕНЕРАЦИИ ИЗОБРАЖЕНИЙ =============
 from routes.image_lab import register_image_lab_routes
 register_image_lab_routes(app)
+from routes.infographic_campaigns import register_infographic_campaign_routes
+register_infographic_campaign_routes(app)
+from routes.marketplace_media_publications import (
+    register_marketplace_media_publication_routes,
+)
+register_marketplace_media_publication_routes(app)
 
 # ============= РОУТЫ ФОТОГРАФИЙ ПОСТАВЩИКОВ =============
 from routes.photos import register_photo_routes, register_content_photo_routes
@@ -6495,6 +6579,9 @@ register_docs_routes(app)
 # ============= РОУТЫ МАРКЕТПЛЕЙСОВ =============
 from routes.marketplaces import register_marketplaces_routes
 register_marketplaces_routes(app)
+
+from routes.admin_sales_intelligence import register_admin_sales_intelligence_routes
+register_admin_sales_intelligence_routes(app)
 
 from routes.marketplace_accounts import register_marketplace_account_routes
 register_marketplace_account_routes(app)
@@ -6525,6 +6612,10 @@ register_marketplace_finance_routes(app)
 
 from routes.marketplace_inbox import register_marketplace_inbox_routes
 register_marketplace_inbox_routes(app)
+
+# Глобальный UI-контекст каналов (mp_nav) для channel bar в shell-слое
+from services.marketplace_nav import register_marketplace_nav
+register_marketplace_nav(app)
 
 # ============= РОУТЫ БРЕНДОВ =============
 from routes.brands import register_brand_routes
@@ -6635,6 +6726,10 @@ def _run_startup_migrations():
                 migrate as migrate_marketplace_inbox,
             )
             migrate_marketplace_inbox(sqlite_path)
+            from migrations.migrate_add_brand_category_external_id import (
+                migrate as migrate_brand_category_external_id,
+            )
+            migrate_brand_category_external_id(sqlite_path)
             from migrations.migrate_add_marketplace_product_links import (
                 migrate as migrate_marketplace_product_links,
             )
@@ -6651,10 +6746,30 @@ def _run_startup_migrations():
                 migrate as migrate_image_lab_marketplace_target,
             )
             migrate_image_lab_marketplace_target(sqlite_path)
+            from migrations.migrate_add_infographic_campaigns import (
+                migrate as migrate_infographic_campaigns,
+            )
+            migrate_infographic_campaigns(sqlite_path)
+            from migrations.migrate_add_marketplace_media_publications import (
+                migrate as migrate_marketplace_media_publications,
+            )
+            migrate_marketplace_media_publications(sqlite_path)
+            from migrations.migrate_add_bestseller_image_recommendations import (
+                migrate as migrate_bestseller_image_recommendations,
+            )
+            migrate_bestseller_image_recommendations(sqlite_path)
             from migrations.migrate_add_content_factory_marketplace_scope import (
                 migrate as migrate_content_factory_marketplace_scope,
             )
             migrate_content_factory_marketplace_scope(sqlite_path)
+            from migrations.migrate_add_social_account_publish_health import (
+                migrate as migrate_social_account_publish_health,
+            )
+            migrate_social_account_publish_health(sqlite_path)
+            from migrations.migrate_add_supplier_catalog_enrichment import (
+                migrate as migrate_supplier_catalog_enrichment,
+            )
+            migrate_supplier_catalog_enrichment(sqlite_path)
             bind.dispose()
             bind = db.engine
     insp = sa_inspect(bind)

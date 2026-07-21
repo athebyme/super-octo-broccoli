@@ -393,6 +393,39 @@ def api_verify(brand_id):
 
             if result.get('valid') and result.get('exact_match'):
                 match = result['exact_match']
+                matched_external_id = match.get('id')
+                if (
+                    type(matched_external_id) is not int
+                    or matched_external_id <= 0
+                ):
+                    return jsonify({
+                        'success': False,
+                        'error': 'WB вернул некорректный ID бренда',
+                    }), 502
+                existing_mp_brand = MarketplaceBrand.query.filter_by(
+                    brand_id=brand.id,
+                    marketplace_id=marketplace_id,
+                ).first()
+                existing_link = (
+                    BrandCategoryLink.query.filter_by(
+                        marketplace_brand_id=existing_mp_brand.id,
+                        category_id=subject_id,
+                    ).first()
+                    if existing_mp_brand else None
+                )
+                if (
+                    existing_link
+                    and existing_link.marketplace_external_brand_id is not None
+                    and int(existing_link.marketplace_external_brand_id)
+                    != matched_external_id
+                ):
+                    return jsonify({
+                        'success': False,
+                        'error': (
+                            'WB вернул конфликтующую идентичность бренда '
+                            'для этой категории'
+                        ),
+                    }), 409
 
                 # Обновляем глобальный бренд
                 brand.status = 'verified'
@@ -405,7 +438,7 @@ def api_verify(brand_id):
                     brand_id=brand.id,
                     marketplace_id=marketplace_id,
                     marketplace_name=match.get('name', brand.name),
-                    marketplace_ext_id=match.get('id'),
+                    marketplace_ext_id=matched_external_id,
                 )
                 mp_brand = MarketplaceBrand.query.get(marketplace_brand_id)
                 if mp_brand:
@@ -424,6 +457,7 @@ def api_verify(brand_id):
                         )
                         db.session.add(link)
                     link.is_available = True
+                    link.marketplace_external_brand_id = matched_external_id
                     link.verified_at = datetime.utcnow()
 
                 db.session.commit()
