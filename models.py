@@ -10508,6 +10508,10 @@ class ContentPlan(db.Model):
 
 # ============= МОНИТОРИНГ КОНКУРЕНТОВ =============
 
+class CompetitorProxyEncryptionError(RuntimeError):
+    """ENCRYPTION_KEY обязателен для сохранения прокси мониторинга конкурентов."""
+
+
 class CompetitorMonitorSettings(db.Model):
     """Настройки мониторинга конкурентов для селлера"""
     __tablename__ = 'competitor_monitor_settings'
@@ -10531,8 +10535,58 @@ class CompetitorMonitorSettings(db.Model):
     # Порог алерта по изменению скидки, процентные пункты
     discount_alert_pp = db.Column(db.Float, default=5.0)
 
-    # Прокси для обхода блокировки WB (формат: http://user:pass@host:port)
-    proxy_url = db.Column(db.String(500), nullable=True)
+    # Прокси для обхода блокировки WB (формат: http://user:pass@host:port).
+    # Может содержать user:pass — это credential: новая запись шифруется
+    # Fernet (fail-closed), чтение поддерживает legacy plaintext.
+    # Наружу — только proxy_display().
+    _proxy_url = db.Column('proxy_url', db.String(500), nullable=True)
+
+    @property
+    def proxy_url(self):
+        if not self._proxy_url:
+            return None
+        encryption_key = os.environ.get('ENCRYPTION_KEY', '').strip()
+        if not encryption_key:
+            return self._proxy_url  # legacy plaintext
+        try:
+            f = Fernet(encryption_key.encode('ascii'))
+            return f.decrypt(self._proxy_url.encode('ascii')).decode('utf-8')
+        except Exception:
+            return self._proxy_url  # не расшифровалось => plaintext
+
+    @proxy_url.setter
+    def proxy_url(self, value):
+        if not value:
+            self._proxy_url = None
+            return
+        encryption_key = os.environ.get('ENCRYPTION_KEY', '').strip()
+        if not encryption_key:
+            raise CompetitorProxyEncryptionError(
+                'ENCRYPTION_KEY обязателен для сохранения прокси')
+        try:
+            f = Fernet(encryption_key.encode('ascii'))
+        except (TypeError, ValueError):
+            raise CompetitorProxyEncryptionError(
+                'ENCRYPTION_KEY не является валидным Fernet-ключом') from None
+        self._proxy_url = f.encrypt(value.strip().encode('utf-8')).decode('ascii')
+
+    def proxy_display(self):
+        raw = self.proxy_url
+        if not raw:
+            return {'is_set': False, 'masked': None, 'has_credentials': False}
+        try:
+            from urllib.parse import urlsplit
+            parts = urlsplit(raw)
+            host = parts.hostname or '***'
+            port = f':{parts.port}' if parts.port else ''
+            masked = f'{parts.scheme or "http"}://{host}{port}'
+            return {
+                'is_set': True,
+                'masked': masked,
+                'has_credentials': bool(parts.username or parts.password),
+            }
+        except (ValueError, AttributeError):
+            return {'is_set': True, 'masked': '***', 'has_credentials': True}
 
     # Статистика
     last_sync_at = db.Column(db.DateTime, nullable=True)
@@ -10558,7 +10612,7 @@ class CompetitorMonitorSettings(db.Model):
             'sync_interval_minutes': self.sync_interval_minutes,
             'next_sync_due_at': self.next_sync_due_at.isoformat() if self.next_sync_due_at else None,
             'discount_alert_pp': self.discount_alert_pp,
-            'proxy_url': self.proxy_url,
+            'proxy': self.proxy_display(),
             'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
             'last_sync_status': self.last_sync_status,
             'last_sync_error': self.last_sync_error,
