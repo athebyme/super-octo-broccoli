@@ -1,149 +1,364 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
 
 {% block title %}Группы конкурентов - Seller Hub{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="competitorGroups()">
+<div x-data="competitorGroups()">
+<style>
+  .cg-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+  .cg-name{color:var(--text);font-weight:600;text-decoration:none}
+  .cg-name:hover{color:var(--accent)}
+  .cg-name:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--r-xs)}
+  .cg-del:hover{color:var(--danger);background:var(--danger-bg)}
+  .cg-field{display:block;margin-bottom:16px}
+  .cg-field:last-child{margin-bottom:0}
+  .cg-label{display:block;font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:6px}
+  .cg-input{width:100%;padding:8px 12px;font-size:13px;color:var(--text);background:var(--bg);
+    border:1px solid var(--border);border-radius:var(--r-sm)}
+  .cg-input:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px;border-color:var(--accent)}
+  .cg-input::placeholder{color:var(--text-muted)}
+  .cg-swatch{width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer;
+    transition:transform var(--dur-1) var(--ease-out)}
+  .cg-swatch:hover{transform:scale(1.08)}
+  .cg-swatch:active{transform:scale(0.96)}
+  .cg-swatch:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+  .cg-swatch--active{border-color:var(--text);box-shadow:inset 0 0 0 2px var(--bg-card)}
+  .cg-results{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:var(--z-dropdown);
+    max-height:260px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border);
+    border-radius:var(--r-sm);box-shadow:var(--shadow-2)}
+  .cg-result{display:block;width:100%;text-align:left;padding:8px 12px;font-size:13px;color:var(--text);
+    background:transparent;border:none;border-top:1px solid var(--border);cursor:pointer}
+  .cg-result:first-child{border-top:none}
+  .cg-result:hover{background:var(--bg-hover)}
+  .cg-result:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+  .cg-result:active{background:var(--bg)}
+  .cg-result-empty{padding:12px;font-size:12.5px;color:var(--text-muted);text-align:center}
+</style>
 
-    <!-- Header -->
-    <div class="mb-8 relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8">
-        <div class="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Группы конкурентов</h1>
-                <p class="mt-1 text-sm text-gray-400">Организуйте конкурентов по группам для удобного отслеживания</p>
-            </div>
-            <button @click="showCreateModal = true"
-                class="px-4 py-2 text-sm rounded-md bg-white text-[#1a1a1a] font-semibold hover:bg-gray-100 transition-all">
-                + Создать группу
-            </button>
-        </div>
+  {# ── Шапка ── #}
+  <div class="sh-page-header">
+    <div class="sh-page-header-content">
+      <div>
+        <h1 class="sh-page-title">Группы конкурентов</h1>
+        <p class="sh-page-subtitle">Организуйте конкурентов по группам и привяжите свой товар для сравнения цен</p>
+      </div>
+      <div class="sh-page-actions">
+        <a href="{{ url_for('competitors_dashboard') }}" class="sh-btn sh-btn--white-outline sh-btn--sm">
+          <span class="sh-btn-icon">{{ icon('arrow-left', size=16) }}</span>
+          К мониторингу
+        </a>
+        <button type="button" class="sh-btn sh-btn--white sh-btn--sm" @click="openCreate()">
+          <span class="sh-btn-icon">{{ icon('plus', size=16) }}</span>
+          Создать группу
+        </button>
+      </div>
     </div>
+  </div>
 
-    <!-- Groups list -->
-    <div class="space-y-4">
-        <template x-for="group in groups" :key="group.id">
-            <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-3">
-                        <div class="w-4 h-4 rounded-full" :style="'background-color:' + group.color"></div>
-                        <div>
-                            <a :href="'/competitors/groups/' + group.id" class="text-lg font-semibold text-gray-900 hover:text-indigo-600" x-text="group.name"></a>
-                            <p class="text-sm text-gray-500" x-text="group.description || ''"></p>
-                        </div>
-                    </div>
-                    <div class="flex items-center gap-3">
-                        <span class="text-sm text-gray-500" x-text="group.products_count + ' товаров'"></span>
-                        <template x-if="group.auto_source !== 'manual'">
-                            <span class="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full" x-text="group.auto_source === 'seller' ? 'По продавцу' : 'По категории'"></span>
-                        </template>
-                        <button @click="editGroup(group)" class="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-                        </button>
-                        <button @click="deleteGroup(group)" class="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                        </button>
-                    </div>
+  {# ── Таблица групп ── #}
+  <template x-if="groups.length > 0">
+    <div class="sh-table-wrap">
+      <table class="sh-table">
+        <thead>
+          <tr>
+            <th>Группа</th>
+            <th>Описание</th>
+            <th style="text-align:right">Товаров</th>
+            <th>Свой товар</th>
+            <th>Импорт</th>
+            <th style="width:90px"><span class="sr-only">Действия</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="g in groups" :key="g.id">
+            <tr>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px;min-width:0">
+                  <span class="cg-dot" :style="'background-color:' + g.color" aria-hidden="true"></span>
+                  <a class="cg-name" :href="'/competitors/groups/' + g.id" x-text="g.name"></a>
                 </div>
-            </div>
-        </template>
+              </td>
+              <td style="color:var(--text-muted);max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                  x-text="g.description || '—'"></td>
+              <td style="text-align:right;font-variant-numeric:tabular-nums" x-text="g.products_count"></td>
+              <td>
+                <template x-if="g.own_product_id">
+                  <span class="sh-badge sh-badge--purple sh-badge--sm" x-text="'#' + g.own_product_id"></span>
+                </template>
+                <template x-if="!g.own_product_id">
+                  <span style="color:var(--text-muted)">—</span>
+                </template>
+              </td>
+              <td>
+                <template x-if="g.import_requested">
+                  <span class="sh-chip">
+                    <span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span>
+                    Импорт каталога…
+                  </span>
+                </template>
+                <template x-if="!g.import_requested && g.auto_source && g.auto_source !== 'manual'">
+                  <span class="sh-badge sh-badge--blue sh-badge--sm"
+                        x-text="g.auto_source === 'seller' ? 'По продавцу' : 'По категории'"></span>
+                </template>
+                <template x-if="!g.import_requested && (!g.auto_source || g.auto_source === 'manual')">
+                  <span style="color:var(--text-muted)">—</span>
+                </template>
+              </td>
+              <td>
+                <div style="display:flex;gap:4px;justify-content:flex-end">
+                  <button type="button" class="sh-icon-btn sh-icon-btn--sm" @click="openEdit(g)"
+                          :aria-label="'Редактировать группу ' + g.name" title="Редактировать">{{ icon('edit', size=16) }}</button>
+                  <button type="button" class="sh-icon-btn sh-icon-btn--sm cg-del" @click="deleteGroup(g)"
+                          :aria-label="'Удалить группу ' + g.name" title="Удалить">{{ icon('trash', size=16) }}</button>
+                </div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
     </div>
+  </template>
 
-    <template x-if="groups.length === 0">
-        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center">
-            <p class="text-gray-500 mb-4">Создайте первую группу для отслеживания конкурентов</p>
-            <button @click="showCreateModal = true" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">
-                Создать группу
-            </button>
+  {# ── Пустое состояние ── #}
+  <template x-if="groups.length === 0">
+    <div class="sh-card sh-card--flush">
+      <div class="sh-empty">
+        <div class="sh-empty-icon">{{ icon('inbox', size=48, stroke=1) }}</div>
+        <p class="sh-empty-title">Нет групп конкурентов</p>
+        <p class="sh-empty-desc">Создайте первую группу, чтобы отслеживать цены конкурентов рядом со своим товаром</p>
+        <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" style="margin-top:16px" @click="openCreate()">
+          <span class="sh-btn-icon">{{ icon('plus', size=16) }}</span>
+          Создать группу
+        </button>
+      </div>
+    </div>
+  </template>
+
+  {# ── Модалка создания/редактирования ── #}
+  <div x-show="modalOpen" x-cloak class="sh-modal sh-modal--md"
+       @keydown.escape.window="modalOpen = false" x-trap.noscroll.inert="modalOpen"
+       role="dialog" aria-modal="true" aria-labelledby="cg-modal-title">
+    <div class="sh-backdrop" x-show="modalOpen"
+         x-transition:enter="sh-backdrop-enter" x-transition:leave="sh-backdrop-leave"
+         @click="modalOpen = false"></div>
+    <div class="sh-modal-panel" x-show="modalOpen"
+         x-transition:enter="sh-modal-enter" x-transition:leave="sh-modal-leave" @click.stop>
+      <div class="sh-modal-header">
+        <h2 id="cg-modal-title" class="sh-modal-title"
+            x-text="editingId ? 'Редактировать группу' : 'Создать группу'"></h2>
+        <button type="button" class="sh-modal-close" @click="modalOpen = false" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="sh-modal-body">
+        <label class="cg-field">
+          <span class="cg-label">Название</span>
+          <input type="text" class="cg-input" x-model="form.name" maxlength="200"
+                 placeholder="Например: Конкуренты по футболкам" @keydown.enter.prevent="saveGroup()">
+        </label>
+        <label class="cg-field">
+          <span class="cg-label">Описание</span>
+          <input type="text" class="cg-input" x-model="form.description" placeholder="Необязательно">
+        </label>
+        <div class="cg-field">
+          <span class="cg-label" id="cg-color-label">Цвет</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap" role="group" aria-labelledby="cg-color-label">
+            <template x-for="c in colors" :key="c">
+              <button type="button" class="cg-swatch" :class="form.color === c ? 'cg-swatch--active' : ''"
+                      :style="'background-color:' + c" @click="form.color = c"
+                      :aria-label="'Цвет ' + c" :aria-pressed="form.color === c ? 'true' : 'false'"></button>
+            </template>
+          </div>
         </div>
-    </template>
-
-    <!-- Create/Edit Modal -->
-    <template x-if="showCreateModal">
-        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" @click.self="showCreateModal = false">
-            <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full mx-4 p-6">
-                <h3 class="text-lg font-semibold mb-4" x-text="editingGroup ? 'Редактировать группу' : 'Создать группу'"></h3>
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Название</label>
-                        <input type="text" x-model="form.name" placeholder="Например: Конкуренты по футболкам"
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Описание</label>
-                        <input type="text" x-model="form.description" placeholder="Опционально"
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">Цвет</label>
-                        <div class="flex gap-2">
-                            <template x-for="c in colors" :key="c">
-                                <button @click="form.color = c" class="w-8 h-8 rounded-full border-2 transition-all"
-                                    :class="form.color === c ? 'border-gray-900 scale-110' : 'border-transparent'"
-                                    :style="'background-color:' + c"></button>
-                            </template>
-                        </div>
-                    </div>
-                </div>
-                <div class="flex justify-end gap-3 mt-6">
-                    <button @click="showCreateModal = false; editingGroup = null"
-                        class="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">Отмена</button>
-                    <button @click="saveGroup()" :disabled="!form.name"
-                        class="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-                        x-text="editingGroup ? 'Сохранить' : 'Создать'"></button>
-                </div>
+        <div class="cg-field">
+          <span class="cg-label">Свой товар для сравнения</span>
+          <template x-if="selectedProduct">
+            <span class="sh-chip sh-chip--active">
+              <span x-text="productLabel(selectedProduct)"></span>
+              <button type="button" class="sh-chip-remove" aria-label="Отвязать товар"
+                      @click="clearProduct()">{{ icon('close', size=12, stroke=2.5) }}</button>
+            </span>
+          </template>
+          <template x-if="!selectedProduct">
+            <div style="position:relative">
+              <input type="search" class="cg-input" x-model="productQuery"
+                     @input.debounce.300ms="searchOwnProduct()"
+                     @focus="searchResults.length && (searchOpen = true)"
+                     @keydown.escape.stop="resetSearch()"
+                     placeholder="Поиск по названию, артикулу или nmID" autocomplete="off"
+                     role="combobox" :aria-expanded="searchOpen ? 'true' : 'false'"
+                     aria-label="Поиск своего товара">
+              <span class="sh-spinner sh-spinner--sm" x-show="searchLoading" x-cloak
+                    style="position:absolute;right:10px;top:10px" aria-hidden="true"></span>
+              <div class="cg-results" x-show="searchOpen" x-cloak @click.outside="searchOpen = false" role="listbox">
+                <template x-if="searchResults.length === 0">
+                  <div class="cg-result-empty">Ничего не найдено</div>
+                </template>
+                <template x-for="item in searchResults" :key="item.id">
+                  <button type="button" class="cg-result" role="option" @click="selectProduct(item)">
+                    <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                          x-text="item.title || ('Товар #' + item.id)"></span>
+                    <span style="display:block;font-size:11.5px;color:var(--text-muted)"
+                          x-text="[item.vendor_code, item.nm_id ? 'nmID ' + item.nm_id : null].filter(Boolean).join(' · ')"></span>
+                  </button>
+                </template>
+              </div>
             </div>
+          </template>
+          <p style="font-size:11.5px;color:var(--text-muted);margin:6px 0 0">
+            Привязка нужна для сравнения позиции своей цены внутри группы
+          </p>
         </div>
-    </template>
+      </div>
+      <div class="sh-modal-footer">
+        <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="modalOpen = false">Отмена</button>
+        <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" :class="saving ? 'is-loading' : ''"
+                :disabled="!form.name.trim() || saving" @click="saveGroup()"
+                x-text="editingId ? 'Сохранить' : 'Создать'"></button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
 function competitorGroups() {
     return {
         groups: {{ groups_data|tojson }},
-        showCreateModal: false,
-        editingGroup: null,
-        form: { name: '', description: '', color: '#3B82F6' },
+        modalOpen: false,
+        editingId: null,
+        saving: false,
+        form: { name: '', description: '', color: '#3B82F6', own_product_id: null },
         colors: ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#06B6D4', '#6B7280'],
+        selectedProduct: null,
+        productQuery: '',
+        searchResults: [],
+        searchLoading: false,
+        searchOpen: false,
+        _searchCtl: null,
 
-        editGroup(group) {
-            this.editingGroup = group;
-            this.form = { name: group.name, description: group.description || '', color: group.color };
-            this.showCreateModal = true;
+        openCreate() {
+            this.editingId = null;
+            this.form = { name: '', description: '', color: '#3B82F6', own_product_id: null };
+            this.selectedProduct = null;
+            this.resetSearch();
+            this.modalOpen = true;
+        },
+        openEdit(g) {
+            this.editingId = g.id;
+            this.form = {
+                name: g.name,
+                description: g.description || '',
+                color: g.color || '#3B82F6',
+                own_product_id: g.own_product_id ?? null
+            };
+            this.selectedProduct = g.own_product_id ? { id: g.own_product_id, title: null } : null;
+            this.resetSearch();
+            this.modalOpen = true;
+        },
+        resetSearch() {
+            if (this._searchCtl) this._searchCtl.abort();
+            this._searchCtl = null;
+            this.productQuery = '';
+            this.searchResults = [];
+            this.searchOpen = false;
+            this.searchLoading = false;
+        },
+        productLabel(p) {
+            if (!p) return '';
+            if (p.title) return p.title + (p.vendor_code ? ' · ' + p.vendor_code : '');
+            return 'Товар #' + p.id;
+        },
+        selectProduct(item) {
+            this.selectedProduct = item;
+            this.form.own_product_id = item.id;
+            this.resetSearch();
+        },
+        clearProduct() {
+            this.selectedProduct = null;
+            this.form.own_product_id = null;
+        },
+
+        async searchOwnProduct() {
+            const q = this.productQuery.trim();
+            if (this._searchCtl) this._searchCtl.abort();
+            if (q.length < 2) {
+                this.searchResults = [];
+                this.searchOpen = false;
+                this.searchLoading = false;
+                return;
+            }
+            const ctl = new AbortController();
+            this._searchCtl = ctl;
+            this.searchLoading = true;
+            try {
+                const res = await fetch('/api/products/search?q=' + encodeURIComponent(q), { signal: ctl.signal });
+                const data = await res.json();
+                if (this._searchCtl !== ctl) return;
+                this.searchResults = data.items || [];
+                this.searchOpen = true;
+            } catch (e) {
+                if (e.name !== 'AbortError') console.error('product search:', e);
+            } finally {
+                if (this._searchCtl === ctl) this.searchLoading = false;
+            }
         },
 
         async saveGroup() {
-            const csrf = document.querySelector('meta[name=csrf-token]')?.content;
-            const headers = {'Content-Type': 'application/json', 'X-CSRFToken': csrf};
-
-            if (this.editingGroup) {
-                const res = await fetch(`/api/competitors/groups/${this.editingGroup.id}`, {
-                    method: 'PUT', headers, body: JSON.stringify(this.form)
-                });
-                const data = await res.json();
-                const idx = this.groups.findIndex(g => g.id === this.editingGroup.id);
-                if (idx >= 0) this.groups[idx] = data;
-            } else {
-                const res = await fetch('/api/competitors/groups', {
-                    method: 'POST', headers, body: JSON.stringify(this.form)
-                });
-                const data = await res.json();
-                this.groups.unshift(data);
+            if (!this.form.name.trim() || this.saving) return;
+            this.saving = true;
+            const headers = {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name=csrf-token]').content
+            };
+            const body = JSON.stringify({
+                name: this.form.name.trim(),
+                description: this.form.description,
+                color: this.form.color,
+                own_product_id: this.form.own_product_id
+            });
+            try {
+                const res = this.editingId
+                    ? await fetch('/api/competitors/groups/' + this.editingId, { method: 'PUT', headers, body })
+                    : await fetch('/api/competitors/groups', { method: 'POST', headers, body });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    this.$store.toasts.error(data.error || 'Не удалось сохранить группу');
+                    return;
+                }
+                if (this.editingId) {
+                    const idx = this.groups.findIndex(g => g.id === this.editingId);
+                    if (idx >= 0) this.groups.splice(idx, 1, data);
+                    this.$store.toasts.success('Группа обновлена');
+                } else {
+                    this.groups.unshift(data);
+                    this.$store.toasts.success('Группа создана');
+                }
+                this.modalOpen = false;
+            } catch (e) {
+                this.$store.toasts.error('Сеть недоступна — попробуйте ещё раз');
+            } finally {
+                this.saving = false;
             }
-
-            this.showCreateModal = false;
-            this.editingGroup = null;
-            this.form = { name: '', description: '', color: '#3B82F6' };
         },
 
-        async deleteGroup(group) {
-            if (!confirm(`Удалить группу "${group.name}" и все товары в ней?`)) return;
-            const csrf = document.querySelector('meta[name=csrf-token]')?.content;
-            await fetch(`/api/competitors/groups/${group.id}`, {
-                method: 'DELETE', headers: {'X-CSRFToken': csrf}
-            });
-            this.groups = this.groups.filter(g => g.id !== group.id);
+        async deleteGroup(g) {
+            if (!confirm('Удалить группу «' + g.name + '» и все товары в ней?')) return;
+            try {
+                const res = await fetch('/api/competitors/groups/' + g.id, {
+                    method: 'DELETE',
+                    headers: { 'X-CSRFToken': document.querySelector('meta[name=csrf-token]').content }
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    this.$store.toasts.error(data.error || 'Не удалось удалить группу');
+                    return;
+                }
+                this.groups = this.groups.filter(x => x.id !== g.id);
+                this.$store.toasts.success('Группа удалена');
+            } catch (e) {
+                this.$store.toasts.error('Сеть недоступна — попробуйте ещё раз');
+            }
         }
-    }
+    };
 }
 </script>
 {% endblock %}
