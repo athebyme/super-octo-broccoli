@@ -37,6 +37,11 @@ DEACTIVATE_AFTER_GONE = 20
 SYNC_WALL_CLOCK_BUDGET_SECONDS = 90
 SUPPLIER_PAGES_PER_SYNC = 5
 BRAND_PAGES_PER_SYNC = 2
+IMPORT_PAGES_PER_TICK = 3
+IMPORT_MAX_PRODUCTS = 300
+
+COMPETITOR_NOTIFICATION_TITLE = 'Конкуренты: изменения'
+NOTIFICATION_DEDUP_HOURS = 4
 
 
 def normalize_sync_interval_minutes(value):
@@ -158,7 +163,52 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                 CompetitorProduct.last_fetched_at.asc().nullsfirst(),
             ).limit(limit).all()
 
-            if not products:
+            # ---------- Фаза A: сеть (write-транзакция не открыта) ----------
+            def out_of_budget():
+                return (time.time() - started) > SYNC_WALL_CLOCK_BUDGET_SECONDS
+
+            # A0: заявки на импорт каталога продавца (только сеть; ORM не трогаем:
+            # изменение флагов здесь открыло бы через autoflush write-транзакцию
+            # SQLite посреди сетевых вызовов)
+            from models import CompetitorGroup
+            import_rows = []      # [(group_id, product_dict)]
+            import_done = set()   # group_id, у которых заявку снимаем в B0
+            import_groups = CompetitorGroup.query.filter_by(
+                seller_id=seller_id, import_requested=True).all()
+            import_existing = {
+                g.id: CompetitorProduct.query.filter_by(group_id=g.id).count()
+                for g in import_groups}
+            for group in import_groups:
+                try:
+                    import_supplier_id = int(group.auto_source_value or 0)
+                except (TypeError, ValueError):
+                    import_supplier_id = 0
+                if not import_supplier_id:
+                    import_done.add(group.id)
+                    continue
+                fetched = 0
+                exhausted = False
+                for page in range(1, IMPORT_PAGES_PER_TICK + 1):
+                    if out_of_budget() or (
+                            import_existing[group.id] + fetched
+                            >= IMPORT_MAX_PRODUCTS):
+                        break
+                    try:
+                        items = service.fetch_seller_catalog_page(
+                            import_supplier_id, page=page)
+                    except WBRateLimitedError:
+                        break
+                    for item in items:
+                        import_rows.append((group.id, item))
+                    fetched += len(items)
+                    if len(items) < 100:
+                        exhausted = True
+                        break
+                if exhausted or (import_existing[group.id] + fetched
+                                 >= IMPORT_MAX_PRODUCTS):
+                    import_done.add(group.id)
+
+            if not products and not import_rows:
                 settings.last_sync_at = now
                 settings.last_sync_status = 'idle'
                 settings.total_products_monitored = 0
@@ -166,13 +216,13 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                     minutes=normalize_sync_interval_minutes(
                         settings.sync_interval_minutes))
                 settings.is_running = False
+                for done_group_id in import_done:
+                    grp = db.session.get(CompetitorGroup, done_group_id)
+                    if grp:
+                        grp.import_requested = False
                 db.session.commit()
                 result['status'] = 'no_products'
                 return result
-
-            # ---------- Фаза A: сеть (write-транзакция не открыта) ----------
-            def out_of_budget():
-                return (time.time() - started) > SYNC_WALL_CLOCK_BUDGET_SECONDS
 
             # A1: метаданные — отсутствующие/протухшие/подозрительные на gone
             metadata_cutoff = now - timedelta(days=METADATA_REFRESH_DAYS)
@@ -238,6 +288,46 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                 put_cached_observation(nm_id, obs)
 
             # ---------- Фаза B: запись ----------
+            # B0: создать товары из импорта каталога (идемпотентно по nm_id)
+            for group_id, item in import_rows:
+                nm_id = item.get('nm_id')
+                if not nm_id:
+                    continue
+                try:
+                    with db.session.begin_nested():
+                        existing = CompetitorProduct.query.filter_by(
+                            seller_id=seller_id, nm_id=nm_id,
+                            group_id=group_id).first()
+                        if existing:
+                            continue
+                        if CompetitorProduct.query.filter_by(
+                                group_id=group_id,
+                        ).count() >= IMPORT_MAX_PRODUCTS:
+                            break
+                        db.session.add(CompetitorProduct(
+                            seller_id=seller_id, group_id=group_id, nm_id=nm_id,
+                            title=item.get('title'), brand=item.get('brand'),
+                            supplier_name=item.get('supplier_name'),
+                            wb_supplier_id=item.get('wb_supplier_id'),
+                            image_url=item.get('image_url'),
+                            current_price=item.get('price'),
+                            current_sale_price=item.get('sale_price'),
+                            current_rating=item.get('rating'),
+                            current_feedbacks_count=item.get('feedbacks_count'),
+                            current_total_stock=item.get('total_stock'),
+                            metadata_synced_at=now,
+                            last_price_at=(now if item.get('sale_price') is not None
+                                           else None),
+                            last_fetched_at=now))
+                except Exception:
+                    logger.exception('Импорт товара %s в группу %s не удался',
+                                     nm_id, group_id)
+
+            for done_group_id in import_done:
+                grp = db.session.get(CompetitorGroup, done_group_id)
+                if grp:
+                    grp.import_requested = False
+
             new_alerts = []
             for product in products:
                 try:
@@ -350,5 +440,76 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
             return result
 
 
+def _create_notification_compat(**kwargs):
+    """Тонкая обёртка для тестируемости (patched в unit-тестах)."""
+    from seller_platform import create_notification
+    return create_notification(**kwargs)
+
+
 def _notify_new_alerts(seller_id, new_alerts):
-    """Заглушка: агрегированное уведомление добавляется следующей задачей."""
+    """Одно агрегированное уведомление в общий центр, дедуп 4 часа."""
+    if not new_alerts:
+        return
+    from models import Notification
+
+    cutoff = datetime.utcnow() - timedelta(hours=NOTIFICATION_DEDUP_HOURS)
+    recent = Notification.query.filter(
+        Notification.seller_id == seller_id,
+        Notification.title == COMPETITOR_NOTIFICATION_TITLE,
+        Notification.created_at >= cutoff,
+    ).first()
+    if recent:
+        return
+
+    severities = {a.severity for a in new_alerts}
+    category = ('error' if 'critical' in severities
+                else 'warning' if 'warning' in severities else 'info')
+    price_changes = sum(1 for a in new_alerts
+                        if a.alert_type in ('price_drop', 'price_increase'))
+    discount_changes = sum(1 for a in new_alerts
+                           if a.alert_type.startswith('discount'))
+    stock_events = sum(1 for a in new_alerts
+                       if a.alert_type in ('out_of_stock', 'back_in_stock'))
+    parts = []
+    if price_changes:
+        parts.append(f'изменений цены: {price_changes}')
+    if discount_changes:
+        parts.append(f'изменений скидки: {discount_changes}')
+    if stock_events:
+        parts.append(f'событий наличия: {stock_events}')
+    try:
+        _create_notification_compat(
+            seller_id=seller_id, category=category,
+            title=COMPETITOR_NOTIFICATION_TITLE,
+            message='У конкурентов ' + ', '.join(parts) + '.',
+            link='/competitors/alerts')
+    except Exception:
+        logger.exception('Не удалось создать уведомление о конкурентах '
+                         '(seller=%s)', seller_id)
+
+
+def run_competitor_monitor_tick(flask_app, seller_limit=2):
+    """Scheduler-джоб: выбрать до seller_limit due-продавцов и синхронизировать."""
+    from models import CompetitorMonitorSettings, db
+
+    now = datetime.utcnow()
+    with flask_app.app_context():
+        due = CompetitorMonitorSettings.query.filter(
+            CompetitorMonitorSettings.is_enabled.is_(True),
+            db.or_(
+                CompetitorMonitorSettings.next_sync_due_at.is_(None),
+                CompetitorMonitorSettings.next_sync_due_at <= now,
+            ),
+        ).order_by(
+            CompetitorMonitorSettings.next_sync_due_at.asc().nullsfirst(),
+        ).limit(seller_limit).all()
+        seller_ids = [s.seller_id for s in due]
+
+    synced = []
+    for seller_id in seller_ids:
+        try:
+            sync_seller_competitors(seller_id, flask_app)
+            synced.append(seller_id)
+        except Exception:
+            logger.exception('Tick: sync продавца %s упал', seller_id)
+    return {'synced': synced}

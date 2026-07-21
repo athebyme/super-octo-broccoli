@@ -190,6 +190,115 @@ class AlertRulesTest(SyncTestBase):
         self.assertEqual([a for a in alerts if 'price' in a.alert_type], [])
 
 
+class TickTest(SyncTestBase):
+    def test_picks_due_sellers_only(self):
+        # наш seller due (next_sync_due_at NULL), второй — не due
+        user2 = User(username='tick-user2', email='tick2@test.local',
+                     is_active=True)
+        user2.set_password('synthetic-password')
+        seller2 = Seller(user=user2, company_name='NotDue')
+        db.session.add(seller2)
+        db.session.flush()
+        db.session.add(CompetitorMonitorSettings(
+            seller_id=seller2.id, is_enabled=True,
+            next_sync_due_at=datetime.utcnow() + timedelta(hours=1)))
+        db.session.commit()
+        with unittest.mock.patch.object(cm, 'sync_seller_competitors',
+                                        return_value={'status': 'ok'}) as sync:
+            out = cm.run_competitor_monitor_tick(self.app)
+        self.assertEqual(out['synced'], [self.seller.id])
+        sync.assert_called_once()
+
+    def test_disabled_never_picked(self):
+        self.settings.is_enabled = False
+        db.session.commit()
+        with unittest.mock.patch.object(cm, 'sync_seller_competitors') as sync:
+            out = cm.run_competitor_monitor_tick(self.app)
+        self.assertEqual(out['synced'], [])
+        sync.assert_not_called()
+
+
+class NotificationTest(SyncTestBase):
+    def _alert(self, severity='warning'):
+        return CompetitorAlert(
+            seller_id=self.seller.id, alert_type='price_drop',
+            severity=severity, message='x')
+
+    def test_aggregated_notification_created(self):
+        with unittest.mock.patch.object(
+                cm, '_create_notification_compat') as create:
+            cm._notify_new_alerts(
+                self.seller.id, [self._alert(), self._alert('critical')])
+        create.assert_called_once()
+        kwargs = create.call_args.kwargs
+        self.assertEqual(kwargs['category'], 'error')      # max severity critical
+        self.assertEqual(kwargs['title'], cm.COMPETITOR_NOTIFICATION_TITLE)
+        self.assertEqual(kwargs['link'], '/competitors/alerts')
+
+    def test_dedup_within_4h(self):
+        from models import Notification
+        db.session.add(Notification(
+            seller_id=self.seller.id, category='warning',
+            title=cm.COMPETITOR_NOTIFICATION_TITLE, message='старое',
+            created_at=datetime.utcnow() - timedelta(hours=1)))
+        db.session.commit()
+        with unittest.mock.patch.object(
+                cm, '_create_notification_compat') as create:
+            cm._notify_new_alerts(self.seller.id, [self._alert()])
+        create.assert_not_called()
+
+    def test_no_alerts_no_notification(self):
+        with unittest.mock.patch.object(
+                cm, '_create_notification_compat') as create:
+            cm._notify_new_alerts(self.seller.id, [])
+        create.assert_not_called()
+
+
+class SellerImportTest(SyncTestBase):
+    def test_import_creates_products_and_clears_flag(self):
+        self.group.import_requested = True
+        self.group.auto_source = 'seller'
+        self.group.auto_source_value = '332183'
+        db.session.commit()
+        page = [{'nm_id': 900 + i, 'title': f'T{i}', 'brand': 'B',
+                 'supplier_name': 'S', 'wb_supplier_id': 332183,
+                 'image_url': 'http://x', 'price': 100, 'sale_price': 90,
+                 'rating': 4.0, 'feedbacks_count': 1, 'total_stock': 5}
+                for i in range(30)]  # < 100 => каталог исчерпан
+        svc = self._fetch_mock()
+        svc.fetch_seller_catalog_page.return_value = page
+        cm.sync_seller_competitors(self.seller.id, self.app, fetch_service=svc)
+        db.session.refresh(self.group)
+        self.assertFalse(self.group.import_requested)
+        self.assertEqual(
+            CompetitorProduct.query.filter_by(group_id=self.group.id).count(),
+            30)
+        # у созданных сразу есть метаданные и наблюдение
+        p = CompetitorProduct.query.filter_by(nm_id=900).one()
+        self.assertEqual(p.current_sale_price, 90)
+        self.assertIsNotNone(p.metadata_synced_at)
+
+    def test_import_respects_max_products(self):
+        self.group.import_requested = True
+        self.group.auto_source_value = '332183'
+        db.session.commit()
+        full_page = [{'nm_id': 10_000 + i, 'title': 'T', 'brand': 'B',
+                      'supplier_name': 'S', 'wb_supplier_id': 332183,
+                      'image_url': None, 'price': 100, 'sale_price': 90,
+                      'rating': None, 'feedbacks_count': 0, 'total_stock': 1}
+                     for i in range(100)]
+        svc = self._fetch_mock()
+        svc.fetch_seller_catalog_page.side_effect = [
+            full_page,
+            [dict(x, nm_id=x['nm_id'] + 100) for x in full_page],
+            [dict(x, nm_id=x['nm_id'] + 200) for x in full_page],
+        ]
+        cm.sync_seller_competitors(self.seller.id, self.app, fetch_service=svc)
+        self.assertLessEqual(
+            CompetitorProduct.query.filter_by(group_id=self.group.id).count(),
+            cm.IMPORT_MAX_PRODUCTS)
+
+
 class NormalizeIntervalTest(unittest.TestCase):
     def test_bounds(self):
         self.assertEqual(cm.normalize_sync_interval_minutes(60), 60)
