@@ -497,13 +497,15 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True
     )
 
-    # Проверка и перезапуск циклов мониторинга конкурентов (каждые 5 мин)
+    # Мониторинг конкурентов v2: bounded tick (до 2 due-продавцов за минуту)
     scheduler.add_job(
-        func=lambda: _check_competitor_monitor_loops(flask_app),
-        trigger=IntervalTrigger(minutes=5),
-        id='check_competitor_monitor_loops',
-        name='Check and restart competitor monitor loops',
-        replace_existing=True
+        func=lambda: _run_competitor_monitor_tick(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='competitor_monitor_tick',
+        name='Sync due competitor monitor sellers (bounded)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
 
     # Компакция старых снимков конкурентов (раз в сутки)
@@ -527,10 +529,6 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
 
     # Запускаем планировщик
     scheduler.start()
-
-    # Запускаем начальный цикл мониторинга конкурентов (через 15 сек после старта)
-    import threading
-    threading.Timer(15.0, lambda: _check_competitor_monitor_loops(flask_app)).start()
 
     logger.info("✅ Product sync scheduler started")
 
@@ -1879,19 +1877,19 @@ def auto_resolve_pending_brands(flask_app):
             logger.error(f"Brand auto-resolve background task failed: {e}")
 
 
-def _check_competitor_monitor_loops(flask_app):
-    """Проверка и перезапуск циклов мониторинга конкурентов"""
+def _run_competitor_monitor_tick(flask_app):
+    """Bounded tick мониторинга конкурентов: до 2 due-продавцов за минуту."""
     try:
-        from services.competitor_monitor import check_and_restart_monitor_loops
-        check_and_restart_monitor_loops(flask_app)
+        from services.competitor_monitor import run_competitor_monitor_tick
+        run_competitor_monitor_tick(flask_app)
     except Exception as e:
-        logger.error(f"Competitor monitor loop check failed: {e}")
+        logger.error(f"Ошибка competitor monitor tick: {e}")
 
 
 def _compact_competitor_snapshots(flask_app):
-    """Компакция старых снимков конкурентов"""
+    """Чанковая компакция снимков конкурентов (без длинного write-lock)."""
     try:
-        from services.competitor_monitor import CompetitorMonitorService
-        CompetitorMonitorService.compact_old_snapshots(flask_app)
+        from services.competitor_monitor import compact_competitor_snapshots
+        compact_competitor_snapshots(flask_app)
     except Exception as e:
-        logger.error(f"Competitor snapshot compaction failed: {e}")
+        logger.error(f"Ошибка компакции снимков конкурентов: {e}")
