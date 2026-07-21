@@ -488,6 +488,84 @@ def _notify_new_alerts(seller_id, new_alerts):
                          '(seller=%s)', seller_id)
 
 
+def compact_competitor_snapshots(flask_app, max_seconds=55, chunk_size=5000):
+    """
+    Чанковая компакция без длинного write-lock:
+    1) all-NULL снимки (исторический мусор fetch-miss'ов v1);
+    2) подряд идущие дубликаты per product (NULL-safe сравнение);
+    3) прочитанные алерты старше 90 дней.
+    Каждый чанк — отдельная короткая транзакция.
+    """
+    from models import db
+
+    started = time.time()
+    out = {'deleted_null': 0, 'deleted_dup': 0, 'deleted_alerts': 0,
+           'complete': True}
+
+    def out_of_time():
+        return (time.time() - started) > max_seconds
+
+    with flask_app.app_context():
+        # 1) all-NULL
+        while True:
+            if out_of_time():
+                out['complete'] = False
+                return out
+            res = db.session.execute(db.text("""
+                DELETE FROM competitor_price_snapshots WHERE id IN (
+                    SELECT id FROM competitor_price_snapshots
+                    WHERE price IS NULL AND sale_price IS NULL
+                      AND total_stock IS NULL AND rating IS NULL
+                    LIMIT :chunk)
+            """), {'chunk': chunk_size})
+            db.session.commit()
+            out['deleted_null'] += res.rowcount
+            if res.rowcount < chunk_size:
+                break
+
+        # 2) подряд-дубликаты (LAG, NULL-safe IS)
+        while True:
+            if out_of_time():
+                out['complete'] = False
+                return out
+            res = db.session.execute(db.text("""
+                DELETE FROM competitor_price_snapshots WHERE id IN (
+                    SELECT id FROM (
+                        SELECT id,
+                               price IS LAG(price) OVER w
+                               AND sale_price IS LAG(sale_price) OVER w
+                               AND total_stock IS LAG(total_stock) OVER w
+                               AND rating IS LAG(rating) OVER w AS is_dup
+                        FROM competitor_price_snapshots
+                        WINDOW w AS (PARTITION BY product_id
+                                     ORDER BY created_at, id)
+                    ) WHERE is_dup LIMIT :chunk)
+            """), {'chunk': chunk_size})
+            db.session.commit()
+            out['deleted_dup'] += res.rowcount
+            if res.rowcount < chunk_size:
+                break
+
+        # 3) ретеншн прочитанных алертов
+        cutoff = datetime.utcnow() - timedelta(days=90)
+        while True:
+            if out_of_time():
+                out['complete'] = False
+                return out
+            res = db.session.execute(db.text("""
+                DELETE FROM competitor_alerts WHERE id IN (
+                    SELECT id FROM competitor_alerts
+                    WHERE is_read = 1 AND created_at < :cutoff
+                    LIMIT :chunk)
+            """), {'cutoff': cutoff, 'chunk': chunk_size})
+            db.session.commit()
+            out['deleted_alerts'] += res.rowcount
+            if res.rowcount < chunk_size:
+                break
+
+    return out
+
+
 def run_competitor_monitor_tick(flask_app, seller_limit=2):
     """Scheduler-джоб: выбрать до seller_limit due-продавцов и синхронизировать."""
     from models import CompetitorMonitorSettings, db
