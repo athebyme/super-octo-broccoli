@@ -8,6 +8,17 @@
 
 **Tech Stack:** Flask/SQLAlchemy/SQLite, APScheduler (существующий singleton), requests, Jinja2 + Alpine.js + Tailwind CDN, Chart.js 4.4.0 + `window.shChart`.
 
+## Поправка пользователя (2026-07-21, в ходе исполнения)
+
+«Старое выпиливаем с корнем»: миграция v2 дополнительно ДРОПАЕТ колонки
+`competitor_monitor_settings.pause_between_cycles_seconds` и
+`.requests_per_minute` (guard: `sqlite_version >= 3.35`, иначе колонки просто
+остаются мёртвыми — идемпотентно в обоих случаях); модель и `to_dict()` эти
+поля не объявляют. `is_running` НЕ legacy — v2 использует его для живого
+статуса синка. Неподключённый v1-скрипт
+`migrations/migrate_add_competitor_monitoring.py` удаляется, если grep не
+находит ссылок на него (Task 9).
+
 ## Global Constraints
 
 - Ветка: `feature/competitor-monitor-v2` (уже создана, спека закоммичена).

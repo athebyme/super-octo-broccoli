@@ -10521,13 +10521,15 @@ class CompetitorMonitorSettings(db.Model):
     # Пороги алертов
     price_change_alert_percent = db.Column(db.Float, default=5.0)  # порог изменения цены для алерта (%)
 
-    # Rate limiting
-    requests_per_minute = db.Column(db.Integer, default=60)  # запросов в минуту к публичному API
-    max_products = db.Column(db.Integer, default=100000)  # лимит отслеживаемых товаров
+    # Лимит отслеживаемых товаров (server-side cap 1000 в рантайме)
+    max_products = db.Column(db.Integer, default=100000)
 
-    # Непрерывный цикл
-    # Runtime/API enforce 60..3600 seconds to prevent a cache-hit hot loop.
-    pause_between_cycles_seconds = db.Column(db.Integer, default=60)
+    # v2: интервал между синками (минуты, 30..1440) и момент следующего запуска.
+    # next_sync_due_at IS NULL означает «due прямо сейчас».
+    sync_interval_minutes = db.Column(db.Integer, default=60)
+    next_sync_due_at = db.Column(db.DateTime, nullable=True)
+    # Порог алерта по изменению скидки, процентные пункты
+    discount_alert_pp = db.Column(db.Float, default=5.0)
 
     # Прокси для обхода блокировки WB (формат: http://user:pass@host:port)
     proxy_url = db.Column(db.String(500), nullable=True)
@@ -10552,9 +10554,10 @@ class CompetitorMonitorSettings(db.Model):
             'is_enabled': self.is_enabled,
             'is_running': self.is_running,
             'price_change_alert_percent': self.price_change_alert_percent,
-            'requests_per_minute': self.requests_per_minute,
             'max_products': self.max_products,
-            'pause_between_cycles_seconds': self.pause_between_cycles_seconds,
+            'sync_interval_minutes': self.sync_interval_minutes,
+            'next_sync_due_at': self.next_sync_due_at.isoformat() if self.next_sync_due_at else None,
+            'discount_alert_pp': self.discount_alert_pp,
             'proxy_url': self.proxy_url,
             'last_sync_at': self.last_sync_at.isoformat() if self.last_sync_at else None,
             'last_sync_status': self.last_sync_status,
@@ -10585,6 +10588,8 @@ class CompetitorGroup(db.Model):
     # Источник наполнения группы
     auto_source = db.Column(db.String(20), default='manual')  # manual/category/seller
     auto_source_value = db.Column(db.String(200), nullable=True)  # wb_supplier_id или subject_id
+    # v2: заявка на фоновый импорт каталога продавца (снимается sync-джобом)
+    import_requested = db.Column(db.Boolean, default=False)
 
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -10604,6 +10609,7 @@ class CompetitorGroup(db.Model):
             'own_product_id': self.own_product_id,
             'auto_source': self.auto_source,
             'auto_source_value': self.auto_source_value,
+            'import_requested': bool(self.import_requested),
             'is_active': self.is_active,
             'products_count': self.products.count() if self.products else 0,
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -10634,9 +10640,9 @@ class CompetitorProduct(db.Model):
     wb_supplier_id = db.Column(db.BigInteger, nullable=True)
     image_url = db.Column(db.String(500), nullable=True)
 
-    # Текущие значения (обновляются при каждом fetch)
-    current_price = db.Column(db.Integer, nullable=True)  # цена в копейках
-    current_sale_price = db.Column(db.Integer, nullable=True)  # цена со скидкой в копейках
+    # Текущие значения (обновляются при успешном наблюдении; fetch-miss их не трогает)
+    current_price = db.Column(db.Integer, nullable=True)  # цена в рублях (integer)
+    current_sale_price = db.Column(db.Integer, nullable=True)  # цена со скидкой в рублях (integer)
     current_rating = db.Column(db.Float, nullable=True)
     current_feedbacks_count = db.Column(db.Integer, nullable=True)
     current_total_stock = db.Column(db.Integer, nullable=True)
@@ -10645,7 +10651,13 @@ class CompetitorProduct(db.Model):
     priority = db.Column(db.Integer, default=2)  # 1=высокий, 2=средний, 3=низкий
     is_active = db.Column(db.Boolean, default=True)
     last_fetched_at = db.Column(db.DateTime, nullable=True)
-    fetch_error_count = db.Column(db.Integer, default=0)  # кол-во ошибок подряд
+    fetch_error_count = db.Column(db.Integer, default=0)  # подряд basket-404 (товар удалён с WB)
+
+    # v2: честные наблюдения
+    metadata_synced_at = db.Column(db.DateTime, nullable=True)  # свежесть basket-метаданных
+    is_adult = db.Column(db.Boolean, nullable=True)  # 18+ (search может фильтровать выдачу)
+    price_miss_count = db.Column(db.Integer, default=0)  # подряд синков без наблюдения цены
+    last_price_at = db.Column(db.DateTime, nullable=True)  # последнее успешное наблюдение цены
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
