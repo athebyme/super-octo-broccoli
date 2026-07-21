@@ -1,18 +1,45 @@
 # -*- coding: utf-8 -*-
 """
-Роуты мониторинга конкурентов.
-Управление группами, товарами, алертами и настройками мониторинга.
+Роуты мониторинга конкурентов v2.
+
+Web-слой никогда не ходит в WB для синка: добавление товаров — только вставка
+строк + next_sync_due_at=now (fetch делает scheduler-tick). Интерактивные
+поиск/превью каталога строго bounded: одна страница, 429 -> честный 503.
 """
 import logging
-from flask import render_template, request, jsonify, redirect, url_for, flash, current_app
+from datetime import datetime, timedelta
+
+from flask import render_template, request, jsonify, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from models import (
     db, CompetitorMonitorSettings, CompetitorGroup, CompetitorProduct,
-    CompetitorPriceSnapshot, CompetitorAlert
+    CompetitorPriceSnapshot, CompetitorAlert, CompetitorProxyEncryptionError,
+    Product,
 )
+from services.competitor_fetch import CompetitorFetchService, WBRateLimitedError
+from services.competitor_monitor import normalize_sync_interval_minutes
 
 logger = logging.getLogger('competitor_routes')
+
+MAX_NM_IDS_PER_REQUEST = 300
+WB_BUSY_ERROR = 'WB ограничивает запросы, повторите позже'
+
+
+def _validate_nm_ids(raw):
+    """Строгий список уникальных positive int. Ошибка -> (None, 'текст')."""
+    if not isinstance(raw, list) or not raw:
+        return None, 'nm_ids должен быть непустым списком целых чисел'
+    if len(raw) > MAX_NM_IDS_PER_REQUEST:
+        return None, f'Не больше {MAX_NM_IDS_PER_REQUEST} товаров за раз'
+    seen = []
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+            return None, f'Недопустимый nm_id: {item!r}'
+        if item in seen:
+            return None, f'Дубликат nm_id: {item}'
+        seen.append(item)
+    return seen, None
 
 
 def register_competitor_routes(app):
@@ -26,7 +53,8 @@ def register_competitor_routes(app):
 
     def _get_or_create_settings(seller_id):
         """Получить или создать настройки мониторинга"""
-        settings = CompetitorMonitorSettings.query.filter_by(seller_id=seller_id).first()
+        settings = CompetitorMonitorSettings.query.filter_by(
+            seller_id=seller_id).first()
         if not settings:
             settings = CompetitorMonitorSettings(seller_id=seller_id)
             db.session.add(settings)
@@ -45,9 +73,9 @@ def register_competitor_routes(app):
             return redirect(url_for('dashboard'))
 
         settings = _get_or_create_settings(seller.id)
-        groups = CompetitorGroup.query.filter_by(seller_id=seller.id, is_active=True).all()
+        groups = CompetitorGroup.query.filter_by(
+            seller_id=seller.id, is_active=True).all()
 
-        # Статистика
         total_products = CompetitorProduct.query.filter_by(
             seller_id=seller.id, is_active=True
         ).count()
@@ -55,7 +83,6 @@ def register_competitor_routes(app):
             seller_id=seller.id, is_read=False
         ).count()
 
-        # Последние алерты
         recent_alerts = CompetitorAlert.query.filter_by(
             seller_id=seller.id
         ).order_by(CompetitorAlert.created_at.desc()).limit(10).all()
@@ -84,7 +111,8 @@ def register_competitor_routes(app):
 
         groups_data = [g.to_dict() for g in groups]
 
-        return render_template('competitors_groups.html', groups=groups, groups_data=groups_data)
+        return render_template('competitors_groups.html',
+                               groups=groups, groups_data=groups_data)
 
     @app.route('/competitors/groups/<int:group_id>')
     @login_required
@@ -94,7 +122,8 @@ def register_competitor_routes(app):
         if not seller:
             return redirect(url_for('dashboard'))
 
-        group = CompetitorGroup.query.filter_by(id=group_id, seller_id=seller.id).first_or_404()
+        group = CompetitorGroup.query.filter_by(
+            id=group_id, seller_id=seller.id).first_or_404()
         products = CompetitorProduct.query.filter_by(
             group_id=group_id, is_active=True
         ).order_by(CompetitorProduct.current_sale_price.asc().nullslast()).all()
@@ -102,7 +131,8 @@ def register_competitor_routes(app):
         products_data = [p.to_dict() for p in products]
 
         return render_template('competitors_group_detail.html',
-                               group=group, products=products, products_data=products_data)
+                               group=group, products=products,
+                               products_data=products_data)
 
     @app.route('/competitors/alerts')
     @login_required
@@ -127,7 +157,8 @@ def register_competitor_routes(app):
         )
 
         return render_template('competitors_alerts.html', alerts=alerts,
-                               current_type=alert_type, current_severity=severity)
+                               current_type=alert_type,
+                               current_severity=severity)
 
     @app.route('/competitors/settings')
     @login_required
@@ -159,34 +190,30 @@ def register_competitor_routes(app):
         if not data:
             return jsonify({'error': 'Нет данных'}), 400
 
-        was_enabled = settings.is_enabled
-
         if 'is_enabled' in data:
+            enabling = bool(data['is_enabled']) and not settings.is_enabled
             settings.is_enabled = bool(data['is_enabled'])
+            if enabling:
+                settings.next_sync_due_at = datetime.utcnow()
+        if 'sync_interval_minutes' in data:
+            settings.sync_interval_minutes = normalize_sync_interval_minutes(
+                data['sync_interval_minutes'])
         if 'price_change_alert_percent' in data:
-            settings.price_change_alert_percent = max(0.1, float(data['price_change_alert_percent']))
-        if 'requests_per_minute' in data:
-            settings.requests_per_minute = max(1, min(120, int(data['requests_per_minute'])))
+            settings.price_change_alert_percent = max(
+                0.1, min(90.0, float(data['price_change_alert_percent'])))
+        if 'discount_alert_pp' in data:
+            settings.discount_alert_pp = max(
+                1.0, min(50.0, float(data['discount_alert_pp'])))
         if 'max_products' in data:
-            settings.max_products = max(1, int(data['max_products']))
-        if 'pause_between_cycles_seconds' in data:
-            from services.competitor_monitor import normalize_cycle_pause_seconds
-            settings.pause_between_cycles_seconds = normalize_cycle_pause_seconds(
-                data['pause_between_cycles_seconds']
-            )
+            settings.max_products = max(1, min(1000, int(data['max_products'])))
         if 'proxy_url' in data:
-            settings.proxy_url = data['proxy_url'].strip() if data['proxy_url'] else None
+            try:
+                settings.proxy_url = (data['proxy_url'] or '').strip() or None
+            except CompetitorProxyEncryptionError as e:
+                db.session.rollback()
+                return jsonify({'error': str(e)}), 400
 
         db.session.commit()
-
-        # Запуск/остановка мониторинга
-        if settings.is_enabled and not was_enabled:
-            from services.competitor_monitor import start_competitor_monitor_loop
-            start_competitor_monitor_loop(seller.id, current_app._get_current_object())
-        elif not settings.is_enabled and was_enabled:
-            from services.competitor_monitor import stop_competitor_monitor_loop
-            stop_competitor_monitor_loop(seller.id)
-
         return jsonify(settings.to_dict())
 
     @app.route('/api/competitors/groups', methods=['GET', 'POST'])
@@ -198,7 +225,8 @@ def register_competitor_routes(app):
             return jsonify({'error': 'Магазин не настроен'}), 403
 
         if request.method == 'GET':
-            groups = CompetitorGroup.query.filter_by(seller_id=seller.id).order_by(
+            groups = CompetitorGroup.query.filter_by(
+                seller_id=seller.id).order_by(
                 CompetitorGroup.created_at.desc()
             ).all()
             return jsonify([g.to_dict() for g in groups])
@@ -207,21 +235,30 @@ def register_competitor_routes(app):
         if not data or not data.get('name'):
             return jsonify({'error': 'Укажите название группы'}), 400
 
+        own_product_id = data.get('own_product_id')
+        if own_product_id is not None:
+            if isinstance(own_product_id, bool) \
+                    or not isinstance(own_product_id, int):
+                return jsonify({'error': 'Некорректный own_product_id'}), 400
+            own = Product.query.filter_by(
+                id=own_product_id, seller_id=seller.id).first()
+            if not own:
+                return jsonify({'error': 'Товар не найден'}), 400
+
         group = CompetitorGroup(
             seller_id=seller.id,
             name=data['name'],
             description=data.get('description', ''),
             color=data.get('color', '#3B82F6'),
-            own_product_id=data.get('own_product_id'),
-            auto_source=data.get('auto_source', 'manual'),
-            auto_source_value=data.get('auto_source_value'),
+            own_product_id=own_product_id,
         )
         db.session.add(group)
         db.session.commit()
 
         return jsonify(group.to_dict()), 201
 
-    @app.route('/api/competitors/groups/<int:group_id>', methods=['PUT', 'DELETE'])
+    @app.route('/api/competitors/groups/<int:group_id>',
+               methods=['PUT', 'DELETE'])
     @login_required
     def api_competitors_group(group_id):
         """PUT: обновить группу; DELETE: удалить"""
@@ -229,7 +266,8 @@ def register_competitor_routes(app):
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
 
-        group = CompetitorGroup.query.filter_by(id=group_id, seller_id=seller.id).first()
+        group = CompetitorGroup.query.filter_by(
+            id=group_id, seller_id=seller.id).first()
         if not group:
             return jsonify({'error': 'Группа не найдена'}), 404
 
@@ -238,7 +276,7 @@ def register_competitor_routes(app):
             db.session.commit()
             return jsonify({'success': True})
 
-        data = request.get_json()
+        data = request.get_json() or {}
         if data.get('name'):
             group.name = data['name']
         if 'description' in data:
@@ -246,7 +284,15 @@ def register_competitor_routes(app):
         if 'color' in data:
             group.color = data['color']
         if 'own_product_id' in data:
-            group.own_product_id = data['own_product_id']
+            opid = data['own_product_id']
+            if opid is not None:
+                if isinstance(opid, bool) or not isinstance(opid, int):
+                    return jsonify({'error': 'Некорректный own_product_id'}), 400
+                own = Product.query.filter_by(
+                    id=opid, seller_id=seller.id).first()
+                if not own:
+                    return jsonify({'error': 'Товар не найден'}), 400
+            group.own_product_id = opid
         if 'is_active' in data:
             group.is_active = bool(data['is_active'])
 
@@ -257,141 +303,69 @@ def register_competitor_routes(app):
     @login_required
     def api_competitors_add_products():
         """
-        Добавить товары конкурентов.
+        Добавить товары конкурентов. Никаких WB-вызовов в запросе.
 
-        Body:
-        - group_id: ID группы
-        - nm_ids: [list] — добавить по nm_id
-        - search_query: str — найти и добавить по запросу
-        - wb_supplier_id: int — добавить все товары продавца
+        Body (один из режимов):
+        - group_id + nm_ids: [int] — вставка строк; данные подтянет sync
+        - group_id + wb_supplier_id: int — заявка на импорт каталога продавца
         """
         seller = _get_seller()
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
 
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'Нет данных'}), 400
-
-        group_id = data.get('group_id')
-        if not group_id:
-            return jsonify({'error': 'Укажите group_id'}), 400
-
-        group = CompetitorGroup.query.filter_by(id=group_id, seller_id=seller.id).first()
+        data = request.get_json() or {}
+        group = CompetitorGroup.query.filter_by(
+            id=data.get('group_id'), seller_id=seller.id).first()
         if not group:
             return jsonify({'error': 'Группа не найдена'}), 404
 
-        from services.competitor_monitor import CompetitorMonitorService
-        service = CompetitorMonitorService()
+        settings = _get_or_create_settings(seller.id)
 
-        products_data = []
-        source = 'manual'
-
-        # Вариант 1: по nm_ids
-        if data.get('nm_ids'):
-            nm_ids = data['nm_ids']
-            if isinstance(nm_ids, str):
-                nm_ids = [int(x.strip()) for x in nm_ids.split(',') if x.strip().isdigit()]
-            products_data_dict = service.fetch_products_batch(nm_ids[:100])
-            products_data = list(products_data_dict.values())
-            # Если не все найдены через API, добавляем как заглушки
-            found_ids = {p['nm_id'] for p in products_data}
-            for nm_id in nm_ids:
-                if nm_id not in found_ids:
-                    products_data.append({'nm_id': nm_id})
-
-        # Вариант 2: по поисковому запросу
-        elif data.get('search_query'):
-            products_data = service.search_products(data['search_query'], limit=data.get('limit', 50))
-            source = 'category'
-
-        # Вариант 3: по ID продавца на WB
-        elif data.get('wb_supplier_id'):
-            products_data = service.fetch_seller_catalog(
-                int(data['wb_supplier_id']),
-                limit=data.get('limit', 500)
-            )
-            source = 'seller'
+        # Режим 2: заявка на импорт каталога продавца (fetch делает scheduler)
+        if data.get('wb_supplier_id') is not None:
+            supplier_id = data['wb_supplier_id']
+            if isinstance(supplier_id, bool) \
+                    or not isinstance(supplier_id, int) or supplier_id <= 0:
+                return jsonify({'error': 'Некорректный wb_supplier_id'}), 400
             group.auto_source = 'seller'
-            group.auto_source_value = str(data['wb_supplier_id'])
+            group.auto_source_value = str(supplier_id)
+            group.import_requested = True
+            settings.next_sync_due_at = datetime.utcnow()
+            db.session.commit()
+            return jsonify({'success': True, 'added': 0, 'reactivated': 0,
+                            'skipped': 0, 'scheduled': True,
+                            'import_requested': True})
 
-        if not products_data:
-            return jsonify({'error': 'Товары не найдены'}), 404
+        # Режим 1: точные nm_ids — только вставка, без WB
+        nm_ids, err = _validate_nm_ids(data.get('nm_ids'))
+        if err:
+            return jsonify({'error': err}), 400
 
-        added = 0
-        skipped = 0
-        for pd in products_data:
-            nm_id = pd.get('nm_id')
-            if not nm_id:
-                continue
-
-            # Проверяем дубликат
+        added = reactivated = skipped = 0
+        for nm_id in nm_ids:
             existing = CompetitorProduct.query.filter_by(
-                seller_id=seller.id, nm_id=nm_id, group_id=group_id
-            ).first()
+                seller_id=seller.id, nm_id=nm_id, group_id=group.id).first()
             if existing:
-                if not existing.is_active:
-                    # Реактивируем ранее удалённый товар
+                if existing.is_active:
+                    skipped += 1
+                else:
                     existing.is_active = True
                     existing.fetch_error_count = 0
-                    existing.title = pd.get('title') or existing.title
-                    existing.brand = pd.get('brand') or existing.brand
-                    existing.supplier_name = pd.get('supplier_name') or existing.supplier_name
-                    existing.image_url = pd.get('image_url') or existing.image_url
-                    existing.current_price = pd.get('price') or existing.current_price
-                    existing.current_sale_price = pd.get('sale_price') or existing.current_sale_price
-                    existing.current_rating = pd.get('rating') or existing.current_rating
-                    existing.current_feedbacks_count = pd.get('feedbacks_count') or existing.current_feedbacks_count
-                    existing.current_total_stock = pd.get('total_stock') or existing.current_total_stock
-                    added += 1
-                else:
-                    skipped += 1
+                    existing.price_miss_count = 0
+                    reactivated += 1
                 continue
-
-            product = CompetitorProduct(
-                seller_id=seller.id,
-                group_id=group_id,
-                nm_id=nm_id,
-                title=pd.get('title'),
-                brand=pd.get('brand'),
-                supplier_name=pd.get('supplier_name'),
-                wb_supplier_id=pd.get('wb_supplier_id'),
-                image_url=pd.get('image_url'),
-                current_price=pd.get('price'),
-                current_sale_price=pd.get('sale_price'),
-                current_rating=pd.get('rating'),
-                current_feedbacks_count=pd.get('feedbacks_count'),
-                current_total_stock=pd.get('total_stock'),
-                last_fetched_at=None if not pd.get('price') else db.func.now(),
-            )
-            db.session.add(product)
+            db.session.add(CompetitorProduct(
+                seller_id=seller.id, group_id=group.id, nm_id=nm_id))
             added += 1
 
-            # Создаём начальный снимок если есть данные
-            if pd.get('price') or pd.get('sale_price'):
-                snapshot = CompetitorPriceSnapshot(
-                    product_id=None,  # будет заполнено после flush
-                    seller_id=seller.id,
-                    price=pd.get('price'),
-                    sale_price=pd.get('sale_price'),
-                    rating=pd.get('rating'),
-                    feedbacks_count=pd.get('feedbacks_count'),
-                    total_stock=pd.get('total_stock'),
-                )
-                db.session.flush()  # получаем product.id
-                snapshot.product_id = product.id
-                db.session.add(snapshot)
-
+        settings.next_sync_due_at = datetime.utcnow()
         db.session.commit()
+        return jsonify({'success': True, 'added': added,
+                        'reactivated': reactivated, 'skipped': skipped,
+                        'scheduled': True})
 
-        return jsonify({
-            'success': True,
-            'added': added,
-            'skipped': skipped,
-            'total_in_group': group.products.filter_by(is_active=True).count(),
-        })
-
-    @app.route('/api/competitors/products/<int:product_id>', methods=['DELETE'])
+    @app.route('/api/competitors/products/<int:product_id>',
+               methods=['DELETE'])
     @login_required
     def api_competitors_remove_product(product_id):
         """Удалить товар из мониторинга"""
@@ -399,7 +373,8 @@ def register_competitor_routes(app):
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
 
-        product = CompetitorProduct.query.filter_by(id=product_id, seller_id=seller.id).first()
+        product = CompetitorProduct.query.filter_by(
+            id=product_id, seller_id=seller.id).first()
         if not product:
             return jsonify({'error': 'Товар не найден'}), 404
 
@@ -415,7 +390,8 @@ def register_competitor_routes(app):
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
 
-        product = CompetitorProduct.query.filter_by(id=product_id, seller_id=seller.id).first()
+        product = CompetitorProduct.query.filter_by(
+            id=product_id, seller_id=seller.id).first()
         if not product:
             return jsonify({'error': 'Товар не найден'}), 404
 
@@ -423,18 +399,21 @@ def register_competitor_routes(app):
         days_map = {'7d': 7, '30d': 30, '90d': 90, '1y': 365}
         days = days_map.get(period, 30)
 
-        from services.competitor_monitor import CompetitorMonitorService
-        history = CompetitorMonitorService.get_price_history(product_id, period_days=days)
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        snapshots = CompetitorPriceSnapshot.query.filter(
+            CompetitorPriceSnapshot.product_id == product_id,
+            CompetitorPriceSnapshot.created_at >= cutoff
+        ).order_by(CompetitorPriceSnapshot.created_at.asc()).all()
 
         return jsonify({
             'product': product.to_dict(),
-            'history': history,
+            'history': [s.to_dict() for s in snapshots],
         })
 
     @app.route('/api/competitors/search')
     @login_required
     def api_competitors_search():
-        """Поиск товаров на WB"""
+        """Поиск товаров на WB: одна страница, bounded."""
         seller = _get_seller()
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
@@ -443,16 +422,18 @@ def register_competitor_routes(app):
         if not query:
             return jsonify({'error': 'Укажите поисковый запрос'}), 400
 
-        from services.competitor_monitor import CompetitorMonitorService
-        service = CompetitorMonitorService()
-        results = service.search_products(query, limit=50)
+        try:
+            service = CompetitorFetchService()
+            results = service.search_products(query, limit=50)
+        except WBRateLimitedError:
+            return jsonify({'error': WB_BUSY_ERROR}), 503
 
         return jsonify(results)
 
     @app.route('/api/competitors/seller-catalog')
     @login_required
     def api_competitors_seller_catalog():
-        """Получить каталог продавца на WB"""
+        """Превью каталога продавца WB: одна страница, bounded."""
         seller = _get_seller()
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
@@ -460,10 +441,14 @@ def register_competitor_routes(app):
         wb_supplier_id = request.args.get('supplier_id', type=int)
         if not wb_supplier_id:
             return jsonify({'error': 'Укажите supplier_id'}), 400
+        page = request.args.get('page', 1, type=int)
 
-        from services.competitor_monitor import CompetitorMonitorService
-        service = CompetitorMonitorService()
-        results = service.fetch_seller_catalog(wb_supplier_id, limit=200)
+        try:
+            service = CompetitorFetchService()
+            results = service.fetch_seller_catalog_page(
+                wb_supplier_id, page=max(1, page))
+        except WBRateLimitedError:
+            return jsonify({'error': WB_BUSY_ERROR}), 503
 
         return jsonify(results)
 
@@ -530,28 +515,36 @@ def register_competitor_routes(app):
     @app.route('/api/competitors/dashboard-data')
     @login_required
     def api_competitors_dashboard_data():
-        """Данные для дашборда"""
+        """Данные для дашборда (агрегаты одним SQL, без N+1)"""
         seller = _get_seller()
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
 
+        from sqlalchemy import func
+
         settings = _get_or_create_settings(seller.id)
-        groups = CompetitorGroup.query.filter_by(seller_id=seller.id, is_active=True).all()
+        groups = CompetitorGroup.query.filter_by(
+            seller_id=seller.id, is_active=True).all()
 
-        groups_data = []
-        for g in groups:
-            products = CompetitorProduct.query.filter_by(
-                group_id=g.id, is_active=True
-            ).all()
+        agg = {}
+        rows = db.session.query(
+            CompetitorProduct.group_id,
+            func.count(CompetitorProduct.id),
+            func.min(CompetitorProduct.current_sale_price),
+            func.avg(CompetitorProduct.current_sale_price),
+            func.max(CompetitorProduct.current_sale_price),
+        ).filter(
+            CompetitorProduct.seller_id == seller.id,
+            CompetitorProduct.is_active.is_(True),
+        ).group_by(CompetitorProduct.group_id).all()
+        for group_id, cnt, mn, avg, mx in rows:
+            agg[group_id] = {'products_count': cnt, 'min_price': mn,
+                             'avg_price': round(avg) if avg else None,
+                             'max_price': mx}
 
-            prices = [p.current_sale_price for p in products if p.current_sale_price]
-            groups_data.append({
-                **g.to_dict(),
-                'products_count': len(products),
-                'avg_price': round(sum(prices) / len(prices)) if prices else None,
-                'min_price': min(prices) if prices else None,
-                'max_price': max(prices) if prices else None,
-            })
+        groups_data = [{**g.to_dict(), **agg.get(g.id, {
+            'products_count': 0, 'min_price': None,
+            'avg_price': None, 'max_price': None})} for g in groups]
 
         total_products = CompetitorProduct.query.filter_by(
             seller_id=seller.id, is_active=True
@@ -575,20 +568,42 @@ def register_competitor_routes(app):
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
 
-        group = CompetitorGroup.query.filter_by(id=group_id, seller_id=seller.id).first()
+        group = CompetitorGroup.query.filter_by(
+            id=group_id, seller_id=seller.id).first()
         if not group:
             return jsonify({'error': 'Группа не найдена'}), 404
 
-        from services.competitor_monitor import CompetitorMonitorService
-        competitors = CompetitorMonitorService.get_group_comparison(group_id)
+        competitors = [p.to_dict() for p in CompetitorProduct.query.filter_by(
+            group_id=group_id, is_active=True).all()]
 
         own_product = None
         if group.own_product_id and group.own_product:
+            own = group.own_product
+            own_price = float(own.discount_price or own.price or 0) or None
+            comp_prices = sorted(
+                p['current_sale_price'] for p in competitors
+                if p.get('current_sale_price'))
+            position = None
+            vs_min = None
+            median = None
+            if own_price and comp_prices:
+                position = 1 + sum(1 for c in comp_prices if c < own_price)
+                vs_min = round(
+                    (own_price - comp_prices[0]) / comp_prices[0] * 100, 1)
+                mid = len(comp_prices) // 2
+                median = (comp_prices[mid] if len(comp_prices) % 2
+                          else round((comp_prices[mid - 1]
+                                      + comp_prices[mid]) / 2))
             own_product = {
-                'nm_id': group.own_product.nm_id,
-                'title': group.own_product.title,
-                'price': float(group.own_product.price) if group.own_product.price else None,
-                'discount_price': float(group.own_product.discount_price) if group.own_product.discount_price else None,
+                'nm_id': own.nm_id,
+                'title': own.title,
+                'price': float(own.price) if own.price else None,
+                'discount_price': (float(own.discount_price)
+                                   if own.discount_price else None),
+                'position': position,
+                'total_with_own': (len(comp_prices) + 1) if comp_prices else None,
+                'vs_min_percent': vs_min,
+                'median_competitor_price': median,
             }
 
         return jsonify({
@@ -600,24 +615,13 @@ def register_competitor_routes(app):
     @app.route('/api/competitors/sync', methods=['POST'])
     @login_required
     def api_competitors_force_sync():
-        """Принудительный запуск синхронизации"""
+        """Запросить синхронизацию: выполнит scheduler в течение минуты."""
         seller = _get_seller()
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
 
-        import threading
-        flask_app = current_app._get_current_object()
-
-        from services.competitor_monitor import CompetitorMonitorService
-
-        def _sync():
-            try:
-                CompetitorMonitorService.sync_seller_competitors(seller.id, flask_app)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"Ошибка force sync: {e}", exc_info=True)
-
-        thread = threading.Thread(target=_sync, daemon=True)
-        thread.start()
-
-        return jsonify({'success': True, 'message': 'Синхронизация запущена'})
+        settings = _get_or_create_settings(seller.id)
+        settings.next_sync_due_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'success': True, 'scheduled': True,
+                        'message': 'Синхронизация запустится в течение минуты'})
