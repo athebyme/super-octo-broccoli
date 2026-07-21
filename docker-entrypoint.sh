@@ -180,7 +180,9 @@ python migrations/migrate_add_enrichment_inference.py /app/data/seller_platform.
 python migrations/migrate_clean_characteristic_dimensions.py /app/data/seller_platform.db
 # Fail-fast: ORM читает колонки WB-ревизии сразу после старта
 python migrations/migrate_add_wb_card_audit.py /app/data/seller_platform.db
-DATABASE_PATH=/app/data/seller_platform.db python migrations/migrate_add_competitor_monitoring.py || echo "⚠️ Competitor monitoring migration skipped (already applied or error)"
+# Fail-fast: мониторинг конкурентов v2 (интервалы, честные наблюдения) + чистка v1-мусора снимков
+python migrations/migrate_competitor_monitor_v2.py /app/data/seller_platform.db
+python migrations/migrate_compact_competitor_snapshots.py /app/data/seller_platform.db
 unset SKIP_SCHEDULER
 
 echo "✅ Инициализация seller-platform завершена"

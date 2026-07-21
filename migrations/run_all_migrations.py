@@ -1330,6 +1330,14 @@ def main():
                 migrate as migrate_wb_card_audit,
             )
             migrate_wb_card_audit(db_path)
+            from migrate_competitor_monitor_v2 import (
+                migrate as migrate_competitor_monitor_v2,
+            )
+            migrate_competitor_monitor_v2(db_path)
+            from migrate_compact_competitor_snapshots import (
+                migrate as migrate_compact_competitor_snapshots,
+            )
+            migrate_compact_competitor_snapshots(db_path)
         except Exception as exc:
             print(f"❌ Post-schema migration failed: {exc}")
             success = False

@@ -19,7 +19,7 @@ Seller Hub автоматизирует работу продавца на ма�
 - `models.py`: единый набор SQLAlchemy-моделей, включая sellers, products, agent tasks, chat, proposals и change snapshots.
 - `routes/`: UI и HTTP API. Новую бизнес-логику держите в `services/`, а не раздувайте handlers.
 - `services/`: доменная логика, интеграции WB, поставщики, pricing, карточки, content factory и фоновые процессы.
-- `services/competitor_monitor.py`, `routes/competitors.py`: seller-scoped WB competitor loop. Между полными циклами всегда применяется interruptible pause `60..3600` секунд; API и runtime нормализуют старые/некорректные значения, поэтому `0` не может превратить cache-hit цикл в hot loop с непрерывными SQLite/log writes.
+- `services/competitor_monitor.py`, `services/competitor_fetch.py`, `routes/competitors.py`: мониторинг конкурентов v2. Никаких собственных тредов: singleton scheduler раз в минуту синхронизирует до 2 due-продавцов (`next_sync_due_at`, интервал 30..1440 минут per seller, default 60). Fetch-слой ORM-free: basket CDN для метаданных (404 = товар удалён), catalog.wb.ru по продавцу и search v18 по бренду для цен; ОДИН глобальный process-wide rate limiter (`COMPETITOR_PUBLIC_RPM`, default 20) на все публичные вызовы всех продавцов + circuit breaker per источник (3 подряд 429/5xx -> cooldown 10 минут). 429 никогда не ждётся sleep-ом. Fetch-miss — не наблюдение: current-значения не затираются, снимок не пишется, `price_miss_count` растёт и включает basket-recheck. Снимок цены создаётся только при успешном наблюдении с фактическим изменением; цены хранятся в рублях (integer). HTTP-пути bounded: добавление товаров — только вставка nm_ids (строгая typed-валидация, cap 300) с `next_sync_due_at=now`; интерактивный поиск/превью каталога — одна страница, 429 -> честный 503. Импорт каталога продавца — заявка `import_requested` на группе, выполняет scheduler (до 3 страниц за тик, до 300 товаров на группу). `proxy_url` — credential: запись fail-closed шифруется Fernet, наружу только маска `proxy_display()`. Алерты зеркалятся одним агрегированным Notification (дедуп 4 часа). Компакция снимков — чанковая (5000 строк/commit) без длинного SQLite write-lock; исторический v1-мусор чистит идемпотентная `migrate_compact_competitor_snapshots.py` с бюджетом времени на прогон, обе миграции v2 подключены fail-fast в entrypoint и comprehensive runner.
 - `services/marketplace_adapters/`: типизированный registry и provider adapters. Adapter не принимает ORM objects и не выполняет tenant authorization.
 - `services/ozon_api_client.py`: строгий Ozon Seller API transport с endpoint allowlist и разными retry-классами для read POST и write POST.
 - `services/marketplace_accounts.py`, `routes/marketplace_accounts.py`: seller-scoped кабинеты маркетплейсов, encrypted credentials и read-only connection checks.
@@ -606,6 +606,8 @@ python migrations/migrate_andrey_feed_full_ingest.py data/seller_platform.db
 python migrations/migrate_add_enrichment_inference.py data/seller_platform.db
 python migrations/migrate_clean_characteristic_dimensions.py data/seller_platform.db
 python migrations/migrate_add_wb_card_audit.py data/seller_platform.db
+python migrations/migrate_competitor_monitor_v2.py data/seller_platform.db
+python migrations/migrate_compact_competitor_snapshots.py data/seller_platform.db
 python migrations/run_all_migrations.py data/seller_platform.db
 ```
 
