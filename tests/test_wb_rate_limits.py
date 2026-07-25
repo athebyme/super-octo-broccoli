@@ -53,6 +53,17 @@ class TestPerEndpointLimiters(unittest.TestCase):
     def test_media_save_has_no_endpoint_bucket(self):
         self.assertIsNone(self.client._limiter_for_endpoint('/content/v3/media/save'))
 
+    def test_transport_never_retries_post_or_put_writes(self):
+        retry = self.client.session.get_adapter(
+            'https://content-api.wildberries.ru'
+        ).max_retries
+        self.assertEqual(
+            retry.allowed_methods,
+            frozenset({'HEAD', 'GET', 'OPTIONS'}),
+        )
+        self.assertNotIn('POST', retry.allowed_methods)
+        self.assertNotIn('PUT', retry.allowed_methods)
+
     def test_same_endpoint_returns_same_limiter_instance(self):
         a = self.client._limiter_for_endpoint('/content/v2/cards/update')
         b = self.client._limiter_for_endpoint('/content/v2/cards/update')
@@ -156,6 +167,24 @@ class TestRateLimit429RetryAfter(unittest.TestCase):
         with self.assertRaises(WBTransportUncertainException) as read_ctx:
             client._make_request('GET', 'statistics', '/transport-test')
         self.assertFalse(read_ctx.exception.request_may_have_been_applied)
+
+    def test_write_redirect_is_not_followed_or_replayed(self):
+        client = WildberriesAPIClient('redirect-token')
+        response = MagicMock()
+        response.status_code = 307
+        response.headers = {'Location': 'https://other.invalid/write'}
+        response.text = 'redirect'
+        client.session = MagicMock()
+        client.session.request.return_value = response
+
+        with self.assertRaises(WBTransportUncertainException) as ctx:
+            client._make_request('POST', 'content', '/content/v2/cards/update', json=[])
+
+        self.assertTrue(ctx.exception.request_may_have_been_applied)
+        client.session.request.assert_called_once()
+        self.assertFalse(
+            client.session.request.call_args.kwargs['allow_redirects']
+        )
 
 
 class TestBrandCursorPagination(unittest.TestCase):

@@ -8,6 +8,7 @@ mapping.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from hashlib import sha256
 import json
 import math
@@ -21,7 +22,8 @@ class MarketplaceFactPackError(ValueError):
 
 
 class MarketplaceFactPackBuilder:
-    VERSION = 1
+    VERSION = 2
+    WB_PACKAGE_HARD_TTL = timedelta(hours=48)
     MAX_SERIALIZED_BYTES = 256 * 1024
     MAX_TEXT = 20_000
     MAX_DESCRIPTION = 100_000
@@ -211,6 +213,38 @@ class MarketplaceFactPackBuilder:
             result.append(text)
         return result
 
+    @classmethod
+    def _photo_urls(cls, value: Any, *, maximum: int) -> list:
+        """Normalize observed supplier photo strings or legacy URL objects."""
+        if isinstance(value, str):
+            raw_text = value.strip()
+            try:
+                decoded = json.loads(raw_text)
+            except (TypeError, ValueError):
+                decoded = None
+            value = decoded if isinstance(decoded, list) else [raw_text]
+        if not isinstance(value, list):
+            return []
+        result = []
+        seen = set()
+        for item in value[:maximum]:
+            candidate = item if isinstance(item, str) else None
+            if isinstance(item, dict):
+                # These are the observed source variants emitted by supplier
+                # parsers.  Processed/AI/channel images are deliberately not
+                # eligible for the marketplace-neutral source fact pack.
+                candidate = next((
+                    item.get(key)
+                    for key in ("sexoptovik", "original", "url", "blur")
+                    if isinstance(item.get(key), str) and item.get(key).strip()
+                ), None)
+            url = cls._text(candidate, maximum=2_000)
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            result.append(url)
+        return result
+
     @staticmethod
     def _first(*values: Any) -> Any:
         for value in values:
@@ -237,6 +271,49 @@ class MarketplaceFactPackBuilder:
             cursor = cursor.setdefault(part, {})
         cursor[parts[-1]] = value
         provenance[path] = {"source": source, "trust": trust}
+
+    @classmethod
+    def _fresh_wb_package_dimensions(
+        cls,
+        imported_product: ImportedProduct,
+        *,
+        now: Optional[datetime] = None,
+    ) -> dict:
+        """Return one coherent fresh WB package observation, or nothing.
+
+        WB Content API dimensions are package dimensions in centimetres and
+        kilograms.  They are eligible only through the exact seller-owned
+        ``ImportedProduct.product`` FK, from a current catalog projection, and
+        only when WB itself returned a fully positive ``isValid=true`` set.
+        Product measurements from supplier characteristics are deliberately
+        not treated as packaging here.
+        """
+        wb_product = imported_product.product
+        current_time = now or datetime.utcnow()
+        if (
+            wb_product is None
+            or imported_product.product_id != wb_product.id
+            or wb_product.seller_id != imported_product.seller_id
+            or wb_product.last_sync is None
+            or wb_product.last_sync < current_time - cls.WB_PACKAGE_HARD_TTL
+        ):
+            return {}
+        raw = cls._load_object(wb_product.dimensions_json)
+        if raw.get("isValid") is not True:
+            return {}
+
+        result = {}
+        for target, source in (
+            ("length_cm", "length"),
+            ("width_cm", "width"),
+            ("height_cm", "height"),
+            ("weight_kg", "weightBrutto"),
+        ):
+            value = cls._number(raw.get(source))
+            if value is None or value <= 0:
+                return {}
+            result[target] = value
+        return result
 
     @classmethod
     def wb_projection_drift(cls, imported_product: ImportedProduct) -> dict:
@@ -327,6 +404,16 @@ class MarketplaceFactPackBuilder:
                 source="imported_product.title",
                 trust="seller_current",
             )
+        source_title = original_text("title", 500)
+        if source_title:
+            cls._record(
+                facts,
+                provenance,
+                "identity.source_title",
+                source_title,
+                source=f"{original_source}.title",
+                trust="observed",
+            )
         description = cls._text(
             imported_product.description,
             maximum=cls.MAX_DESCRIPTION,
@@ -365,6 +452,19 @@ class MarketplaceFactPackBuilder:
                     if original_text("category", 500)
                     else "imported_product.category"
                 ),
+                trust="observed",
+            )
+        source_categories = cls._string_list(
+            original.get("all_categories"),
+            maximum=50,
+        )
+        if source_categories:
+            cls._record(
+                facts,
+                provenance,
+                "identity.source_categories",
+                source_categories,
+                source=f"{original_source}.all_categories",
                 trust="observed",
             )
 
@@ -431,6 +531,19 @@ class MarketplaceFactPackBuilder:
             ("sizes", 100),
         ):
             value = original.get(key)
+            source_key = key
+            if key == "sizes" and value in (None, "", [], {}):
+                # Current supplier snapshots keep the literal label value as
+                # ``sizes_raw``.  It is observed source data, unlike the
+                # normalized/AI size columns on ImportedProduct, and is the
+                # only safe input for marketplace clothing size defaults.
+                raw_size = cls._text(
+                    original.get("sizes_raw"),
+                    maximum=2_000,
+                )
+                if raw_size:
+                    value = {"raw": raw_size}
+                    source_key = "sizes_raw"
             if isinstance(value, dict) and key == "sizes":
                 value = cls._safe_value(value)
             else:
@@ -441,7 +554,7 @@ class MarketplaceFactPackBuilder:
                     provenance,
                     f"attributes.{key}",
                     value,
-                    source=f"{original_source}.{key}",
+                    source=f"{original_source}.{source_key}",
                     trust="observed",
                 )
         for key in ("country", "gender", "season", "age_group"):
@@ -467,10 +580,26 @@ class MarketplaceFactPackBuilder:
                 trust="observed",
             )
 
-        images = cls._string_list(original.get("photo_urls"), maximum=cls.MAX_IMAGES)
+        wb_package_dimensions = cls._fresh_wb_package_dimensions(
+            imported_product
+        )
+        if wb_package_dimensions:
+            cls._record(
+                facts,
+                provenance,
+                "physical.wb_package_dimensions",
+                wb_package_dimensions,
+                source="product.dimensions_json",
+                trust="marketplace_observed",
+            )
+
+        images = cls._photo_urls(
+            original.get("photo_urls"),
+            maximum=cls.MAX_IMAGES,
+        )
         image_source = f"{original_source}.photo_urls"
         if not images:
-            images = cls._string_list(
+            images = cls._photo_urls(
                 imported_product.photo_urls,
                 maximum=cls.MAX_IMAGES,
             )
@@ -486,6 +615,13 @@ class MarketplaceFactPackBuilder:
             )
 
         price = cls._number(imported_product.calculated_price)
+        price_source = "imported_product.calculated_price"
+        if price is None or price <= 0:
+            price = cls._number(imported_product.recommended_retail_price)
+            price_source = "imported_product.recommended_retail_price"
+        if price is None or price <= 0:
+            price = cls._number(original.get("recommended_retail_price"))
+            price_source = f"{original_source}.recommended_retail_price"
         old_price = cls._number(imported_product.calculated_price_before_discount)
         if price is not None and price > 0:
             cls._record(
@@ -493,8 +629,12 @@ class MarketplaceFactPackBuilder:
                 provenance,
                 "commercial.price",
                 price,
-                source="imported_product.calculated_price",
-                trust="seller_calculation",
+                source=price_source,
+                trust=(
+                    "seller_calculation"
+                    if price_source == "imported_product.calculated_price"
+                    else "observed"
+                ),
             )
         if old_price is not None and old_price > 0:
             cls._record(

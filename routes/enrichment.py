@@ -4,19 +4,51 @@
 """
 import json
 import logging
-from datetime import datetime, timedelta
-
 from flask import render_template, request, redirect, url_for, flash, jsonify, abort, Response, send_file
 from flask_login import login_required, current_user
 
 from models import Product, ImportedProduct, EnrichmentJob
 from services.supplier_enrichment import (
+    EnrichmentJobAlreadyActive,
+    SAFE_ENRICHMENT_PHOTO_STRATEGIES,
     WbMediaOperationBusy,
     get_enrichment_service,
 )
 
 logger = logging.getLogger(__name__)
 MAX_SUPPLIER_BULK_PRODUCTS = 200
+
+# Технические коды остановки задачи → что это значит для продавца и что делать.
+# Неизвестный код показывается как есть: врать про причину нельзя.
+_JOB_ERROR_TEXTS = {
+    'invalid_durable_job_payload': (
+        'Не удалось прочитать список выбранных карточек — выберите товары '
+        'заново и запустите отправку ещё раз.'
+    ),
+    'seller_lock_busy': (
+        'Для этого магазина уже идёт другая отправка на WB. Дождитесь её '
+        'завершения и повторите.'
+    ),
+    'worker_interrupted': (
+        'Обработка прервалась при перезапуске сервиса. Уже отправленные '
+        'карточки сохранены, остальные можно отправить повторно.'
+    ),
+    'wb_api_key_missing': (
+        'Не найден ключ Wildberries. Проверьте подключение в «Настройках API».'
+    ),
+    'supplier_source_unavailable': (
+        'Нет данных поставщика для этих карточек — обновите каталог поставщика '
+        'и повторите.'
+    ),
+}
+
+
+def _human_job_error(code):
+    """Человеческая расшифровка кода остановки задачи."""
+    if not code:
+        return None
+    text = _JOB_ERROR_TEXTS.get(str(code).strip())
+    return text or str(code)
 
 
 def _bounded_unique_product_ids(raw_ids, limit=MAX_SUPPLIER_BULK_PRODUCTS):
@@ -168,17 +200,58 @@ def register_enrichment_routes(app):
 
         data = request.get_json(silent=True) or {}
         fields = data.get('fields', [])
-        photo_strategy = data.get('photo_strategy', 'replace')
+        photo_strategy = data.get('photo_strategy', 'smart_merge')
         photo_indices = data.get('photo_indices')  # Новое: выборочные фото
         supplier_id = data.get('supplier_id')
 
-        if not fields:
+        if not isinstance(fields, list) or not fields:
             return jsonify({'error': 'No fields selected'}), 400
+        if photo_strategy not in SAFE_ENRICHMENT_PHOTO_STRATEGIES:
+            return jsonify({'error': 'Invalid photo_strategy'}), 400
 
-        allowed_fields = {'title', 'brand', 'description', 'characteristics', 'dimensions', 'photos'}
-        fields = [f for f in fields if f in allowed_fields]
-        if not fields:
-            return jsonify({'error': 'No valid fields selected'}), 400
+        allowed_fields = {
+            'title', 'brand', 'description',
+            'characteristics', 'dimensions', 'photos',
+        }
+        if (
+            len(fields) > len(allowed_fields)
+            or any(
+                not isinstance(field, str) or field not in allowed_fields
+                for field in fields
+            )
+            or len(set(fields)) != len(fields)
+        ):
+            return jsonify({'error': 'Invalid or duplicate fields'}), 400
+        if supplier_id is not None and (
+            not isinstance(supplier_id, int)
+            or isinstance(supplier_id, bool)
+            or supplier_id <= 0
+        ):
+            return jsonify({'error': 'supplier_id must be a positive integer'}), 400
+        if photo_indices is not None:
+            from services.wb_api_client import MAX_WB_MEDIA_FILES
+
+            if 'photos' not in fields:
+                return jsonify({
+                    'error': 'photo_indices requires the photos field',
+                }), 400
+            if (
+                not isinstance(photo_indices, list)
+                or not 1 <= len(photo_indices) <= MAX_WB_MEDIA_FILES
+                or any(
+                    not isinstance(index, int)
+                    or isinstance(index, bool)
+                    or index < 0
+                    for index in photo_indices
+                )
+                or len(set(photo_indices)) != len(photo_indices)
+            ):
+                return jsonify({
+                    'error': (
+                        'photo_indices must contain 1..30 unique '
+                        'non-negative integers'
+                    ),
+                }), 400
 
         service = get_enrichment_service()
 
@@ -195,6 +268,27 @@ def register_enrichment_routes(app):
         if not imp:
             return jsonify({'error': 'Supplier data not found'}), 404
 
+        # Validate exact source positions before a text/content write. A bad
+        # selective-photo request must not leave a partially applied content
+        # side effect merely because its media input was rejected afterwards.
+        selected_photo_source_urls = None
+        if photo_indices is not None:
+            source_photos, _source_type, _external_id = service._photo_source(
+                imp
+            )
+            if any(index >= len(source_photos) for index in photo_indices):
+                return jsonify({
+                    'error': 'photo_indices contains an unavailable position',
+                }), 400
+            selected_photo_source_urls = [
+                service._photo_url(source_photos[index])
+                for index in photo_indices
+            ]
+            if any(not value for value in selected_photo_source_urls):
+                return jsonify({
+                    'error': 'photo_indices contains an invalid photo source',
+                }), 400
+
         from services.wb_api_client import WildberriesAPIClient
         try:
             wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
@@ -204,23 +298,46 @@ def register_enrichment_routes(app):
         try:
             # Если есть выборочные фото — используем selective стратегию
             if photo_indices is not None and 'photos' in fields:
-                # Применяем текстовые поля через обычный apply_enrichment
-                # но фото пропускаем (strategy=selective)
-                text_result = service.apply_enrichment(
-                    product, imp, fields, 'selective',
-                    current_user.seller, wb_client
-                )
+                # Content и media — разные операции/receipts. Не передаём
+                # `photos` в content-flow: при uncertain content выбранные
+                # индексы нигде durable не хранятся и не должны ошибочно
+                # отображаться как автоматически ожидающий photo follow-up.
+                content_fields = [
+                    field for field in fields if field != 'photos'
+                ]
+                if content_fields:
+                    text_result = service.apply_enrichment(
+                        product, imp, content_fields, 'smart_merge',
+                        current_user.seller, wb_client
+                    )
+                else:
+                    text_result = {
+                        'success': True,
+                        'fields_applied': [],
+                        'error': None,
+                        'wb_sync': False,
+                        'reconciliation_pending': False,
+                        'fields_pending': [],
+                    }
 
                 # Fail closed до отдельного photo side effect. Иначе crafted
                 # request мог получить success по фото после того, как
                 # характеристики были отклонены обязательным WB-словарём.
                 if text_result.get('error'):
-                    return jsonify(text_result)
+                    text_result['photos'] = {
+                        'skipped': True,
+                        'reason': 'content_update_not_settled',
+                        'definitely_not_sent': True,
+                    }
+                    return jsonify(text_result), (
+                        202 if text_result.get('reconciliation_pending') else 409
+                    )
 
                 # Отдельно применяем выбранные фото
                 photo_result = service.apply_selective_photos(
                     product, imp, photo_indices, photo_strategy,
-                    current_user.seller, wb_client
+                    current_user.seller, wb_client,
+                    expected_source_urls=selected_photo_source_urls,
                 )
 
                 # Объединяем результаты
@@ -235,24 +352,55 @@ def register_enrichment_routes(app):
                     text_result.get('success', False)
                     if text_fields_requested else True
                 )
-                return jsonify({
+                combined = {
                     'success': bool(
                         text_success and photo_result.get('success', False)
                     ),
                     'fields_applied': combined_fields,
                     'photos': photo_result,
                     'error': text_result.get('error') or photo_result.get('error'),
-                    'wb_sync': text_result.get('wb_sync', False),
-                })
+                    'wb_sync': bool(
+                        text_result.get('wb_sync', False)
+                        or int(photo_result.get('uploaded') or 0) > 0
+                    ),
+                    'wb_confirmed': False,
+                    'deferred': bool(
+                        text_result.get('deferred')
+                        or photo_result.get('deferred')
+                    ),
+                    'reconciliation_pending': bool(
+                        text_result.get('reconciliation_pending')
+                        or photo_result.get('reconciliation_pending')
+                    ),
+                    'fields_pending': sorted(set(
+                        list(text_result.get('fields_pending') or [])
+                        + (
+                            ['photos']
+                            if photo_result.get('reconciliation_pending')
+                            else []
+                        )
+                    )),
+                }
+                if combined['reconciliation_pending']:
+                    status = 202
+                else:
+                    status = 200 if combined['success'] else 409
+                return jsonify(combined), status
             else:
                 result = service.apply_enrichment(
                     product, imp, fields, photo_strategy,
                     current_user.seller, wb_client
                 )
-                return jsonify(result)
+                return jsonify(result), (
+                    202 if result.get('reconciliation_pending') else 200
+                )
         except Exception as e:
             logger.error(f"[Enrich] apply_enrichment error for product {product_id}: {e}", exc_info=True)
             return jsonify({'success': False, 'error': str(e)}), 500
+        finally:
+            close = getattr(wb_client, 'close', None)
+            if callable(close):
+                close()
 
     @app.route('/api/products/<int:product_id>/supplier-photos', methods=['GET'])
     @login_required
@@ -568,7 +716,7 @@ def register_enrichment_routes(app):
         data = request.get_json(silent=True) or {}
         raw_product_ids = data.get('product_ids', [])
         fields = data.get('fields', [])
-        photo_strategy = data.get('photo_strategy', 'replace')
+        photo_strategy = data.get('photo_strategy', 'smart_merge')
 
         if not raw_product_ids or not fields:
             return jsonify({'error': 'product_ids and fields are required'}), 400
@@ -591,7 +739,7 @@ def register_enrichment_routes(app):
             return jsonify({'error': 'fields contains an unsupported value'}), 400
         if len(set(fields)) != len(fields):
             return jsonify({'error': 'fields must not contain duplicates'}), 400
-        if photo_strategy not in {'replace', 'append', 'only_if_empty'}:
+        if photo_strategy not in SAFE_ENRICHMENT_PHOTO_STRATEGIES:
             return jsonify({'error': 'Invalid photo_strategy'}), 400
 
         seller_id = current_user.seller.id
@@ -612,12 +760,6 @@ def register_enrichment_routes(app):
             .filter(
                 EnrichmentJob.seller_id == seller_id,
                 EnrichmentJob.status.in_(('pending', 'running')),
-                # Legacy threads have no durable recovery. Do not let a stale
-                # crashed row block photo updates forever; the worker refreshes
-                # updated_at after every card in current runs.
-                EnrichmentJob.updated_at >= (
-                    datetime.utcnow() - timedelta(hours=2)
-                ),
             )
             .order_by(EnrichmentJob.created_at.desc())
             .first()
@@ -629,10 +771,16 @@ def register_enrichment_routes(app):
             }), 409
 
         service = get_enrichment_service()
-        job_id = service.start_bulk_enrichment(
-            product_ids, fields, photo_strategy,
-            current_user.seller,
-        )
+        try:
+            job_id = service.start_bulk_enrichment(
+                product_ids, fields, photo_strategy,
+                current_user.seller,
+            )
+        except EnrichmentJobAlreadyActive as exc:
+            payload = {'error': str(exc)}
+            if exc.job_id:
+                payload['job_id'] = exc.job_id
+            return jsonify(payload), 409
 
         return jsonify({'job_id': job_id, 'total': len(product_ids)})
 
@@ -662,6 +810,16 @@ def register_enrichment_routes(app):
             'succeeded': job.succeeded,
             'failed': job.failed,
             'skipped': job.skipped,
+            'confirmed': job.confirmed or 0,
+            'conflicted': job.conflicted or 0,
+            'reconciliation_pending': max(
+                0,
+                int(job.succeeded or 0)
+                - int(job.confirmed or 0)
+                - int(job.conflicted or 0),
+            ),
+            'last_error': job.last_error,
+            'last_error_text': _human_job_error(job.last_error),
             'progress_pct': round(job.processed / job.total * 100) if job.total else 0,
             # Запуск ограничен 200 карточками, поэтому весь bounded отчёт можно
             # вернуть сразу: пользователь видит результат каждой выбранной строки.
@@ -806,84 +964,53 @@ def register_enrichment_routes(app):
         data = request.get_json(silent=True) or {}
         supplier_id = data.get('supplier_id')
         photo_indices = data.get('photo_indices', [])
-        strategy = data.get('strategy', 'append')
+        strategy = data.get('strategy', 'smart_merge')
 
-        if not supplier_id or not photo_indices:
+        if (
+            not isinstance(supplier_id, int)
+            or isinstance(supplier_id, bool)
+            or supplier_id <= 0
+            or not isinstance(photo_indices, list)
+            or not photo_indices
+        ):
             return jsonify({'error': 'supplier_id and photo_indices required'}), 400
+        if strategy not in SAFE_ENRICHMENT_PHOTO_STRATEGIES:
+            return jsonify({'error': 'Invalid photo strategy'}), 400
 
         imp = ImportedProduct.query.filter_by(
             id=supplier_id,
             seller_id=current_user.seller.id,
         ).first()
-        if not imp or not imp.photo_urls:
-            return jsonify({'error': 'Supplier product not found or no photos'}), 404
-
-        try:
-            all_photos = json.loads(imp.photo_urls)
-        except (json.JSONDecodeError, TypeError):
-            return jsonify({'error': 'Invalid photo data'}), 400
-
-        from services.photo_cache import get_photo_cache
-        cache = get_photo_cache()
-        supplier_type = imp.source_type or 'unknown'
-        external_id = imp.external_id or ''
-
-        # Собираем пути к выбранным фото
-        cached_paths = []
-        for idx in photo_indices:
-            if idx < 0 or idx >= len(all_photos):
-                continue
-            ph = all_photos[idx]
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
-            if not url:
-                continue
-
-            # Пытаемся загрузить синхронно если не в кэше
-            if not cache.is_cached(supplier_type, external_id, url):
-                fallbacks = []
-                if ph.get('blur') and ph['blur'] != url:
-                    fallbacks.append(ph['blur'])
-                if ph.get('original') and ph['original'] != url:
-                    fallbacks.append(ph['original'])
-
-                service = get_enrichment_service()
-                auth_cookies = None
-                if supplier_type == 'sexoptovik':
-                    try:
-                        auth_cookies = service._get_sexoptovik_auth(current_user.seller)
-                    except Exception:
-                        pass
-
-                cache.download_now(supplier_type, external_id, url, auth_cookies, fallbacks)
-
-            if cache.is_cached(supplier_type, external_id, url):
-                cached_paths.append(cache.get_cache_path(supplier_type, external_id, url))
-
-        if not cached_paths:
-            return jsonify({'error': 'No photos could be downloaded'}), 400
+        if not imp:
+            return jsonify({'error': 'Supplier product not found'}), 404
 
         from services.wb_api_client import WildberriesAPIClient
+        wb_client = None
         try:
             wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
             service = get_enrichment_service()
-            upload_results = service.upload_photos_to_card_locked(
+            result = service.apply_selective_photos(
+                product,
+                imp,
+                photo_indices,
+                strategy,
+                current_user.seller,
                 wb_client,
-                seller_id=current_user.seller.id,
-                nm_id=product.nm_id,
-                photo_paths=cached_paths,
             )
-            uploaded = sum(1 for r in upload_results if r.get('success'))
-            return jsonify({
-                'success': True,
-                'uploaded': uploaded,
-                'total': len(cached_paths),
-                'failed': len(cached_paths) - uploaded,
-            })
+            if result.get('reconciliation_pending') or result.get('deferred'):
+                status = 202
+            else:
+                status = 200 if result.get('success') else 400
+            return jsonify(result), status
         except WbMediaOperationBusy as e:
             return jsonify({'success': False, 'error': str(e)}), 409
         except Exception as e:
             logger.error(f"[Enrich] Photo upload error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
+        finally:
+            close = getattr(wb_client, 'close', None)
+            if callable(close):
+                close()
 
 
 def _generate_placeholder_image():

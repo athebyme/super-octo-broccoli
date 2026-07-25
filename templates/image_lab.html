@@ -386,10 +386,18 @@
                   <template x-for="tag in ratingTags" :key="tag"><button type="button" class="lab-tag" :class="{'active':draft(item).tags.includes(tag)}" @click="toggleRatingTag(item,tag)" x-text="tagLabel(tag)"></button></template>
                 </div>
                 <textarea rows="2" maxlength="500" class="w-full rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs mt-2" x-model="draft(item).comment" placeholder="Что понравилось или сломалось?"></textarea>
-                <div class="flex gap-2 mt-2">
+                <div class="flex gap-2 mt-2 flex-wrap">
                   <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" :disabled="!draft(item).rating" @click="saveRating(item)">Сохранить оценку</button>
+                  <a class="sh-btn sh-btn--secondary sh-btn--sm" x-show="item.status === 'succeeded'"
+                     :href="`/image-lab/api/experiments/${item.id}/image/final`"
+                     :download="`seller-hub-${item.id}.jpg`"
+                     title="Скачать готовое изображение на компьютер">Скачать</a>
                   <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="repeat(item)">Повторить</button>
                 </div>
+                <p class="text-xs mt-2" style="color:var(--text-muted)" x-show="item.status === 'succeeded'">
+                  Файл нужно проверить глазами: поставить его на карточку можно в
+                  <a href="/my-products" style="color:var(--accent)">«Моих товарах» → Обновить фото</a>.
+                </p>
               </div>
               <details class="mt-3 text-xs"><summary class="cursor-pointer text-gray-500">Prompt и проверки</summary>
                 <p class="mt-2 break-words text-gray-600" x-text="item.prompt"></p>

@@ -3,10 +3,13 @@ Wildberries API Client с оптимизацией и кэшированием
 """
 import logging
 import copy
+import hashlib
+import json
 import threading as _threading
 import time
 from datetime import datetime, timedelta
 from functools import lru_cache, wraps
+from io import BytesIO
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urljoin
 
@@ -113,6 +116,54 @@ class WBTransportUncertainException(WBAPIException):
         self.request_may_have_been_applied = bool(request_may_have_been_applied)
 
 
+class WBContentOperationBusy(WBAPIException):
+    """Another full-card replacement owns the seller content boundary."""
+
+
+class WBLiveCardDrift(WBAPIException):
+    """Provider reads did not expose one stable pre-send card state."""
+
+
+def _wire_equivalent_card_state(prepared_card: Dict[str, Any]) -> str:
+    """Return a stable full-card state for consecutive live-read comparison.
+
+    WB may return the same characteristic set in a different array order.
+    Characteristic order has no full-replacement meaning, so canonicalize only
+    that array for the comparison fingerprint. Values and every other wire
+    field remain exact; the actual latest provider payload is not reordered.
+    """
+    normalized = copy.deepcopy(prepared_card)
+    characteristics = normalized.get('characteristics')
+    if isinstance(characteristics, list):
+        def characteristic_key(item: Any):
+            item_state = json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(',', ':'),
+                default=str,
+            )
+            if not isinstance(item, dict):
+                return (2, '', item_state)
+            raw_id = item.get('id')
+            try:
+                return (0, int(raw_id), item_state)
+            except (TypeError, ValueError):
+                return (1, str(raw_id), item_state)
+
+        normalized['characteristics'] = sorted(
+            characteristics,
+            key=characteristic_key,
+        )
+    return json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+        default=str,
+    )
+
+
 class RateLimiter:
     """Thread-safe rate limiter для соблюдения лимитов API WB"""
 
@@ -153,7 +204,7 @@ class WildberriesAPIClient:
 
     Особенности:
     - Connection pooling для переиспользования соединений
-    - Автоматические retry при временных ошибках
+    - Автоматические retry только для безопасных read HTTP-методов
     - Rate limiting для соблюдения лимитов API
     - Кэширование результатов
     - Логирование всех запросов
@@ -211,7 +262,7 @@ class WildberriesAPIClient:
         Args:
             api_key: API ключ Wildberries
             sandbox: Использовать sandbox-окружение
-            max_retries: Максимальное количество повторов при ошибках
+            max_retries: Максимальное количество повторов безопасных read-запросов
             rate_limit: Максимальное количество запросов в минуту
             timeout: Таймаут запроса в секундах
             db_logger_callback: Функция для логирования в БД
@@ -233,12 +284,17 @@ class WildberriesAPIClient:
         """Создание сессии с retry-логикой и connection pooling"""
         session = requests.Session()
 
-        # Настройка retry-стратегии
+        # Full-card/content/media endpoints are asynchronous writes without an
+        # idempotency key.  Retrying POST/PUT after a 5xx, a late disconnect or
+        # a read timeout can apply the same mutation twice while the caller has
+        # only one durable receipt.  Keep transport retries strictly limited to
+        # read-style HTTP verbs; POST-based WB reads intentionally remain
+        # single-attempt unless a caller performs its own bounded read retry.
         retry_strategy = Retry(
             total=max_retries,
             backoff_factor=1,  # 1s, 2s, 4s, ...
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT"]
+            allowed_methods=frozenset({"HEAD", "GET", "OPTIONS"}),
         )
 
         adapter = HTTPAdapter(
@@ -357,6 +413,14 @@ class WildberriesAPIClient:
         # Установка таймаута если не указан
         if 'timeout' not in kwargs:
             kwargs['timeout'] = self.timeout
+        is_write_method = str(method).upper() not in {
+            'GET', 'HEAD', 'OPTIONS',
+        }
+        # requests follows 307/308 with the original method and body.  WB
+        # writes have no idempotency key, so an implicit redirect would be an
+        # invisible second physical submission outside the durable receipt.
+        if is_write_method:
+            kwargs.setdefault('allow_redirects', False)
 
         # Логирование запроса
         params_str = f" params={kwargs.get('params')}" if kwargs.get('params') else ""
@@ -419,6 +483,12 @@ class WildberriesAPIClient:
                 suffix = f" Повтор через {retry_after}с." if retry_after else ""
                 raise WBRateLimitException(
                     f"Превышен лимит запросов к API.{suffix}", retry_after=retry_after)
+            elif 300 <= response.status_code < 400:
+                raise WBTransportUncertainException(
+                    f"WB API вернул неожиданный redirect {response.status_code}; "
+                    "автоматический переход запрещён",
+                    request_may_have_been_applied=is_write_method,
+                )
             elif response.status_code >= 400:
                 error_msg = f"API Error {response.status_code}"
                 try:
@@ -485,7 +555,7 @@ class WildberriesAPIClient:
                     raise WBTransportUncertainException(
                         error_msg,
                         request_may_have_been_applied=(
-                            str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                            is_write_method
                         ),
                     )
                 raise WBAPIException(error_msg)
@@ -515,7 +585,7 @@ class WildberriesAPIClient:
             raise WBTransportUncertainException(
                 f"Timeout при запросе к API ({self.timeout}s). Попробуйте позже.",
                 request_may_have_been_applied=(
-                    str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                    is_write_method
                 ),
             )
         except requests.exceptions.SSLError as e:
@@ -523,14 +593,14 @@ class WildberriesAPIClient:
             raise WBTransportUncertainException(
                 f"Ошибка SSL соединения: {str(e)}. Проверьте сетевое подключение.",
                 request_may_have_been_applied=(
-                    str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                    is_write_method
                 ),
             )
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Connection error for {url}: {e}")
             error_msg = str(e)
             request_may_have_been_applied = (
-                str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                is_write_method
             )
             if "Name or service not known" in error_msg or "getaddrinfo failed" in error_msg:
                 message = "Не удалось разрешить имя хоста API Wildberries. Проверьте интернет-соединение."
@@ -551,7 +621,7 @@ class WildberriesAPIClient:
             raise WBTransportUncertainException(
                 f"Неожиданная ошибка: {str(e)}",
                 request_may_have_been_applied=(
-                    str(method).upper() not in {'GET', 'HEAD', 'OPTIONS'}
+                    is_write_method
                 ),
             )
 
@@ -950,6 +1020,9 @@ class WildberriesAPIClient:
         before_send_callback: Optional[
             Callable[[Dict[str, Dict[str, Any]]], None]
         ] = None,
+        preserve_richer_enrichment: bool = False,
+        before_live_read_callback: Optional[Callable[[], None]] = None,
+        _content_lock_held: bool = False,
     ) -> Dict[str, Any]:
         """
         Обновить карточку товара (Content API v2)
@@ -978,10 +1051,47 @@ class WildberriesAPIClient:
             WB API v2 требует отправлять ПОЛНУЮ карточку товара.
             Метод автоматически получает текущую карточку и объединяет с изменениями.
         """
+        if seller_id is not None and not _content_lock_held:
+            from services.marketplace_operation_locks import (
+                release_wb_seller_content_lock,
+                try_wb_seller_content_lock,
+            )
+            claim = try_wb_seller_content_lock(seller_id)
+            if claim is None:
+                raise WBContentOperationBusy(
+                    'Для продавца уже выполняется другая операция с контентом WB'
+                )
+            try:
+                return self.update_card(
+                    nm_id,
+                    updates,
+                    merge_with_existing=merge_with_existing,
+                    log_to_db=log_to_db,
+                    seller_id=seller_id,
+                    validate=validate,
+                    snapshot_context=snapshot_context,
+                    before_send_callback=before_send_callback,
+                    preserve_richer_enrichment=preserve_richer_enrichment,
+                    before_live_read_callback=before_live_read_callback,
+                    _content_lock_held=True,
+                )
+            finally:
+                release_wb_seller_content_lock(claim)
+
+        # Enrichment uses this hook to reject a second full-card replacement
+        # while an earlier asynchronous WB write for the same product is still
+        # being reconciled.  It runs *inside* the seller content lock so two
+        # concurrent callers cannot both pass the guard before either durable
+        # pre-send receipt exists.
+        if before_live_read_callback is not None:
+            before_live_read_callback()
+
         from services.wb_validators import prepare_card_for_update, validate_and_log_errors, clean_characteristics_for_update
         from services.wb_validators import _mark_wb_card_as_fetched
 
         updates = dict(updates or {})
+        merge_decisions = None
+        stable_wire_state = None
         logger.info(f"🔧 Updating card nmID={nm_id} with updates: {list(updates.keys())}")
         logger.debug(f"Update data: {updates}")
 
@@ -997,6 +1107,46 @@ class WildberriesAPIClient:
                 if not full_card:
                     raise WBAPIException(f"Card nmID={nm_id} not found in WB API")
                 _mark_wb_card_as_fetched(full_card)
+
+                if preserve_richer_enrichment:
+                    # The endpoint is a full replacement and WB exposes no
+                    # revision/ETag precondition. Require two consecutive live
+                    # reads to describe the same exact wire payload, then build
+                    # the merge only from the second (latest) observation.
+                    first_prepared = prepare_card_for_update(
+                        full_card, {}, preserve_live_fields=True,
+                    )
+                    from services.wb_validators import WB_PREPARED_CONTEXT_KEY
+                    first_prepared.pop(WB_PREPARED_CONTEXT_KEY, None)
+                    stable_card = self.get_card_by_nm_id(
+                        nm_id,
+                        log_to_db=log_to_db,
+                        seller_id=seller_id,
+                    )
+                    if not stable_card:
+                        raise WBLiveCardDrift(
+                            'Повторный live-read WB не вернул карточку'
+                        )
+                    _mark_wb_card_as_fetched(stable_card)
+                    second_prepared = prepare_card_for_update(
+                        stable_card, {}, preserve_live_fields=True,
+                    )
+                    second_prepared.pop(WB_PREPARED_CONTEXT_KEY, None)
+                    first_wire_state = _wire_equivalent_card_state(
+                        first_prepared,
+                    )
+                    second_wire_state = _wire_equivalent_card_state(
+                        second_prepared,
+                    )
+                    if first_wire_state != second_wire_state:
+                        raise WBLiveCardDrift(
+                            'Live-карточка WB изменилась между проверками; '
+                            'дообогащение безопасно остановлено'
+                        )
+                    stable_wire_state = second_wire_state
+                    full_card = stable_card
+            except WBLiveCardDrift:
+                raise
             except Exception as e:
                 logger.error(f"❌ Failed to fetch full card for merging: {str(e)}")
                 raise WBAPIException(
@@ -1015,8 +1165,156 @@ class WildberriesAPIClient:
                     updates['characteristics'] = clean_characteristics_for_update(
                         updates['characteristics'])
 
+                if preserve_richer_enrichment:
+                    from services.wb_enrichment_merge import (
+                        MERGE_POLICY_VERSION,
+                        plan_characteristic_merge,
+                        plan_dimensions_merge,
+                        plan_scalar_field_merge,
+                    )
+
+                    merge_decisions = {
+                        'policy': MERGE_POLICY_VERSION,
+                        'fields': {},
+                    }
+                    if 'characteristics' in updates:
+                        characteristic_plan = plan_characteristic_merge(
+                            full_card.get('characteristics'),
+                            updates['characteristics'],
+                        )
+                        updates['characteristics'] = characteristic_plan.pop(
+                            'accepted_patch')
+                        merge_decisions['characteristics'] = characteristic_plan
+                        merge_decisions['fields']['characteristics'] = {
+                            'decision': (
+                                'update'
+                                if updates['characteristics']
+                                else 'preserve_live'
+                            ),
+                            'accepted': sum((
+                                characteristic_plan['counts']['added'],
+                                characteristic_plan['counts'][
+                                    'replaced_more_complete'
+                                ],
+                            )),
+                            'preserved': sum((
+                                characteristic_plan['counts'][
+                                    'preserved_existing'
+                                ],
+                                characteristic_plan['counts']['unchanged'],
+                                characteristic_plan['counts']['skipped_empty'],
+                            )),
+                        }
+                        if not updates['characteristics']:
+                            updates.pop('characteristics')
+
+                    # Every non-characteristic enrichment field has an explicit
+                    # preserve-live policy. Unknown fields are rejected instead
+                    # of silently widening this full-replacement contract.
+                    for field in list(updates):
+                        if field == 'characteristics':
+                            continue
+                        incoming = updates[field]
+                        current = full_card.get(field)
+                        if field in {'title', 'description', 'brand'}:
+                            field_plan = plan_scalar_field_merge(
+                                field, current, incoming,
+                            )
+                            merge_decisions['fields'][field] = field_plan
+                            if not field_plan['accepted']:
+                                updates.pop(field)
+                        elif field == 'dimensions':
+                            dimension_plan = plan_dimensions_merge(
+                                current, incoming,
+                            )
+                            updates[field] = dimension_plan.pop(
+                                'accepted_patch')
+                            decision = (
+                                'update' if updates[field] else 'preserve_live'
+                            )
+                            merge_decisions['fields'][field] = {
+                                'decision': decision,
+                                **dimension_plan,
+                            }
+                            if not updates[field]:
+                                updates.pop(field)
+                        else:
+                            raise WBAPIException(
+                                f'Поле {field} запрещено для smart enrichment'
+                            )
+
+                    if not updates:
+                        before_snapshot = copy.deepcopy(full_card)
+                        from services.wb_validators import WB_SOURCE_CONTEXT_KEY
+                        before_snapshot.pop(WB_SOURCE_CONTEXT_KEY, None)
+                        exact_snapshot = {
+                            'before': before_snapshot,
+                            'after': copy.deepcopy(before_snapshot),
+                            'merge_decisions': copy.deepcopy(merge_decisions),
+                            'applied_update_fields': [],
+                            'write_required': False,
+                        }
+                        if snapshot_context is not None:
+                            snapshot_context.clear()
+                            snapshot_context.update(copy.deepcopy(exact_snapshot))
+                        return {
+                            'error': False,
+                            'skipped': True,
+                            'reason': 'nothing_to_update',
+                        }
+
+                    # WB отклоняет full replacement с невалидным габаритом, а
+                    # живая карточка может прийти с weightBrutto=0/isValid=false.
+                    # Такой карточке заблокировано ЛЮБОЕ обновление, включая
+                    # обновление одних только фото. Единственный допустимый
+                    # источник починки — факт, заявленный самим продавцом в
+                    # дефолтах товаров; ровно его использует путь создания
+                    # карточки. Валидное живое значение не перезаписывается,
+                    # отсутствующий ключ не фабрикуется, а запись стартует
+                    # только потому, что она и так уже запрошена: сам по себе
+                    # этот блок нового write в WB не инициирует.
+                    if seller_id is not None:
+                        from services.wb_package_dimensions import (
+                            plan_declared_dimension_repair,
+                            resolve_declared_package_dimensions,
+                        )
+                        repair_probe = plan_declared_dimension_repair(
+                            full_card.get('dimensions'), {},
+                        )
+                        if repair_probe['invalid_live_keys']:
+                            declared_dimensions = (
+                                resolve_declared_package_dimensions(
+                                    seller_id,
+                                    full_card.get('subjectID'),
+                                )
+                            )
+                            repair_plan = plan_declared_dimension_repair(
+                                full_card.get('dimensions'),
+                                declared_dimensions,
+                            )
+                            if repair_plan['patch']:
+                                repaired_patch = dict(
+                                    updates.get('dimensions') or {})
+                                for key, value in repair_plan['patch'].items():
+                                    # Уже принятое merge-планом значение
+                                    # сильнее заявленного дефолта.
+                                    repaired_patch.setdefault(key, value)
+                                updates['dimensions'] = repaired_patch
+                            merge_decisions['declared_dimension_repair'] = {
+                                'source': 'seller_product_defaults',
+                                'invalid_live_keys': list(
+                                    repair_plan['invalid_live_keys']),
+                                'applied': sorted(repair_plan['patch']),
+                                'unresolved_keys': list(
+                                    repair_plan['unresolved_keys']),
+                            }
+
                 # Подготавливаем полную карточку; characteristic patch мержится по id.
-                card_to_send = prepare_card_for_update(full_card, updates)
+                card_to_send = prepare_card_for_update(
+                    full_card,
+                    updates,
+                    preserve_live_fields=preserve_richer_enrichment,
+                )
         else:
             raise WBAPIException(
                 'Обновление карточки без merge_with_existing запрещено: '
@@ -1035,6 +1333,24 @@ class WildberriesAPIClient:
         card_to_send.pop(WB_CHARACTERISTICS_CHANGED_KEY, None)
         card_to_send.pop(WB_PREPARED_CONTEXT_KEY, None)
 
+        # Preserve-live ветка уже прошла тот же ремонт через merge-план выше и
+        # записала его в merge_decisions. Legacy generic update такого плана не
+        # строит, поэтому чинит габариты здесь — и точно так же отказывается от
+        # записи, если продавец ничего не заявил.
+        if seller_id is not None and not preserve_richer_enrichment:
+            from services.wb_package_dimensions import (
+                describe_unresolved_dimensions,
+                repair_card_dimensions_in_place,
+            )
+            legacy_repair = repair_card_dimensions_in_place(
+                card_to_send, seller_id, full_card.get('subjectID'),
+            )
+            if legacy_repair['unresolved_keys']:
+                raise WBAPIException(
+                    f'Карточку nmID={nm_id} нельзя безопасно отправить в WB: '
+                    + describe_unresolved_dimensions(legacy_repair)
+                )
+
         # Content API performs a full replacement. Even when only title or
         # description changes, an invalid dictionary-bound value already
         # present in the fresh card would otherwise be sent back to WB.
@@ -1051,8 +1367,32 @@ class WildberriesAPIClient:
 
         # Валидация данных перед отправкой
         if validate:
-            if not validate_and_log_errors(card_to_send, operation="update"):
-                raise WBAPIException(f"Validation failed for card nmID={nm_id}")
+            validation_errors: List[str] = []
+            if not validate_and_log_errors(
+                card_to_send,
+                operation="update",
+                errors_out=validation_errors,
+            ):
+                displayed_errors = validation_errors[:8]
+                details = '; '.join(displayed_errors)
+                if len(validation_errors) > len(displayed_errors):
+                    details += (
+                        f'; ещё ошибок: '
+                        f'{len(validation_errors) - len(displayed_errors)}'
+                    )
+                hint = ''
+                if any(
+                    "weightBrutto" in error
+                    for error in validation_errors
+                ):
+                    from services.wb_package_dimensions import (
+                        MISSING_PACKAGE_WEIGHT_HINT,
+                    )
+                    hint = f'. {MISSING_PACKAGE_WEIGHT_HINT}'
+                raise WBAPIException(
+                    f'Карточку nmID={nm_id} нельзя безопасно отправить в WB: '
+                    f'{details}{hint}'
+                )
 
         # WB Content API v2 эндпоинт для обновления
         endpoint = "/content/v2/cards/update"
@@ -1066,12 +1406,52 @@ class WildberriesAPIClient:
         exact_snapshot = {
             'before': before_snapshot,
             'after': copy.deepcopy(card_to_send),
+            'merge_decisions': copy.deepcopy(merge_decisions),
+            'applied_update_fields': list(updates),
+            'write_required': True,
         }
         if snapshot_context is not None:
             snapshot_context.clear()
             snapshot_context.update(copy.deepcopy(exact_snapshot))
         if before_send_callback is not None:
             before_send_callback(copy.deepcopy(exact_snapshot))
+
+        if preserve_richer_enrichment:
+            # The durable callback can involve a DB fsync. Close that extra
+            # race window with one last provider read before the full-card
+            # replacement. WB has no ETag/CAS, so any observed drift must stop
+            # rather than trigger an automatic re-plan/replay.
+            try:
+                final_card = self.get_card_by_nm_id(
+                    nm_id,
+                    log_to_db=log_to_db,
+                    seller_id=seller_id,
+                )
+                if not final_card:
+                    raise WBLiveCardDrift(
+                        'Финальный live-read WB не вернул карточку'
+                    )
+                _mark_wb_card_as_fetched(final_card)
+                final_prepared = prepare_card_for_update(
+                    final_card, {}, preserve_live_fields=True,
+                )
+                from services.wb_validators import WB_PREPARED_CONTEXT_KEY
+                final_prepared.pop(WB_PREPARED_CONTEXT_KEY, None)
+                final_wire_state = _wire_equivalent_card_state(
+                    final_prepared,
+                )
+            except WBLiveCardDrift:
+                raise
+            except Exception as exc:
+                raise WBLiveCardDrift(
+                    'Не удалось выполнить финальный live-read WB; '
+                    'дообогащение безопасно остановлено'
+                ) from exc
+            if stable_wire_state is None or final_wire_state != stable_wire_state:
+                raise WBLiveCardDrift(
+                    'Live-карточка WB изменилась перед отправкой; '
+                    'дообогащение безопасно остановлено'
+                )
 
         logger.info(f"📤 Sending update request for nmID={nm_id}")
         logger.debug(f"Card to send keys: {list(card_to_send.keys())}")
@@ -1175,7 +1555,8 @@ class WildberriesAPIClient:
         nm_updates: Dict[int, Dict[str, Any]],
         log_to_db: bool = False,
         seller_id: int = None,
-        chunk_size: int = 1000
+        chunk_size: int = 1000,
+        _content_lock_held: bool = False,
     ) -> Dict[str, Any]:
         """
         Пакетное редактирование: слить updates с полными карточками и отправить
@@ -1195,6 +1576,27 @@ class WildberriesAPIClient:
         до одиночных карточек, виновники попадают в 'failed', остальные
         отправляются (одна плохая карточка из 1000 ≈ +2*log2(1000) запросов).
         """
+        if seller_id is not None and not _content_lock_held:
+            from services.marketplace_operation_locks import (
+                release_wb_seller_content_lock,
+                try_wb_seller_content_lock,
+            )
+            claim = try_wb_seller_content_lock(seller_id)
+            if claim is None:
+                raise WBContentOperationBusy(
+                    'Для продавца уже выполняется другая операция с контентом WB'
+                )
+            try:
+                return self.update_cards_merged(
+                    nm_updates,
+                    log_to_db=log_to_db,
+                    seller_id=seller_id,
+                    chunk_size=chunk_size,
+                    _content_lock_held=True,
+                )
+            finally:
+                release_wb_seller_content_lock(claim)
+
         import json as _json
         from services.wb_validators import (
             prepare_card_for_update, validate_card_update,
@@ -1205,6 +1607,11 @@ class WildberriesAPIClient:
             WBCharacteristicValidationError,
             build_wb_characteristic_patch,
             validate_wb_full_card_dictionary_values,
+        )
+        from services.wb_package_dimensions import (
+            describe_unresolved_dimensions,
+            plan_declared_dimension_repair,
+            resolve_declared_package_dimensions,
         )
 
         result = {
@@ -1226,6 +1633,36 @@ class WildberriesAPIClient:
                 result['missing'].append(nm)
                 continue
             upd = dict(updates)
+
+            # Legacy generic prepare заполняет невалидный габарит захардкоженным
+            # DEFAULT_DIMENSIONS и молча отправлял бы в WB 0.1 кг вместо
+            # фактического веса упаковки. Чиним исключительно из заявленного
+            # продавцом факта; если заявления нет — карточка не отправляется,
+            # а причина возвращается вызывающему коду.
+            dimension_repair = plan_declared_dimension_repair(
+                full_card.get('dimensions'), {},
+            )
+            if dimension_repair['invalid_live_keys']:
+                dimension_repair = plan_declared_dimension_repair(
+                    full_card.get('dimensions'),
+                    resolve_declared_package_dimensions(
+                        seller_id, full_card.get('subjectID'),
+                    ),
+                )
+                if dimension_repair['unresolved_keys']:
+                    result['invalid'][nm] = describe_unresolved_dimensions(
+                        dimension_repair)
+                    logger.warning(
+                        "Card nmID=%s has unusable WB dimensions and no "
+                        "declared package facts: %s",
+                        nm, dimension_repair['unresolved_keys'],
+                    )
+                    continue
+                repaired_patch = dict(upd.get('dimensions') or {})
+                for key, value in dimension_repair['patch'].items():
+                    repaired_patch.setdefault(key, value)
+                upd['dimensions'] = repaired_patch
+
             try:
                 if 'characteristics' in upd:
                     upd['characteristics'] = build_wb_characteristic_patch(
@@ -1254,7 +1691,12 @@ class WildberriesAPIClient:
                 return
             try:
                 resp = self.update_cards_batch(
-                    chunk, log_to_db=log_to_db, seller_id=seller_id, validate=False)
+                    chunk,
+                    log_to_db=log_to_db,
+                    seller_id=seller_id,
+                    validate=False,
+                    _content_lock_held=True,
+                )
                 # WB может ответить HTTP 200 с error:true в теле — это отказ
                 if isinstance(resp, dict) and resp.get('error'):
                     raise WBAPIException(
@@ -1322,7 +1764,8 @@ class WildberriesAPIClient:
     def update_card_characteristics(
         self,
         nm_id: int,
-        characteristics: List[Dict[str, Any]]
+        characteristics: List[Dict[str, Any]],
+        seller_id: int = None,
     ) -> Dict[str, Any]:
         """
         Обновить характеристики карточки товара
@@ -1335,14 +1778,19 @@ class WildberriesAPIClient:
         Returns:
             Результат обновления
         """
-        return self.update_card(nm_id, {"characteristics": characteristics})
+        return self.update_card(
+            nm_id,
+            {"characteristics": characteristics},
+            seller_id=seller_id,
+        )
 
     def update_cards_batch(
         self,
         cards: List[Dict[str, Any]],
         log_to_db: bool = False,
         seller_id: int = None,
-        validate: bool = True
+        validate: bool = True,
+        _content_lock_held: bool = False,
     ) -> Dict[str, Any]:
         """
         Обновить несколько карточек одним запросом (Content API v2)
@@ -1369,6 +1817,27 @@ class WildberriesAPIClient:
             - Максимальный размер запроса 10 МБ
             - Все карточки должны быть ПОЛНЫМИ (не частичные обновления)
         """
+        if seller_id is not None and not _content_lock_held:
+            from services.marketplace_operation_locks import (
+                release_wb_seller_content_lock,
+                try_wb_seller_content_lock,
+            )
+            claim = try_wb_seller_content_lock(seller_id)
+            if claim is None:
+                raise WBContentOperationBusy(
+                    'Для продавца уже выполняется другая операция с контентом WB'
+                )
+            try:
+                return self.update_cards_batch(
+                    cards,
+                    log_to_db=log_to_db,
+                    seller_id=seller_id,
+                    validate=validate,
+                    _content_lock_held=True,
+                )
+            finally:
+                release_wb_seller_content_lock(claim)
+
         import sys
 
         if len(cards) > 3000:
@@ -1399,6 +1868,10 @@ class WildberriesAPIClient:
             WBValidationError,
             _read_wb_prepared_context,
             clean_characteristics_for_update,
+        )
+        from services.wb_package_dimensions import (
+            describe_unresolved_dimensions,
+            repair_card_dimensions_in_place,
         )
         characteristic_validation_cache = {}
         guarded_cards = []
@@ -1527,6 +2000,20 @@ class WildberriesAPIClient:
                     )
                     card['characteristics'] = merge_wb_characteristics(
                         card.get('characteristics'), normalized_patch)
+
+            # Тот же контракт, что и в update_cards_merged: без этой починки
+            # normalize_update_card_payload ниже подменил бы невалидный габарит
+            # захардкоженным DEFAULT_DIMENSIONS и отправил бы в WB выдуманный
+            # вес упаковки. Валидный живой габарит не трогается, а карточка без
+            # заявленного факта не уходит в WB вообще.
+            dimension_repair = repair_card_dimensions_in_place(
+                card, seller_id, subject_id,
+            )
+            if dimension_repair['unresolved_keys']:
+                raise WBAPIException(
+                    f"Card #{index + 1} (nmID={card.get('nmID', '?')}): "
+                    + describe_unresolved_dimensions(dimension_repair)
+                )
             guarded_cards.append(card)
 
         from services.wb_content_payload import normalize_update_card_payload
@@ -1593,7 +2080,9 @@ class WildberriesAPIClient:
         self,
         nm_id: int,
         photo_paths: List[str],
-        seller_id: int = None
+        seller_id: int = None,
+        start_photo_number: int = 1,
+        expected_source_sha256: Optional[List[str]] = None,
     ) -> List[Dict]:
         """
         Загрузить фото в карточку WB через Content API v3 media/file
@@ -1602,6 +2091,9 @@ class WildberriesAPIClient:
             nm_id: Артикул WB (nmID)
             photo_paths: Список путей к JPEG-файлам на диске
             seller_id: ID продавца для логирования
+            expected_source_sha256: опциональные SHA-256 тех же файлов,
+                рассчитанные безопасным enrichment-планом. При несовпадении
+                байты не отправляются.
 
         Returns:
             Список результатов по каждому фото
@@ -1614,39 +2106,95 @@ class WildberriesAPIClient:
             Body: multipart/form-data с полем uploadfile
         """
         endpoint = "/content/v3/media/file"
-        if len(photo_paths) > MAX_WB_MEDIA_FILES:
-            logger.warning(
-                f"WB media limit: trimming photos from {len(photo_paths)} to {MAX_WB_MEDIA_FILES}"
+        if (
+            isinstance(start_photo_number, bool)
+            or not isinstance(start_photo_number, int)
+            or not 1 <= start_photo_number <= MAX_WB_MEDIA_FILES
+        ):
+            raise ValueError(
+                f'start_photo_number must be between 1 and {MAX_WB_MEDIA_FILES}'
             )
-            photo_paths = photo_paths[:MAX_WB_MEDIA_FILES]
+        pinned_hashes = None
+        if expected_source_sha256 is not None:
+            if (
+                not isinstance(expected_source_sha256, list)
+                or len(expected_source_sha256) != len(photo_paths)
+                or any(
+                    not isinstance(value, str)
+                    or len(value) != 64
+                    or any(char not in '0123456789abcdef' for char in value)
+                    for value in expected_source_sha256
+                )
+            ):
+                raise ValueError(
+                    'expected_source_sha256 must exactly match photo_paths'
+                )
+            pinned_hashes = list(expected_source_sha256)
+        available_slots = MAX_WB_MEDIA_FILES - start_photo_number + 1
+        if len(photo_paths) > available_slots:
+            logger.warning(
+                f"WB media limit: trimming photos from {len(photo_paths)} "
+                f"to {available_slots} free slots"
+            )
+            photo_paths = photo_paths[:available_slots]
+            if pinned_hashes is not None:
+                pinned_hashes = pinned_hashes[:available_slots]
         results = []
 
         for idx, path in enumerate(photo_paths):
-            photo_number = idx + 1
+            photo_number = start_photo_number + idx
             logger.info(f"📤 Uploading photo {photo_number}/{len(photo_paths)} for nmID={nm_id}: {path}")
 
+            request_started = False
             try:
-                with open(path, 'rb') as f:
+                if pinned_hashes is not None:
+                    # Freeze exactly the bytes whose hash was approved by the
+                    # merge plan. Cache files can otherwise be replaced in the
+                    # narrow fingerprint→multipart interval.
+                    with open(path, 'rb') as source:
+                        payload = source.read(8 * 1024 * 1024 + 1)
+                    if len(payload) > 8 * 1024 * 1024:
+                        results.append({
+                            'photo_number': photo_number,
+                            'success': False,
+                            'error': 'source_photo_too_large',
+                            'request_may_have_been_applied': False,
+                        })
+                        break
+                    if hashlib.sha256(payload).hexdigest() != pinned_hashes[idx]:
+                        results.append({
+                            'photo_number': photo_number,
+                            'success': False,
+                            'error': 'source_photo_changed',
+                            'request_may_have_been_applied': False,
+                        })
+                        break
+                    upload_file = BytesIO(payload)
+                else:
+                    upload_file = open(path, 'rb')
+                try:
+                    f = upload_file
                     files = {'uploadfile': (f'photo_{photo_number}.jpg', f, 'image/jpeg')}
                     # WB API требует X-Nm-Id и X-Photo-Number в ЗАГОЛОВКАХ, не в query
                     extra_headers = {
                         'X-Nm-Id': str(nm_id),
                         'X-Photo-Number': str(photo_number),
+                        # A per-request None removes the session JSON header in
+                        # requests' header merge.  Never mutate shared session
+                        # headers around multipart I/O: another thread could
+                        # otherwise emit JSON without Content-Type (or multipart
+                        # with application/json).
+                        'Content-Type': None,
                     }
 
-                    # Remove Content-Type header for multipart upload
-                    old_content_type = self.session.headers.pop('Content-Type', None)
-                    try:
-                        response = self._make_request(
-                            'POST', 'content', endpoint,
-                            headers=extra_headers,
-                            files=files,
-                            log_to_db=False,
-                            seller_id=seller_id
-                        )
-                    finally:
-                        if old_content_type:
-                            self.session.headers['Content-Type'] = old_content_type
+                    request_started = True
+                    response = self._make_request(
+                        'POST', 'content', endpoint,
+                        headers=extra_headers,
+                        files=files,
+                        log_to_db=False,
+                        seller_id=seller_id
+                    )
 
                     result = response.json() if response.content else {}
                     # WB может вернуть 200 с error в теле
@@ -1654,13 +2202,47 @@ class WildberriesAPIClient:
                         error_text = result.get('errorText', result.get('message', 'Unknown error'))
                         logger.error(f"❌ Photo {photo_number} API error (200 body): {error_text}")
                         results.append({'photo_number': photo_number, 'success': False, 'error': error_text, 'response': result})
+                        # Keep append positions contiguous. Continuing after a
+                        # rejected slot could create a hole or target a slot
+                        # whose final provider meaning is no longer known.
+                        break
                     else:
                         logger.info(f"✅ Photo {photo_number} uploaded: {result}")
                         results.append({'photo_number': photo_number, 'success': True, 'response': result})
+                finally:
+                    upload_file.close()
 
+            except WBTransportUncertainException as e:
+                logger.error(f"❌ Failed to upload photo {photo_number} for nmID={nm_id}: {e}")
+                results.append({
+                    'photo_number': photo_number,
+                    'success': False,
+                    'error': str(e),
+                    'request_may_have_been_applied': bool(
+                        e.request_may_have_been_applied
+                    ),
+                })
+                break
+            except (WBAuthException, WBRateLimitException, WBAPIException) as e:
+                logger.error(f"❌ Failed to upload photo {photo_number} for nmID={nm_id}: {e}")
+                results.append({
+                    'photo_number': photo_number,
+                    'success': False,
+                    'error': str(e),
+                    'request_may_have_been_applied': False,
+                })
+                break
             except Exception as e:
                 logger.error(f"❌ Failed to upload photo {photo_number} for nmID={nm_id}: {e}")
-                results.append({'photo_number': photo_number, 'success': False, 'error': str(e)})
+                results.append({
+                    'photo_number': photo_number,
+                    'success': False,
+                    'error': str(e),
+                    # A decode/error after a 2xx response is ambiguous. A
+                    # local file-open failure before _make_request is not.
+                    'request_may_have_been_applied': bool(request_started),
+                })
+                break
 
         return results
 

@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta
 import json
 import re
 import secrets
 from typing import Any, Optional, Tuple
 
-from sqlalchemy import func
+from flask import current_app, has_app_context
+from sqlalchemy import case, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.exc import StaleDataError
 
 from models import (
     Marketplace,
+    MarketplaceAttributeDefinition,
+    MarketplaceAttributeValue,
     MarketplaceCredentialEncryptionError,
     MarketplaceListing,
     MarketplaceListingSnapshot,
@@ -46,6 +50,11 @@ from services.marketplace_listings import (
 from services.marketplace_operation_locks import (
     release_account_operation_lock,
     try_account_operation_lock,
+)
+from services.marketplace_image_assets import (
+    ASSET_CONTRACT_VERSION,
+    MarketplaceImageAssetError,
+    materialize_product_payload,
 )
 from services.ozon_api_client import (
     OzonAPIError,
@@ -124,6 +133,9 @@ class MarketplacePublicationService:
     MAX_PROVIDER_REQUEST_IDS = 50
     MAX_DUE_OPERATIONS = 50
     MAX_JSON_BYTES = 512 * 1024
+    MEDIA_ASSET_MAX_FAILURES = 3
+    OZON_IMPORT_ONLY_TYPE_ATTRIBUTE_ID = "8229"
+    OZON_PROVIDER_OFFER_ATTRIBUTE_ID = "9024"
 
     @staticmethod
     def _positive_integer(value: Any, field_name: str) -> int:
@@ -581,7 +593,18 @@ class MarketplacePublicationService:
                 "Ozon schema изменилась после валидации; провалидируйте черновик заново"
             )
         try:
-            payload = OzonProductImportContract.build_payload(draft)
+            documents, update_baseline = (
+                MarketplaceDraftService.publication_documents(draft)
+            )
+            validated_baseline = validation.get("update_baseline")
+            if update_baseline != validated_baseline:
+                raise MarketplacePublicationConflict(
+                    "Снимок существующей карточки Ozon изменился во время подготовки; повторите проверку"
+                )
+            payload = OzonProductImportContract.build_payload(
+                draft,
+                documents=documents,
+            )
         except OzonProductImportPayloadError as exc:
             raise MarketplacePublicationValidationError(str(exc)) from None
         return draft, payload, validation
@@ -594,6 +617,44 @@ class MarketplacePublicationService:
         payload: dict,
     ) -> dict:
         item = payload["items"][0]
+        payload_slots = []
+        if item.get("primary_image"):
+            payload_slots.append(
+                ("primary_image", item["primary_image"])
+            )
+        payload_slots.extend(
+            (f"images:{index}", value)
+            for index, value in enumerate(item.get("images", []))
+            if isinstance(value, str) and value
+        )
+        if item.get("color_image"):
+            payload_slots.append(
+                ("color_image", item["color_image"])
+            )
+        if draft.published_listing_id is None:
+            media_asset_slots = [
+                key for key, _value in payload_slots
+            ]
+        else:
+            stored_media = MarketplaceDraftService._stored_json(
+                draft.media_json,
+                dict,
+            )
+            source_urls = {
+                value
+                for value in (
+                    [stored_media.get("primary_image")]
+                    + list(stored_media.get("images") or [])
+                    + [stored_media.get("color_image")]
+                )
+                if isinstance(value, str) and value
+            }
+            media_asset_slots = [
+                key
+                for key, value in payload_slots
+                if value in source_urls
+            ]
+        media_source_total = len(media_asset_slots)
         return {
             "offer_id": item["offer_id"],
             "imported_product_id": draft.imported_product_id,
@@ -604,8 +665,22 @@ class MarketplacePublicationService:
             "source_fact_hash": draft.source_fact_hash,
             "schema_hash": draft.schema_hash,
             "attribute_count": len(item.get("attributes", [])),
+            "explicit_attribute_removal_count": len(
+                MarketplaceDraftService._stored_json(
+                    draft.attribute_removals_json,
+                    list,
+                )
+            ),
             "complex_group_count": len(item.get("complex_attributes", [])),
             "image_count": len(item.get("images", [])),
+            "media_asset_contract_version": ASSET_CONTRACT_VERSION,
+            "media_asset_state": (
+                "pending" if media_asset_slots else "ready"
+            ),
+            "media_asset_slots": media_asset_slots,
+            "media_asset_prepared": 0,
+            "media_asset_source_total": media_source_total,
+            "media_asset_failure_count": 0,
             "has_barcode": bool(item.get("barcode")),
             "currency_code": item["currency_code"],
         }
@@ -631,6 +706,198 @@ class MarketplacePublicationService:
             )
         return summary
 
+    @staticmethod
+    def _media_asset_test_bypass() -> bool:
+        """Keep legacy synthetic publication tests free of real network I/O.
+
+        Production can never enable this path: the opt-out is honored only on
+        a Flask application explicitly running in TESTING mode.  Dedicated
+        media tests set MARKETPLACE_IMAGE_ASSETS_TEST_ENFORCE=true.
+        """
+        return bool(
+            has_app_context()
+            and current_app.testing
+            and not current_app.config.get(
+                "MARKETPLACE_IMAGE_ASSETS_TEST_ENFORCE",
+                False,
+            )
+        )
+
+    @classmethod
+    def _store_media_asset_result(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        payload: dict,
+        summary: dict,
+    ) -> None:
+        snapshot = operation.snapshot
+        if snapshot is None:
+            raise MarketplacePublicationConflict(
+                "Операция не имеет media snapshot"
+            )
+        fingerprint = (
+            OzonProductStateContract.fingerprint(payload)
+            if operation.operation_kind in cls.UPDATE_KINDS
+            else OzonProductImportContract.fingerprint(payload)
+        )
+        item = payload["items"][0]
+        operation.request_fingerprint = fingerprint
+        operation.request_summary_json = cls._json(summary, dict)
+        snapshot.submitted_state_json = cls._json(payload, dict)
+        snapshot.submitted_fingerprint = fingerprint
+        summary["image_count"] = (
+            len(item.get("images", []))
+            + (1 if item.get("primary_image") else 0)
+        )
+        operation.request_summary_json = cls._json(summary, dict)
+
+    @classmethod
+    def _prepare_media_assets(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        now: datetime,
+    ) -> bool:
+        """Freeze all outbound create/update images before provider I/O.
+
+        The operation and its candidate payload already exist durably.  A
+        bounded pass may replace only a prefix of URLs; that partial progress
+        is committed with attempt_count=0 and safely resumed on the next tick.
+        """
+        if operation.operation_kind not in {"product_import", "product_update"}:
+            return True
+        if cls._media_asset_test_bypass():
+            return True
+        if operation.status != "queued" or operation.attempt_count != 0:
+            raise MarketplacePublicationConflict(
+                "Media assets можно готовить только до первого Ozon write"
+            )
+        try:
+            summary = cls._operation_summary(operation)
+            snapshot = operation.snapshot
+            if snapshot is None:
+                raise MarketplaceImageAssetError(
+                    "Операция не имеет обязательного media snapshot",
+                    code="media_snapshot_missing",
+                )
+            payload = json.loads(snapshot.submitted_state_json)
+            if not isinstance(payload, dict):
+                raise MarketplaceImageAssetError(
+                    "Media snapshot операции повреждён",
+                    code="media_payload_invalid",
+                )
+            stored_fingerprint = (
+                OzonProductStateContract.fingerprint(payload)
+                if operation.operation_kind in cls.UPDATE_KINDS
+                else OzonProductImportContract.fingerprint(payload)
+            )
+            if (
+                stored_fingerprint != operation.request_fingerprint
+                or snapshot.submitted_fingerprint != stored_fingerprint
+            ):
+                raise MarketplaceImageAssetError(
+                    "Fingerprint media snapshot не совпадает с операцией",
+                    code="media_payload_fingerprint_mismatch",
+                )
+            result = materialize_product_payload(
+                payload,
+                config=current_app.config,
+                secret_key=current_app.config["SECRET_KEY"],
+                selected_slots=(
+                    summary.get("media_asset_slots")
+                    if isinstance(summary.get("media_asset_slots"), list)
+                    else None
+                ),
+            )
+        except (TypeError, json.JSONDecodeError, KeyError):
+            result = None
+            error = MarketplaceImageAssetError(
+                "Media snapshot операции повреждён",
+                code="media_payload_invalid",
+            )
+        except MarketplaceImageAssetError as exc:
+            result = None
+            error = exc
+        else:
+            error = None
+
+        if result is not None:
+            summary.update({
+                "media_asset_contract_version": ASSET_CONTRACT_VERSION,
+                "media_asset_prepared": result.prepared_total,
+                "media_asset_source_total": result.source_total,
+                "media_asset_last_prepared_at": now.isoformat(),
+            })
+            cls._store_media_asset_result(
+                operation,
+                payload=result.payload,
+                summary=summary,
+            )
+            if result.error_code:
+                error = MarketplaceImageAssetError(
+                    result.error_message
+                    or "Не удалось подготовить фото карточки",
+                    code=result.error_code,
+                    retryable=result.retryable,
+                )
+            elif not result.complete:
+                summary["media_asset_state"] = "preparing"
+                operation.request_summary_json = cls._json(summary, dict)
+                cls._defer_prewrite(
+                    operation,
+                    code="media_preparation_pending",
+                    message=(
+                        "Подготавливаем фото для Ozon: "
+                        f"{result.prepared_total} из {result.source_total}"
+                    ),
+                    now=now,
+                )
+                return False
+            else:
+                summary["media_asset_state"] = "ready"
+                summary["media_asset_failure_count"] = int(
+                    summary.get("media_asset_failure_count") or 0
+                )
+                operation.request_summary_json = cls._json(summary, dict)
+                operation.error_code = None
+                operation.error_message = None
+                operation.next_poll_at = now
+                db.session.commit()
+                return True
+
+        assert error is not None
+        failures = int(summary.get("media_asset_failure_count") or 0) + 1
+        summary.update({
+            "media_asset_state": (
+                "retrying"
+                if error.retryable and failures < cls.MEDIA_ASSET_MAX_FAILURES
+                else "failed"
+            ),
+            "media_asset_failure_count": failures,
+            "media_asset_error_code": error.code,
+            "media_asset_last_prepared_at": now.isoformat(),
+        })
+        operation.request_summary_json = cls._json(summary, dict)
+        if error.retryable and failures < cls.MEDIA_ASSET_MAX_FAILURES:
+            cls._defer_prewrite(
+                operation,
+                code="media_preparation_retry",
+                message=(
+                    f"{str(error)}. Повторим автоматически "
+                    f"({failures}/{cls.MEDIA_ASSET_MAX_FAILURES})"
+                ),
+                now=now,
+            )
+            return False
+        cls._mark_failed(
+            operation,
+            code=error.code or "ozon_media_not_publicly_fetchable",
+            message=str(error),
+            now=now,
+        )
+        return False
+
     @classmethod
     def _existing_idempotent_operation(
         cls,
@@ -655,6 +922,33 @@ class MarketplacePublicationService:
             )
         return cls._owned_operation(
             seller_id=seller_id,
+            operation_id=existing.id,
+        )
+
+    @classmethod
+    def _existing_idempotent_rollback(
+        cls,
+        *,
+        parent: MarketplaceOperation,
+        operation_kind: str,
+        idempotency_key: str,
+    ) -> Optional[MarketplaceOperation]:
+        existing = MarketplaceOperation.query.filter_by(
+            account_id=parent.account_id,
+            operation_kind=operation_kind,
+            idempotency_key=idempotency_key,
+        ).first()
+        if existing is None:
+            return None
+        if (
+            existing.seller_id != parent.seller_id
+            or existing.parent_operation_id != parent.id
+        ):
+            raise MarketplacePublicationConflict(
+                "idempotency_key уже использован для другого rollback"
+            )
+        return cls._owned_operation(
+            seller_id=parent.seller_id,
             operation_id=existing.id,
         )
 
@@ -685,6 +979,17 @@ class MarketplacePublicationService:
             ):
                 raise MarketplacePublicationConflict(
                     "Update требует точный seller-scoped Ozon listing"
+                )
+            if (
+                not isinstance(expected_before_fingerprint, str)
+                or len(expected_before_fingerprint) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in expected_before_fingerprint
+                )
+            ):
+                raise MarketplacePublicationConflict(
+                    "Update требует точный fingerprint проверенного Ozon before-state"
                 )
             fingerprint = OzonProductStateContract.fingerprint(payload)
         else:
@@ -897,6 +1202,462 @@ class MarketplacePublicationService:
         db.session.commit()
 
     @classmethod
+    def _verified_roundtrip_omittable_attributes(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        submitted_payload: dict,
+    ) -> tuple[str, ...]:
+        """Return import-only attributes proven against the exact fresh schema.
+
+        Ozon currently requires attribute 8229 for import, while its attributes
+        read model omits that field.  Treating an arbitrary missing attribute as
+        normalization would weaken the full-state CAS gate, so the exception is
+        granted only for one official type-scoped dictionary value whose display
+        is byte-for-byte equal to the selected official product type name.
+        """
+        if operation.operation_kind not in cls.UPDATE_KINDS:
+            return ()
+        draft = operation.draft
+        product_type = draft.product_type if draft is not None else None
+        if (
+            draft is None
+            or product_type is None
+            or draft.seller_id != operation.seller_id
+            or draft.marketplace_id != operation.marketplace_id
+            or draft.account_id != operation.account_id
+            or draft.product_type_id != product_type.id
+            or draft.version != operation.draft_version
+            or draft.validation_status != "valid"
+            or draft.schema_version != product_type.attributes_version
+            or draft.schema_hash != product_type.attributes_schema_hash
+            or product_type.marketplace_id != operation.marketplace_id
+            or product_type.category is None
+            or product_type.attributes_sync_status != "success"
+        ):
+            return ()
+        try:
+            canonical = OzonProductStateContract.canonical_payload(
+                submitted_payload
+            )
+        except OzonProductStateError:
+            return ()
+        item = canonical["items"][0]
+        if (
+            str(item.get("type_id")) != product_type.external_type_id
+            or str(item.get("description_category_id"))
+            != product_type.category.external_category_id
+            or draft.external_type_id != product_type.external_type_id
+            or draft.external_category_id
+            != product_type.category.external_category_id
+        ):
+            return ()
+
+        attribute_id = cls.OZON_IMPORT_ONLY_TYPE_ATTRIBUTE_ID
+        matches = [
+            attribute
+            for attribute in item["attributes"]
+            if (
+                isinstance(attribute, dict)
+                and str(attribute.get("id")) == attribute_id
+            )
+        ]
+        if len(matches) != 1:
+            return ()
+        attribute = matches[0]
+        values = attribute.get("values")
+        if (
+            set(attribute) != {"id", "complex_id", "values"}
+            or attribute.get("complex_id") != 0
+            or not isinstance(values, list)
+            or len(values) != 1
+            or not isinstance(values[0], dict)
+            or set(values[0]) != {"dictionary_value_id", "value"}
+            or not isinstance(values[0].get("dictionary_value_id"), int)
+            or isinstance(values[0].get("dictionary_value_id"), bool)
+            or values[0]["dictionary_value_id"] <= 0
+            or values[0].get("value") != product_type.name
+        ):
+            return ()
+
+        definitions = MarketplaceAttributeDefinition.query.filter_by(
+            marketplace_id=operation.marketplace_id,
+            product_type_id=product_type.id,
+            external_attribute_id=attribute_id,
+            is_available=True,
+            is_enabled=True,
+        ).all()
+        if len(definitions) != 1:
+            return ()
+        definition = definitions[0]
+        if (
+            not definition.is_required
+            or not definition.dictionary_id
+            or definition.attribute_complex_id not in (None, "", "0")
+        ):
+            return ()
+        official_value = MarketplaceAttributeValue.query.filter_by(
+            marketplace_id=operation.marketplace_id,
+            product_type_id=product_type.id,
+            attribute_id=definition.id,
+            external_value_id=str(values[0]["dictionary_value_id"]),
+            is_available=True,
+        ).first()
+        if (
+            official_value is None
+            or official_value.value != values[0]["value"]
+            or official_value.value != product_type.name
+        ):
+            return ()
+        return (attribute_id,)
+
+    @classmethod
+    def _provider_roundtrip_omissions(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        live_payload: dict,
+    ) -> Optional[tuple[str, ...]]:
+        """Backward-compatible pure-omission proof.
+
+        New reconciliation code uses ``_provider_roundtrip_adjustments`` so a
+        provider canonicalization can never be mislabeled as an omission.
+        """
+        adjustments = cls._provider_roundtrip_adjustments(
+            operation,
+            live_payload=live_payload,
+        )
+        if (
+            adjustments is None
+            or adjustments["offer_id_canonicalized_attribute_ids"]
+        ):
+            return None
+        return adjustments["omitted_attribute_ids"]
+
+    @classmethod
+    def _verified_roundtrip_offer_id_attributes(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        submitted_payload: dict,
+    ) -> tuple[str, ...]:
+        """Allow only official optional ``Код продавца`` canonicalization."""
+        if operation.operation_kind not in cls.UPDATE_KINDS:
+            return ()
+        draft = operation.draft
+        product_type = draft.product_type if draft is not None else None
+        if (
+            draft is None
+            or product_type is None
+            or draft.seller_id != operation.seller_id
+            or draft.marketplace_id != operation.marketplace_id
+            or draft.account_id != operation.account_id
+            or draft.product_type_id != product_type.id
+            or draft.version != operation.draft_version
+            or draft.validation_status != "valid"
+            or draft.schema_version != product_type.attributes_version
+            or draft.schema_hash != product_type.attributes_schema_hash
+            or product_type.marketplace_id != operation.marketplace_id
+            or product_type.category is None
+            or product_type.attributes_sync_status != "success"
+        ):
+            return ()
+        try:
+            canonical = OzonProductStateContract.canonical_payload(
+                submitted_payload
+            )
+        except OzonProductStateError:
+            return ()
+        item = canonical["items"][0]
+        if (
+            str(item.get("type_id")) != product_type.external_type_id
+            or str(item.get("description_category_id"))
+            != product_type.category.external_category_id
+            or draft.external_type_id != product_type.external_type_id
+            or draft.external_category_id
+            != product_type.category.external_category_id
+        ):
+            return ()
+
+        attribute_id = cls.OZON_PROVIDER_OFFER_ATTRIBUTE_ID
+        matches = [
+            attribute
+            for attribute in item["attributes"]
+            if (
+                isinstance(attribute, dict)
+                and str(attribute.get("id")) == attribute_id
+            )
+        ]
+        if len(matches) != 1:
+            return ()
+        attribute = matches[0]
+        values = attribute.get("values")
+        if (
+            set(attribute) != {"id", "complex_id", "values"}
+            or attribute.get("complex_id") != 0
+            or not isinstance(values, list)
+            or len(values) != 1
+            or not isinstance(values[0], dict)
+            or set(values[0]) != {"value"}
+            or not isinstance(values[0].get("value"), str)
+            or not values[0]["value"]
+        ):
+            return ()
+        definitions = MarketplaceAttributeDefinition.query.filter_by(
+            marketplace_id=operation.marketplace_id,
+            product_type_id=product_type.id,
+            external_attribute_id=attribute_id,
+            is_available=True,
+            is_enabled=True,
+        ).all()
+        if len(definitions) != 1:
+            return ()
+        definition = definitions[0]
+        if (
+            definition.name != "Код продавца"
+            or definition.data_type != "String"
+            or definition.is_required
+            or definition.dictionary_id
+            or definition.attribute_complex_id not in (None, "", "0")
+        ):
+            return ()
+        return (attribute_id,)
+
+    @classmethod
+    def _provider_roundtrip_adjustments(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        live_payload: dict,
+    ) -> Optional[dict]:
+        submitted_payload = cls._submitted_payload(operation)
+        omittable = cls._verified_roundtrip_omittable_attributes(
+            operation,
+            submitted_payload=submitted_payload,
+        )
+        offer_id_canonicalized = (
+            cls._verified_roundtrip_offer_id_attributes(
+                operation,
+                submitted_payload=submitted_payload,
+            )
+        )
+        if not omittable and not offer_id_canonicalized:
+            return None
+        try:
+            return OzonProductStateContract.provider_roundtrip_adjustments(
+                submitted_payload,
+                live_payload,
+                omittable_simple_attribute_ids=omittable,
+                offer_id_canonicalized_simple_attribute_ids=(
+                    offer_id_canonicalized
+                ),
+            )
+        except OzonProductStateError:
+            return None
+
+    @staticmethod
+    def _record_provider_roundtrip_adjustments(
+        target: dict,
+        adjustments: dict,
+    ) -> None:
+        omitted = adjustments.get("omitted_attribute_ids", ())
+        canonicalized = adjustments.get(
+            "offer_id_canonicalized_attribute_ids",
+            (),
+        )
+        if omitted:
+            target["provider_roundtrip_omitted_attribute_ids"] = list(
+                omitted
+            )
+        if canonicalized:
+            target[
+                "provider_roundtrip_offer_id_canonicalized_attribute_ids"
+            ] = list(canonicalized)
+
+    @classmethod
+    def _rollback_payload_from_prior_state(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        before_payload: dict,
+        submitted_payload: dict,
+    ) -> Optional[dict]:
+        """Build a schema-valid rollback body without inventing live state.
+
+        An import-only 8229 value may be copied from the just-confirmed request
+        because the provider never round-trips it.  Every provider-visible field
+        still comes from the exact prior live payload.  If the old state no
+        longer satisfies the current official required schema, automatic
+        rollback is deliberately unavailable instead of submitting a known
+        invalid restore request.
+        """
+        try:
+            rollback_payload = OzonProductStateContract.canonical_payload(
+                deepcopy(before_payload)
+            )
+            submitted = OzonProductStateContract.canonical_payload(
+                submitted_payload
+            )
+        except OzonProductStateError:
+            return None
+
+        allowed = cls._verified_roundtrip_omittable_attributes(
+            operation,
+            submitted_payload=submitted_payload,
+        )
+        rollback_attributes = rollback_payload["items"][0]["attributes"]
+        submitted_attributes = submitted["items"][0]["attributes"]
+        for attribute_id in allowed:
+            if any(
+                str(attribute.get("id")) == attribute_id
+                for attribute in rollback_attributes
+                if isinstance(attribute, dict)
+            ):
+                continue
+            matches = [
+                attribute
+                for attribute in submitted_attributes
+                if (
+                    isinstance(attribute, dict)
+                    and str(attribute.get("id")) == attribute_id
+                )
+            ]
+            if len(matches) != 1:
+                return None
+            rollback_attributes.append(deepcopy(matches[0]))
+        try:
+            rollback_payload = OzonProductStateContract.canonical_payload(
+                rollback_payload
+            )
+            documents = OzonProductStateContract.draft_documents(
+                rollback_payload
+            )
+        except OzonProductStateError:
+            return None
+
+        draft = operation.draft
+        product_type = draft.product_type if draft is not None else None
+        item = rollback_payload["items"][0]
+        if (
+            draft is None
+            or product_type is None
+            or draft.product_type_id != product_type.id
+            or draft.version != operation.draft_version
+            or draft.validation_status != "valid"
+            or draft.schema_version != product_type.attributes_version
+            or draft.schema_hash != product_type.attributes_schema_hash
+            or product_type.category is None
+            or product_type.attributes_sync_status != "success"
+            or str(item.get("type_id")) != product_type.external_type_id
+            or str(item.get("description_category_id"))
+            != product_type.category.external_category_id
+        ):
+            return None
+        errors: list[dict] = []
+        MarketplaceDraftService._validate_attributes(
+            product_type=product_type,
+            attributes=documents["attributes"],
+            complex_groups=documents["complex_attributes"],
+            errors=errors,
+        )
+        return None if errors else rollback_payload
+
+    @classmethod
+    def _mark_update_already_current(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        live: dict,
+        now: datetime,
+    ) -> None:
+        """Finish a proven no-op update as success without provider write."""
+        snapshot = operation.snapshot
+        if snapshot is None or operation.operation_kind not in cls.UPDATE_KINDS:
+            raise MarketplacePublicationConflict(
+                "No-change update требует точный update snapshot"
+            )
+        identity = live.get("identity")
+        payload = live.get("payload")
+        fingerprint = live.get("fingerprint")
+        adjustments: Optional[dict] = {
+            "omitted_attribute_ids": (),
+            "offer_id_canonicalized_attribute_ids": (),
+        }
+        if (
+            isinstance(payload, dict)
+            and isinstance(fingerprint, str)
+            and fingerprint != operation.request_fingerprint
+        ):
+            adjustments = cls._provider_roundtrip_adjustments(
+                operation,
+                live_payload=payload,
+            )
+        if (
+            not isinstance(identity, dict)
+            or not isinstance(payload, dict)
+            or not isinstance(fingerprint, str)
+            or (
+                fingerprint != operation.request_fingerprint
+                and not adjustments
+            )
+        ):
+            raise MarketplacePublicationConflict(
+                "No-change update не подтверждён полным live-state"
+            )
+        confirmed_state = {
+            "identity": identity,
+            "payload": payload,
+            "checked_at": now.isoformat(),
+        }
+        if adjustments and (
+            adjustments["omitted_attribute_ids"]
+            or adjustments["offer_id_canonicalized_attribute_ids"]
+        ):
+            cls._record_provider_roundtrip_adjustments(
+                confirmed_state,
+                adjustments,
+            )
+            summary = cls._operation_summary(operation)
+            cls._record_provider_roundtrip_adjustments(
+                summary,
+                adjustments,
+            )
+            operation.request_summary_json = cls._json(summary, dict)
+        snapshot.confirmed_state_json = cls._json(confirmed_state, dict)
+        snapshot.confirmed_fingerprint = fingerprint
+        snapshot.rollback_state_json = "{}"
+        snapshot.rollback_status = "unavailable"
+        operation.item_results_json = cls._json([{
+            "offer_id": identity.get("offer_id"),
+            "product_id": identity.get("product_id"),
+            "status": "already_current",
+            "errors": [],
+        }], list)
+        operation.status = "succeeded"
+        operation.error_code = None
+        operation.error_message = None
+        operation.quota_reserved = 0
+        operation.next_poll_at = None
+        operation.completed_at = now
+        draft = operation.draft
+        if (
+            draft is not None
+            and draft.seller_id == operation.seller_id
+            and draft.account_id == operation.account_id
+            and draft.published_listing_id == operation.listing_id
+        ):
+            draft.status = "published"
+        if (
+            operation.operation_kind == "product_update_rollback"
+            and operation.parent_operation is not None
+            and operation.parent_operation.snapshot is not None
+        ):
+            operation.parent_operation.snapshot.rollback_status = "succeeded"
+            operation.parent_operation.snapshot.rollback_error_code = None
+            operation.parent_operation.snapshot.rollback_error_message = None
+        db.session.commit()
+
+    @classmethod
     def _mark_uncertain(
         cls,
         operation: MarketplaceOperation,
@@ -956,7 +1717,12 @@ class MarketplacePublicationService:
                 raise MarketplacePublicationUpstreamError(
                     "Ozon вернул некорректный ответ проверки offer_id"
                 ) from exc
-            if page["cursor"] or page["total"] != len(page["items"]):
+            # Current Ozon v3 returns an opaque ``last_id`` even for an exact
+            # offer filter whose declared total is fully present on this page.
+            # Completeness is therefore proven by exact total == item count;
+            # requiring an empty cursor would reject every existing offer and
+            # make update/uncertain reconciliation impossible.
+            if page["total"] != len(page["items"]):
                 raise MarketplacePublicationUpstreamError(
                     "Ozon offer_id preflight returned an incomplete page"
                 )
@@ -1062,7 +1828,18 @@ class MarketplacePublicationService:
                     now=now,
                 )
                 return False
-            if live["fingerprint"] == operation.request_fingerprint:
+            roundtrip_adjustments: Optional[dict] = {}
+            if live["fingerprint"] != operation.request_fingerprint:
+                roundtrip_adjustments = (
+                    cls._provider_roundtrip_adjustments(
+                    operation,
+                    live_payload=live["payload"],
+                )
+                )
+            if (
+                live["fingerprint"] == operation.request_fingerprint
+                or roundtrip_adjustments
+            ):
                 snapshot.before_state_json = cls._json({
                     "identity": live["identity"],
                     "fingerprint": live["fingerprint"],
@@ -1070,10 +1847,9 @@ class MarketplacePublicationService:
                     "payload": live["payload"],
                 }, dict)
                 snapshot.before_fingerprint = live["fingerprint"]
-                cls._mark_failed(
+                cls._mark_update_already_current(
                     operation,
-                    code="product_update_no_change",
-                    message="Live карточка уже полностью совпадает с черновиком",
+                    live=live,
                     now=now,
                 )
                 return False
@@ -1245,6 +2021,34 @@ class MarketplacePublicationService:
                 seller_id=operation.seller_id,
                 operation_id=operation.id,
             )
+        try:
+            cls._operation_summary(operation)
+            payload = cls._submitted_payload(operation)
+        except MarketplacePublicationError as exc:
+            cls._mark_failed(
+                operation,
+                code="publication_snapshot_invalid",
+                message=str(exc),
+                now=now,
+            )
+            return cls._owned_operation(
+                seller_id=operation.seller_id,
+                operation_id=operation.id,
+            )
+        if not cls._prepare_media_assets(operation, now=now):
+            return cls._owned_operation(
+                seller_id=operation.seller_id,
+                operation_id=operation.id,
+            )
+        # Media preparation may have committed a new content-addressed
+        # submitted payload and incremented the ORM version.
+        seller_id = operation.seller_id
+        operation_id = operation.id
+        db.session.expire_all()
+        operation = cls._owned_operation(
+            seller_id=seller_id,
+            operation_id=operation_id,
+        )
         try:
             cls._operation_summary(operation)
             payload = cls._submitted_payload(operation)
@@ -1775,6 +2579,128 @@ class MarketplacePublicationService:
         return {"queued": queued, "skipped": skipped}
 
     @classmethod
+    def enqueue_bulk_updates(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        draft_ids: Any,
+        created_by_user_id: Optional[int],
+        now: Optional[datetime] = None,
+    ) -> dict:
+        """Queue up to 50 exact full-state updates without provider I/O.
+
+        Each queued operation keeps its own submitted full payload and starts
+        with ``pending_live_preflight``.  The scheduler later reconstructs the
+        exact current Ozon card, captures the rollback state, checks update
+        quota and performs at most one write attempt under the account claim.
+        """
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        if not isinstance(draft_ids, (list, tuple)) or not draft_ids:
+            raise MarketplacePublicationValidationError(
+                "Выберите хотя бы один черновик"
+            )
+        if len(draft_ids) > 50:
+            raise MarketplacePublicationValidationError(
+                "За один запуск можно поставить не более 50 черновиков"
+            )
+        prepared = []
+        seen = set()
+        for raw in draft_ids:
+            value = cls._positive_integer(raw, "draft_id")
+            if value in seen:
+                raise MarketplacePublicationValidationError(
+                    "В выборе есть повторяющиеся черновики"
+                )
+            seen.add(value)
+            prepared.append(value)
+        created_by_user_id = cls._validate_author(
+            seller_id=seller_id,
+            created_by_user_id=created_by_user_id,
+        )
+        current_time = now or datetime.utcnow()
+        queued = []
+        skipped = []
+
+        def _skip(draft_id: int, reason: str) -> None:
+            skipped.append({
+                "draft_id": draft_id,
+                "reason": cls._safe_text(reason, maximum=200)
+                or "Черновик не готов к обновлению",
+            })
+
+        for draft_id in prepared:
+            try:
+                draft = MarketplaceDraftService.get_draft(
+                    seller_id=seller_id,
+                    draft_id=draft_id,
+                )
+            except MarketplaceDraftError as exc:
+                _skip(draft_id, str(exc))
+                continue
+            if draft.account_id != account_id:
+                _skip(draft_id, "Черновик относится к другому кабинету")
+                continue
+            listing = MarketplaceListing.query.filter_by(
+                id=draft.published_listing_id,
+                seller_id=seller_id,
+                account_id=account_id,
+            ).first()
+            if (
+                listing is None
+                or listing.marketplace_id != draft.marketplace_id
+                or listing.offer_id != draft.offer_id
+                or not listing.external_product_id
+                or not listing.is_available
+                or listing.is_archived
+            ):
+                _skip(
+                    draft_id,
+                    "Связанный Ozon listing отсутствует, архивирован "
+                    "или изменил identity",
+                )
+                continue
+            active = MarketplaceOperation.query.filter(
+                MarketplaceOperation.seller_id == seller_id,
+                MarketplaceOperation.draft_id == draft.id,
+                MarketplaceOperation.status.in_(cls.ACTIVE_STATUSES),
+            ).first()
+            if active is not None:
+                _skip(draft_id, "По черновику уже есть активная операция")
+                continue
+            try:
+                draft, payload, validation = cls._publication_payload(
+                    seller_id=seller_id,
+                    draft_id=draft_id,
+                    expected_version=draft.version,
+                )
+                operation = cls._create_operation(
+                    draft=draft,
+                    payload=payload,
+                    idempotency_key=cls._idempotency_key(
+                        secrets.token_urlsafe(24)
+                    ),
+                    created_by_user_id=created_by_user_id,
+                    now=current_time,
+                    operation_kind="product_update",
+                    listing=listing,
+                    expected_before_fingerprint=validation[
+                        "update_baseline"
+                    ]["fingerprint"],
+                )
+                db.session.commit()
+            except (MarketplaceDraftError, MarketplacePublicationError) as exc:
+                db.session.rollback()
+                _skip(draft_id, str(exc))
+                continue
+            queued.append({
+                "draft_id": draft_id,
+                "operation_id": operation.id,
+            })
+        return {"queued": queued, "skipped": skipped}
+
+    @classmethod
     def start_update(
         cls,
         *,
@@ -1825,7 +2751,7 @@ class MarketplacePublicationService:
             )
         try:
             db.session.expire_all()
-            draft, payload, _ = cls._publication_payload(
+            draft, payload, validation = cls._publication_payload(
                 seller_id=seller_id,
                 draft_id=draft_id,
                 expected_version=expected_version,
@@ -1862,6 +2788,9 @@ class MarketplacePublicationService:
                 now=current_time,
                 operation_kind="product_update",
                 listing=listing,
+                expected_before_fingerprint=validation[
+                    "update_baseline"
+                ]["fingerprint"],
             )
             if operation.status != "queued":
                 return operation
@@ -1908,26 +2837,22 @@ class MarketplacePublicationService:
             parent.operation_kind != "product_update"
             or parent.status != "succeeded"
             or parent.snapshot is None
-            or parent.snapshot.rollback_status != "available"
             or parent.draft is None
             or parent.listing is None
         ):
             raise MarketplacePublicationConflict(
                 "Для этой операции нет доступного full-state rollback"
             )
-        existing = MarketplaceOperation.query.filter_by(
-            account_id=parent.account_id,
+        existing = cls._existing_idempotent_rollback(
+            parent=parent,
             operation_kind="product_update_rollback",
             idempotency_key=idempotency_key,
-        ).first()
+        )
         if existing is not None:
-            if existing.parent_operation_id != parent.id:
-                raise MarketplacePublicationConflict(
-                    "idempotency_key уже использован для другого rollback"
-                )
-            return cls._owned_operation(
-                seller_id=seller_id,
-                operation_id=existing.id,
+            return existing
+        if parent.snapshot.rollback_status != "available":
+            raise MarketplacePublicationConflict(
+                "Для этой операции нет доступного full-state rollback"
             )
         try:
             rollback_state = json.loads(parent.snapshot.rollback_state_json)
@@ -1965,6 +2890,13 @@ class MarketplacePublicationService:
                 seller_id=seller_id,
                 operation_id=operation_id,
             )
+            existing = cls._existing_idempotent_rollback(
+                parent=parent,
+                operation_kind="product_update_rollback",
+                idempotency_key=idempotency_key,
+            )
+            if existing is not None:
+                return existing
             if (
                 parent.version != expected_version
                 or parent.snapshot is None
@@ -2168,9 +3100,21 @@ class MarketplacePublicationService:
             parent.operation_kind != "product_import"
             or parent.status != "succeeded"
             or parent.snapshot is None
-            or parent.snapshot.rollback_status != "available"
             or parent.listing is None
             or parent.listing.seller_id != seller_id
+        ):
+            raise MarketplacePublicationConflict(
+                "Для операции нет доступной archive-компенсации"
+            )
+        existing = cls._existing_idempotent_rollback(
+            parent=parent,
+            operation_kind="product_import_rollback",
+            idempotency_key=idempotency_key,
+        )
+        if existing is not None:
+            return existing
+        if (
+            parent.snapshot.rollback_status != "available"
             or parent.listing.is_archived
         ):
             raise MarketplacePublicationConflict(
@@ -2189,6 +3133,13 @@ class MarketplacePublicationService:
                 seller_id=seller_id,
                 operation_id=operation_id,
             )
+            existing = cls._existing_idempotent_rollback(
+                parent=parent,
+                operation_kind="product_import_rollback",
+                idempotency_key=idempotency_key,
+            )
+            if existing is not None:
+                return existing
             if (
                 parent.version != expected_version
                 or parent.snapshot is None
@@ -2237,8 +3188,12 @@ class MarketplacePublicationService:
         attributes = []
         for attribute in item.get("attributes", []):
             normalized = {
-                "attribute_id": str(attribute["id"]),
-                "complex_id": str(attribute.get("complex_id", 0)),
+                "id": str(attribute["id"]),
+                "complex_id": (
+                    str(attribute["complex_id"])
+                    if attribute.get("complex_id") not in (None, 0)
+                    else None
+                ),
                 "values": [{
                     key: str(value) if key == "dictionary_value_id" else value
                     for key, value in raw_value.items()
@@ -2256,8 +3211,12 @@ class MarketplacePublicationService:
         for group in item.get("complex_attributes", []):
             complex_attributes.append({
                 "attributes": [{
-                    "attribute_id": str(attribute["id"]),
-                    "complex_id": str(attribute.get("complex_id", 0)),
+                    "id": str(attribute["id"]),
+                    "complex_id": (
+                        str(attribute["complex_id"])
+                        if attribute.get("complex_id") not in (None, 0)
+                        else None
+                    ),
                     "values": [{
                         key: str(value) if key == "dictionary_value_id" else value
                         for key, value in raw_value.items()
@@ -2272,13 +3231,18 @@ class MarketplacePublicationService:
             "weight": item["weight"],
             "weight_unit": item["weight_unit"],
         }
-        price_summary = {
+        price_values = {
             "price": item["price"],
             "currency_code": item["currency_code"],
             "vat": item["vat"],
         }
         if "old_price" in item:
-            price_summary["old_price"] = item["old_price"]
+            price_values["old_price"] = item["old_price"]
+        price_summary = {
+            "available": True,
+            "currency": item["currency_code"],
+            "values": price_values,
+        }
         return {
             "offer_id": item["offer_id"],
             "external_product_id": item_result["product_id"],
@@ -2309,6 +3273,7 @@ class MarketplacePublicationService:
         normalized: dict,
         now: datetime,
         source: str,
+        confirmed_live: Optional[dict] = None,
     ) -> None:
         if operation.snapshot is None:
             cls._mark_uncertain(
@@ -2328,14 +3293,93 @@ class MarketplacePublicationService:
             )
             return
         item_result = item_results[0]
-        payload = cls._submitted_payload(operation)
+        submitted_payload = cls._submitted_payload(operation)
+        summary = cls._operation_summary(operation)
+        payload = submitted_payload
+        confirmed_live_fingerprint = None
+        roundtrip_adjustments: dict = {
+            "omitted_attribute_ids": (),
+            "offer_id_canonicalized_attribute_ids": (),
+        }
+        if confirmed_live is not None:
+            identity = confirmed_live.get("identity")
+            live_payload = confirmed_live.get("payload")
+            live_fingerprint = confirmed_live.get("fingerprint")
+            if (
+                operation.operation_kind not in cls.UPDATE_KINDS
+                or not isinstance(identity, dict)
+                or not isinstance(live_payload, dict)
+                or not isinstance(live_fingerprint, str)
+                or identity.get("offer_id") != summary.get("offer_id")
+                or identity.get("product_id")
+                != summary.get("external_product_id")
+                or item_result.get("offer_id") != summary.get("offer_id")
+                or item_result.get("product_id")
+                != summary.get("external_product_id")
+            ):
+                cls._mark_uncertain(
+                    operation,
+                    code="update_live_identity_unconfirmed",
+                    message=(
+                        "Ozon update завершён, но подтверждённый live-state "
+                        "не совпадает с exact target identity"
+                    ),
+                    now=now,
+                )
+                return
+            try:
+                calculated_live_fingerprint = (
+                    OzonProductStateContract.fingerprint(live_payload)
+                )
+            except OzonProductStateError:
+                calculated_live_fingerprint = None
+            if calculated_live_fingerprint != live_fingerprint:
+                cls._mark_uncertain(
+                    operation,
+                    code="update_live_fingerprint_invalid",
+                    message=(
+                        "Ozon update завершён, но live-state fingerprint "
+                        "не прошёл повторную проверку"
+                    ),
+                    now=now,
+                )
+                return
+            if live_fingerprint != operation.request_fingerprint:
+                proven_adjustments = cls._provider_roundtrip_adjustments(
+                    operation,
+                    live_payload=live_payload,
+                )
+                if not proven_adjustments:
+                    cls._mark_uncertain(
+                        operation,
+                        code="update_postwrite_drift",
+                        message=(
+                            "Live карточка не совпадает с отправленным полным "
+                            "payload вне разрешённой нормализации Ozon"
+                        ),
+                        now=now,
+                    )
+                    return
+                roundtrip_adjustments = proven_adjustments
+            payload = live_payload
+            confirmed_live_fingerprint = live_fingerprint
         state = cls._outgoing_to_listing_state(
             payload=payload,
             item_result=item_result,
             now=now,
             source=source,
         )
-        summary = cls._operation_summary(operation)
+        if (
+            roundtrip_adjustments["omitted_attribute_ids"]
+            or roundtrip_adjustments[
+                "offer_id_canonicalized_attribute_ids"
+            ]
+        ):
+            cls._record_provider_roundtrip_adjustments(
+                summary,
+                roundtrip_adjustments,
+            )
+            operation.request_summary_json = cls._json(summary, dict)
         imported_product_id = summary.get("imported_product_id")
         product_type_id = summary.get("product_type_id")
         canonical_product = None
@@ -2494,21 +3538,13 @@ class MarketplacePublicationService:
                 now=now,
             )
 
-        draft = operation.draft
-        if (
-            draft is not None
-            and draft.seller_id == operation.seller_id
-            and draft.account_id == operation.account_id
-            and draft.version == operation.draft_version
-        ):
-            draft.published_listing_id = listing.id
-            draft.status = "published"
-
         snapshot = operation.snapshot
         snapshot.listing_id = listing.id
         snapshot.confirmed_state_json = cls._json(state, dict)
         if operation.operation_kind in cls.UPDATE_KINDS:
-            snapshot.confirmed_fingerprint = operation.request_fingerprint
+            snapshot.confirmed_fingerprint = (
+                confirmed_live_fingerprint or operation.request_fingerprint
+            )
             if operation.operation_kind == "product_update":
                 try:
                     before_state = json.loads(snapshot.before_state_json)
@@ -2529,15 +3565,33 @@ class MarketplacePublicationService:
                         now=now,
                     )
                     return
-                snapshot.rollback_state_json = cls._json({
-                    "payload": before_payload,
-                    "expected_live_fingerprint": operation.request_fingerprint,
-                    "product_id": listing.external_product_id,
-                    "offer_id": listing.offer_id,
-                }, dict)
-                snapshot.rollback_status = "available"
-                snapshot.rollback_error_code = None
-                snapshot.rollback_error_message = None
+                rollback_payload = cls._rollback_payload_from_prior_state(
+                    operation,
+                    before_payload=before_payload,
+                    submitted_payload=submitted_payload,
+                )
+                if rollback_payload is None:
+                    snapshot.rollback_state_json = "{}"
+                    snapshot.rollback_status = "unavailable"
+                    snapshot.rollback_error_code = (
+                        "update_rollback_prior_state_not_publishable"
+                    )
+                    snapshot.rollback_error_message = (
+                        "Prior live-state не проходит текущую official Ozon "
+                        "schema; автоматический rollback отключён"
+                    )
+                else:
+                    snapshot.rollback_state_json = cls._json({
+                        "payload": rollback_payload,
+                        "expected_live_fingerprint": (
+                            snapshot.confirmed_fingerprint
+                        ),
+                        "product_id": listing.external_product_id,
+                        "offer_id": listing.offer_id,
+                    }, dict)
+                    snapshot.rollback_status = "available"
+                    snapshot.rollback_error_code = None
+                    snapshot.rollback_error_message = None
             else:
                 snapshot.rollback_state_json = "{}"
                 snapshot.rollback_status = "unavailable"
@@ -2564,6 +3618,15 @@ class MarketplacePublicationService:
             snapshot.rollback_status = "available"
             snapshot.rollback_error_code = None
             snapshot.rollback_error_message = None
+        draft = operation.draft
+        if (
+            draft is not None
+            and draft.seller_id == operation.seller_id
+            and draft.account_id == operation.account_id
+            and draft.version == operation.draft_version
+        ):
+            draft.published_listing_id = listing.id
+            draft.status = "published"
         operation.listing_id = listing.id
         operation.status = "succeeded"
         operation.item_results_json = cls._json(item_results, list)
@@ -2638,12 +3701,34 @@ class MarketplacePublicationService:
             db.session.commit()
             return
 
-        if live["fingerprint"] == operation.request_fingerprint:
+        exact_submitted = (
+            live["fingerprint"] == operation.request_fingerprint
+        )
+        roundtrip_omissions: Optional[tuple[str, ...]] = ()
+        if not exact_submitted:
+            roundtrip_omissions = cls._provider_roundtrip_omissions(
+                operation,
+                live_payload=live["payload"],
+            )
+        reconciled_without_task_id = any(
+            item.get("reconciled_without_task_id") is True
+            for item in normalized.get("items", [])
+            if isinstance(item, dict)
+        )
+        if (
+            exact_submitted
+            or (
+                roundtrip_omissions
+                and operation.external_task_id
+                and not reconciled_without_task_id
+            )
+        ):
             cls._finalize_success(
                 operation,
                 normalized=normalized,
                 now=now,
                 source=source,
+                confirmed_live=live,
             )
             return
         before_fingerprint = (
@@ -3250,6 +4335,18 @@ class MarketplacePublicationService:
             MarketplaceOperation.next_poll_at.isnot(None),
             MarketplaceOperation.next_poll_at <= current_time,
         ).order_by(
+            case(
+                (
+                    MarketplaceOperation.status.in_((
+                        "submitting",
+                        "submitted",
+                        "polling",
+                        "uncertain",
+                    )),
+                    0,
+                ),
+                else_=1,
+            ),
             MarketplaceOperation.next_poll_at.asc(),
             MarketplaceOperation.id.asc(),
         ).limit(limit).all()

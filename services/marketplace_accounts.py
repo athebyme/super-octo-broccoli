@@ -63,6 +63,9 @@ class MarketplaceAccountService:
     MAX_ACCOUNTS_PER_MARKETPLACE = 10
     MAX_LABEL_LENGTH = 120
     MAX_EXTERNAL_ACCOUNT_ID_LENGTH = 200
+    OZON_VAT_VALUES = {
+        "0", "0.05", "0.07", "0.1", "0.10", "0.2", "0.20", "0.22",
+    }
     ALLOWED_CONNECTION_STATUSES = {
         "unchecked",
         "connected",
@@ -182,6 +185,7 @@ class MarketplaceAccountService:
         api_key: Optional[Any],
         is_default: bool = False,
         account_id: Optional[int] = None,
+        default_vat: Optional[Any] = None,
     ) -> SellerMarketplaceAccount:
         seller_id = cls._positive_integer(seller_id, "seller_id")
         if not isinstance(is_default, bool):
@@ -205,6 +209,17 @@ class MarketplaceAccountService:
                 "API key",
                 maximum=2000,
             )
+        normalized_default_vat = None
+        if default_vat not in (None, ""):
+            normalized_default_vat = cls._bounded_text(
+                default_vat,
+                "Ставка НДС",
+                maximum=10,
+            )
+            if normalized_default_vat not in cls.OZON_VAT_VALUES:
+                raise MarketplaceAccountValidationError(
+                    "Ставка НДС не входит в поддерживаемый Ozon enum"
+                )
 
         marketplace = cls._marketplace("ozon")
         if account_id is None:
@@ -216,6 +231,7 @@ class MarketplaceAccountService:
                 label=label,
                 normalized_api_key=normalized_api_key,
                 is_default=is_default,
+                default_vat=normalized_default_vat,
             )
 
         account_id = cls._positive_integer(account_id, "account_id")
@@ -284,6 +300,7 @@ class MarketplaceAccountService:
                 label=label,
                 normalized_api_key=normalized_api_key,
                 is_default=is_default,
+                default_vat=normalized_default_vat,
             )
         finally:
             release_account_operation_lock(claim)
@@ -299,6 +316,7 @@ class MarketplaceAccountService:
         label: str,
         normalized_api_key: Optional[str],
         is_default: bool,
+        default_vat: Optional[str],
     ) -> SellerMarketplaceAccount:
         if account is None:
             existing_count = SellerMarketplaceAccount.query.filter_by(
@@ -349,6 +367,20 @@ class MarketplaceAccountService:
         account.external_account_id = external_account_id
         account.label = label
         account.is_active = True
+        if default_vat is not None:
+            try:
+                settings = json.loads(account.settings_json or "{}")
+            except (TypeError, json.JSONDecodeError):
+                settings = {}
+            if not isinstance(settings, dict):
+                settings = {}
+            settings["default_vat"] = default_vat
+            account.settings_json = json.dumps(
+                settings,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         if credential_changed:
             try:
                 account.set_credentials({"api_key": normalized_api_key})

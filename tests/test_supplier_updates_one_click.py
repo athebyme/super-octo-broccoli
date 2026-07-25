@@ -4,7 +4,9 @@
 import json
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 from flask import Flask
 
@@ -149,10 +151,12 @@ class RefreshFromSupplierRouteTest(unittest.TestCase):
         with patch('routes.suppliers.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user):
             resp = self.client.post(
-                '/my-products/refresh-from-supplier',
+                '/my-products/refresh-from-supplier?updates=1&supplier=2',
                 data={'selected_ids': ['abc']},
             )
         self.assertEqual(resp.status_code, 302)
+        query = parse_qs(urlsplit(resp.headers['Location']).query)
+        self.assertEqual(query, {'updates': ['1'], 'supplier': ['2']})
 
     def test_rejects_foreign_or_missing_ids(self):
         from unittest.mock import patch, MagicMock
@@ -168,6 +172,132 @@ class RefreshFromSupplierRouteTest(unittest.TestCase):
             )
             MockService.update_seller_products.assert_not_called()
         self.assertEqual(resp.status_code, 302)
+
+    def test_success_keeps_updates_view_and_drops_conflicting_status(self):
+        from unittest.mock import MagicMock, patch
+        user = self._login()
+        row = SimpleNamespace(
+            supplier_product_id=13,
+            import_status='imported',
+            product_id=99,
+        )
+        with patch('routes.suppliers.current_user', user), \
+             patch('flask_login.utils._get_user', return_value=user), \
+             patch('routes.suppliers.ImportedProduct') as MockImported, \
+             patch('routes.suppliers.SupplierService') as MockService:
+            MockImported.query.filter.return_value.all.return_value = [row]
+            MockService.update_seller_products.return_value = SimpleNamespace(
+                imported=1,
+            )
+            resp = self.client.post(
+                '/my-products/refresh-from-supplier'
+                '?updates=1&status=imported&supplier=2',
+                data={'selected_ids': ['5']},
+            )
+
+        self.assertEqual(resp.status_code, 302)
+        query = parse_qs(urlsplit(resp.headers['Location']).query)
+        self.assertEqual(query['updates'], ['1'])
+        self.assertEqual(query['supplier'], ['2'])
+        self.assertEqual(query['refreshed'], ['1'])
+        self.assertEqual(query['wb_ready'], ['1'])
+        self.assertNotIn('status', query)
+        MockService.update_seller_products.assert_called_once_with(7, [13])
+
+    def test_single_delete_keeps_regular_status_and_filters(self):
+        from unittest.mock import MagicMock, patch
+        user = self._login()
+        product = SimpleNamespace(title='Удаляемый', external_id='ext')
+        with patch('routes.suppliers.current_user', user), \
+             patch('flask_login.utils._get_user', return_value=user), \
+             patch('routes.suppliers.ImportedProduct') as MockImported, \
+             patch('routes.suppliers.db') as MockDb:
+            MockImported.query.filter_by.return_value.first_or_404.return_value = (
+                product
+            )
+            resp = self.client.post(
+                '/my-products/5/delete?status=failed&supplier=2',
+            )
+
+        self.assertEqual(resp.status_code, 302)
+        query = parse_qs(urlsplit(resp.headers['Location']).query)
+        self.assertEqual(
+            query,
+            {'status': ['failed'], 'supplier': ['2']},
+        )
+        MockDb.session.delete.assert_called_once_with(product)
+
+
+class MyProductsSupplierUpdatesViewContractTest(unittest.TestCase):
+    def test_updates_view_uses_full_bulk_budget(self):
+        from routes.suppliers import (
+            MY_PRODUCTS_PAGE_SIZE,
+            MY_PRODUCTS_UPDATES_PAGE_SIZE,
+        )
+
+        self.assertEqual(MY_PRODUCTS_PAGE_SIZE, 200)
+        self.assertEqual(MY_PRODUCTS_UPDATES_PAGE_SIZE, 200)
+
+    def test_return_args_make_updates_and_status_mutually_exclusive(self):
+        from routes.suppliers import _my_products_return_args
+
+        self.assertEqual(
+            _my_products_return_args({
+                'updates': '1',
+                'status': 'imported',
+                'supplier': '9',
+                'sort': 'oldest',
+                'unknown': 'ignored',
+            }),
+            {'updates': 1, 'supplier': 9, 'sort': 'oldest'},
+        )
+
+    def test_template_keeps_and_focuses_supplier_updates_view(self):
+        template = (
+            Path(__file__).resolve().parents[1]
+            / 'templates'
+            / 'seller_my_products.html'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('name="updates" value="1"', template)
+        self.assertIn(
+            "url_for('my_products_refresh_from_supplier', **page_args)",
+            template,
+        )
+        self.assertIn('Применить в мои карточки', template)
+        self.assertIn('{% if not updates_filter %}', template)
+        self.assertIn('WB и Ozon на этом шаге не меняются', template)
+
+    def test_my_products_uses_one_click_ozon_upload_journal(self):
+        template = (
+            Path(__file__).resolve().parents[1]
+            / 'templates'
+            / 'seller_my_products.html'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn("url_for('ozon_bulk_uploads.create')", template)
+        self.assertIn('name="imported_product_ids"', template)
+        self.assertIn('Синхронизировать Ozon', template)
+        self.assertIn('Обновить Ozon', template)
+        self.assertIn('name="confirm_write"', template)
+        self.assertIn('Подключить Ozon', template)
+
+    def test_characteristics_handoff_is_explicit_and_keeps_photos_off(self):
+        template = (
+            Path(__file__).resolve().parents[1]
+            / 'templates'
+            / 'products_enrich_bulk.html'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('Отправка характеристик на WB', template)
+        self.assertIn(
+            'характеристики и габариты. Название, описание, бренд '
+            'и фотографии не изменятся',
+            template,
+        )
+        self.assertIn('photos: false', template)
+        self.assertIn('characteristics: true', template)
+        self.assertIn('dimensions: true', template)
 
 
 if __name__ == '__main__':

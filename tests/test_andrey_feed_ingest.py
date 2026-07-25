@@ -15,6 +15,7 @@ from migrations.migrate_andrey_feed_full_ingest import ANDREY_CSV_COLUMN_MAPPING
 from services.supplier_service import (
     SupplierCSVParser,
     _copy_to_imported_product,
+    hydrate_missing_imported_observed_snapshot,
     _update_imported_from_supplier,
     _update_supplier_product,
 )
@@ -285,11 +286,83 @@ class TestImportedProductCopy(unittest.TestCase):
         return sp
 
     def test_copy_full_barcodes_and_rrp(self):
-        imp = _copy_to_imported_product(seller_id=1, sp=self._supplier_product())
+        sp = self._supplier_product()
+        sp.photo_urls_json = json.dumps([
+            {"original": "https://img.test/one.jpg"},
+        ])
+        sp.dimensions_json = json.dumps({
+            "Ширина упаковки, см": "3.5",
+        }, ensure_ascii=False)
+        sp.characteristics_json = json.dumps([
+            {"name": "Материал", "value": "Силикон"},
+        ], ensure_ascii=False)
+        imp = _copy_to_imported_product(seller_id=1, sp=sp)
         self.assertEqual(
             json.loads(imp.barcodes), ['4042342000719', '4042342000720']
         )
         self.assertEqual(imp.recommended_retail_price, 1050.0)
+        observed = json.loads(imp.original_data)
+        self.assertEqual(
+            observed["photo_urls"],
+            [{"original": "https://img.test/one.jpg"}],
+        )
+        self.assertEqual(
+            observed["dimensions"],
+            {"Ширина упаковки, см": "3.5"},
+        )
+        self.assertEqual(
+            observed["characteristics"],
+            [{"name": "Материал", "value": "Силикон"}],
+        )
+        self.assertEqual(
+            observed["barcodes"],
+            ['4042342000719', '4042342000720'],
+        )
+        self.assertEqual(observed["recommended_retail_price"], 1050.0)
+
+    def test_legacy_snapshot_hydration_fills_only_missing_observed_facts(self):
+        sp = self._supplier_product()
+        sp.photo_urls_json = json.dumps([
+            {"original": "https://img.test/current.jpg"},
+        ])
+        sp.dimensions_json = json.dumps({
+            "Вес упаковки, кг": "0.123",
+        }, ensure_ascii=False)
+        sp.characteristics_json = json.dumps({
+            "Материал": "Силикон",
+        }, ensure_ascii=False)
+        imp = ImportedProduct(
+            seller_id=1,
+            supplier_product_id=sp.id,
+            supplier_product=sp,
+            original_data=json.dumps({
+                "title": "Снимок продавца",
+                "photo_urls": ["https://img.test/kept.jpg"],
+            }, ensure_ascii=False),
+        )
+
+        changed = hydrate_missing_imported_observed_snapshot(imp)
+
+        self.assertTrue(changed)
+        observed = json.loads(imp.original_data)
+        self.assertEqual(observed["title"], "Снимок продавца")
+        self.assertEqual(
+            observed["photo_urls"],
+            ["https://img.test/kept.jpg"],
+        )
+        self.assertEqual(
+            observed["dimensions"],
+            {"Вес упаковки, кг": "0.123"},
+        )
+        self.assertEqual(
+            observed["characteristics"],
+            {"Материал": "Силикон"},
+        )
+        self.assertEqual(
+            observed["barcodes"],
+            ['4042342000719', '4042342000720'],
+        )
+        self.assertFalse(hydrate_missing_imported_observed_snapshot(imp))
 
     def test_copy_falls_back_to_single_barcode(self):
         sp = self._supplier_product()

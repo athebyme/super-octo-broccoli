@@ -36,6 +36,20 @@ class ParserTest(unittest.TestCase):
         self.assertEqual(obs['price'], 2500)
         self.assertEqual(obs['sale_price'], 1990)
 
+    def test_final_price_prefers_total_and_pair_stays_on_one_size(self):
+        obs = cf.parse_price_observation({
+            'sizes': [
+                {'price': {
+                    'basic': 300000,
+                    'product': 210000,
+                    'total': 175000,
+                }},
+                {'price': {'basic': 900000, 'product': 100000}},
+            ],
+        })
+        self.assertEqual(obs['price'], 3000)
+        self.assertEqual(obs['sale_price'], 1750)
+
     def test_parse_full_product(self):
         with patch.object(cf, '_image_url', return_value='http://img/1.webp'):
             p = cf.parse_full_product(SEARCH_PRODUCT)
@@ -141,6 +155,23 @@ class FetchServiceTest(unittest.TestCase):
         # ровно один HTTP-вызов, никакой пагинации/sleep
         self.assertEqual(session.get.call_count, 1)
 
+    def test_seller_preview_hard_caps_unexpected_large_page(self):
+        products = [dict(SEARCH_PRODUCT, id=index + 1) for index in range(140)]
+        session = MagicMock()
+        session.get.return_value = _resp(200, {'data': {'products': products}})
+        svc, _, _ = self._service(session)
+        preview = svc.fetch_seller_catalog_page(4116984)
+        self.assertEqual(len(preview), cf.INTERACTIVE_CATALOG_LIMIT)
+        self.assertEqual(session.get.call_count, 1)
+        url = session.get.call_args.args[0]
+        params = session.get.call_args.kwargs['params']
+        self.assertEqual(url, 'https://catalog.wb.ru/sellers/v4/catalog')
+        self.assertEqual(params['supplier'], '4116984')
+        self.assertEqual(params['page'], '1')
+        self.assertEqual(params['spp'], '30')
+        self.assertEqual(params['ab_testing'], 'false')
+        self.assertNotIn('limit', params)
+
     def test_supplier_prices_collects_targets_and_stops(self):
         page1 = {'data': {'products': [
             dict(SEARCH_PRODUCT, id=111), dict(SEARCH_PRODUCT, id=222)]}}
@@ -151,6 +182,33 @@ class FetchServiceTest(unittest.TestCase):
         self.assertEqual(set(found.keys()), {111, 222})
         # все цели найдены на первой странице — вторая не запрашивается
         self.assertEqual(session.get.call_count, 1)
+
+    def test_exact_prices_use_one_bounded_card_v4_request(self):
+        session = MagicMock()
+        session.get.return_value = _resp(200, {'products': [
+            dict(SEARCH_PRODUCT, id=111),
+            dict(SEARCH_PRODUCT, id=222),
+            dict(SEARCH_PRODUCT, id=999),
+        ]})
+        svc, _, _ = self._service(session)
+
+        found = svc.fetch_exact_prices([111, 222, 111])
+
+        self.assertEqual(set(found), {111, 222})
+        self.assertEqual(session.get.call_count, 1)
+        self.assertEqual(session.get.call_args.args[0], cf.CARD_URL)
+        self.assertEqual(session.get.call_args.kwargs['params']['nm'], '111;222')
+
+    def test_exact_prices_reject_invalid_or_oversized_batches(self):
+        session = MagicMock()
+        svc, _, _ = self._service(session)
+        with self.assertRaises(ValueError):
+            svc.fetch_exact_prices([True])
+        with self.assertRaises(ValueError):
+            svc.fetch_exact_prices(
+                list(range(1, cf.EXACT_CARD_BATCH_LIMIT + 2)),
+            )
+        session.get.assert_not_called()
 
     def test_supplier_prices_429_stops_without_sleep(self):
         session = MagicMock()

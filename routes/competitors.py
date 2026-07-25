@@ -15,15 +15,27 @@ from flask_login import login_required, current_user
 from models import (
     db, CompetitorMonitorSettings, CompetitorGroup, CompetitorProduct,
     CompetitorPriceSnapshot, CompetitorAlert, CompetitorProxyEncryptionError,
-    Product,
+    BackgroundJob, Product,
 )
 from services.competitor_fetch import CompetitorFetchService, WBRateLimitedError
+from services.competitor_matching import (
+    CompetitorMatchingError,
+    queue_group_matching,
+    review_match,
+    search_supplier_products,
+    serialize_group_matches,
+)
+from services.competitor_comparison import (
+    CompetitorComparisonError,
+    build_competitor_comparison,
+)
 from services.competitor_monitor import normalize_sync_interval_minutes
 
 logger = logging.getLogger('competitor_routes')
 
 MAX_NM_IDS_PER_REQUEST = 300
 WB_BUSY_ERROR = 'WB ограничивает запросы, повторите позже'
+WB_BUSY_CODE = 'wb_rate_limited'
 
 
 def _validate_nm_ids(raw):
@@ -60,6 +72,13 @@ def register_competitor_routes(app):
             db.session.add(settings)
             db.session.commit()
         return settings
+
+    def _interactive_fetch_service(seller_id):
+        """Fetch для UI с seller proxy, но без записи настроек из GET."""
+        settings = CompetitorMonitorSettings.query.filter_by(
+            seller_id=seller_id).first()
+        return CompetitorFetchService(
+            proxy_url=settings.proxy_url if settings else None)
 
     # ========================= СТРАНИЦЫ =========================
 
@@ -114,6 +133,15 @@ def register_competitor_routes(app):
         return render_template('competitors_groups.html',
                                groups=groups, groups_data=groups_data)
 
+    @app.route('/competitors/comparison')
+    @login_required
+    def competitors_comparison():
+        """Общее сравнение exact-match товаров всех конкурентов с нами."""
+        seller = _get_seller()
+        if not seller:
+            return redirect(url_for('dashboard'))
+        return render_template('competitors_comparison.html')
+
     @app.route('/competitors/groups/<int:group_id>')
     @login_required
     def competitors_group_detail(group_id):
@@ -125,7 +153,7 @@ def register_competitor_routes(app):
         group = CompetitorGroup.query.filter_by(
             id=group_id, seller_id=seller.id).first_or_404()
         products = CompetitorProduct.query.filter_by(
-            group_id=group_id, is_active=True
+            seller_id=seller.id, group_id=group_id, is_active=True
         ).order_by(CompetitorProduct.current_sale_price.asc().nullslast()).all()
 
         products_data = [p.to_dict() for p in products]
@@ -299,6 +327,24 @@ def register_competitor_routes(app):
         db.session.commit()
         return jsonify(group.to_dict())
 
+    @app.route('/api/competitors/groups/<int:group_id>/import',
+               methods=['DELETE'])
+    @login_required
+    def api_competitors_cancel_group_import(group_id):
+        """Снять durable-заявку импорта, не удаляя уже добавленные товары."""
+        seller = _get_seller()
+        if not seller:
+            return jsonify({'error': 'Магазин не настроен'}), 403
+
+        group = CompetitorGroup.query.filter_by(
+            id=group_id, seller_id=seller.id).first()
+        if not group:
+            return jsonify({'error': 'Группа не найдена'}), 404
+
+        group.import_requested = False
+        db.session.commit()
+        return jsonify({'success': True, 'import_requested': False})
+
     @app.route('/api/competitors/products', methods=['POST'])
     @login_required
     def api_competitors_add_products():
@@ -334,7 +380,8 @@ def register_competitor_routes(app):
             db.session.commit()
             return jsonify({'success': True, 'added': 0, 'reactivated': 0,
                             'skipped': 0, 'scheduled': True,
-                            'import_requested': True})
+                            'import_requested': True,
+                            'wb_supplier_id': supplier_id})
 
         # Режим 1: точные nm_ids — только вставка, без WB
         nm_ids, err = _validate_nm_ids(data.get('nm_ids'))
@@ -342,10 +389,12 @@ def register_competitor_routes(app):
             return jsonify({'error': err}), 400
 
         added = reactivated = skipped = 0
+        requested_products = []
         for nm_id in nm_ids:
             existing = CompetitorProduct.query.filter_by(
                 seller_id=seller.id, nm_id=nm_id, group_id=group.id).first()
             if existing:
+                requested_products.append(existing)
                 if existing.is_active:
                     skipped += 1
                 else:
@@ -354,15 +403,24 @@ def register_competitor_routes(app):
                     existing.price_miss_count = 0
                     reactivated += 1
                 continue
-            db.session.add(CompetitorProduct(
-                seller_id=seller.id, group_id=group.id, nm_id=nm_id))
+            product = CompetitorProduct(
+                seller_id=seller.id, group_id=group.id, nm_id=nm_id)
+            db.session.add(product)
+            requested_products.append(product)
             added += 1
 
         settings.next_sync_due_at = datetime.utcnow()
+        # Сериализуем bounded-набор до commit, чтобы expire-on-commit не
+        # превратил ответ picker-а в сотни повторных SELECT.
+        db.session.flush()
+        requested_products_data = [p.to_dict() for p in requested_products]
         db.session.commit()
         return jsonify({'success': True, 'added': added,
                         'reactivated': reactivated, 'skipped': skipped,
-                        'scheduled': True})
+                        'scheduled': True,
+                        # Bounded тем же cap=300. UI может сразу показать
+                        # честные pending-строки, не делая WB-вызов в POST.
+                        'products': requested_products_data})
 
     @app.route('/api/competitors/products/<int:product_id>',
                methods=['DELETE'])
@@ -410,6 +468,144 @@ def register_competitor_routes(app):
             'history': [s.to_dict() for s in snapshots],
         })
 
+    @app.route('/api/competitors/groups/<int:group_id>/matches')
+    @login_required
+    def api_competitors_group_matches(group_id):
+        """Shared AI result plus tenant-scoped review and exact own price."""
+        seller = _get_seller()
+        if not seller:
+            return jsonify({'error': 'Магазин не настроен'}), 403
+        try:
+            return jsonify(serialize_group_matches(seller.id, group_id))
+        except CompetitorMatchingError as error:
+            return jsonify({'error': str(error)}), 404
+
+    @app.route('/api/competitors/comparison')
+    @login_required
+    def api_competitors_comparison():
+        """Bounded all-vs-us/one-vs-us read model; no provider calls."""
+        seller = _get_seller()
+        if not seller:
+            return jsonify({'error': 'Магазин не настроен'}), 403
+
+        def query_int(name, default, *, minimum=1, maximum=None):
+            raw = request.args.get(name)
+            if raw in (None, ''):
+                return default
+            try:
+                value = int(raw)
+            except (TypeError, ValueError):
+                raise CompetitorComparisonError(
+                    f'Некорректный параметр {name}',
+                )
+            if value < minimum or (maximum is not None and value > maximum):
+                raise CompetitorComparisonError(
+                    f'Некорректный параметр {name}',
+                )
+            return value
+
+        try:
+            group_id = query_int('group_id', None)
+            page = query_int('page', 1)
+            per_page = query_int('per_page', 24, maximum=50)
+            payload = build_competitor_comparison(
+                seller.id,
+                group_id=group_id,
+                query=request.args.get('q', ''),
+                scope=request.args.get('scope', 'all'),
+                sort=request.args.get('sort', 'coverage'),
+                page=page,
+                per_page=per_page,
+            )
+        except CompetitorComparisonError as error:
+            message = str(error)
+            status = 404 if message == 'Конкурент не найден' else 400
+            return jsonify({'error': message}), status
+        return jsonify(payload)
+
+    @app.route('/api/competitors/groups/<int:group_id>/matches/run',
+               methods=['POST'])
+    @login_required
+    def api_competitors_run_group_matching(group_id):
+        """Enqueue a bounded job; image/LLM calls never run in HTTP."""
+        seller = _get_seller()
+        if not seller:
+            return jsonify({'error': 'Магазин не настроен'}), 403
+        try:
+            job = queue_group_matching(seller.id, group_id)
+        except CompetitorMatchingError as error:
+            return jsonify({'error': str(error)}), 400
+        return jsonify({
+            'success': True,
+            'job': job.to_dict(),
+            'shared_cache': True,
+            'source_scope': 'supplier_observed_only',
+        }), 202
+
+    @app.route('/api/competitors/matches/jobs/<string:job_uid>')
+    @login_required
+    def api_competitors_matching_job(job_uid):
+        """Read only the current seller's matching job."""
+        seller = _get_seller()
+        if not seller:
+            return jsonify({'error': 'Магазин не настроен'}), 403
+        job = BackgroundJob.query.filter_by(
+            job_uid=job_uid,
+            seller_id=seller.id,
+            job_type='competitor_matching',
+        ).first()
+        if not job:
+            return jsonify({'error': 'Задача не найдена'}), 404
+        return jsonify(job.to_dict())
+
+    @app.route('/api/competitors/matches/<int:match_id>/review',
+               methods=['PUT'])
+    @login_required
+    def api_competitors_review_match(match_id):
+        """Write a seller-local decision without changing the shared match."""
+        seller = _get_seller()
+        if not seller:
+            return jsonify({'error': 'Магазин не настроен'}), 403
+        data = request.get_json() or {}
+        try:
+            review = review_match(
+                seller.id,
+                getattr(current_user, 'id', None),
+                match_id,
+                action=data.get('action'),
+                supplier_product_id=data.get('supplier_product_id'),
+                match_type=data.get('match_type'),
+            )
+        except CompetitorMatchingError as error:
+            message = str(error)
+            status = 404 if message == 'Сопоставление не найдено' else 400
+            return jsonify({'error': message}), status
+        return jsonify({
+            'success': True,
+            'review': ({
+                'status': review.status,
+                'match_type': review.match_type,
+                'supplier_product_id': review.supplier_product_id,
+                'reviewed_at': review.reviewed_at.isoformat(),
+            } if review else None),
+            'shared_suggestion_changed': False,
+        })
+
+    @app.route('/api/competitors/supplier-products/search')
+    @login_required
+    def api_competitors_supplier_product_search():
+        """Bounded observed-only search for a seller-local manual override."""
+        seller = _get_seller()
+        if not seller:
+            return jsonify({'error': 'Магазин не настроен'}), 403
+        query = request.args.get('q', '').strip()
+        if len(query) < 2:
+            return jsonify({'error': 'Введите минимум 2 символа'}), 400
+        return jsonify({
+            'items': search_supplier_products(query, limit=20),
+            'source_scope': 'supplier_observed_only',
+        })
+
     @app.route('/api/competitors/search')
     @login_required
     def api_competitors_search():
@@ -423,10 +619,14 @@ def register_competitor_routes(app):
             return jsonify({'error': 'Укажите поисковый запрос'}), 400
 
         try:
-            service = CompetitorFetchService()
+            service = _interactive_fetch_service(seller.id)
             results = service.search_products(query, limit=50)
         except WBRateLimitedError:
-            return jsonify({'error': WB_BUSY_ERROR}), 503
+            return jsonify({
+                'error': WB_BUSY_ERROR,
+                'code': WB_BUSY_CODE,
+                'retryable': True,
+            }), 503
 
         return jsonify(results)
 
@@ -444,11 +644,15 @@ def register_competitor_routes(app):
         page = request.args.get('page', 1, type=int)
 
         try:
-            service = CompetitorFetchService()
+            service = _interactive_fetch_service(seller.id)
             results = service.fetch_seller_catalog_page(
                 wb_supplier_id, page=max(1, page))
         except WBRateLimitedError:
-            return jsonify({'error': WB_BUSY_ERROR}), 503
+            return jsonify({
+                'error': WB_BUSY_ERROR,
+                'code': WB_BUSY_CODE,
+                'retryable': True,
+            }), 503
 
         return jsonify(results)
 
@@ -621,6 +825,18 @@ def register_competitor_routes(app):
             return jsonify({'error': 'Магазин не настроен'}), 403
 
         settings = _get_or_create_settings(seller.id)
+        # Планировщик пропускает выключенных продавцов, поэтому обещать запуск
+        # при выключенном мониторинге — значит врать: он никогда не случится.
+        if not settings.is_enabled:
+            return jsonify({
+                'success': False,
+                'scheduled': False,
+                'code': 'monitoring_disabled',
+                'message': (
+                    'Мониторинг конкурентов выключен — включите его в '
+                    'настройках, тогда данные начнут обновляться'
+                ),
+            }), 409
         settings.next_sync_due_at = datetime.utcnow()
         db.session.commit()
         return jsonify({'success': True, 'scheduled': True,

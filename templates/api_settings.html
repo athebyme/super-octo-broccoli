@@ -27,6 +27,21 @@
                class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                style="border-color:var(--border);color:var(--text)">
     </label>
+    <label class="block md:col-span-2">
+        <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">НДС для новых карточек</span>
+        <select name="default_vat" required
+                class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                style="border-color:var(--border);color:var(--text)">
+            <option value="">Выберите один раз для кабинета</option>
+            <option value="0">Без НДС</option>
+            <option value="0.05">5%</option>
+            <option value="0.07">7%</option>
+            <option value="0.1">10%</option>
+            <option value="0.2">20%</option>
+            <option value="0.22">22%</option>
+        </select>
+        <span class="block mt-1 text-xs" style="color:var(--text-muted)">Seller Hub заполнит ставку и валюту RUB автоматически; цену возьмёт из рассчитанной цены товара.</span>
+    </label>
     <div class="md:col-span-2 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
         <label class="inline-flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
             <input type="checkbox" name="is_default" value="1" class="rounded">
@@ -63,10 +78,14 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h2 id="ozon-api-settings-title" class="text-lg font-semibold" style="color:var(--text)">Ozon</h2>
-                        <span class="sh-badge sh-badge--yellow">Пилот</span>
+                        {% if ozon_publication_enabled %}
+                        <span class="sh-badge sh-badge--green">Загрузка карточек включена</span>
+                        {% else %}
+                        <span class="sh-badge sh-badge--gray">Запись выключена</span>
+                        {% endif %}
                     </div>
                     <p class="mt-1 text-sm" style="color:var(--text-secondary)">
-                        Подключите кабинет для чтения каталога, справочников, аналитики, заказов и финансов.
+                        Подключите кабинет для массовой загрузки карточек, каталога, аналитики, заказов и финансов.
                     </p>
                 </div>
             </div>
@@ -86,7 +105,7 @@
             <div class="sh-alert sh-alert--info mt-5" role="status">
                 <span class="sh-alert-icon">{{ status_icon('info') }}</span>
                 <div class="sh-alert-content">
-                    Пилот работает в безопасном режиме: проверка доступа и синхронизации выполняются только на чтение.
+                    Проверка доступа и синхронизации выполняются только на чтение.
                     Публикация карточек и изменение цен или остатков в Ozon выключены.
                 </div>
             </div>
@@ -116,6 +135,17 @@
                         </div>
                         <p class="mt-1 text-xs" style="color:var(--text-muted)">
                             Client-Id: {{ account.external_account_id }} · {{ 'API key сохранён' if account.has_credentials else 'API key не сохранён' }}
+                        </p>
+                        <p class="mt-1 text-xs" style="color:var(--text-muted)">
+                            НДС новых карточек:
+                            {% set vat = account.settings.default_vat %}
+                            {% if vat == '0' %}без НДС
+                            {% elif vat in ['0.05'] %}5%
+                            {% elif vat in ['0.07'] %}7%
+                            {% elif vat in ['0.1', '0.10'] %}10%
+                            {% elif vat in ['0.2', '0.20'] %}20%
+                            {% elif vat == '0.22' %}22%
+                            {% else %}не выбран{% endif %}
                         </p>
                         {% if account.last_error_message %}
                         <p class="mt-1 text-xs" style="color:var(--danger)">{{ account.last_error_message }}</p>

@@ -155,6 +155,72 @@ class TestSupplierChips(HubDBTestCase):
         self.assertEqual(chips[1]['with_new'], 1)
 
 
+class TestSupplierUpdateJobCreation(HubDBTestCase):
+    def test_check_and_insert_is_single_active_job_per_seller_and_type(self):
+        from services.supplier_update_hub import (
+            JOB_TYPE,
+            SupplierUpdateJobAlreadyActive,
+            create_supplier_update_job,
+        )
+
+        created = create_supplier_update_job(
+            seller_id=1,
+            job_type=JOB_TYPE,
+            product_ids=[11, 14],
+            progress={'skipped': 0},
+        )
+        self.assertEqual(created.status, 'pending')
+        self.assertEqual(created.get_progress()['product_ids'], [11, 14])
+
+        with self.assertRaises(SupplierUpdateJobAlreadyActive) as raised:
+            create_supplier_update_job(
+                seller_id=1,
+                job_type=JOB_TYPE,
+                product_ids=[12],
+                progress={'skipped': 0},
+            )
+        self.assertEqual(raised.exception.job_uid, created.job_uid)
+        self.assertEqual(BackgroundJob.query.count(), 1)
+
+    def test_photo_and_verify_creation_scopes_are_independent(self):
+        from services.supplier_update_hub import (
+            JOB_TYPE,
+            VERIFY_JOB_TYPE,
+            create_supplier_update_job,
+        )
+
+        photo = create_supplier_update_job(
+            seller_id=1,
+            job_type=JOB_TYPE,
+            product_ids=[11],
+            progress={},
+        )
+        verify = create_supplier_update_job(
+            seller_id=1,
+            job_type=VERIFY_JOB_TYPE,
+            product_ids=[11],
+            progress={'attempts': 0},
+        )
+        self.assertNotEqual(photo.job_uid, verify.job_uid)
+        self.assertEqual(BackgroundJob.query.count(), 2)
+
+    def test_job_payload_validation_is_strict(self):
+        from services.supplier_update_hub import (
+            JOB_TYPE,
+            create_supplier_update_job,
+        )
+
+        for product_ids in ([True], ['11'], [0], [11, 11], []):
+            with self.subTest(product_ids=product_ids):
+                with self.assertRaises(ValueError):
+                    create_supplier_update_job(
+                        seller_id=1,
+                        job_type=JOB_TYPE,
+                        product_ids=product_ids,
+                        progress={},
+                    )
+
+
 class TestBuildTargetPhotoSet(HubDBTestCase):
     def _sp(self, id_):
         return db.session.get(SupplierProduct, id_)
@@ -221,8 +287,7 @@ class TestRunPhotosJob(HubDBTestCase):
              patch('services.supplier_update_hub.verify_cards_on_wb',
                    return_value={'items': [], 'summary': {}}), \
              patch('services.supplier_enrichment.EnrichmentService.apply_enrichment',
-                   return_value=apply_result) as mock_apply, \
-             patch('services.supplier_update_hub.time.sleep'):
+                   return_value=apply_result) as mock_apply:
             run_photos_job(self.app, 'j-test', 1, product_ids)
         return mock_apply
 
@@ -234,6 +299,7 @@ class TestRunPhotosJob(HubDBTestCase):
         self.assertEqual(job.succeeded, 2)
         self.assertEqual(job.failed_count, 0)
         self.assertEqual(mock_apply.call_count, 2)
+        self.assertNotIn('_photo_job_claim_token', job.get_progress())
         # запись в историю массовых операций
         h = BulkEditHistory.query.first()
         self.assertIsNotNone(h)
@@ -266,6 +332,56 @@ class TestRunPhotosJob(HubDBTestCase):
         self.assertEqual(job.failed_count, 1)
         self.assertEqual(job.status, 'completed')
 
+    def test_pending_previous_photo_write_defers_without_advancing_cursor(self):
+        from services.supplier_update_hub import run_photos_job
+
+        self._make_job([11])
+        deferred = {
+            'success': False,
+            'fields_applied': [],
+            'photos': {
+                'skipped': True,
+                'reason': 'previous_photo_write_pending',
+            },
+            'wb_sync': False,
+            'error': 'Предыдущая отправка фото ещё проверяется',
+            'reconciliation_pending': True,
+            'deferred': True,
+        }
+        success = {
+            'success': True,
+            'fields_applied': ['photos'],
+            'photos': {'uploaded': 1},
+            'wb_sync': True,
+            'error': None,
+        }
+        with (
+            patch('services.supplier_update_hub.WildberriesAPIClient'),
+            patch(
+                'services.supplier_enrichment.EnrichmentService.apply_enrichment',
+                side_effect=[deferred, success],
+            ) as apply,
+        ):
+            run_photos_job(self.app, 'j-test', 1, [11])
+            waiting = BackgroundJob.query.filter_by(job_uid='j-test').first()
+            self.assertEqual(waiting.status, 'pending')
+            self.assertEqual(waiting.processed, 0)
+            self.assertEqual(
+                waiting.get_progress().get('current_product_id'), 11,
+            )
+            self.assertNotIn(
+                '_photo_job_claim_token', waiting.get_progress(),
+            )
+
+            run_photos_job(self.app, 'j-test', 1, [])
+
+        db.session.expire_all()
+        job = BackgroundJob.query.filter_by(job_uid='j-test').first()
+        self.assertEqual(job.status, 'completed')
+        self.assertEqual(job.processed, 1)
+        self.assertEqual(job.succeeded, 1)
+        self.assertEqual(apply.call_count, 2)
+
     def test_bulk_uses_multipart_even_with_public_base_url(self):
         from services.supplier_update_hub import run_photos_job
 
@@ -283,8 +399,7 @@ class TestRunPhotosJob(HubDBTestCase):
              patch('services.supplier_update_hub.verify_cards_on_wb',
                    return_value={'items': [], 'summary': {}}), \
              patch('services.supplier_enrichment.EnrichmentService.apply_enrichment',
-                   return_value=result) as apply_enrichment, \
-             patch('services.supplier_update_hub.time.sleep'):
+                   return_value=result) as apply_enrichment:
             run_photos_job(self.app, 'j-test', 1, [11, 12])
 
         job = BackgroundJob.query.filter_by(job_uid='j-test').first()
@@ -294,8 +409,64 @@ class TestRunPhotosJob(HubDBTestCase):
         build_target.assert_not_called()
         self.assertEqual(
             apply_enrichment.call_args.args[2:4],
-            (['photos'], 'replace'),
+            (['photos'], 'smart_merge'),
         )
+
+    def test_worker_that_loses_claim_cannot_advance_cursor_after_io(self):
+        from services.supplier_update_hub import run_photos_job
+
+        self._make_job([11])
+
+        def steal_claim(*_args, **_kwargs):
+            job = BackgroundJob.query.filter_by(job_uid='j-test').first()
+            progress = job.get_progress()
+            self.assertIn('_photo_job_claim_token', progress)
+            progress['_photo_job_claim_token'] = 'replacement-worker'
+            job.set_progress(progress)
+            job.status = 'running'
+            db.session.commit()
+            return {
+                'success': True,
+                'fields_applied': ['photos'],
+                'photos': {'uploaded': 1},
+                'wb_sync': True,
+                'error': None,
+            }
+
+        with (
+            patch('services.supplier_update_hub.WildberriesAPIClient'),
+            patch(
+                'services.supplier_enrichment.EnrichmentService.apply_enrichment',
+                side_effect=steal_claim,
+            ),
+        ):
+            run_photos_job(self.app, 'j-test', 1, [11])
+
+        db.session.expire_all()
+        job = BackgroundJob.query.filter_by(job_uid='j-test').first()
+        self.assertEqual(job.status, 'running')
+        self.assertEqual(job.processed, 0)
+        self.assertEqual(job.succeeded, 0)
+        self.assertEqual(
+            job.get_progress()['_photo_job_claim_token'],
+            'replacement-worker',
+        )
+
+    def test_client_construction_failure_releases_claim_for_retry(self):
+        from services.supplier_update_hub import run_photos_job
+
+        self._make_job([11])
+        with patch(
+            'services.supplier_update_hub.WildberriesAPIClient',
+            side_effect=RuntimeError('temporary client failure'),
+        ):
+            run_photos_job(self.app, 'j-test', 1, [11])
+
+        job = BackgroundJob.query.filter_by(job_uid='j-test').first()
+        self.assertEqual(job.status, 'pending')
+        self.assertEqual(job.processed, 0)
+        self.assertNotIn('_photo_job_claim_token', job.get_progress())
+        self.assertEqual(job.get_progress()['worker_attempts'], 1)
 
     def test_cancelled_job_stops_processing(self):
         from services.supplier_update_hub import run_photos_job

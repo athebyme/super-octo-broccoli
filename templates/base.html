@@ -2158,7 +2158,7 @@
             </div>
 
             <!-- Операции: журналы и статусы синхронизаций/записей -->
-            {% set operations_active = request.endpoint in ['product_sync_status_page', 'bulk_edit_history', 'bulk_edit_history_detail'] or (request.endpoint and request.endpoint.startswith('marketplace_operations.')) %}
+            {% set operations_active = request.endpoint in ['product_sync_status_page', 'bulk_edit_history', 'bulk_edit_history_detail'] or (request.endpoint and (request.endpoint.startswith('marketplace_operations.') or request.endpoint.startswith('ozon_bulk_uploads.'))) %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if operations_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if operations_active else 'false' }} }" :aria-expanded="open" aria-label="Операции">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -2173,6 +2173,7 @@
                     <a href="{{ url_for('product_sync_status_page') }}" class="sidebar-sublink {% if request.endpoint == 'product_sync_status_page' %}active{% endif %}">Синхронизация WB</a>
                     <a href="{{ url_for('bulk_edit_history') }}" class="sidebar-sublink {% if request.endpoint in ['bulk_edit_history', 'bulk_edit_history_detail'] %}active{% endif %}">История операций</a>
                     {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+                    <a href="{{ url_for('ozon_bulk_uploads.index') }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('ozon_bulk_uploads.') %}active{% endif %}">Загрузки Ozon</a>
                     <a href="{{ url_for('marketplace_operations.index', account_id=mp_last_account) }}" class="sidebar-sublink {% if request.endpoint and request.endpoint.startswith('marketplace_operations.') %}active{% endif %}">Операции Ozon</a>
                     {% endif %}
                 </div>
@@ -2245,7 +2246,7 @@
             </div>
 
             <!-- Конкуренты -->
-            {% set competitors_active = request.endpoint in ['competitors_dashboard', 'competitors_groups', 'competitors_group_detail', 'competitors_alerts', 'competitors_settings'] %}
+            {% set competitors_active = request.endpoint in ['competitors_dashboard', 'competitors_groups', 'competitors_group_detail', 'competitors_comparison', 'competitors_alerts', 'competitors_settings'] %}
             <div class="sidebar-section" x-data="{ open: {{ 'true' if competitors_active else 'false' }} }">
                 <button @click="open = !open" class="sidebar-group-toggle" :class="{ 'active': {{ 'true' if competitors_active else 'false' }} }" :aria-expanded="open" aria-label="Конкуренты">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -2258,6 +2259,7 @@
                 <div x-show="open && sidebarOpen" x-collapse x-cloak class="sidebar-subnav">
                     <a href="{{ url_for('competitors_dashboard') }}" class="sidebar-sublink {% if request.endpoint == 'competitors_dashboard' %}active{% endif %}">Обзор</a>
                     <a href="{{ url_for('competitors_groups') }}" class="sidebar-sublink {% if request.endpoint in ['competitors_groups', 'competitors_group_detail'] %}active{% endif %}">Группы</a>
+                    <a href="{{ url_for('competitors_comparison') }}" class="sidebar-sublink {% if request.endpoint == 'competitors_comparison' %}active{% endif %}">Сравнение</a>
                     <a href="{{ url_for('competitors_alerts') }}" class="sidebar-sublink {% if request.endpoint == 'competitors_alerts' %}active{% endif %}">Алерты</a>
                     <a href="{{ url_for('competitors_settings') }}" class="sidebar-sublink {% if request.endpoint == 'competitors_settings' %}active{% endif %}">Настройки</a>
                 </div>
@@ -2685,6 +2687,10 @@
     <a href="{{ url_for('marketplace_drafts.index') }}" class="sh-cmdpal-item">
         {{ icon('document', size=20, stroke=1.5) }}
         <span class="sh-cmdpal-item-label">Черновики Ozon</span>
+    </a>
+    <a href="{{ url_for('ozon_bulk_uploads.index') }}" class="sh-cmdpal-item">
+        {{ icon('upload', size=20, stroke=1.5) }}
+        <span class="sh-cmdpal-item-label">Загрузки карточек Ozon</span>
     </a>
     <a href="{{ url_for('marketplace_inbox.page') }}" class="sh-cmdpal-item">
         {{ icon('chat', size=20, stroke=1.5) }}

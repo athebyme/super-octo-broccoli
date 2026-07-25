@@ -676,3 +676,94 @@ class MarketplaceListingServiceTest(unittest.TestCase):
                 seller_id=self.seller1.id,
                 account_id=self.account2.id,
             )
+
+
+class MarketplaceListingGroupMembersTest(unittest.TestCase):
+    """group_members никогда не должен потерять текущий листинг из среза."""
+
+    def setUp(self):
+        self.app = Flask(__name__)
+        self.app.config.update(
+            TESTING=True,
+            SQLALCHEMY_DATABASE_URI="sqlite://",
+            SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        )
+        db.init_app(self.app)
+        with self.app.app_context():
+            db.create_all()
+            user = User(
+                username="members-owner",
+                email="members@test.local",
+                is_active=True,
+            )
+            user.set_password("synthetic-password")
+            seller = Seller(user=user, company_name="Members seller")
+            db.session.add(seller)
+            ozon = Marketplace(
+                name="Ozon",
+                code="ozon",
+                adapter_code="ozon",
+                is_active=True,
+            )
+            db.session.add(ozon)
+            db.session.flush()
+            source = ImportedProduct(
+                seller_id=seller.id,
+                external_id="members-source",
+                source_type="synthetic",
+                title="Общая карточка",
+            )
+            db.session.add(source)
+            db.session.flush()
+            accounts = []
+            for index in range(8):
+                account = SellerMarketplaceAccount(
+                    seller_id=seller.id,
+                    marketplace_id=ozon.id,
+                    external_account_id=f"client-{index}",
+                    label=f"Кабинет {index}",
+                    is_active=True,
+                    connection_status="connected",
+                )
+                db.session.add(account)
+                accounts.append(account)
+            db.session.flush()
+            listing_ids = []
+            for index, account in enumerate(accounts):
+                listing = MarketplaceListing(
+                    seller_id=seller.id,
+                    marketplace_id=ozon.id,
+                    account_id=account.id,
+                    imported_product_id=source.id,
+                    offer_id=f"offer-{index}",
+                    external_product_id=f"{900 + index}",
+                    title=f"Канал {index}",
+                    normalized_status="active",
+                    sync_fingerprint=f"{index:064x}",
+                )
+                db.session.add(listing)
+                db.session.flush()
+                listing_ids.append(listing.id)
+            db.session.commit()
+            self.seller_id = seller.id
+            self.listing_ids = listing_ids
+
+    def tearDown(self):
+        with self.app.app_context():
+            db.session.remove()
+            db.drop_all()
+
+    def test_last_channel_stays_in_its_own_member_list(self):
+        with self.app.app_context():
+            last_id = self.listing_ids[-1]
+            listing = db.session.get(MarketplaceListing, last_id)
+            members = MarketplaceListingService.group_members(
+                seller_id=self.seller_id,
+                listing=listing,
+            )
+            ids = [row["id"] for row in members]
+            self.assertIn(last_id, ids)
+            self.assertTrue(
+                any(row["is_current"] for row in members),
+                "текущий канал обязан быть помечен в переключателе",
+            )

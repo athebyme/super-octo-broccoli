@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+
+{% block title %}Мои товары · beta — Seller Hub{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css') }}">
+
+<script type="application/json" id="mp-bootstrap">{{ {
+    'wbConnected': wb_connected,
+    'ozonEnabled': ozon_enabled,
+    'ozonAccounts': ozon_accounts,
+    'suppliers': suppliers_payload,
+    'urls': {
+        'feed': url_for('api_my_products_list'),
+        'facets': url_for('api_my_products_facets'),
+        'jobStatus': '/api/jobs/',
+        'pushToWb': url_for('seller_push_to_wb_bulk'),
+        'wbAudit': url_for('seller_wb_audit_start'),
+        'refreshFromSupplier': url_for('my_products_refresh_from_supplier'),
+        'deleteBulk': url_for('seller_delete_imported_products_bulk'),
+        'enrichBulk': url_for('products_enrich_bulk'),
+        'wbPreviewBase': '/my-products/',
+        'supplierCatalog': url_for('supplier_catalog'),
+        'apiSettings': url_for('api_settings'),
+        'classic': url_for('seller_my_products'),
+        'ozonUploads': ozon_uploads_url,
+    },
+} | tojson }}</script>
+
+<div id="my-products-app" class="shk-page" v-cloak>
+{% raw %}
+    <header class="shk-head">
+        <div>
+            <h1 class="shk-head-title">Мои товары</h1>
+            <p class="shk-head-sub">
+                Выберите карточки и примените действие ко всем сразу — публикация, обновление данных, фото.
+            </p>
+        </div>
+        <div class="shk-head-actions">
+            <a class="sh-btn sh-btn--primary" :href="urls.supplierCatalog">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M12 5v14M5 12h14"/></svg>
+                Добавить товары
+            </a>
+            <a class="shk-quiet-link" :href="urls.classic" title="Открыть прежний интерфейс этой страницы">
+                Старая версия
+            </a>
+        </div>
+    </header>
+
+    <sh-job-progress :job="job" :title="jobTitle" @dismiss="job = null" @retry-failed="retryFailed"></sh-job-progress>
+
+    <!-- Вкладки: одно состояние — одна вкладка, со счётчиком -->
+    <nav class="mp-tabs" aria-label="Статус карточек">
+        <button v-for="tab in tabs" :key="tab.key" type="button"
+                class="mp-tab" :class="{'is-active': activeTab === tab.key}"
+                @click="setTab(tab.key)">
+            {{ tab.label }}
+            <span v-if="facets[tab.countKey] !== undefined" class="mp-tab-n">{{ facets[tab.countKey] }}</span>
+        </button>
+    </nav>
+
+    <sh-filter-bar v-model="searchInput" placeholder="Название, бренд или артикул"
+                   :chips="[]" :sticky="true">
+        <select v-model="filters.supplier" class="mp-select" aria-label="Поставщик">
+            <option value="">Все поставщики</option>
+            <option v-for="s in suppliers" :key="s.id" :value="s.id">{{ s.name }}</option>
+        </select>
+        <select v-model="filters.has_photos" class="mp-select" aria-label="Фото">
+            <option value="">Фото: любые</option>
+            <option value="yes">С фото</option>
+            <option value="no">Без фото</option>
+        </select>
+        <select v-model="filters.stock" class="mp-select" aria-label="Остаток у поставщика">
+            <option value="">Остаток: любой</option>
+            <option value="in_stock">В наличии</option>
+            <option value="out_of_stock">Нет у поставщика</option>
+        </select>
+        <select v-model="filters.sort" class="mp-select" aria-label="Сортировка">
+            <option value="">Сначала новые</option>
+            <option value="oldest">Сначала старые</option>
+            <option value="price_asc">Дешевле</option>
+            <option value="price_desc">Дороже</option>
+            <option value="title">По названию</option>
+        </select>
+    </sh-filter-bar>
+
+    <sh-error :message="error" @retry="load"></sh-error>
+
+    <div class="mp-listhead" v-if="items.length || loading">
+        <label class="mp-selectall">
+            <input type="checkbox" :checked="allSelected" :indeterminate.prop="someSelected"
+                   @change="toggleAll" aria-label="Выбрать все на странице">
+            <span>{{ allSelected ? 'Снять выбор' : 'Выбрать все на странице' }}</span>
+        </label>
+        <span class="mp-listhead-count">
+            {{ $fmt.int(pagination.total || 0) }} {{ $fmt.plural(pagination.total || 0, 'товар', 'товара', 'товаров') }}
+        </span>
+    </div>
+
+    <div class="mp-list">
+        <template v-if="loading && !items.length">
+            <div v-for="n in 8" :key="'sk' + n" class="mp-row mp-row--skeleton">
+                <div class="mp-photo sh-skeleton"></div>
+                <div class="mp-main">
+                    <div class="sh-skeleton sh-skeleton--line-70"></div>
+                    <div class="sh-skeleton sh-skeleton--line-50"></div>
+                </div>
+            </div>
+        </template>
+
+        <sh-empty v-else-if="!items.length"
+                  :title="emptyState.title" :text="emptyState.text">
+            <button v-if="emptyState.action === 'reset'" type="button"
+                    class="sh-btn sh-btn--secondary" @click="resetFilters">Сбросить фильтры</button>
+            <a v-else-if="emptyState.action === 'catalog'" class="sh-btn sh-btn--primary"
+               :href="urls.supplierCatalog">Открыть каталог поставщика</a>
+        </sh-empty>
+
+        <article v-for="item in items" :key="item.id" class="mp-row"
+                 :class="{'is-selected': selected.includes(item.id)}">
+            <label class="mp-check">
+                <input type="checkbox" :value="item.id" v-model="selected"
+                       :aria-label="'Выбрать ' + (item.title || item.vendor_code)">
+            </label>
+
+            <div class="mp-photo">
+                <img v-if="item.photo && !imgFailed[item.id]" :src="item.photo" loading="lazy" alt=""
+                     @error="imgFailed[item.id] = true">
+                <span v-else class="mp-photo-letter">{{ letterOf(item) }}</span>
+                <span v-if="!item.photo_count" class="mp-photo-warn" title="Нет фотографий">!</span>
+            </div>
+
+            <div class="mp-main">
+                <h3 class="mp-title">{{ item.title || 'Без названия' }}</h3>
+                <div class="mp-meta">
+                    <span class="mp-mono">{{ item.vendor_code }}</span>
+                    <span v-if="item.brand">{{ item.brand }}</span>
+                    <span v-if="item.category" class="mp-cat">{{ item.category }}</span>
+                </div>
+                <div class="mp-flags">
+                    <sh-badge v-if="item.has_supplier_update" label="Есть обновление у поставщика" tone="info"></sh-badge>
+                    <sh-badge v-if="!item.photo_count" label="Нет фото" tone="warn"></sh-badge>
+                    <sh-badge v-if="item.supplier_quantity === 0" label="Нет у поставщика" tone="muted"></sh-badge>
+                </div>
+            </div>
+
+            <!-- Каналы: где карточка уже живёт -->
+            <div class="mp-channels">
+                <span v-if="item.wb" class="mp-chan mp-chan--wb" :title="wbTitle(item)">
+                    <i class="mp-dot mp-dot--wb"></i>WB
+                    <b v-if="item.wb.price">{{ $fmt.money(item.wb.price) }}</b>
+                </span>
+                <span v-else class="mp-chan mp-chan--off">не на WB</span>
+
+                <template v-if="ozonEnabled">
+                    <span v-for="listing in (item.ozon ? item.ozon.listings : [])" :key="'l' + listing.id"
+                          class="mp-chan mp-chan--ozon" :title="listing.account_label">
+                        <i class="mp-dot mp-dot--ozon"></i>Ozon
+                    </span>
+                    <span v-for="draft in (item.ozon ? item.ozon.drafts : [])" :key="'d' + draft.id"
+                          class="mp-chan mp-chan--draft" :title="'Черновик · ' + draft.account_label">
+                        черновик
+                    </span>
+                </template>
+            </div>
+
+            <!-- Сигнал: продаётся ли и что мешает -->
+            <div class="mp-signal" v-if="item.wb">
+                <div class="mp-signal-row" v-if="item.wb.views_30d !== null">
+                    <span>Смотрят</span><b>{{ $fmt.int(item.wb.views_30d) }}</b>
+                </div>
+                <div class="mp-signal-row" v-if="item.wb.orders_30d !== null">
+                    <span>Заказы</span>
+                    <b :class="{'mp-zero': item.wb.views_30d > 30 && !item.wb.orders_30d}">{{ $fmt.int(item.wb.orders_30d) }}</b>
+                </div>
+                <div class="mp-signal-score" v-if="item.wb.quality_score !== null"
+                     :class="'is-' + scoreTone(item.wb.quality_score)"
+                     :title="reasonsTitle(item)">
+                    {{ item.wb.quality_score }}
+                </div>
+            </div>
+            <div class="mp-signal mp-signal--empty" v-else>
+                <span class="mp-supplier-price" v-if="item.supplier_price">
+                    закупка {{ $fmt.money(item.supplier_price) }}
+                </span>
+            </div>
+
+            <a class="mp-open" :href="urls.wbPreviewBase + item.id + '/wb-preview'"
+               title="Открыть карточку">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </a>
+        </article>
+    </div>
+
+    <div v-if="items.length" class="mp-foot">
+        <span class="mp-foot-info">Показано {{ items.length }} из {{ $fmt.int(pagination.total || 0) }}</span>
+        <button v-if="pagination.has_next" type="button" class="sh-btn sh-btn--secondary"
+                :class="{'is-loading': loadingMore}" :disabled="loadingMore" @click="loadMore">Показать ещё</button>
+    </div>
+
+    <!-- Массовые действия: сгруппированы, опасные отдельно -->
+    <sh-bulk-bar :count="selected.length" @clear="selected = []">
+        <sh-action-menu :count="selected.length" :groups="actionGroups"
+                        label="Что сделать" @pick="startAction"></sh-action-menu>
+    </sh-bulk-bar>
+
+    <sh-confirm :open="confirm.open" :title="confirm.title" :message="confirm.message"
+                :details="confirm.details" :confirm-label="confirm.label"
+                :danger="confirm.danger" :busy="confirm.busy"
+                @confirm="runAction" @cancel="confirm.open = false"></sh-confirm>
+{% endraw %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+<script src="{{ url_for('static', filename='sh-vue-kit.js') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,205 @@
+/* Главная · beta — поверх sh-vue-kit, только токены «Тёплой редакции». */
+
+.db-head { align-items: flex-start; }
+.db-period .sh-segmented-item { padding: 5px 12px; font-size: 12px; }
+
+/* ---------- Подключение магазина ---------- */
+.db-connect {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding: 22px 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent-light);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-1);
+}
+.db-connect-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.db-connect-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    max-width: 520px;
+    line-height: 1.5;
+}
+
+.db-stats { margin-bottom: 26px; }
+
+/* ---------- Секции ---------- */
+.db-section { margin-bottom: 30px; }
+.db-section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.db-section-title {
+    font-family: var(--font-body, 'Inter', sans-serif);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+}
+.db-section-count { font-size: 12px; color: var(--text-muted); }
+
+/* ---------- Карточки задач ---------- */
+.db-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+    gap: 12px;
+}
+.db-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: transform var(--dur-2) var(--ease-out),
+                box-shadow var(--dur-2) var(--ease-out),
+                border-color var(--dur-1) var(--ease-out);
+}
+@media (prefers-reduced-motion: no-preference) {
+    .db-card {
+        animation: db-in var(--dur-3) var(--ease-out) both;
+        animation-delay: calc(var(--i, 0) * 40ms);
+    }
+}
+@keyframes db-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+}
+.db-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
+.db-card:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.db-card--danger { border-left-color: var(--danger); }
+.db-card--warn { border-left-color: var(--warn); }
+.db-card--info { border-left-color: var(--info); }
+.db-card--ok { border-left-color: var(--ok); }
+.db-card--skeleton { cursor: default; gap: 12px; }
+.db-card--skeleton:hover { transform: none; box-shadow: none; }
+
+.db-card-top { display: flex; align-items: baseline; gap: 10px; }
+.db-card-count {
+    font-family: var(--font-display, 'Instrument Serif', Georgia, serif);
+    font-size: 30px;
+    line-height: 1;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+.db-card--danger .db-card-count { color: var(--danger); }
+.db-card--warn .db-card-count { color: var(--warn); }
+.db-card--info .db-card-count { color: var(--info); }
+.db-card--ok .db-card-count { color: var(--ok); }
+.db-card-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.db-card-text {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    flex: 1;
+}
+.db-card-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent);
+}
+.db-card-action svg {
+    width: 13px;
+    height: 13px;
+    transition: transform var(--dur-1) var(--ease-out);
+}
+.db-card:hover .db-card-action svg { transform: translateX(2px); }
+
+/* ---------- Активные задачи ---------- */
+.db-tasks { display: flex; flex-direction: column; gap: 6px; }
+.db-task {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    text-decoration: none;
+    transition: border-color var(--dur-1) var(--ease-out);
+}
+.db-task:hover { border-color: var(--accent); }
+.db-task-title { color: var(--text); }
+.db-task-progress {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+
+/* ---------- Быстрые переходы ---------- */
+.db-links {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+}
+.db-link {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    text-decoration: none;
+    transition: border-color var(--dur-1) var(--ease-out),
+                box-shadow var(--dur-2) var(--ease-out);
+}
+.db-link:hover { border-color: var(--accent); box-shadow: var(--shadow-1); }
+.db-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.db-link-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.db-link-text { font-size: 12px; color: var(--text-muted); }
+
+/* ---------- Панель задачи ---------- */
+.db-drawer-hero {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 16px 18px;
+    border-radius: var(--r-md);
+    background: var(--bg-hover);
+}
+.db-drawer-hero.is-danger { background: var(--danger-bg); }
+.db-drawer-hero.is-warn { background: var(--warn-bg); }
+.db-drawer-hero.is-info { background: var(--info-bg); }
+.db-drawer-hero.is-ok { background: var(--ok-bg); }
+.db-drawer-count {
+    font-family: var(--font-display, 'Instrument Serif', Georgia, serif);
+    font-size: 40px;
+    line-height: 1;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+.db-drawer-label { font-size: 13px; color: var(--text-secondary); }
+.db-drawer-text { font-size: 13px; line-height: 1.55; color: var(--text-secondary); }
+.db-drawer-why h4 {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+.db-drawer-why p { font-size: 13px; line-height: 1.55; color: var(--text); }
+
+@media (max-width: 720px) {
+    .db-cards { grid-template-columns: 1fr; }
+    .db-card-count { font-size: 26px; }
+}

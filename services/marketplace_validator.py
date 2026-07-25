@@ -699,29 +699,22 @@ def validate_wb_characteristics(
     return result
 
 
-def build_wb_characteristic_patch(
+def _map_wb_characteristic_input(
     subject_id: Any,
     values: Any,
-    marketplace_code: str = 'wb',
-    validation_cache: Optional[Dict[str, Any]] = None,
+    schema: List[MarketplaceCategoryCharacteristic],
 ) -> List[Dict[str, Any]]:
-    """Смаппить supplier values (name/id formats) и строго провалидировать."""
-    validation_cache = validation_cache if validation_cache is not None else {}
+    """Смаппить name/id input без преждевременной проверки значений.
+
+    Supplier-builder использует этот этап, чтобы сначала разрешить приоритет
+    типизированных supplier-полей над их сырыми дублями, а затем ровно один
+    раз провалидировать итоговый patch. Самостоятельный public builder ниже
+    по-прежнему сразу выполняет строгую проверку.
+    """
     if isinstance(values, list) and all(
         isinstance(item, dict) and item.get('id') is not None for item in values
     ):
-        result = validate_wb_characteristics(
-            subject_id, values, marketplace_code, validation_cache)
-        if not result['valid']:
-            raise WBCharacteristicValidationError(result)
-        return result['normalized']
-
-    marketplace, category, schema = _resolve_wb_schema(
-        subject_id, marketplace_code, validation_cache)
-    if not marketplace or not category or not schema:
-        result = validate_wb_characteristics(
-            subject_id, [], marketplace_code, validation_cache)
-        raise WBCharacteristicValidationError(result)
+        return [dict(item) for item in values]
 
     if isinstance(values, dict):
         named_items = list(values.items())
@@ -771,6 +764,25 @@ def build_wb_characteristic_patch(
             'issues': mapping_issues,
         })
 
+    return patch
+
+
+def build_wb_characteristic_patch(
+    subject_id: Any,
+    values: Any,
+    marketplace_code: str = 'wb',
+    validation_cache: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Смаппить supplier values (name/id formats) и строго провалидировать."""
+    validation_cache = validation_cache if validation_cache is not None else {}
+    marketplace, category, schema = _resolve_wb_schema(
+        subject_id, marketplace_code, validation_cache)
+    if not marketplace or not category or not schema:
+        result = validate_wb_characteristics(
+            subject_id, [], marketplace_code, validation_cache)
+        raise WBCharacteristicValidationError(result)
+
+    patch = _map_wb_characteristic_input(subject_id, values, schema)
     result = validate_wb_characteristics(
         subject_id, patch, marketplace_code, validation_cache)
     if not result['valid']:
@@ -978,6 +990,88 @@ _SUPPLIER_MATERIAL_CHARACTERISTIC_NAMES = (
     'состав материала',
 )
 _SUPPLIER_GENDER_CHARACTERISTIC_NAMES = ('пол', 'пол товара')
+_SUPPLIER_GENDER_VALUE_ALIASES = {
+    'female': 'Женский',
+    'женский': 'Женский',
+    'женщина': 'Женский',
+    'для женщин': 'Женский',
+    'male': 'Мужской',
+    'мужской': 'Мужской',
+    'мужчина': 'Мужской',
+    'для мужчин': 'Мужской',
+    'детский': 'Детский',
+    'для детей': 'Детский',
+    'девочки': 'Девочки',
+    'для девочек': 'Девочки',
+    'мальчики': 'Мальчики',
+    'для мальчиков': 'Мальчики',
+}
+
+
+def _normalize_supplier_gender_value(value: Any) -> Any:
+    """Канонизировать только явные языковые варианты official WB kinds."""
+    if isinstance(value, list):
+        return [
+            _SUPPLIER_GENDER_VALUE_ALIASES.get(
+                _normalized_label(item),
+                item,
+            )
+            for item in value
+        ]
+    return _SUPPLIER_GENDER_VALUE_ALIASES.get(
+        _normalized_label(value),
+        value,
+    )
+
+
+def _partition_name_keyed_supplier_values(
+    values: Any,
+) -> Optional[Tuple[Any, Dict[str, Any], List[str]]]:
+    """Нормализовать оба name-keyed container-формата до schema filtering.
+
+    Возвращает ``None`` для ID-based, mixed и malformed массивов: такие данные
+    должен целиком увидеть строгий downstream-валидатор. Для словаря сохраняет
+    словарь, для массива сохраняет массив и порядок/дубли его элементов.
+    """
+    from services.wb_content_payload import extract_characteristics
+
+    if isinstance(values, dict):
+        extraction = extract_characteristics(values)
+        return (
+            dict(extraction.values),
+            dict(extraction.dimensions),
+            [str(name) for name in extraction.dropped],
+        )
+
+    if not isinstance(values, list):
+        return None
+
+    is_name_keyed = all(
+        isinstance(item, dict)
+        and item.get('id') is None
+        and isinstance(item.get('name'), str)
+        and bool(item.get('name').strip())
+        for item in values
+    )
+    if not is_name_keyed:
+        return None
+
+    kept_values = []
+    dimensions: Dict[str, Any] = {}
+    dropped = []
+    for item in values:
+        raw_name = item['name']
+        extraction = extract_characteristics({
+            raw_name: item.get('value'),
+        })
+        if extraction.dropped:
+            dimensions.update(extraction.dimensions)
+            dropped.extend(str(name) for name in extraction.dropped)
+            continue
+        # Массив не превращаем в dict: строгий downstream-валидатор должен
+        # по-прежнему обнаруживать duplicate_characteristic.
+        kept_values.append(dict(item))
+    return kept_values, dimensions, dropped
 
 
 def partition_supplier_characteristic_input(
@@ -991,7 +1085,8 @@ def partition_supplier_characteristic_input(
 ) -> Dict[str, Any]:
     """Развести supplier-вход до строгого билдера, не ослабляя валидацию.
 
-    Из name-keyed словаря supplier-характеристик:
+    Из name-keyed словаря или массива ``{name, value}``
+    supplier-характеристик:
     - dimension-образные имена («Ширина упаковки, см», «Вес упаковки, кг»…)
       уходят в отдельный ``dimensions`` (в WB это объект карточки, а не
       характеристики) через общий детектор ``wb_content_payload``;
@@ -1013,22 +1108,41 @@ def partition_supplier_characteristic_input(
         'skipped': [],
     }
 
-    from services.wb_content_payload import extract_characteristics
+    def add_skip(name: Any, reason: str, message: str) -> None:
+        name = str(name)
+        skip_key = (_normalized_label(name), reason)
+        if any(
+            (_normalized_label(item.get('name')), item.get('reason'))
+            == skip_key
+            for item in result['skipped']
+        ):
+            return
+        result['skipped'].append({
+            'name': name,
+            'reason': reason,
+            'message': message,
+        })
 
-    extraction = None
-    if isinstance(values, dict):
-        extraction = extract_characteristics(values)
-        result['values'] = dict(extraction.values)
-        result['dimensions'] = dict(extraction.dimensions)
-        for dropped_name in extraction.dropped:
-            result['skipped'].append({
-                'name': dropped_name,
-                'reason': 'dimension_field',
-                'message': (
-                    f'«{dropped_name}» — габарит упаковки: отправляется в '
-                    'блок габаритов WB, а не в характеристики'
-                ),
-            })
+    def add_dimension_skip(dropped_name: Any) -> None:
+        dropped_name = str(dropped_name)
+        add_skip(
+            dropped_name,
+            'dimension_field',
+            f'«{dropped_name}» — габарит упаковки: отправляется в '
+            'блок габаритов WB, а не в характеристики',
+        )
+
+    name_partition = _partition_name_keyed_supplier_values(values)
+    if name_partition is not None:
+        normalized_values, dimensions, dropped_names = name_partition
+        result['values'] = normalized_values
+        result['dimensions'] = dimensions
+        for dropped_name in dropped_names:
+            add_dimension_skip(dropped_name)
+    name_keyed_list = (
+        name_partition is not None
+        and isinstance(result['values'], list)
+    )
 
     marketplace, category, schema = _resolve_wb_schema(
         subject_id, marketplace_code, validation_cache)
@@ -1047,41 +1161,51 @@ def partition_supplier_characteristic_input(
             if _normalized_label(raw_name) in by_name:
                 kept[str(raw_name)] = value
             else:
-                result['skipped'].append({
-                    'name': str(raw_name),
-                    'reason': 'not_in_schema',
-                    'message': (
-                        f'«{raw_name}» пропущено: характеристики с таким '
-                        'именем нет в WB-схеме этой категории'
-                    ),
-                })
+                add_skip(
+                    raw_name,
+                    'not_in_schema',
+                    f'«{raw_name}» пропущено: характеристики с таким '
+                    'именем нет в WB-схеме этой категории',
+                )
         result['values'] = kept
+    elif name_keyed_list:
+        kept_list = []
+        for item in result['values']:
+            raw_name = item['name']
+            if raw_name.startswith('_'):
+                continue
+            if _normalized_label(raw_name) in by_name:
+                kept_list.append(item)
+            else:
+                add_skip(
+                    raw_name,
+                    'not_in_schema',
+                    f'«{raw_name}» пропущено: характеристики с таким '
+                    'именем нет в WB-схеме этой категории',
+                )
+        result['values'] = kept_list
 
     def _semantic_mappable(aliases) -> bool:
         return any(by_name.get(alias) for alias in aliases)
 
     if result['materials'] not in (None, '', [], {}) and not _semantic_mappable(
             _SUPPLIER_MATERIAL_CHARACTERISTIC_NAMES):
-        result['skipped'].append({
-            'name': 'Материал',
-            'reason': 'not_in_schema',
-            'message': (
-                '«Материал» пропущен: в WB-схеме этой категории нет '
-                'поддерживаемой точной характеристики материала/состава'
-            ),
-        })
+        add_skip(
+            'Материал',
+            'not_in_schema',
+            '«Материал» пропущен: в WB-схеме этой категории нет '
+            'поддерживаемой точной характеристики материала/состава',
+        )
         result['materials'] = None
 
     if result['gender'] not in (None, '', [], {}) and not _semantic_mappable(
             _SUPPLIER_GENDER_CHARACTERISTIC_NAMES):
-        result['skipped'].append({
-            'name': 'Пол',
-            'reason': 'not_in_schema',
-            'message': (
-                '«Пол» пропущен: в WB-схеме этой категории нет '
-                'характеристики пола'
-            ),
-        })
+        add_skip(
+            'Пол',
+            'not_in_schema',
+            '«Пол» пропущен: в WB-схеме этой категории нет '
+            'характеристики пола',
+        )
         result['gender'] = None
 
     return result
@@ -1113,18 +1237,25 @@ def build_wb_supplier_characteristic_patch(
     if values in (None, ''):
         base_patch = []
     else:
-        base_patch = build_wb_characteristic_patch(
+        base_patch = _map_wb_characteristic_input(
             subject_id,
             values,
-            marketplace_code,
-            validation_cache,
+            schema,
         )
 
     by_name = {_normalized_label(charc.name): charc for charc in schema}
-    combined = {int(item['id']): dict(item) for item in base_patch}
+    combined = [dict(item) for item in base_patch]
+    positions: Dict[int, List[int]] = {}
+    for index, item in enumerate(combined):
+        try:
+            charc_id = _strict_positive_integer(item.get('id'))
+        except ValueError:
+            # Итоговый строгий валидатор вернёт точный invalid_payload.
+            continue
+        positions.setdefault(charc_id, []).append(index)
     issues = []
 
-    def add_semantic_value(raw_value, aliases, label):
+    def add_semantic_value(raw_value, aliases, label, normalizer=None):
         if raw_value in (None, '', [], {}):
             return
         charc = next((by_name.get(alias) for alias in aliases if by_name.get(alias)), None)
@@ -1137,14 +1268,33 @@ def build_wb_supplier_characteristic_patch(
                 value=raw_value,
             ))
             return
-        combined[int(charc.charc_id)] = {
-            'id': int(charc.charc_id),
-            'value': raw_value,
+        charc_id = int(charc.charc_id)
+        normalized_value = (
+            normalizer(raw_value)
+            if normalizer is not None else raw_value
+        )
+        semantic_item = {
+            'id': charc_id,
+            'value': normalized_value,
         }
+        if positions.get(charc_id):
+            # Dedicated typed supplier fields are the canonical source for the
+            # same fact. Replace every raw duplicate but retain its positions:
+            # duplicate IDs must still be rejected by final validation.
+            for index in positions[charc_id]:
+                combined[index] = dict(semantic_item)
+        else:
+            positions[charc_id] = [len(combined)]
+            combined.append(semantic_item)
 
     add_semantic_value(
         materials, _SUPPLIER_MATERIAL_CHARACTERISTIC_NAMES, 'Материал')
-    add_semantic_value(gender, _SUPPLIER_GENDER_CHARACTERISTIC_NAMES, 'Пол')
+    add_semantic_value(
+        gender,
+        _SUPPLIER_GENDER_CHARACTERISTIC_NAMES,
+        'Пол',
+        _normalize_supplier_gender_value,
+    )
 
     if issues:
         raise WBCharacteristicValidationError({
@@ -1156,7 +1306,7 @@ def build_wb_supplier_characteristic_patch(
 
     result = validate_wb_characteristics(
         subject_id,
-        list(combined.values()),
+        combined,
         marketplace_code,
         validation_cache,
     )

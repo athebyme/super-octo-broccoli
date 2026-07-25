@@ -1,217 +1,47 @@
 # -*- coding: utf-8 -*-
-"""Тесты apply_card_updates_bulk: тексты — одним батчем cards/update, фото — по карточке."""
-import json
+"""Regression: the legacy batch helper is a provider-write-free shim."""
+
 import unittest
-from unittest.mock import MagicMock, patch
+
+from services.card_improver import (
+    LEGACY_WRITE_DISABLED,
+    apply_card_updates_bulk,
+)
 
 
-class FakeWBClient:
-    def __init__(self, outcome=None, raise_batch=False):
-        self.calls = []
-        self.outcome = outcome
-        self.raise_batch = raise_batch
+class LegacyBulkWriteDisabledTest(unittest.TestCase):
+    def test_every_row_fails_closed_without_batch_or_media_calls(self):
+        class Product:
+            def __init__(self, product_id, title):
+                self.id = product_id
+                self.title = title
+                self.quality_score = 20.0
 
-    def update_cards_merged(self, nm_updates, log_to_db=False, seller_id=None, chunk_size=1000):
-        self.calls.append({'method': 'update_cards_merged',
-                           'nm_updates': {int(k): dict(v) for k, v in nm_updates.items()},
-                           'seller_id': seller_id})
-        if self.raise_batch:
-            raise RuntimeError('WB API недоступен')
-        if self.outcome is not None:
-            return self.outcome
-        return {'sent': [int(k) for k in nm_updates], 'missing': [], 'invalid': {}, 'requests': 1}
+        class Client:
+            def __getattr__(self, name):
+                raise AssertionError(
+                    f'legacy bulk shim must not access WB client: {name}'
+                )
 
-    def update_card(self, *a, **kw):
-        self.calls.append({'method': 'update_card'})
-        raise AssertionError('bulk-путь не должен звать поштучный update_card')
+        first = Product(1, 'One')
+        second = Product(2, 'Two')
+        results = apply_card_updates_bulk(
+            [
+                (first, {'title': 'Replacement'}),
+                (second, {'photos': ['replacement.jpg']}),
+            ],
+            object(),
+            Client(),
+        )
 
-    def upload_photos_by_url(self, nm_id, photo_urls, seller_id=None):
-        self.calls.append({'method': 'upload_photos_by_url', 'nm_id': nm_id,
-                           'photo_urls': list(photo_urls)})
-        return {'error': False}
-
-
-class FakeSeller:
-    id = 7
-
-
-def _product(pid, nm_id):
-    class P:
-        pass
-    p = P()
-    p.id = pid
-    p.nm_id = nm_id
-    p.vendor_code = f'VC-{pid}'
-    p.title = 'Старый'
-    p.brand = 'OldBrand'
-    p.description = 'кратко'
-    p.object_name = 'Платье'
-    p.subject_id = 999
-    p.price = 1990
-    p.discount_price = 1490
-    p.quantity = 5
-    p.characteristics_json = json.dumps([{'id': 1, 'value': 'синий'}])
-    p.dimensions_json = json.dumps({'length': 10})
-    p.photos_json = json.dumps(['a.jpg'])
-    p.sizes_json = None
-    p.is_active = True
-    p.quality_score = 40.0
-    p.quality_breakdown_json = None
-    p.quality_checked_at = None
-    p.nm_rating = 7.0
-    p.wb_feedback_rating = 4.2
-    p.nm_rating_checked_at = None
-    p.updated_at = None
-    return p
-
-
-class BulkApplyTestBase(unittest.TestCase):
-    def setUp(self):
-        self.history_records = []
-        self.recompute_calls = []
-        self.fake_context = {'dup_descriptions': set(), 'charcs_by_subject': {}}
-
-        def fake_snapshot(product):
-            return {'title': product.title, 'brand': product.brand}
-
-        def fake_recompute(product, capture_history=True, context=None):
-            self.recompute_calls.append({'product_id': product.id, 'context': context})
-            return {'score': 60.0, 'dimensions': {}}
-
-        class FakeHistory:
-            def __init__(self, **kw):
-                self.__dict__.update(kw)
-
-        outer = self
-
-        class FakeSession:
-            def add(self, obj):
-                outer.history_records.append(obj)
-
-            def commit(self):
-                pass
-
-        self.mock_build_context = MagicMock(return_value=self.fake_context)
-
-        self.patches = [
-            patch('services.card_improver._create_product_snapshot', side_effect=fake_snapshot),
-            patch('services.card_improver.recompute_and_persist', side_effect=fake_recompute),
-            patch('services.card_improver.CardEditHistory',
-                  lambda **kw: FakeHistory(**kw)),
-            patch('services.card_improver.db'),
-            patch('services.card_improver.build_seller_scoring_context',
-                  new=self.mock_build_context),
-        ]
-        started = [p.start() for p in self.patches]
-        started[3].session = FakeSession()
-
-    def tearDown(self):
-        for p in self.patches:
-            p.stop()
-
-    def _run(self, items, client=None):
-        from services.card_improver import apply_card_updates_bulk
-        client = client or FakeWBClient()
-        results = apply_card_updates_bulk(items, FakeSeller(), client, source='test-bulk')
-        return results, client
-
-
-class TestBulkTextUpdates(BulkApplyTestBase):
-    def test_texts_go_in_single_merged_call(self):
-        p1, p2 = _product(1, 111), _product(2, 222)
-        results, client = self._run([
-            (p1, {'title': 'Новый 1', 'brand': 'NewBrand'}),
-            (p2, {'description': 'Новое описание'}),
-        ])
-        merged_calls = [c for c in client.calls if c['method'] == 'update_cards_merged']
-        self.assertEqual(len(merged_calls), 1)
-        self.assertEqual(set(merged_calls[0]['nm_updates']), {111, 222})
-        self.assertTrue(results[1]['success'])
-        self.assertTrue(results[2]['success'])
-        self.assertEqual(p1.title, 'Новый 1')
-        self.assertEqual(p1.brand, 'NewBrand')
-        self.assertEqual(p2.description, 'Новое описание')
-        self.assertIn('title', results[1]['fields_applied'])
-
-    def test_missing_card_fails_without_local_apply(self):
-        p1 = _product(1, 111)
-        client = FakeWBClient(outcome={'sent': [], 'missing': [111], 'invalid': {}, 'requests': 0})
-        results, _ = self._run([(p1, {'title': 'Новый'})], client)
-        self.assertFalse(results[1]['success'])
-        self.assertFalse(results[1]['wb_sync'])
-        self.assertEqual(p1.title, 'Старый')
-        self.assertIn('не найдена', results[1]['error'])
-
-    def test_invalid_card_error_propagates(self):
-        p1 = _product(1, 111)
-        client = FakeWBClient(outcome={'sent': [], 'missing': [],
-                                       'invalid': {111: 'нет vendorCode'}, 'requests': 0})
-        results, _ = self._run([(p1, {'title': 'Новый'})], client)
-        self.assertFalse(results[1]['success'])
-        self.assertEqual(results[1]['error'], 'нет vendorCode')
-
-    def test_failed_send_from_bisect_propagates_per_card(self):
-        """Карточки из failed-карты (бисекция чанка) получают свою ошибку."""
-        p1, p2 = _product(1, 111), _product(2, 222)
-        client = FakeWBClient(outcome={'sent': [222], 'missing': [], 'invalid': {},
-                                       'failed': {111: 'WB отклонил карточку'},
-                                       'requests': 2})
-        results, _ = self._run([(p1, {'title': 'Новый'}), (p2, {'brand': 'B'})], client)
-        self.assertFalse(results[1]['success'])
-        self.assertEqual(results[1]['error'], 'WB отклонил карточку')
-        self.assertEqual(p1.title, 'Старый')
-        self.assertTrue(results[2]['success'])
-        self.assertEqual(p2.brand, 'B')
-
-    def test_batch_exception_marks_all_failed(self):
-        p1, p2 = _product(1, 111), _product(2, 222)
-        client = FakeWBClient(raise_batch=True)
-        results, _ = self._run([(p1, {'title': 'Новый'}), (p2, {'brand': 'X'})], client)
-        self.assertFalse(results[1]['success'])
-        self.assertFalse(results[2]['success'])
-        self.assertEqual(p1.title, 'Старый')
-
-    def test_history_written_per_card(self):
-        p1, p2 = _product(1, 111), _product(2, 222)
-        self._run([(p1, {'title': 'Новый 1'}), (p2, {'brand': 'B'})])
-        self.assertEqual(len(self.history_records), 2)
-
-
-class TestBulkSharedScoringContext(BulkApplyTestBase):
-    """recompute_and_persist не должен строить контекст скоринга по каталогу
-    отдельно на каждый товар в bulk-вызове (N+1) — контекст строится один
-    раз и передаётся в каждый вызов recompute_and_persist."""
-
-    def test_context_built_once_and_shared_across_products(self):
-        p1, p2, p3 = _product(1, 111), _product(2, 222), _product(3, 333)
-        results, _client = self._run([
-            (p1, {'title': 'Новый 1'}),
-            (p2, {'brand': 'NewBrand'}),
-            (p3, {'description': 'Новое описание'}),
-        ])
-
-        self.mock_build_context.assert_called_once_with(FakeSeller.id)
-
-        self.assertEqual(len(self.recompute_calls), 3)
-        for call in self.recompute_calls:
-            self.assertIs(call['context'], self.fake_context)
-
-        self.assertTrue(results[1]['success'])
-        self.assertTrue(results[2]['success'])
-        self.assertTrue(results[3]['success'])
-
-
-class TestBulkPhotos(BulkApplyTestBase):
-    def test_photos_uploaded_per_card_via_media_save(self):
-        p1 = _product(1, 111)
-        results, client = self._run([(p1, {'photos': ['http://x/1.jpg', 'http://x/2.jpg']})])
-        photo_calls = [c for c in client.calls if c['method'] == 'upload_photos_by_url']
-        self.assertEqual(len(photo_calls), 1)
-        self.assertEqual(photo_calls[0]['nm_id'], 111)
-        self.assertTrue(results[1]['success'])
-        self.assertEqual(json.loads(p1.photos_json), ['http://x/1.jpg', 'http://x/2.jpg'])
-        # текстового батча не было — нечего слать
-        self.assertEqual([c for c in client.calls if c['method'] == 'update_cards_merged'], [])
+        self.assertEqual(set(results), {1, 2})
+        self.assertTrue(all(not row['success'] for row in results.values()))
+        self.assertTrue(all(
+            row['error'] == LEGACY_WRITE_DISABLED
+            for row in results.values()
+        ))
+        self.assertEqual(first.title, 'One')
+        self.assertEqual(second.title, 'Two')
 
 
 if __name__ == '__main__':

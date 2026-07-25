@@ -222,6 +222,7 @@ function competitorSettings() {
                 never: 'не запускалась',
                 running: 'выполняется',
                 success: 'успешно',
+                waiting_wb: 'ожидает ответа WB',
                 failed: 'ошибка'
             }[this.form.last_sync_status] || (this.form.last_sync_status || '—');
         },
@@ -229,7 +230,8 @@ function competitorSettings() {
             return {
                 success: 'sh-badge--green',
                 failed: 'sh-badge--red',
-                running: 'sh-badge--yellow'
+                running: 'sh-badge--yellow',
+                waiting_wb: 'sh-badge--yellow'
             }[this.form.last_sync_status] || 'sh-badge--gray';
         },
         nextSyncText() {

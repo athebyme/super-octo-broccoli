@@ -153,6 +153,9 @@
                 <div class="flex items-center gap-2">
                     <h1 class="sh-page-title">Мои товары</h1>
                     {% include 'partials/card_journey_help.html' %}
+                    <a href="{{ url_for('seller_my_products_beta') }}" class="sh-btn sh-btn--accent sh-btn--sm"
+                       style="margin-left:12px"
+                       title="Новый экран массовых операций: видно, что произойдёт, до подтверждения">Новая версия</a>
                 </div>
                 <p class="sh-page-subtitle">
                     {{ stats.total }} товаров · {{ stats.validated }} готово к WB · {{ stats.imported }} на WB{% if ozon_drafts_total %} · {{ ozon_drafts_total }} черновиков Ozon{% endif %}
@@ -169,23 +172,23 @@
 
     <!-- Stats -->
     <div class="my-stat-strip mb-6">
-        <a href="{{ url_for('seller_my_products', **status_link_args) }}" class="my-stat-card {{ 'active' if not status else '' }}">
+        <a href="{{ url_for('seller_my_products', **status_link_args) }}" class="my-stat-card {{ 'active' if not status and not updates_filter else '' }}">
             <p class="my-stat-label">В работе</p>
             <p class="my-stat-value">{{ stats.total - stats.imported }}</p>
         </a>
-        <a href="{{ url_for('seller_my_products', status='pending', **status_link_args) }}" class="my-stat-card {{ 'active' if status == 'pending' else '' }}">
+        <a href="{{ url_for('seller_my_products', status='pending', **status_link_args) }}" class="my-stat-card {{ 'active' if not updates_filter and status == 'pending' else '' }}">
             <p class="my-stat-label">Ожидают</p>
             <p class="my-stat-value">{{ stats.pending }}</p>
         </a>
-        <a href="{{ url_for('seller_my_products', status='validated', **status_link_args) }}" class="my-stat-card {{ 'active' if status == 'validated' else '' }}">
+        <a href="{{ url_for('seller_my_products', status='validated', **status_link_args) }}" class="my-stat-card {{ 'active' if not updates_filter and status == 'validated' else '' }}">
             <p class="my-stat-label">Готово к WB</p>
             <p class="my-stat-value">{{ stats.validated }}</p>
         </a>
-        <a href="{{ url_for('seller_my_products', status='imported', **status_link_args) }}" class="my-stat-card {{ 'active' if status == 'imported' else '' }}">
+        <a href="{{ url_for('seller_my_products', status='imported', **status_link_args) }}" class="my-stat-card {{ 'active' if not updates_filter and status == 'imported' else '' }}">
             <p class="my-stat-label">На WB</p>
             <p class="my-stat-value">{{ stats.imported }}</p>
         </a>
-        <a href="{{ url_for('seller_my_products', status='failed', **status_link_args) }}" class="my-stat-card {{ 'active' if status == 'failed' else '' }}">
+        <a href="{{ url_for('seller_my_products', status='failed', **status_link_args) }}" class="my-stat-card {{ 'active' if not updates_filter and status == 'failed' else '' }}">
             <p class="my-stat-label">Ошибки</p>
             <p class="my-stat-value">{{ stats.failed }}</p>
         </a>
@@ -195,7 +198,7 @@
             <p class="my-stat-value">{{ ozon_drafts_total }}</p>
         </a>
         {% endif %}
-        {% if supplier_updates_count %}
+        {% if supplier_updates_count or updates_filter %}
         <a href="{{ url_for('seller_my_products', updates=1) }}" class="my-stat-card {{ 'active' if updates_filter else '' }}"
            title="Общие карточки поставщика обновились — заберите изменения себе">
             <p class="my-stat-label">Обновления поставщика</p>
@@ -226,9 +229,25 @@
     </div>
     {% endif %}
 
+    {% if updates_filter %}
+    <div class="sh-alert sh-alert--info mb-6" role="note">
+        <div>
+            <strong>Сначала обновляются ваши карточки в Seller Hub.</strong>
+            Категория и характеристики копируются из свежего каталога поставщика
+            локально; WB и Ozon на этом шаге не меняются. Для опубликованных
+            карточек после применения появится отдельное подтверждение отправки
+            характеристик на WB.
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Search & Filters -->
     <form method="GET" class="myp-surface rounded-lg border p-4 mb-6">
+        {% if updates_filter %}
+        <input type="hidden" name="updates" value="1">
+        {% elif status %}
         <input type="hidden" name="status" value="{{ status }}">
+        {% endif %}
         <div class="flex flex-col sm:flex-row gap-3 sm:items-end">
             <div class="flex-1">
                 <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию, бренду, ID..."
@@ -237,7 +256,7 @@
             <div class="flex gap-2 items-center flex-shrink-0">
                 <button type="submit" class="sh-btn sh-btn--primary sh-btn--md">Найти</button>
                 {% if active_filters or search %}
-                <a href="{{ url_for('seller_my_products', status=status) if status else url_for('seller_my_products') }}"
+                <a href="{{ url_for('seller_my_products', **reset_args) }}"
                    class="sh-btn sh-btn--secondary sh-btn--md">
                     Сбросить{% if active_filters %} ({{ active_filters }}){% endif %}
                 </a>
@@ -335,6 +354,7 @@
             <span class="text-sm myp-tm" x-text="selected.length + ' выбрано'"></span>
         </div>
         <div class="flex gap-2 flex-shrink-0">
+            {% if not updates_filter %}
             <button @click="openInfographicCampaign()" :disabled="selected.length === 0"
                     class="sh-btn sh-btn--accent sh-btn--md"
                     title="Создать локальную очередь инфографики по выбранным товарам; публикации на WB не будет">
@@ -375,26 +395,39 @@
                 Обновить фото<span x-show="selectedWbProductIds.length" x-text="' (' + selectedWbProductIds.length + ')'" ></span>
             </button>
             {% endif %}
-            <form method="POST" action="{{ url_for('my_products_refresh_from_supplier') }}" class="inline-flex">
+            {% endif %}
+            <form method="POST" action="{{ url_for('my_products_refresh_from_supplier', **page_args) }}" class="inline-flex">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <template x-for="id in selected" :key="'ref-' + id">
                     <input type="hidden" name="selected_ids" :value="id">
                 </template>
                 <button type="submit" :disabled="selected.length === 0"
-                        class="sh-btn sh-btn--secondary sh-btn--md"
+                        class="sh-btn {{ 'sh-btn--primary' if updates_filter else 'sh-btn--secondary' }} sh-btn--md"
                         title="Скопировать свежие данные общей карточки поставщика в выбранные локальные карточки. WB и Ozon не вызываются.">
-                    Обновить из каталога<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
+                    {{ 'Применить в мои карточки' if updates_filter else 'Обновить из каталога' }}<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
                 </button>
             </form>
-            {% if marketplace_accounts %}
-            <form method="POST" action="{{ url_for('marketplace_drafts.bulk_prepare') }}" class="inline-flex items-center gap-2">
+            {% if not updates_filter %}
+            {% set ozon_upload_enabled = config.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', false) %}
+            {% set available_ozon_accounts = ozon_upload_accounts if ozon_upload_enabled else marketplace_accounts %}
+            {% set preferred_ozon_account = default_ozon_upload_account if ozon_upload_enabled else default_marketplace_account %}
+            {% if available_ozon_accounts %}
+            <form method="POST"
+                  action="{{ url_for('ozon_bulk_uploads.create') if ozon_upload_enabled else url_for('marketplace_drafts.bulk_prepare') }}"
+                  class="inline-flex items-center gap-2"
+                  {% if ozon_upload_enabled %}onsubmit="return confirm('Синхронизировать выбранные карточки с Ozon? Новые карточки будут созданы, существующие — полностью обновлены после live-проверки. Итог и причины будут на одном экране.')" {% endif %}>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                {% if ozon_upload_enabled %}
+                <input type="hidden" name="confirm_write" value="1">
+                {% endif %}
+                {% if not ozon_upload_enabled %}
                 <input type="hidden" name="validate" value="1">
-                {% if default_marketplace_account %}
-                <input type="hidden" name="account_id" value="{{ default_marketplace_account.id }}">
+                {% endif %}
+                {% if preferred_ozon_account %}
+                <input type="hidden" name="account_id" value="{{ preferred_ozon_account.id }}">
                 {% else %}
                 <select name="account_id" class="px-2 py-2 border rounded-md text-sm" aria-label="Кабинет Ozon">
-                    {% for account in marketplace_accounts %}
+                    {% for account in available_ozon_accounts %}
                     <option value="{{ account.id }}" {{ 'selected' if account.is_default else '' }}>Ozon · {{ account.label }}</option>
                     {% endfor %}
                 </select>
@@ -404,10 +437,16 @@
                 </template>
                 <button type="submit" :disabled="selected.length === 0"
                         class="sh-btn sh-btn--md myp-btn-ozon-outline"
-                        title="Создать и локально проверить Ozon-черновики для выбранных; публикации в Ozon не будет">
-                    Подготовить Ozon<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
+                        title="{{ 'Создать новые и безопасно полностью обновить существующие карточки Ozon с единым итогом' if ozon_upload_enabled else 'Создать и локально проверить Ozon-черновики для выбранных; публикации в Ozon не будет' }}">
+                    {{ 'Синхронизировать Ozon' if ozon_upload_enabled else 'Подготовить Ozon' }}<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
                 </button>
             </form>
+            {% elif ozon_upload_enabled %}
+            <a class="sh-btn sh-btn--md myp-btn-ozon-outline"
+               href="{{ url_for('marketplace_accounts.index') }}"
+               title="Для массовой загрузки нужен проверенный кабинет и выбранная ставка НДС">
+                {{ 'Настроить загрузку Ozon' if marketplace_accounts else 'Подключить Ozon' }}
+            </a>
             {% endif %}
             <button @click="deleteBulk()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
                     class="sh-btn sh-btn--secondary sh-btn--md myp-btn-del">
@@ -477,6 +516,7 @@
                     </div>
                 </template>
             </div>
+            {% endif %}
         </div>
     </div>
 
@@ -771,7 +811,7 @@
                     <td class="px-3 py-2">
                         <input type="checkbox"
                                :checked="selected.includes({{ p.id }})"
-                               @change="selected = $event.target.checked ? [...selected, {{ p.id }}] : selected.filter(id => id !== {{ p.id }})"
+                               @change="selected = $event.target.checked ? [...selected, {{ p.id }}] : selected.filter(id => id !== {{ p.id }}); selectedAll = selected.length > 0 && selected.length === document.querySelectorAll('[data-product-id]').length"
                                class="rounded myp-check">
                     </td>
                     <td class="px-3 py-2">
@@ -903,7 +943,8 @@
                             {% else %}
                             <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--warn-bg);color:var(--warn)"><span class="sh-mp-dot sh-mp-dot--wb"></span>Ожидает</span>
                             {% endif %}
-                            {% for d in ozon_drafts_map.get(p.id, []) %}
+                            {% set product_ozon_drafts = ozon_drafts_map.get(p.id, []) %}
+                            {% for d in product_ozon_drafts %}
                             <a href="{{ url_for('marketplace_drafts.detail', draft_id=d.id) }}"
                                class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium hover:opacity-80"
                                title="Ozon · {{ d.account_label }} — открыть черновик"
@@ -921,25 +962,69 @@
                                 {%- else %}Черновик Ozon{% endif %}
                             </a>
                             {% endfor %}
+                            {% if not product_ozon_drafts %}
+                            {% for listing in ozon_listings_map.get(p.id, []) %}
+                            <a href="{{ url_for('marketplace_listings.detail', listing_id=listing.id) }}"
+                               class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium hover:opacity-80"
+                               title="Ozon · {{ listing.account_label }} — открыть связанную карточку"
+                               {% if listing.status == 'active' and listing.is_available %}style="background:var(--ok-bg);color:var(--ok)"
+                               {% elif listing.status == 'error' %}style="background:var(--danger-bg);color:var(--danger)"
+                               {% else %}style="background:var(--bg-hover);color:var(--text-secondary)"{% endif %}>
+                                <span class="sh-mp-dot sh-mp-dot--ozon"></span>
+                                {%- if listing.status == 'active' and listing.is_available %}На Ozon
+                                {%- elif listing.status == 'error' %}Ошибка Ozon
+                                {%- elif listing.status == 'archived' %}Архив Ozon
+                                {%- else %}Карточка Ozon{% endif %}
+                            </a>
+                            {% endfor %}
+                            {% endif %}
                         </div>
                     </td>
                     <td class="px-3 py-2 text-center whitespace-nowrap">
+                        {% if updates_filter %}
+                        <form method="POST" action="{{ url_for('my_products_refresh_from_supplier', **page_args) }}" class="inline">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="selected_ids" value="{{ p.id }}">
+                            <button type="submit"
+                                    class="inline-flex items-center px-2.5 py-1 sh-btn sh-btn--primary sh-btn--sm"
+                                    title="Применить свежую категорию и характеристики локально; WB и Ozon не изменятся">
+                                Применить локально
+                            </button>
+                        </form>
+                        <a href="{{ url_for('seller_product_wb_preview', product_id=p.id) }}"
+                           class="inline-flex items-center px-2.5 py-1 myp-btn-soft rounded text-xs font-medium ml-1">
+                            Открыть карточку
+                        </a>
+                        {% else %}
                         <a href="{{ url_for('seller_product_wb_preview', product_id=p.id) }}"
                            class="inline-flex items-center px-2.5 py-1 myp-btn-soft rounded text-xs font-medium">
                             WB карточка
                         </a>
-                        {% if default_marketplace_account %}
-                        {% set default_account_draft = ozon_drafts_map.get(p.id, []) | selectattr('account_id', 'equalto', default_marketplace_account.id) | list %}
-                        {% if not default_account_draft %}
-                        <form method="post" action="{{ url_for('marketplace_drafts.create') }}" class="inline">
+                        {% set row_upload_enabled = config.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', false) %}
+                        {% set row_ozon_account = default_ozon_upload_account if row_upload_enabled else default_marketplace_account %}
+                        {% if row_ozon_account %}
+                        {% set row_account_draft = ozon_drafts_map.get(p.id, []) | selectattr('account_id', 'equalto', row_ozon_account.id) | list %}
+                        {% set row_published_drafts = row_account_draft | selectattr('published_listing_id') | list %}
+                        {% set row_account_listings = ozon_listings_map.get(p.id, []) | selectattr('account_id', 'equalto', row_ozon_account.id) | list %}
+                        {% set row_is_ozon_update = row_published_drafts | length > 0 or row_account_listings | length > 0 %}
+                        {% if row_upload_enabled or not row_account_draft %}
+                        <form method="post"
+                              action="{{ url_for('ozon_bulk_uploads.create') if row_upload_enabled else url_for('marketplace_drafts.create') }}"
+                              class="inline"
+                              {% if row_upload_enabled %}onsubmit="return confirm('{{ 'Полностью обновить эту карточку в Ozon после live-проверки?' if row_is_ozon_update else 'Подготовить, проверить и создать эту карточку в Ozon?' }}')" {% endif %}>
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="account_id" value="{{ default_marketplace_account.id }}">
+                            <input type="hidden" name="account_id" value="{{ row_ozon_account.id }}">
+                            {% if row_upload_enabled %}
+                            <input type="hidden" name="confirm_write" value="1">
+                            <input type="hidden" name="imported_product_ids" value="{{ p.id }}">
+                            {% else %}
                             <input type="hidden" name="imported_product_id" value="{{ p.id }}">
                             <input type="hidden" name="validate" value="1">
+                            {% endif %}
                             <button type="submit"
                                     class="inline-flex items-center px-2.5 py-1 border rounded text-xs font-medium ml-1 myp-btn-ozon-outline"
-                                    title="Подготовить и локально проверить для {{ default_marketplace_account.label }}; публикации в Ozon не будет">
-                                Подготовить Ozon
+                                    title="{{ (('Полностью обновить в ' if row_is_ozon_update else 'Создать в ') ~ row_ozon_account.label) if row_upload_enabled else 'Подготовить и локально проверить для ' ~ row_ozon_account.label ~ '; публикации в Ozon не будет' }}">
+                                {{ ('Обновить Ozon' if row_is_ozon_update else 'Загрузить Ozon') if row_upload_enabled else 'Подготовить Ozon' }}
                             </button>
                         </form>
                         {% endif %}
@@ -984,14 +1069,15 @@
                             </div>
                         </div>
                         {% endif %}
-                        <form method="POST" action="{{ url_for('seller_delete_imported_product', product_id=p.id) }}"
-                              class="inline" onsubmit="return confirm('Удалить товар? Он станет доступен для повторного импорта.')">
+                        <form method="POST" action="{{ url_for('seller_delete_imported_product', product_id=p.id, **page_args) }}"
+                              class="inline" onsubmit="return confirm({% if p.import_status == 'imported' %}'Карточка уже опубликована на маркетплейсе и останется там продаваться — здесь вы потеряете управление ею. Удалить из «Моих товаров»?'{% else %}'Удалить товар? Он станет доступен для повторного импорта.'{% endif %})">
                             <button type="submit"
                                     class="inline-flex items-center px-2.5 py-1 border myp-btn-del rounded text-xs font-medium ml-1"
                                     title="Удалить из моих товаров">
                                 Удалить
                             </button>
                         </form>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
@@ -999,9 +1085,13 @@
         </table>
         {% else %}
         <div class="text-center py-12">
-            {% if active_filters or search %}
+            {% if updates_filter and not (active_filters or search) %}
+            <p class="myp-tm">Все обновления поставщика уже применены к вашим карточкам</p>
+            <a href="{{ url_for('seller_my_products') }}"
+               class="myp-link text-sm hover:underline mt-2 inline-block">Вернуться в работу</a>
+            {% elif active_filters or search %}
             <p class="myp-tm">Ничего не найдено по заданным фильтрам</p>
-            <a href="{{ url_for('seller_my_products', status=status) if status else url_for('seller_my_products') }}"
+            <a href="{{ url_for('seller_my_products', **reset_args) }}"
                class="myp-link text-sm hover:underline mt-2 inline-block">Сбросить фильтры</a>
             {% else %}
             <p class="myp-tm">Нет импортированных товаров</p>
@@ -1040,7 +1130,7 @@
     {% endif %}
 
     <!-- Import History -->
-    {% if recent_imports %}
+    {% if recent_imports and not updates_filter %}
     <div class="mt-8">
         <h2 class="text-lg font-medium myp-t mb-3">История загрузок</h2>
         <div class="myp-surface border rounded-lg" style="overflow-x:auto;-webkit-overflow-scrolling:touch">
@@ -1105,6 +1195,8 @@ function myProductsPage() {
             {{ p.id }}: {{ p.product_id if p.import_status == 'imported' and p.product_id else 'null' }}{% if not loop.last %},{% endif %}
             {% endfor %}
         },
+        // Уже опубликованные карточки: удаление здесь не убирает их с маркетплейса
+        publishedIds: [{% for p in pagination.items %}{% if p.import_status == 'imported' %}{{ p.id }},{% endif %}{% endfor %}],
         activeJob: null,
         bulkElapsed: 0,
         notification: null,
@@ -1391,7 +1483,11 @@ function myProductsPage() {
 
         deleteBulk() {
             if (!this.selected.length) return;
-            if (!confirm('Удалить ' + this.selected.length + ' товаров? Они станут доступны для повторного импорта.')) return;
+            var publishedCount = this.selected.filter(id => this.publishedIds.includes(id)).length;
+            var message = publishedCount
+                ? 'Среди выбранных ' + publishedCount + ' уже опубликованы на маркетплейсе — они останутся там продаваться, вы лишь потеряете управление ими здесь. Удалить ' + this.selected.length + ' товаров из «Моих товаров»?'
+                : 'Удалить ' + this.selected.length + ' товаров? Они станут доступны для повторного импорта.';
+            if (!confirm(message)) return;
             fetch('{{ url_for("seller_delete_imported_products_bulk") }}', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -1427,7 +1523,7 @@ function myProductsPage() {
             try {
                 const r = await fetch('/my-products/' + productId + '/wb-reupload-photos', {method: 'POST'});
                 const data = await r.json();
-                if (data.success) {
+                if (data.success || data.reconciliation_pending) {
                     this.showNotification(data.message, 'success');
                 } else {
                     this.showNotification(data.error || 'Ошибка', 'error');

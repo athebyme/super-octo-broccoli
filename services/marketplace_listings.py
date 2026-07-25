@@ -15,18 +15,20 @@ import math
 import os
 import tempfile
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from models import (
     ImportedProduct,
     Marketplace,
+    MarketplaceAttributeDefinition,
     MarketplaceCatalogSync,
     MarketplaceCredentialEncryptionError,
     MarketplaceListing,
     MarketplaceProductType,
     MarketplaceTaxonomyCategory,
+    Product,
     SellerMarketplaceAccount,
     db,
 )
@@ -1881,14 +1883,52 @@ class MarketplaceListingService:
             raise MarketplaceListingValidationError(
                 "per_page не может быть больше 100"
             )
+        query = cls._filtered_listing_query(
+            seller_id=seller_id,
+            marketplace_code=marketplace_code,
+            account_id=account_id,
+            normalized_status=normalized_status,
+            link_status=link_status,
+            include_unavailable=include_unavailable,
+            search=search,
+        )
+        return query.order_by(
+            MarketplaceListing.is_available.desc(),
+            MarketplaceListing.updated_at.desc(),
+            MarketplaceListing.id.desc(),
+        ).paginate(page=page, per_page=per_page, error_out=False)
+
+    @classmethod
+    def _filtered_listing_query(
+        cls,
+        *,
+        seller_id: int,
+        marketplace_code: Optional[str] = None,
+        account_id: Optional[int] = None,
+        normalized_status: Optional[str] = None,
+        link_status: Optional[str] = None,
+        include_unavailable: bool = True,
+        search: Optional[str] = None,
+        with_options: bool = True,
+    ):
+        """Общий tenant-scoped фильтрованный query листингов (без order/paginate)."""
         if not isinstance(include_unavailable, bool):
             raise MarketplaceListingValidationError(
                 "include_unavailable должен быть boolean"
             )
-        query = MarketplaceListing.query.options(
-            joinedload(MarketplaceListing.marketplace),
-            joinedload(MarketplaceListing.account),
-        ).filter(MarketplaceListing.seller_id == seller_id)
+        query = MarketplaceListing.query
+        if with_options:
+            query = query.options(
+                joinedload(MarketplaceListing.marketplace),
+                joinedload(MarketplaceListing.account),
+                # WB-проекции без media разворачивают превью из legacy Product;
+                # bounded load_only исключает N+1 и широкую таблицу products.
+                joinedload(MarketplaceListing.legacy_product).load_only(
+                    Product.nm_id,
+                    Product.photos_json,
+                ),
+            )
+        query = query.filter(MarketplaceListing.seller_id == seller_id)
         if marketplace_code:
             if not isinstance(marketplace_code, str):
                 raise MarketplaceListingValidationError(
@@ -1955,20 +1995,297 @@ class MarketplaceListingService:
                     .replace("%", "\\%")
                     .replace("_", "\\_")
                 )
-                pattern = f"%{escaped}%"
-                query = query.filter(or_(
-                    MarketplaceListing.title.ilike(pattern, escape="\\"),
-                    MarketplaceListing.offer_id.ilike(pattern, escape="\\"),
-                    MarketplaceListing.external_product_id.ilike(
-                        pattern,
-                        escape="\\",
-                    ),
-                ))
-        return query.order_by(
-            MarketplaceListing.is_available.desc(),
-            MarketplaceListing.updated_at.desc(),
-            MarketplaceListing.id.desc(),
-        ).paginate(page=page, per_page=per_page, error_out=False)
+                # SQLite lower()/LIKE сворачивает регистр только для ASCII,
+                # поэтому «свеча» не находит «Свеча». Ищем по нескольким
+                # регистровым вариантам запроса вместо расширений SQLite.
+                variants = []
+                for candidate in (
+                    escaped,
+                    escaped.lower(),
+                    escaped.upper(),
+                    escaped.capitalize(),
+                    escaped.title(),
+                ):
+                    if candidate and candidate not in variants:
+                        variants.append(candidate)
+                conditions = []
+                for variant in variants:
+                    pattern = f"%{variant}%"
+                    conditions.extend((
+                        MarketplaceListing.title.ilike(pattern, escape="\\"),
+                        MarketplaceListing.offer_id.ilike(pattern, escape="\\"),
+                        MarketplaceListing.external_product_id.ilike(
+                            pattern,
+                            escape="\\",
+                        ),
+                    ))
+                query = query.filter(or_(*conditions))
+        return query
+
+    @staticmethod
+    def _group_member_sort_key(listing: MarketplaceListing) -> tuple:
+        code = listing.marketplace.code if listing.marketplace else ""
+        return (0 if code == "wb" else 1, listing.account_id or 0, listing.id)
+
+    @classmethod
+    def list_catalog_groups(
+        cls,
+        *,
+        seller_id: int,
+        marketplace_code: Optional[str] = None,
+        account_id: Optional[int] = None,
+        normalized_status: Optional[str] = None,
+        link_status: Optional[str] = None,
+        include_unavailable: bool = True,
+        search: Optional[str] = None,
+        page: int = 1,
+        per_page: int = 50,
+    ) -> Dict[str, Any]:
+        """Каталог, сгруппированный по общей карточке `ImportedProduct`.
+
+        Один товар, опубликованный и на WB, и на Ozon, возвращается одной
+        группой с bounded списком канальных листингов. Несвязанные листинги
+        остаются одиночными группами. Read-only: членство группы вычисляется
+        в тех же фильтрах, что и плоский список.
+        """
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        page = cls._positive_integer(page, "page")
+        per_page = cls._positive_integer(per_page, "per_page")
+        if per_page > 100:
+            raise MarketplaceListingValidationError(
+                "per_page не может быть больше 100"
+            )
+        filters = dict(
+            seller_id=seller_id,
+            marketplace_code=marketplace_code,
+            account_id=account_id,
+            normalized_status=normalized_status,
+            link_status=link_status,
+            include_unavailable=include_unavailable,
+            search=search,
+        )
+        group_key = func.coalesce(
+            MarketplaceListing.imported_product_id,
+            -MarketplaceListing.id,
+        )
+        grouped = cls._filtered_listing_query(
+            **filters,
+            with_options=False,
+        ).with_entities(
+            MarketplaceListing.imported_product_id.label("imported_product_id"),
+            func.max(MarketplaceListing.id).label("newest_id"),
+            func.count(MarketplaceListing.id).label("member_count"),
+        ).group_by(group_key).order_by(func.max(MarketplaceListing.id).desc())
+        total = grouped.count()
+        rows = grouped.limit(per_page).offset((page - 1) * per_page).all()
+
+        canonical_ids = [
+            row.imported_product_id for row in rows
+            if row.imported_product_id is not None
+        ]
+        single_ids = [
+            row.newest_id for row in rows
+            if row.imported_product_id is None
+        ]
+        members: List[MarketplaceListing] = []
+        if canonical_ids:
+            members.extend(cls._filtered_listing_query(**filters).filter(
+                MarketplaceListing.imported_product_id.in_(canonical_ids)
+            ).all())
+        if single_ids:
+            members.extend(cls._filtered_listing_query(**filters).filter(
+                MarketplaceListing.id.in_(single_ids)
+            ).all())
+
+        by_canonical: Dict[int, List[MarketplaceListing]] = {}
+        by_single: Dict[int, MarketplaceListing] = {}
+        for listing in members:
+            if listing.imported_product_id is not None:
+                by_canonical.setdefault(
+                    listing.imported_product_id,
+                    [],
+                ).append(listing)
+            else:
+                by_single[listing.id] = listing
+
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            if row.imported_product_id is not None:
+                group = sorted(
+                    by_canonical.get(row.imported_product_id, []),
+                    key=cls._group_member_sort_key,
+                )[:6]
+                if not group:
+                    continue
+                items.append({
+                    "key": f"p{row.imported_product_id}",
+                    "imported_product_id": row.imported_product_id,
+                    "listing_count": row.member_count,
+                    "listings": [
+                        listing.to_public_dict() for listing in group
+                    ],
+                })
+            else:
+                listing = by_single.get(row.newest_id)
+                if listing is None:
+                    continue
+                items.append({
+                    "key": f"l{listing.id}",
+                    "imported_product_id": None,
+                    "listing_count": 1,
+                    "listings": [listing.to_public_dict()],
+                })
+        pages = math.ceil(total / per_page) if total else 1
+        return {
+            "items": items,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "pages": pages,
+                "total": total,
+                "has_next": page * per_page < total,
+                "has_prev": page > 1,
+            },
+        }
+
+    @classmethod
+    def catalog_facets(
+        cls,
+        *,
+        seller_id: int,
+        marketplace_code: Optional[str] = None,
+        account_id: Optional[int] = None,
+        normalized_status: Optional[str] = None,
+        link_status: Optional[str] = None,
+        include_unavailable: bool = True,
+        search: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Счётчики фасетов каталога двумя агрегатами вместо 5+N запросов.
+
+        Статусы считаются в текущем scope БЕЗ статус-фильтра, каналы — БЕЗ
+        канального фильтра: каждый фасет показывает, что получит продавец,
+        если переключится на него.
+        """
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        status_rows = cls._filtered_listing_query(
+            seller_id=seller_id,
+            marketplace_code=marketplace_code,
+            account_id=account_id,
+            link_status=link_status,
+            include_unavailable=include_unavailable,
+            search=search,
+            with_options=False,
+        ).with_entities(
+            MarketplaceListing.normalized_status,
+            func.count(MarketplaceListing.id),
+        ).group_by(MarketplaceListing.normalized_status).all()
+
+        channel_rows = cls._filtered_listing_query(
+            seller_id=seller_id,
+            normalized_status=normalized_status,
+            link_status=link_status,
+            include_unavailable=include_unavailable,
+            search=search,
+            with_options=False,
+        ).join(Marketplace).with_entities(
+            Marketplace.code,
+            MarketplaceListing.account_id,
+            func.count(MarketplaceListing.id),
+        ).group_by(
+            Marketplace.code,
+            MarketplaceListing.account_id,
+        ).all()
+
+        statuses: Dict[str, int] = {}
+        total = 0
+        for status, count in status_rows:
+            statuses[status or "unknown"] = int(count or 0)
+            total += int(count or 0)
+        channels: Dict[str, int] = {"all": 0}
+        for code, channel_account_id, count in channel_rows:
+            value = int(count or 0)
+            channels["all"] += value
+            key = code or "wb"
+            channels[key] = channels.get(key, 0) + value
+            if code == "ozon" and channel_account_id:
+                scoped = f"ozon:{channel_account_id}"
+                channels[scoped] = channels.get(scoped, 0) + value
+        statuses["all"] = total
+        return {"statuses": statuses, "channels": channels}
+
+    @classmethod
+    def attribute_names(
+        cls,
+        *,
+        listing: MarketplaceListing,
+    ) -> Dict[str, str]:
+        """Bounded имена атрибутов из local reference для detail-отображения."""
+        if not listing.product_type_id:
+            return {}
+        try:
+            raw = json.loads(listing.attributes_json or "[]")
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        ids: List[str] = []
+        for entry in raw if isinstance(raw, list) else []:
+            value = entry.get("id") if isinstance(entry, dict) else None
+            if isinstance(value, str) and value and value not in ids:
+                ids.append(value)
+            if len(ids) >= 200:
+                break
+        if not ids:
+            return {}
+        rows = MarketplaceAttributeDefinition.query.filter(
+            MarketplaceAttributeDefinition.product_type_id
+            == listing.product_type_id,
+            MarketplaceAttributeDefinition.external_attribute_id.in_(ids),
+        ).all()
+        return {row.external_attribute_id: row.name for row in rows}
+
+    @classmethod
+    def group_members(
+        cls,
+        *,
+        seller_id: int,
+        listing: MarketplaceListing,
+    ) -> List[Dict[str, Any]]:
+        """Bounded каналы одной общей карточки для channel-переключателя детали."""
+        if listing.imported_product_id is None:
+            rows = [listing]
+        else:
+            # Лимит с запасом: физически это WB + до 10 Ozon-кабинетов.
+            # Текущий листинг добавляется явно, чтобы срез никогда не выкинул
+            # именно ту карточку, которую продавец сейчас смотрит.
+            rows = MarketplaceListing.query.options(
+                joinedload(MarketplaceListing.marketplace),
+                joinedload(MarketplaceListing.account),
+                joinedload(MarketplaceListing.legacy_product).load_only(
+                    Product.nm_id,
+                    Product.photos_json,
+                ),
+            ).filter_by(
+                seller_id=seller_id,
+                imported_product_id=listing.imported_product_id,
+            ).order_by(MarketplaceListing.id.asc()).limit(12).all()
+            if all(row.id != listing.id for row in rows):
+                rows.append(listing)
+        result = []
+        for row in sorted(rows, key=cls._group_member_sort_key):
+            legacy = row.legacy_product if row.legacy_product_id else None
+            result.append({
+                "id": row.id,
+                "marketplace_code": (
+                    row.marketplace.code if row.marketplace else None
+                ),
+                "account_id": row.account_id,
+                "account_label": row.account.label if row.account else None,
+                "title": row.title,
+                "primary_image": row.primary_image_url(),
+                "normalized_status": row.normalized_status,
+                "wb_nm_id": getattr(legacy, "nm_id", None),
+                "is_current": row.id == listing.id,
+            })
+        return result
 
     @classmethod
     def get_listing(
@@ -1988,10 +2305,56 @@ class MarketplaceListingService:
             joinedload(MarketplaceListing.imported_product).joinedload(
                 ImportedProduct.supplier_product
             ),
+            joinedload(MarketplaceListing.legacy_product).load_only(
+                Product.nm_id,
+                Product.photos_json,
+            ),
         ).filter_by(id=listing_id, seller_id=seller_id).first()
         if listing is None:
             raise MarketplaceListingNotFound("Листинг не найден")
         return listing
+
+    @classmethod
+    def gallery_urls(
+        cls,
+        *,
+        listing: MarketplaceListing,
+        limit: int = 10,
+    ) -> List[str]:
+        """Bounded фото карточки: Ozon media snapshot либо слоты WB-галереи."""
+        media = listing._json_value(listing.media_json, {})
+        urls: List[str] = []
+
+        def _push(value: Any) -> None:
+            if (
+                isinstance(value, str)
+                and value.startswith("http")
+                and value not in urls
+            ):
+                urls.append(value)
+
+        _push(media.get("primary_image"))
+        for item in media.get("images") or []:
+            if len(urls) >= limit:
+                break
+            _push(item)
+        if len(urls) < limit and listing.legacy_product_id is not None:
+            product = listing.legacy_product
+            nm_id = getattr(product, "nm_id", None)
+            slots = media.get("photos")
+            if not isinstance(slots, list) or not slots:
+                slots = listing._json_value(
+                    getattr(product, "photos_json", None) if product else None,
+                    [],
+                )
+            if nm_id and slots:
+                from services.wb_media import normalize_photo_urls
+
+                for value in normalize_photo_urls(nm_id, slots[:limit], "big"):
+                    if len(urls) >= limit:
+                        break
+                    _push(value)
+        return urls[:limit]
 
     @classmethod
     def latest_syncs(cls, *, seller_id: int) -> Dict[int, MarketplaceCatalogSync]:

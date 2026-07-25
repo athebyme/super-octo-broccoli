@@ -408,9 +408,19 @@ def migrate(db_path):
                     succeeded INTEGER DEFAULT 0,
                     failed INTEGER DEFAULT 0,
                     skipped INTEGER DEFAULT 0,
+                    confirmed INTEGER DEFAULT 0,
+                    conflicted INTEGER DEFAULT 0,
                     fields_config TEXT,
-                    photo_strategy VARCHAR(20) DEFAULT 'replace',
+                    photo_strategy VARCHAR(20) DEFAULT 'smart_merge',
                     results TEXT,
+                    product_ids_json TEXT NOT NULL DEFAULT '[]',
+                    bulk_edit_id INTEGER REFERENCES bulk_edit_history(id),
+                    claim_token VARCHAR(64),
+                    claim_expires_at DATETIME,
+                    heartbeat_at DATETIME,
+                    current_product_id INTEGER,
+                    current_item_started_at DATETIME,
+                    last_error TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -1232,6 +1242,10 @@ def main():
                 migrate as migrate_ozon_references,
             )
             migrate_ozon_references(db_path)
+            from migrate_add_ozon_product_type_visibility import (
+                migrate as migrate_ozon_product_type_visibility,
+            )
+            migrate_ozon_product_type_visibility(db_path)
             from migrate_add_marketplace_listings import (
                 STARTUP_BACKFILL_LIMIT,
                 migrate as migrate_marketplace_listings,
@@ -1256,6 +1270,10 @@ def main():
                 migrate as migrate_marketplace_drafts,
             )
             migrate_marketplace_drafts(db_path)
+            from migrate_add_marketplace_draft_attribute_removals import (
+                migrate as migrate_marketplace_draft_attribute_removals,
+            )
+            migrate_marketplace_draft_attribute_removals(db_path)
             from migrate_add_marketplace_operations import (
                 migrate as migrate_marketplace_operations,
             )
@@ -1330,10 +1348,30 @@ def main():
                 migrate as migrate_wb_card_audit,
             )
             migrate_wb_card_audit(db_path)
+            from migrate_add_enrichment_merge_audit import (
+                migrate as migrate_enrichment_merge_audit,
+            )
+            migrate_enrichment_merge_audit(db_path)
+            from migrate_enrichment_reliability_v2 import (
+                migrate as migrate_enrichment_reliability_v2,
+            )
+            migrate_enrichment_reliability_v2(db_path)
             from migrate_competitor_monitor_v2 import (
                 migrate as migrate_competitor_monitor_v2,
             )
             migrate_competitor_monitor_v2(db_path)
+            from migrate_add_competitor_matching import (
+                migrate as migrate_add_competitor_matching,
+            )
+            migrate_add_competitor_matching(db_path)
+            from migrate_add_competitor_price_lanes import (
+                migrate as migrate_add_competitor_price_lanes,
+            )
+            migrate_add_competitor_price_lanes(db_path)
+            from migrate_backfill_imported_supplier_links import (
+                migrate as migrate_backfill_imported_supplier_links,
+            )
+            migrate_backfill_imported_supplier_links(db_path)
             from migrate_compact_competitor_snapshots import (
                 migrate as migrate_compact_competitor_snapshots,
             )

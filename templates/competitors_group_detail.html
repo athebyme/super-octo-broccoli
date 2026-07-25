@@ -4,6 +4,10 @@
 
 {% block title %}{{ group.name }} — Конкуренты{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='competitors-group.css', v='20260722-7') }}">
+{% endblock %}
+
 {% block topbar_left %}
 <nav class="sh-crumbs" aria-label="Хлебные крошки">
     <a href="{{ url_for('competitors_dashboard') }}">Конкуренты</a>
@@ -13,67 +17,73 @@
 {% endblock %}
 
 {% block content %}
-<style>
-    .cg-thumb {
-        width: 40px; height: 40px; flex-shrink: 0;
-        border-radius: var(--r-sm);
-        background: var(--bg-hover);
-        color: var(--text-muted);
-        display: flex; align-items: center; justify-content: center;
-        overflow: hidden; position: relative;
-    }
-    .cg-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-    .cg-link { color: var(--text); text-decoration: none; }
-    .cg-link:hover { color: var(--accent); }
-    .cg-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--r-xs); }
-    .cg-del:hover { color: var(--danger); background: var(--danger-bg); }
-    .cg-chip-wait { border-style: dashed; color: var(--text-muted); }
-    .cg-chip-warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
-    .cg-chip-ok { background: var(--ok-bg); color: var(--ok); border-color: var(--ok-border); }
-    .cg-input {
-        border: 1px solid var(--border); border-radius: var(--r-sm);
-        background: transparent; color: var(--text);
-        padding: 8px 12px; font-size: 14px; width: 100%;
-    }
-    .cg-input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-color: var(--accent); }
-    .cg-pick { border-bottom: 1px solid var(--border-light); cursor: pointer; }
-    .cg-pick:last-child { border-bottom: none; }
-    .cg-pick:hover { background: var(--bg-hover); }
-    .cg-pick input[type="checkbox"]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-</style>
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6"
+     x-data='competitorGroupDetail({
+        "groupId": {{ group.id|tojson }},
+        "products": {{ products_data|tojson }},
+        "importRequested": {{ (group.import_requested or false)|tojson }},
+        "sourceSupplierId": {{ group.auto_source_value|tojson if group.auto_source == "seller" else "null" }}
+     })'>
 
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6" x-data="groupDetail()" x-init="init()">
-
-    <!-- Header -->
     <div class="sh-page-header">
         <div class="sh-page-header-content">
             <div>
                 <div class="flex items-center gap-3 flex-wrap">
                     <span class="w-3 h-3 rounded-full flex-shrink-0" style="background: {{ group.color }}" aria-hidden="true"></span>
                     <h1 class="sh-page-title">{{ group.name }}</h1>
-                    {% if group.import_requested %}
-                    <span class="sh-chip" title="Каталог продавца подтянется фоновой синхронизацией в течение нескольких минут">
-                        <span class="sh-spinner sh-spinner--sm" role="status" aria-label="Импорт выполняется"></span>
-                        Импорт каталога…
+                    <span class="sh-chip" x-show="importRequested" x-cloak
+                          title="Заявка сохранена и будет повторена фоновой синхронизацией">
+                        {{ icon('clock', size=14) }}
+                        Каталог в очереди
                     </span>
-                    {% endif %}
                 </div>
-                <p class="sh-page-subtitle">{% if group.description %}{{ group.description }} · {% endif %}<span x-text="products.length"></span> <span x-text="plural(products.length, ['товар','товара','товаров'])"></span> под мониторингом</p>
+                <p class="sh-page-subtitle">
+                    {% if group.description %}{{ group.description }} · {% endif %}
+                    <span x-text="products.length"></span>
+                    <span x-text="plural(products.length, ['товар','товара','товаров'])"></span>
+                    под мониторингом
+                </p>
             </div>
             <div class="sh-page-actions">
-                <button type="button" class="sh-btn sh-btn--white-outline sh-btn--md" @click="forceSync()" :disabled="syncing" :class="{ 'is-loading': syncing }">
+                <a href="{{ url_for('competitors_comparison', group_id=group.id) }}"
+                   class="sh-btn sh-btn--white-outline sh-btn--md">
+                    <span class="sh-btn-icon">{{ icon('chart', size=16) }}</span>
+                    Сравнить с нами
+                </a>
+                <button type="button" class="sh-btn sh-btn--white-outline sh-btn--md"
+                        @click="forceSync()" :disabled="syncing" :class="{ 'is-loading': syncing }">
                     <span class="sh-btn-icon">{{ icon('refresh', size=16) }}</span>
                     Обновить данные
                 </button>
-                <button type="button" class="sh-btn sh-btn--white sh-btn--md" @click="openAdd()">
+                <button type="button" class="sh-btn sh-btn--white sh-btn--md" @click="openAdd('seller')">
                     <span class="sh-btn-icon">{{ icon('plus', size=16) }}</span>
-                    Добавить товары
+                    Добавить конкурента
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- Own product comparison -->
+    <div class="cgd-source-strip" x-show="sourceSupplierId || importRequested" x-cloak>
+        <div class="cgd-source-main">
+            <span class="cgd-source-icon" aria-hidden="true">{{ icon('office', size=17) }}</span>
+            <div class="min-w-0">
+                <p class="cgd-source-title">Каталог продавца WB подключён к группе</p>
+                <p class="cgd-source-meta">
+                    <span x-show="sourceSupplierId" x-text="'ID ' + sourceSupplierId"></span>
+                    <span x-show="sourceSupplierId && importRequested"> · </span>
+                    <span x-show="importRequested">ожидает следующей попытки WB</span>
+                </p>
+            </div>
+        </div>
+        <div class="cgd-source-actions">
+            <button x-show="importRequested" type="button" class="sh-btn sh-btn--ghost sh-btn--sm"
+                    @click="cancelSellerImport()" :disabled="adding">Отменить очередь</button>
+            <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="openAdd('seller')">
+                <span x-text="importRequested ? 'Добавить сейчас' : 'Открыть каталог'"></span>
+            </button>
+        </div>
+    </div>
+
     <div class="sh-card" style="padding:16px 20px">
         <template x-if="compareLoading">
             {{ skeleton(lines=1) }}
@@ -87,13 +97,13 @@
         <template x-if="!compareLoading && !compareError && compare && !compare.own_product">
             <p class="text-sm flex items-center gap-2" style="color:var(--text-muted)">
                 {{ icon('info-circle', size=16) }}
-                Привяжите свою карточку в настройках группы, чтобы видеть позицию по цене среди конкурентов.
+                Привяжите свою карточку в настройках группы, чтобы видеть позицию цены среди конкурентов.
             </p>
         </template>
         <template x-if="!compareLoading && compare && compare.own_product">
             <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <span class="text-xs font-semibold uppercase tracking-wide flex-shrink-0" style="color:var(--text-muted)">Ваш товар</span>
-                <a class="cg-link text-sm font-medium truncate max-w-xs" target="_blank" rel="noopener"
+                <a class="cgd-product-link text-sm truncate max-w-xs" target="_blank" rel="noopener"
                    :href="'https://www.wildberries.ru/catalog/' + compare.own_product.nm_id + '/detail.aspx'"
                    x-text="compare.own_product.title || ('nm ' + compare.own_product.nm_id)"></a>
                 <span class="text-sm font-semibold" style="color:var(--text)" x-text="fmtPrice(ownPrice())"></span>
@@ -101,250 +111,806 @@
                     <span class="sh-chip" x-text="'позиция ' + compare.own_product.position + ' из ' + compare.own_product.total_with_own + ' по цене'"></span>
                 </template>
                 <template x-if="compare.own_product.vs_min_percent !== null && compare.own_product.vs_min_percent <= 0">
-                    <span class="sh-chip cg-chip-ok" x-text="compare.own_product.vs_min_percent === 0 ? 'на уровне минимума' : ('на ' + Math.abs(compare.own_product.vs_min_percent) + '% ниже минимума')"></span>
+                    <span class="sh-chip cgd-chip-ok"
+                          x-text="compare.own_product.vs_min_percent === 0 ? 'на уровне минимума' : ('на ' + Math.abs(compare.own_product.vs_min_percent) + '% ниже минимума')"></span>
                 </template>
                 <template x-if="compare.own_product.vs_min_percent !== null && compare.own_product.vs_min_percent > 0">
-                    <span class="sh-chip cg-chip-warn" x-text="'+' + compare.own_product.vs_min_percent + '% к минимуму'"></span>
+                    <span class="sh-chip cgd-chip-warn" x-text="'+' + compare.own_product.vs_min_percent + '% к минимуму'"></span>
                 </template>
                 <template x-if="compare.own_product.median_competitor_price">
-                    <span class="text-xs" style="color:var(--text-muted)" x-text="'медиана конкурентов: ' + fmtPrice(compare.own_product.median_competitor_price)"></span>
+                    <span class="text-xs" style="color:var(--text-muted)"
+                          x-text="'медиана конкурентов: ' + fmtPrice(compare.own_product.median_competitor_price)"></span>
                 </template>
             </div>
         </template>
     </div>
 
-    <!-- Products table -->
+    <section class="sh-card sh-card--flush cgd-match-section" x-show="products.length > 0" x-cloak>
+        <div class="cgd-match-head">
+            <div class="cgd-match-heading">
+                <span class="cgd-match-icon" aria-hidden="true">{{ icon('sparkles', size=19) }}</span>
+                <div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <h2 class="cgd-match-title">Соответствия товаров</h2>
+                        <span class="sh-chip cgd-shared-chip">общая база</span>
+                    </div>
+                    <p class="cgd-match-subtitle">
+                        Идентичность проверяется по исходному фиду поставщика, тексту и фото.
+                        Результат один для всех продавцов; ваша карточка и цена подключаются отдельно по точной связи.
+                    </p>
+                </div>
+            </div>
+            <button type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                    @click="runMatching()" :disabled="matching || !products.length"
+                    :class="{ 'is-loading': matching }">
+                <span class="sh-btn-icon">{{ icon('sparkles', size=16) }}</span>
+                <span x-text="matchedCount() ? 'Актуализировать' : 'Найти соответствия'"></span>
+            </button>
+        </div>
+
+        <div class="cgd-match-proof cgd-match-boundary">
+            <span>{{ icon('shield', size=15) }}</span>
+            <p><strong>Граница данных:</strong> для идентичности используются только наблюдаемые факты WB и исходные поля/фото
+                <code>SupplierProduct</code>. Тексты вашей карточки, seller-правки и любые <code>ai_*</code> исключены.</p>
+        </div>
+
+        <div class="cgd-match-progress" x-show="matching && matchJob" x-cloak>
+            <div class="cgd-match-progress-copy">
+                <span><strong x-text="matchJob?.processed || 0"></strong> из <span x-text="matchJob?.total || products.length"></span></span>
+                <span x-text="matchJob?.progress?.cache_hits ? (matchJob.progress.cache_hits + ' уже были в общей базе') : 'сначала текст, затем фото и до одной AI-проверки'"></span>
+            </div>
+            <div class="cgd-progress-track" role="progressbar" :aria-valuenow="matchProgress()" aria-valuemin="0" aria-valuemax="100">
+                <span :style="'width:' + matchProgress() + '%'"></span>
+            </div>
+        </div>
+
+        <div class="cgd-match-toolbar" x-show="!matchesLoading && matchData?.items?.length" x-cloak>
+            <div class="cgd-match-stats">
+                <span><strong x-text="calculatedCount()"></strong> рассчитано</span>
+                <span><strong x-text="matchedCount()"></strong> найдено</span>
+                <span><strong x-text="reviewedCount()"></strong> проверено вами</span>
+            </div>
+            {{ segmented([
+                {'value': 'all', 'label': 'Все'},
+                {'value': 'matched', 'label': 'Найдены'},
+                {'value': 'review', 'label': 'Проверить'}
+            ], x_model='matchFilter') }}
+        </div>
+
+        <div class="cgd-match-loading" x-show="matchesLoading" x-cloak>
+            {% for _ in range(2) %}
+            <div class="cgd-match-skeleton">
+                <span class="sh-skeleton" style="width:48px;height:48px;border-radius:12px"></span>
+                <span style="flex:1">{{ skeleton(lines=2) }}</span>
+                <span class="sh-skeleton" style="width:180px;height:48px;border-radius:12px"></span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="cgd-inline-error cgd-match-error" x-show="!matchesLoading && matchesError" x-cloak role="alert">
+            {{ icon('warning', size=15) }}
+            <span x-text="matchesError"></span>
+            <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" @click="loadMatches()">Повторить</button>
+        </div>
+
+        <div class="cgd-match-empty" x-show="!matchesLoading && !matchesError && matchData && !calculatedCount() && !matching" x-cloak>
+            <span class="cgd-match-empty-visual" aria-hidden="true">
+                <span>{{ icon('package', size=23, stroke=1.5) }}</span>
+                <i></i>
+                <span>{{ icon('sparkles', size=23, stroke=1.5) }}</span>
+            </span>
+            <div>
+                <p>Пока соответствия не рассчитаны</p>
+                <span>Запуск не меняет карточки и цены — только создаёт общие подсказки для проверки.</span>
+            </div>
+        </div>
+
+        <div class="cgd-match-list" x-show="!matchesLoading && calculatedCount() && matchItems().length" x-cloak>
+            <template x-for="item in matchItems()" :key="item.competitor.id">
+                <article class="cgd-match-row" :class="{ 'is-reviewed': item.review }">
+                    <div class="cgd-match-product cgd-match-product--market">
+                        <span class="cgd-thumb cgd-thumb--match" aria-hidden="true">
+                            {{ icon('image', size=17, stroke=1.5) }}
+                            <template x-if="item.competitor.image_url">
+                                <img :src="item.competitor.image_url" alt="" loading="lazy" @error="$el.remove()">
+                            </template>
+                        </span>
+                        <div class="min-w-0">
+                            <span class="cgd-match-eyebrow">Wildberries · конкурент</span>
+                            <a class="cgd-product-link cgd-match-product-title" target="_blank" rel="noopener"
+                               :href="'https://www.wildberries.ru/catalog/' + item.competitor.nm_id + '/detail.aspx'"
+                               x-text="item.competitor.title || ('nmID ' + item.competitor.nm_id)"></a>
+                            <span class="cgd-match-product-meta"
+                                  x-text="[item.competitor.brand, fmtPrice(item.competitor.current_sale_price ?? item.competitor.current_price)].filter(Boolean).join(' · ')"></span>
+                        </div>
+                    </div>
+
+                    <div class="cgd-match-score" :class="confidenceTone(item)">
+                        <span class="cgd-match-score-number" x-text="item.match ? (item.match.score + '%') : '—'"></span>
+                        <span class="cgd-match-score-label" x-text="item.match ? item.match.score_label : 'не проверен' "></span>
+                        <span class="cgd-match-evidence" x-show="item.match">
+                            <span x-text="'текст ' + (item.match?.text_score ?? 0)"></span>
+                            <span x-text="item.match?.image_score === null ? 'фото нет' : ('фото ' + item.match?.image_score)"></span>
+                        </span>
+                    </div>
+
+                    <div class="cgd-match-product cgd-match-product--supplier">
+                        <template x-if="item.effective_supplier">
+                            <div class="contents">
+                                <span class="cgd-thumb cgd-thumb--match" aria-hidden="true">
+                                    {{ icon('image', size=17, stroke=1.5) }}
+                                    <template x-if="item.effective_supplier.photo_url">
+                                        <img :src="item.effective_supplier.photo_url" alt="" loading="lazy" @error="$el.remove()">
+                                    </template>
+                                </span>
+                                <div class="min-w-0">
+                                    <span class="cgd-match-eyebrow">
+                                        Фид поставщика
+                                        <em x-show="item.effective_source === 'seller_confirmed'">· ваш выбор</em>
+                                    </span>
+                                    <span class="cgd-match-product-title" x-text="item.effective_supplier.title"></span>
+                                    <span class="cgd-match-product-meta"
+                                          x-text="[item.effective_supplier.brand, item.effective_supplier.vendor_code].filter(Boolean).join(' · ')"></span>
+                                </div>
+                            </div>
+                        </template>
+                        <template x-if="!item.effective_supplier">
+                            <div class="cgd-match-no-candidate">
+                                <span>{{ icon('search', size=17) }}</span>
+                                <div><strong>Нужно выбрать</strong><small>кандидат не подтверждён</small></div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="cgd-match-own">
+                        <template x-if="item.own_product">
+                            <div>
+                                <span class="cgd-match-eyebrow">Ваша карточка · точная связь</span>
+                                <strong x-text="fmtPrice(item.own_product.effective_price)"></strong>
+                                <small :class="Number(item.own_product.price_gap_percent || 0) > 0 ? 'is-up' : 'is-down'"
+                                       x-text="priceGapText(item)"></small>
+                            </div>
+                        </template>
+                        <template x-if="!item.own_product">
+                            <div>
+                                <span class="cgd-match-eyebrow">Ваш магазин</span>
+                                <small>Этот товар поставщика ещё не импортирован</small>
+                            </div>
+                        </template>
+                    </div>
+
+                    <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm cgd-match-review-btn"
+                            :disabled="!item.match || item.match.status !== 'completed'"
+                            @click="openMatchReview(item)"
+                            x-text="item.review ? 'Изменить' : 'Проверить'"></button>
+                </article>
+            </template>
+        </div>
+    </section>
+
     <div class="sh-card sh-card--flush" x-show="products.length > 0" x-cloak>
-        <div class="sh-table-wrap">
-            <table class="sh-table">
-                <thead>
-                    <tr>
-                        <th>Товар</th>
-                        <th class="text-right">Цена</th>
-                        <th class="text-right">Со скидкой</th>
-                        <th class="text-right">Скидка</th>
-                        <th class="text-right">Рейтинг</th>
-                        <th class="text-right">Отзывы</th>
-                        <th class="text-right">Остаток</th>
-                        <th class="text-right">Данные</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <template x-for="p in products" :key="p.id">
-                        <tr>
-                            <td>
-                                <div class="flex items-center gap-3">
-                                    <span class="cg-thumb" aria-hidden="true">
-                                        {{ icon('image', size=18, stroke=1.5) }}
-                                        <template x-if="p.image_url">
-                                            <img :src="p.image_url" alt="" loading="lazy" @error="$el.remove()">
-                                        </template>
-                                    </span>
-                                    <div class="min-w-0">
-                                        <a class="cg-link text-sm font-medium truncate block max-w-xs" target="_blank" rel="noopener"
-                                           :href="'https://www.wildberries.ru/catalog/' + p.nm_id + '/detail.aspx'"
-                                           x-text="p.title || ('nm ' + p.nm_id)"></a>
-                                        <p class="text-xs truncate max-w-xs" style="color:var(--text-muted)"
-                                           x-text="[p.brand, p.supplier_name].filter(Boolean).join(' · ')"></p>
-                                    </div>
-                                </div>
-                            </td>
-                            <td class="text-right" style="color:var(--text-muted)" x-text="p.current_price ? fmtPrice(p.current_price) : '—'"></td>
-                            <td class="text-right font-medium" style="color:var(--text)" x-text="p.current_sale_price ? fmtPrice(p.current_sale_price) : '—'"></td>
-                            <td class="text-right">
-                                <template x-if="p.current_discount_percent">
-                                    <span class="sh-badge sh-badge--sm" :class="discountTone(p)" x-text="'-' + p.current_discount_percent + '%'"></span>
-                                </template>
-                                <template x-if="!p.current_discount_percent">
-                                    <span style="color:var(--text-muted)">—</span>
-                                </template>
-                            </td>
-                            <td class="text-right" x-text="p.current_rating ? p.current_rating.toFixed(1) : '—'"></td>
-                            <td class="text-right" style="color:var(--text-muted)" x-text="p.current_feedbacks_count ?? '—'"></td>
-                            <td class="text-right">
-                                <span :style="p.current_total_stock === 0 ? 'color:var(--danger);font-weight:500' : 'color:var(--text-muted)'"
-                                      x-text="p.current_total_stock !== null && p.current_total_stock !== undefined ? p.current_total_stock : '—'"></span>
-                            </td>
-                            <td class="text-right">
-                                <template x-if="!p.current_price && !p.current_sale_price">
-                                    <span class="sh-chip cg-chip-wait">
-                                        <span class="sh-spinner sh-spinner--sm" role="status" aria-label="Ожидание данных"></span>
-                                        ожидает данных
-                                    </span>
-                                </template>
-                                <template x-if="(p.current_price || p.current_sale_price) && isStale(p)">
-                                    <span class="sh-chip cg-chip-warn" :title="'Цена не обновлялась с ' + shortDateTime(priceTs(p))"
-                                          x-text="'цена от ' + shortDate(priceTs(p))"></span>
-                                </template>
-                                <template x-if="(p.current_price || p.current_sale_price) && !isStale(p)">
-                                    <span class="text-xs" style="color:var(--text-muted)" x-text="priceTs(p) ? shortDateTime(priceTs(p)) : '—'"></span>
-                                </template>
-                            </td>
-                            <td class="text-right">
-                                <div class="flex items-center justify-end gap-1">
-                                    <button type="button" class="sh-icon-btn" @click="showHistoryFor(p)" title="История цен" aria-label="История цен">
-                                        {{ icon('chart', size=16) }}
-                                    </button>
-                                    <button type="button" class="sh-icon-btn cg-del" @click="removeProduct(p)" title="Убрать из мониторинга" aria-label="Убрать из мониторинга">
-                                        {{ icon('trash', size=16) }}
-                                    </button>
-                                </div>
-                            </td>
-                        </tr>
+        <div class="cgd-list-toolbar">
+            <label class="cgd-search">
+                <span class="sr-only">Найти товар в группе</span>
+                {{ icon('search', size=15) }}
+                <input type="search" class="cgd-control" x-model.debounce.150ms="productQuery"
+                       placeholder="Название, бренд или артикул" autocomplete="off">
+            </label>
+            <label>
+                <span class="sr-only">Фильтр по продавцу</span>
+                <select class="cgd-control cgd-select" x-model="sellerFilter">
+                    <option value="all">Все продавцы</option>
+                    <template x-for="seller in sellerOptions()" :key="seller.key">
+                        <option :value="seller.key" x-text="seller.label + ' · ' + seller.count"></option>
                     </template>
-                </tbody>
-            </table>
+                </select>
+            </label>
+            <label>
+                <span class="sr-only">Сортировка товаров</span>
+                <select class="cgd-control cgd-select" x-model="productSort">
+                    <option value="price_asc">Сначала дешевле</option>
+                    <option value="price_desc">Сначала дороже</option>
+                    <option value="rating_desc">По рейтингу</option>
+                    <option value="newest">Недавно добавленные</option>
+                </select>
+            </label>
+            <span class="cgd-list-count" aria-live="polite">
+                <span x-text="visibleProducts().length"></span> из <span x-text="products.length"></span>
+                <span x-show="sellersCount()"> · <span x-text="sellersCount()"></span> <span x-text="plural(sellersCount(), ['продавец','продавца','продавцов'])"></span></span>
+            </span>
+        </div>
+
+        <div class="cgd-table-desktop" x-show="visibleProducts().length > 0">
+            <div class="sh-table-wrap">
+                <table class="sh-table">
+                    <thead>
+                        <tr>
+                            <th>Товар</th>
+                            <th>Продавец</th>
+                            <th class="text-right">Цена</th>
+                            <th class="text-right">Скидка</th>
+                            <th class="text-right">Рейтинг</th>
+                            <th class="text-right">Отзывы</th>
+                            <th class="text-right">Остаток</th>
+                            <th class="text-right">Данные</th>
+                            <th><span class="sr-only">Действия</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="product in visibleProducts()" :key="product.id">
+                            <tr>
+                                <td>
+                                    <div class="flex items-center gap-3">
+                                        <span class="cgd-thumb" aria-hidden="true">
+                                            {{ icon('image', size=18, stroke=1.5) }}
+                                            <template x-if="product.image_url">
+                                                <img :src="product.image_url" alt="" loading="lazy" @error="$el.remove()">
+                                            </template>
+                                        </span>
+                                        <div class="min-w-0">
+                                            <a class="cgd-product-link text-sm truncate block max-w-xs" target="_blank" rel="noopener"
+                                               :href="'https://www.wildberries.ru/catalog/' + product.nm_id + '/detail.aspx'"
+                                               x-text="product.title || ('nmID ' + product.nm_id)"></a>
+                                            <p class="text-xs truncate max-w-xs" style="color:var(--text-muted)"
+                                               x-text="[product.brand, 'nmID ' + product.nm_id].filter(Boolean).join(' · ')"></p>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="text-sm block max-w-[180px] truncate" style="color:var(--text-secondary)"
+                                          x-text="product.supplier_name || (product.wb_supplier_id ? 'Продавец #' + product.wb_supplier_id : 'уточняется')"></span>
+                                </td>
+                                <td class="text-right">
+                                    <span class="font-medium" style="color:var(--text)"
+                                          x-text="fmtPrice(product.current_sale_price ?? product.current_price)"></span>
+                                    <span x-show="product.current_sale_price && product.current_price && product.current_sale_price !== product.current_price"
+                                          class="block text-xs line-through" style="color:var(--text-muted)" x-text="fmtPrice(product.current_price)"></span>
+                                </td>
+                                <td class="text-right">
+                                    <template x-if="product.current_discount_percent">
+                                        <span class="sh-badge sh-badge--sm" :class="discountTone(product)"
+                                              x-text="'-' + product.current_discount_percent + '%'"></span>
+                                    </template>
+                                    <span x-show="!product.current_discount_percent" style="color:var(--text-muted)">—</span>
+                                </td>
+                                <td class="text-right" x-text="product.current_rating ? Number(product.current_rating).toFixed(1) : '—'"></td>
+                                <td class="text-right" style="color:var(--text-muted)" x-text="fmtInteger(product.current_feedbacks_count)"></td>
+                                <td class="text-right">
+                                    <span :style="product.current_total_stock === 0 ? 'color:var(--danger);font-weight:500' : 'color:var(--text-muted)'"
+                                          x-text="fmtInteger(product.current_total_stock)"></span>
+                                </td>
+                                <td class="text-right">
+                                    <template x-if="!product.current_price && !product.current_sale_price">
+                                        <span class="sh-chip cgd-chip-wait">
+                                            <span class="sh-spinner sh-spinner--sm" role="status" aria-label="Ожидание данных"></span>
+                                            ожидает
+                                        </span>
+                                    </template>
+                                    <template x-if="(product.current_price || product.current_sale_price) && isStale(product)">
+                                        <span class="sh-chip cgd-chip-warn" :title="'Цена не обновлялась с ' + shortDateTime(priceTs(product))"
+                                              x-text="'от ' + shortDate(priceTs(product))"></span>
+                                    </template>
+                                    <template x-if="(product.current_price || product.current_sale_price) && !isStale(product)">
+                                        <span class="text-xs" style="color:var(--text-muted)"
+                                              x-text="priceTs(product) ? shortDateTime(priceTs(product)) : '—'"></span>
+                                    </template>
+                                </td>
+                                <td class="text-right">
+                                    <div class="flex items-center justify-end gap-1">
+                                        <button type="button" class="sh-icon-btn" @click="showHistoryFor(product)"
+                                                title="История цен" aria-label="История цен">{{ icon('chart', size=16) }}</button>
+                                        <button type="button" class="sh-icon-btn cgd-delete" @click="askRemoveProduct(product)"
+                                                title="Убрать из мониторинга" aria-label="Убрать из мониторинга">{{ icon('trash', size=16) }}</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="cgd-mobile-list" x-show="visibleProducts().length > 0">
+            <template x-for="product in visibleProducts()" :key="product.id">
+                <article class="cgd-mobile-row">
+                    <div class="cgd-mobile-head">
+                        <span class="cgd-thumb cgd-thumb--lg" aria-hidden="true">
+                            {{ icon('image', size=18, stroke=1.5) }}
+                            <template x-if="product.image_url"><img :src="product.image_url" alt="" loading="lazy" @error="$el.remove()"></template>
+                        </span>
+                        <div class="min-w-0 flex-1">
+                            <a class="cgd-product-link text-sm truncate block" target="_blank" rel="noopener"
+                               :href="'https://www.wildberries.ru/catalog/' + product.nm_id + '/detail.aspx'"
+                               x-text="product.title || ('nmID ' + product.nm_id)"></a>
+                            <p class="text-xs truncate mt-0.5" style="color:var(--text-muted)"
+                               x-text="[product.supplier_name, product.brand, 'nmID ' + product.nm_id].filter(Boolean).join(' · ')"></p>
+                            <span class="sh-chip cgd-chip-wait mt-1.5" x-show="!product.current_price && !product.current_sale_price">
+                                <span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span> ожидает данных
+                            </span>
+                        </div>
+                        <div class="flex gap-1">
+                            <button type="button" class="sh-icon-btn" @click="showHistoryFor(product)" aria-label="История цен">{{ icon('chart', size=16) }}</button>
+                            <button type="button" class="sh-icon-btn cgd-delete" @click="askRemoveProduct(product)" aria-label="Убрать из мониторинга">{{ icon('trash', size=16) }}</button>
+                        </div>
+                    </div>
+                    <div class="cgd-mobile-body">
+                        <div class="cgd-mobile-metric"><span>Цена</span><strong x-text="fmtPrice(product.current_sale_price ?? product.current_price)"></strong></div>
+                        <div class="cgd-mobile-metric"><span>Рейтинг</span><strong x-text="product.current_rating ? Number(product.current_rating).toFixed(1) : '—'"></strong></div>
+                        <div class="cgd-mobile-metric"><span>Остаток</span><strong x-text="fmtInteger(product.current_total_stock)"></strong></div>
+                    </div>
+                </article>
+            </template>
+        </div>
+
+        <div class="cgd-filter-empty" x-show="visibleProducts().length === 0">
+            {{ icon('search', size=28, stroke=1.5) }}
+            <p class="mt-2 text-sm font-medium" style="color:var(--text)">По фильтрам ничего не найдено</p>
+            <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm mt-2"
+                    @click="productQuery=''; sellerFilter='all'">Сбросить фильтры</button>
         </div>
     </div>
 
-    <!-- Empty state -->
     <div class="sh-card sh-card--flush" x-show="products.length === 0" x-cloak>
         <div class="sh-empty">
             <div class="sh-empty-icon">{{ icon('package', size=48, stroke=1) }}</div>
-            <p class="sh-empty-title">В группе пока нет товаров</p>
-            <p class="sh-empty-desc">Добавьте артикулы вручную, найдите товары в поиске WB или импортируйте каталог продавца.</p>
-            <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" style="margin-top:16px" @click="openAdd()">Добавить товары</button>
+            <p class="sh-empty-title">В группе пока нет конкурентов</p>
+            <p class="sh-empty-desc">Вставьте ссылку на продавца WB, посмотрите его каталог и выберите товары для мониторинга.</p>
+            <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" style="margin-top:16px" @click="openAdd('seller')">
+                <span class="sh-btn-icon">{{ icon('office', size=16) }}</span>
+                Добавить продавца
+            </button>
         </div>
     </div>
 
-    <!-- Add products modal -->
-    <div x-show="showAddModal" x-cloak class="sh-modal sh-modal--lg" @keydown.escape.window="closeAdd()"
-         x-trap.noscroll.inert="showAddModal" role="dialog" aria-modal="true" aria-labelledby="cg-add-title">
+    {# Seller/product picker #}
+    <div x-show="showAddModal" x-cloak class="sh-modal sh-modal--xl cgd-add-modal"
+         @keydown.escape.window="closeAdd()" x-trap.noscroll.inert="showAddModal"
+         role="dialog" aria-modal="true" aria-labelledby="cgd-add-title">
         <div class="sh-backdrop" x-show="showAddModal"
-             x-transition:enter="sh-backdrop-enter" x-transition:leave="sh-backdrop-leave" @click="closeAdd()"></div>
-        <div class="sh-modal-panel" x-show="showAddModal"
-             x-transition:enter="sh-modal-enter" x-transition:leave="sh-modal-leave" @click.stop>
-            <div class="sh-modal-header">
-                <h2 id="cg-add-title" class="sh-modal-title">Добавить товары</h2>
-                <button type="button" class="sh-modal-close" @click="closeAdd()" aria-label="Закрыть">&times;</button>
-            </div>
-            <div class="sh-modal-body">
-                {{ segmented([
-                    {'value': 'nm_ids', 'label': 'По артикулам'},
-                    {'value': 'search', 'label': 'Поиск WB'},
-                    {'value': 'seller', 'label': 'Каталог продавца'}
-                ], x_model='addMode') }}
-
-                <!-- Tab: nm_ids -->
-                <div x-show="addMode === 'nm_ids'" class="mt-4">
-                    <label class="block text-sm font-medium mb-1" for="cg-nm-input" style="color:var(--text)">Артикулы WB (nm_id)</label>
-                    <textarea id="cg-nm-input" x-model="nmInput" rows="4" class="cg-input font-mono"
-                              placeholder="12345678, 87654321 — через запятую, пробел или с новой строки"></textarea>
-                    <p class="mt-1.5 text-xs" style="color:var(--text-muted)" aria-live="polite">
-                        <template x-if="nmInput.trim()">
-                            <span>
-                                <span x-text="'Распознано: ' + parsedNm().valid.length"></span>
-                                <span x-show="parsedNm().invalid > 0" style="color:var(--warn)"
-                                      x-text="' · невалидных: ' + parsedNm().invalid + ' (будут пропущены)'"></span>
-                                <span x-show="parsedNm().valid.length > 300" style="color:var(--danger)"> · максимум 300 за раз</span>
-                            </span>
-                        </template>
-                        <template x-if="!nmInput.trim()">
-                            <span>Данные по новым товарам подтянутся фоновой синхронизацией в течение минуты.</span>
-                        </template>
-                    </p>
-                </div>
-
-                <!-- Tab: WB search -->
-                <div x-show="addMode === 'search'" class="mt-4">
-                    <form class="flex gap-2" @submit.prevent="runSearch()">
-                        <label class="sr-only" for="cg-search-input">Поисковый запрос</label>
-                        <input id="cg-search-input" type="search" x-model="searchQuery" class="cg-input flex-1"
-                               placeholder="Например: беспроводные наушники">
-                        <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md" :disabled="searching || !searchQuery.trim()"
-                                :class="{ 'is-loading': searching }">Найти</button>
-                    </form>
-                    <p x-show="searchError" class="mt-2 text-xs" style="color:var(--danger)" x-text="searchError"></p>
-                    <template x-if="searchResults && searchResults.length === 0">
-                        <p class="mt-3 text-sm" style="color:var(--text-muted)">Ничего не найдено — попробуйте другой запрос.</p>
-                    </template>
-                    <template x-if="searchResults && searchResults.length > 0">
-                        <div class="mt-3 max-h-72 overflow-y-auto rounded-md" style="border:1px solid var(--border)">
-                            <template x-for="r in searchResults" :key="r.nm_id">
-                                <label class="cg-pick flex items-center gap-3 px-3 py-2">
-                                    <input type="checkbox" :value="r.nm_id" x-model="selectedNmIds">
-                                    <span class="cg-thumb" aria-hidden="true">
-                                        {{ icon('image', size=16, stroke=1.5) }}
-                                        <template x-if="r.image_url"><img :src="r.image_url" alt="" loading="lazy" @error="$el.remove()"></template>
-                                    </span>
-                                    <span class="min-w-0 flex-1">
-                                        <span class="block text-sm truncate" style="color:var(--text)" x-text="r.title || ('nm ' + r.nm_id)"></span>
-                                        <span class="block text-xs truncate" style="color:var(--text-muted)"
-                                              x-text="[r.brand, r.supplier_name].filter(Boolean).join(' · ')"></span>
-                                    </span>
-                                    <span class="text-sm font-medium flex-shrink-0" style="color:var(--text)"
-                                          x-text="r.sale_price ? fmtPrice(r.sale_price) : (r.price ? fmtPrice(r.price) : '—')"></span>
-                                </label>
-                            </template>
-                        </div>
-                    </template>
-                </div>
-
-                <!-- Tab: seller catalog -->
-                <div x-show="addMode === 'seller'" class="mt-4">
-                    <form class="flex gap-2" @submit.prevent="loadSellerPreview()">
-                        <label class="sr-only" for="cg-supplier-input">ID продавца WB</label>
-                        <input id="cg-supplier-input" type="number" min="1" step="1" x-model="supplierIdInput" class="cg-input flex-1"
-                               placeholder="ID продавца WB, например 123456">
-                        <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md"
-                                :disabled="sellerLoading || !supplierIdInput" :class="{ 'is-loading': sellerLoading }">Показать превью</button>
-                    </form>
-                    <p x-show="sellerError" class="mt-2 text-xs" style="color:var(--danger)" x-text="sellerError"></p>
-                    <template x-if="sellerPreview && sellerPreview.length === 0">
-                        <p class="mt-3 text-sm" style="color:var(--text-muted)">У продавца не нашлось товаров — проверьте ID.</p>
-                    </template>
-                    <template x-if="sellerPreview && sellerPreview.length > 0">
-                        <div class="mt-3">
-                            <p class="text-xs mb-2" style="color:var(--text-muted)"
-                               x-text="'Первая страница каталога: ' + sellerPreview.length + ' ' + plural(sellerPreview.length, ['товар','товара','товаров'])"></p>
-                            <div class="max-h-60 overflow-y-auto rounded-md" style="border:1px solid var(--border)">
-                                <template x-for="r in sellerPreview" :key="r.nm_id">
-                                    <div class="cg-pick flex items-center gap-3 px-3 py-2" style="cursor:default">
-                                        <span class="cg-thumb" aria-hidden="true">
-                                            {{ icon('image', size=16, stroke=1.5) }}
-                                            <template x-if="r.image_url"><img :src="r.image_url" alt="" loading="lazy" @error="$el.remove()"></template>
-                                        </span>
-                                        <span class="block text-sm truncate min-w-0 flex-1" style="color:var(--text)" x-text="r.title || ('nm ' + r.nm_id)"></span>
-                                        <span class="text-sm font-medium flex-shrink-0" style="color:var(--text)"
-                                              x-text="r.sale_price ? fmtPrice(r.sale_price) : (r.price ? fmtPrice(r.price) : '—')"></span>
-                                    </div>
-                                </template>
-                            </div>
-                            <p class="mt-2 text-xs" style="color:var(--text-muted)">Полный каталог импортируется в фоне, до 300 товаров.</p>
-                        </div>
-                    </template>
-                </div>
-            </div>
-            <div class="sh-modal-footer">
-                <button type="button" class="sh-btn sh-btn--ghost sh-btn--md" @click="closeAdd()">Закрыть</button>
-                <button x-show="addMode === 'nm_ids'" type="button" class="sh-btn sh-btn--primary sh-btn--md"
-                        :disabled="adding || !parsedNm().valid.length || parsedNm().valid.length > 300"
-                        :class="{ 'is-loading': adding }" @click="addByNmIds()">Добавить</button>
-                <button x-show="addMode === 'search'" type="button" class="sh-btn sh-btn--primary sh-btn--md"
-                        :disabled="adding || !selectedNmIds.length" :class="{ 'is-loading': adding }"
-                        @click="addSelected()" x-text="'Добавить выбранные (' + selectedNmIds.length + ')'"></button>
-                <button x-show="addMode === 'seller'" type="button" class="sh-btn sh-btn--primary sh-btn--md"
-                        :disabled="adding || !supplierIdInput" :class="{ 'is-loading': adding }"
-                        @click="importSellerCatalog()">Импортировать весь каталог (до 300)</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Price history modal -->
-    <div x-show="!!historyProduct" x-cloak class="sh-modal sh-modal--lg" @keydown.escape.window="closeHistory()"
-         x-trap.noscroll.inert="!!historyProduct" role="dialog" aria-modal="true" aria-labelledby="cg-history-title">
-        <div class="sh-backdrop" x-show="!!historyProduct"
-             x-transition:enter="sh-backdrop-enter" x-transition:leave="sh-backdrop-leave" @click="closeHistory()"></div>
-        <div class="sh-modal-panel" x-show="!!historyProduct"
+             x-transition:enter="sh-backdrop-enter" x-transition:leave="sh-backdrop-leave"
+             @click="closeAdd()"></div>
+        <div class="sh-modal-panel cgd-add-panel" x-show="showAddModal"
              x-transition:enter="sh-modal-enter" x-transition:leave="sh-modal-leave" @click.stop>
             <div class="sh-modal-header">
                 <div class="min-w-0">
-                    <h2 id="cg-history-title" class="sh-modal-title">История цен</h2>
-                    <p class="mt-1 text-sm truncate" style="color:var(--text-muted)"
-                       x-text="historyProduct ? (historyProduct.title || ('nm ' + historyProduct.nm_id)) : ''"></p>
+                    <h2 id="cgd-add-title" class="sh-modal-title">Добавить конкурентов</h2>
+                    <p class="cgd-modal-subtitle">Выберите точные товары сейчас или поставьте весь каталог продавца в фоновый импорт</p>
                 </div>
-                <button type="button" class="sh-modal-close" @click="closeHistory()" aria-label="Закрыть">&times;</button>
+                <button type="button" class="sh-modal-close" @click="closeAdd()" aria-label="Закрыть">
+                    {{ icon('close', size=18) }}
+                </button>
+            </div>
+
+            <div class="sh-modal-body cgd-modal-body">
+                <div class="cgd-mode-tabs">
+                    {{ segmented([
+                        {'value': 'seller', 'label': 'Продавец WB'},
+                        {'value': 'search', 'label': 'Поиск товаров'},
+                        {'value': 'nm_ids', 'label': 'Артикулы'}
+                    ], x_model='addMode') }}
+                </div>
+
+                <section x-show="addMode === 'seller'">
+                    <div class="cgd-mode-intro">
+                        <p class="cgd-mode-title">Каталог конкретного продавца</p>
+                        <p class="cgd-mode-help">Ссылка удобнее всего: откройте страницу продавца на WB и скопируйте адрес из браузера.</p>
+                    </div>
+                    <form class="cgd-find-row" @submit.prevent="loadSellerPreview()">
+                        <label class="cgd-field">
+                            <span class="cgd-label">Ссылка или ID продавца</span>
+                            <input x-ref="sellerInput" type="text" inputmode="url" class="cgd-control"
+                                   x-model="supplierIdInput" @input="sellerInputChanged()"
+                                   placeholder="wildberries.ru/seller/123456 или 123456" autocomplete="off">
+                        </label>
+                        <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md"
+                                :disabled="sellerLoading || !supplierIdInput.trim()"
+                                :class="{ 'is-loading': sellerLoading }">Показать каталог</button>
+                    </form>
+                    <div class="cgd-inline-error" x-show="sellerError" x-cloak role="alert">
+                        {{ icon('warning', size=15) }}
+                        <span>
+                            <span x-text="sellerError"></span>
+                            <span class="block mt-1" x-show="sellerRateLimited">
+                                WB не ответил ни серверу, ни прямому запросу браузера. Оставьте каталог
+                                в очереди или повторите позже; <a href="{{ url_for('competitors_settings') }}">прокси</a>
+                                остаётся дополнительным, а не обязательным вариантом.
+                            </span>
+                        </span>
+                    </div>
+
+                    <div class="cgd-loading-list" x-show="sellerLoading" x-cloak aria-busy="true" aria-label="Загрузка каталога">
+                        {% for _ in range(4) %}
+                        <div class="cgd-loading-row">
+                            <span class="sh-skeleton" style="width:44px;height:44px;flex:0 0 44px"></span>
+                            <span style="flex:1">{{ skeleton(lines=2) }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <template x-if="sellerPreview && sellerPreview.length === 0">
+                        <div class="cgd-picker-empty" style="margin-top:14px;border:1px solid var(--border);border-radius:var(--r-md)">
+                            {{ icon('inbox', size=28, stroke=1.5) }}
+                            <p class="mt-2">На первой странице нет товаров. Проверьте ID продавца.</p>
+                        </div>
+                    </template>
+
+                    <template x-if="sellerPreview && sellerPreview.length > 0">
+                        <div>
+                            <div class="cgd-seller-summary">
+                                <span class="cgd-seller-avatar" x-text="sellerInitial()" aria-hidden="true"></span>
+                                <div class="min-w-0">
+                                    <p class="cgd-seller-name truncate" x-text="sellerName()"></p>
+                                    <p class="cgd-seller-meta">
+                                        ID <span x-text="sellerResolvedId"></span> · первая страница каталога
+                                        <span x-show="sellerPreviewSource === 'browser'"> · напрямую через ваш браузер</span>
+                                    </p>
+                                </div>
+                                <div class="cgd-seller-stat">
+                                    <strong x-text="sellerPreview.length"></strong>
+                                    <span>товаров в превью</span>
+                                </div>
+                                <div class="cgd-seller-stat">
+                                    <strong x-text="fmtPrice(sellerMinPrice())"></strong>
+                                    <span>минимальная цена</span>
+                                </div>
+                            </div>
+
+                            <div class="cgd-picker">
+                                <div class="cgd-picker-toolbar">
+                                    <label class="cgd-search">
+                                        <span class="sr-only">Фильтр товаров продавца</span>
+                                        {{ icon('search', size=14) }}
+                                        <input type="search" class="cgd-control" x-model.debounce.100ms="sellerProductQuery"
+                                               placeholder="Фильтр по названию или артикулу">
+                                    </label>
+                                    <button type="button" class="cgd-select-all" @click="toggleSellerVisible()"
+                                            x-text="allSellerVisibleSelected() ? 'Снять выбор' : 'Выбрать видимые'"></button>
+                                </div>
+                                <div class="cgd-picker-list">
+                                    <template x-for="item in filteredSellerPreview()" :key="item.nm_id">
+                                        <label class="cgd-picker-item"
+                                               :class="{
+                                                   'cgd-picker-item--selected': selectedIncludes(sellerSelectedIds, item.nm_id),
+                                                   'cgd-picker-item--tracked': isTracked(item.nm_id)
+                                               }">
+                                            <input type="checkbox" class="cgd-picker-check" :value="Number(item.nm_id)"
+                                                   x-model="sellerSelectedIds" :disabled="isTracked(item.nm_id)">
+                                            <span class="cgd-thumb" aria-hidden="true">
+                                                {{ icon('image', size=16, stroke=1.5) }}
+                                                <template x-if="item.image_url"><img :src="item.image_url" alt="" loading="lazy" @error="$el.remove()"></template>
+                                            </span>
+                                            <span class="cgd-picker-copy">
+                                                <span class="cgd-picker-title" x-text="item.title || ('nmID ' + item.nm_id)"></span>
+                                                <span class="cgd-picker-meta"
+                                                      x-text="[item.brand, 'nmID ' + item.nm_id].filter(Boolean).join(' · ')"></span>
+                                            </span>
+                                            <span class="sh-badge sh-badge--gray sh-badge--sm" x-show="isTracked(item.nm_id)">Уже отслеживается</span>
+                                            <span class="cgd-picker-numbers" x-show="!isTracked(item.nm_id)">
+                                                <span class="cgd-picker-number cgd-picker-number--secondary">
+                                                    <strong x-text="item.rating ? Number(item.rating).toFixed(1) : '—'"></strong><span>рейтинг</span>
+                                                </span>
+                                                <span class="cgd-picker-number">
+                                                    <strong x-text="fmtPrice(item.sale_price ?? item.price)"></strong><span>цена</span>
+                                                </span>
+                                            </span>
+                                        </label>
+                                    </template>
+                                    <div class="cgd-picker-empty" x-show="filteredSellerPreview().length === 0">
+                                        По этому фильтру товаров нет
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="cgd-picker-note">
+                                {{ icon('info-circle', size=14) }}
+                                <span>
+                                    Превью ограничено одной страницей. «Весь каталог» попробует получить до трёх страниц
+                                    прямо через ваш браузер и отправит на сервер только точные nmID; недоступный остаток останется в очереди.
+                                </span>
+                            </p>
+                        </div>
+                    </template>
+                </section>
+
+                <section x-show="addMode === 'search'">
+                    <div class="cgd-mode-intro">
+                        <p class="cgd-mode-title">Найти отдельные карточки на WB</p>
+                        <p class="cgd-mode-help">Подходит, когда продавец неизвестен или нужны товары нескольких конкурентов.</p>
+                    </div>
+                    <form class="cgd-find-row" @submit.prevent="runSearch()">
+                        <label class="cgd-field">
+                            <span class="cgd-label">Поисковый запрос</span>
+                            <input x-ref="searchInput" type="search" class="cgd-control" x-model="searchQuery"
+                                   placeholder="Например: беспроводные наушники" autocomplete="off">
+                        </label>
+                        <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md"
+                                :disabled="searching || !searchQuery.trim()" :class="{ 'is-loading': searching }">Найти</button>
+                    </form>
+                    <div class="cgd-inline-error" x-show="searchError" x-cloak role="alert">
+                        {{ icon('warning', size=15) }}<span x-text="searchError"></span>
+                    </div>
+                    <div class="cgd-loading-list" x-show="searching" x-cloak aria-busy="true">
+                        {% for _ in range(4) %}
+                        <div class="cgd-loading-row">
+                            <span class="sh-skeleton" style="width:44px;height:44px;flex:0 0 44px"></span>
+                            <span style="flex:1">{{ skeleton(lines=2) }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <template x-if="searchResults && searchResults.length === 0">
+                        <div class="cgd-picker-empty" style="margin-top:14px;border:1px solid var(--border);border-radius:var(--r-md)">
+                            {{ icon('search', size=28, stroke=1.5) }}
+                            <p class="mt-2">Ничего не найдено — уточните запрос.</p>
+                        </div>
+                    </template>
+                    <template x-if="searchResults && searchResults.length > 0">
+                        <div class="cgd-picker">
+                            <div class="cgd-picker-toolbar">
+                                <span class="text-xs flex-1" style="color:var(--text-muted)"
+                                      x-text="searchResults.length + ' ' + plural(searchResults.length, ['результат','результата','результатов'])"></span>
+                                <button type="button" class="cgd-select-all" @click="toggleSearchAll()"
+                                        x-text="allSearchSelected() ? 'Снять выбор' : 'Выбрать все'"></button>
+                            </div>
+                            <div class="cgd-picker-list">
+                                <template x-for="item in searchResults" :key="item.nm_id">
+                                    <label class="cgd-picker-item"
+                                           :class="{
+                                               'cgd-picker-item--selected': selectedIncludes(searchSelectedIds, item.nm_id),
+                                               'cgd-picker-item--tracked': isTracked(item.nm_id)
+                                           }">
+                                        <input type="checkbox" class="cgd-picker-check" :value="Number(item.nm_id)"
+                                               x-model="searchSelectedIds" :disabled="isTracked(item.nm_id)">
+                                        <span class="cgd-thumb" aria-hidden="true">
+                                            {{ icon('image', size=16, stroke=1.5) }}
+                                            <template x-if="item.image_url"><img :src="item.image_url" alt="" loading="lazy" @error="$el.remove()"></template>
+                                        </span>
+                                        <span class="cgd-picker-copy">
+                                            <span class="cgd-picker-title" x-text="item.title || ('nmID ' + item.nm_id)"></span>
+                                            <span class="cgd-picker-meta"
+                                                  x-text="[item.supplier_name, item.brand, 'nmID ' + item.nm_id].filter(Boolean).join(' · ')"></span>
+                                        </span>
+                                        <span class="sh-badge sh-badge--gray sh-badge--sm" x-show="isTracked(item.nm_id)">Уже отслеживается</span>
+                                        <span class="cgd-picker-numbers" x-show="!isTracked(item.nm_id)">
+                                            <span class="cgd-picker-number cgd-picker-number--secondary">
+                                                <strong x-text="item.rating ? Number(item.rating).toFixed(1) : '—'"></strong><span>рейтинг</span>
+                                            </span>
+                                            <span class="cgd-picker-number">
+                                                <strong x-text="fmtPrice(item.sale_price ?? item.price)"></strong><span>цена</span>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </section>
+
+                <section x-show="addMode === 'nm_ids'">
+                    <div class="cgd-mode-intro">
+                        <p class="cgd-mode-title">Добавить известные артикулы</p>
+                        <p class="cgd-mode-help">Вставьте до 300 nmID через запятую, пробел или с новой строки.</p>
+                    </div>
+                    <label class="cgd-field">
+                        <span class="cgd-label">Артикулы WB</span>
+                        <textarea x-ref="nmInput" x-model="nmInput" rows="7" class="cgd-control font-mono"
+                                  placeholder="12345678, 87654321&#10;11223344"></textarea>
+                    </label>
+                    <div class="cgd-manual-count" aria-live="polite">
+                        <span>
+                            Распознано: <strong style="color:var(--text)" x-text="parsedNm().valid.length"></strong>
+                            <span x-show="parsedNm().duplicates"> · повторов: <span x-text="parsedNm().duplicates"></span></span>
+                            <span x-show="parsedNm().invalid" style="color:var(--warn)"> · не распознано: <span x-text="parsedNm().invalid"></span></span>
+                        </span>
+                        <span :style="parsedNm().valid.length > 300 ? 'color:var(--danger)' : ''">лимит 300</span>
+                    </div>
+                    <p class="cgd-picker-note">
+                        {{ icon('info-circle', size=14) }}
+                        <span>В запросе сохраняются только точные nmID. Название, фото и цены подтянет фоновая синхронизация.</span>
+                    </p>
+                </section>
+            </div>
+
+            <div class="sh-modal-footer cgd-modal-footer">
+                <div class="cgd-footer-status" aria-live="polite">
+                    <template x-if="addMode === 'seller' && sellerPreview && sellerPreview.length">
+                        <span><strong x-text="sellerSelectedIds.length"></strong> выбрано из <span x-text="sellerPreview.length"></span></span>
+                    </template>
+                    <template x-if="addMode === 'seller' && sellerRateLimited">
+                        <span>WB ограничил и сервер, и браузер · можно оставить очередь</span>
+                    </template>
+                    <template x-if="addMode === 'search' && searchResults && searchResults.length">
+                        <span><strong x-text="searchSelectedIds.length"></strong> выбрано из <span x-text="searchResults.length"></span></span>
+                    </template>
+                    <template x-if="addMode === 'nm_ids'">
+                        <span><strong x-text="parsedNm().valid.length"></strong> готово к добавлению</span>
+                    </template>
+                </div>
+                <div class="cgd-footer-actions">
+                    <button type="button" class="sh-btn sh-btn--ghost sh-btn--md" @click="closeAdd()" :disabled="adding">Отмена</button>
+                    <button x-show="addMode === 'seller'" type="button" class="sh-btn sh-btn--md"
+                            :disabled="adding || !canQueueSellerCatalog()"
+                            :class="[sellerRateLimited ? 'sh-btn--primary' : 'sh-btn--secondary', { 'is-loading': adding }]"
+                            @click="importSellerCatalog()">Добавить каталог · до 300</button>
+                    <button x-show="addMode === 'seller' && !sellerRateLimited" type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                            :disabled="adding || !sellerSelectedIds.length" :class="{ 'is-loading': adding }"
+                            @click="addSellerSelected()" x-text="'Добавить выбранные · ' + sellerSelectedIds.length"></button>
+                    <button x-show="addMode === 'search'" type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                            :disabled="adding || !searchSelectedIds.length" :class="{ 'is-loading': adding }"
+                            @click="addSearchSelected()" x-text="'Добавить выбранные · ' + searchSelectedIds.length"></button>
+                    <button x-show="addMode === 'nm_ids'" type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                            :disabled="adding || !parsedNm().valid.length || parsedNm().valid.length > 300"
+                            :class="{ 'is-loading': adding }" @click="addByNmIds()"
+                            x-text="'Добавить · ' + parsedNm().valid.length"></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# Match review overlay #}
+    <div x-show="reviewItem" x-cloak class="sh-modal sh-modal--xl cgd-match-modal"
+         @keydown.escape.window="closeMatchReview()" x-trap.noscroll.inert="!!reviewItem"
+         role="dialog" aria-modal="true" aria-labelledby="cgd-match-review-title">
+        <div class="sh-backdrop" @click="closeMatchReview()"></div>
+        <div class="sh-modal-panel cgd-match-modal-panel" @click.stop>
+            <div class="sh-modal-header">
+                <div class="min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <h2 id="cgd-match-review-title" class="sh-modal-title">Проверить соответствие</h2>
+                        <span class="sh-chip cgd-shared-chip">ваше решение</span>
+                    </div>
+                    <p class="cgd-modal-subtitle">Общий AI-результат не изменится — выбор действует только для вашего магазина.</p>
+                </div>
+                <button type="button" class="sh-modal-close" @click="closeMatchReview()" aria-label="Закрыть">
+                    {{ icon('close', size=18) }}
+                </button>
+            </div>
+            <div class="sh-modal-body cgd-match-modal-body">
+                <div class="cgd-match-source-card" x-show="reviewItem">
+                    <span class="cgd-thumb cgd-thumb--lg" aria-hidden="true">
+                        {{ icon('image', size=18, stroke=1.5) }}
+                        <template x-if="reviewItem?.competitor?.image_url">
+                            <img :src="reviewItem.competitor.image_url" alt="" @error="$el.remove()">
+                        </template>
+                    </span>
+                    <div class="min-w-0">
+                        <span class="cgd-match-eyebrow">Карточка конкурента</span>
+                        <strong x-text="reviewItem?.competitor?.title || ('nmID ' + reviewItem?.competitor?.nm_id)"></strong>
+                        <small x-text="[reviewItem?.competitor?.brand, 'nmID ' + reviewItem?.competitor?.nm_id].filter(Boolean).join(' · ')"></small>
+                    </div>
+                    <div class="cgd-match-modal-score" :class="confidenceTone(reviewItem)">
+                        <strong x-text="(reviewItem?.match?.score || 0) + '%'"></strong>
+                        <span x-text="reviewItem?.match?.score_label"></span>
+                    </div>
+                </div>
+
+                <div class="cgd-match-proof" x-show="reviewItem?.match">
+                    <span>{{ icon('info-circle', size=15) }}</span>
+                    <p>
+                        Текст <strong x-text="reviewItem?.match?.text_score || 0"></strong>/100 ·
+                        фото <strong x-text="reviewItem?.match?.image_score === null ? 'недоступно' : (reviewItem?.match?.image_score + '/100')"></strong> ·
+                        AI <strong x-text="reviewItem?.match?.llm_label"></strong>.
+                        В анализ не попадали описания вашей WB-карточки и AI-поля.
+                        <span class="cgd-match-llm-reason" x-show="reviewItem?.match?.llm_reason"
+                              x-text="reviewItem?.match?.llm_reason"></span>
+                    </p>
+                </div>
+
+                <div class="cgd-match-candidates">
+                    <div class="cgd-match-block-title">
+                        <div><strong>Кандидаты из фида поставщика</strong><span>исходные названия, артикулы и фото</span></div>
+                    </div>
+                    <div class="cgd-match-candidate-grid">
+                        <template x-for="candidate in (reviewItem?.match?.candidates || [])" :key="candidate.supplier.id">
+                            <button type="button" class="cgd-match-candidate"
+                                    :class="{ 'is-selected': reviewSupplier?.id === candidate.supplier.id }"
+                                    @click="chooseReviewSupplier(candidate.supplier)">
+                                <span class="cgd-thumb cgd-thumb--lg" aria-hidden="true">
+                                    {{ icon('image', size=17, stroke=1.5) }}
+                                    <template x-if="candidate.supplier.photo_url">
+                                        <img :src="candidate.supplier.photo_url" alt="" loading="lazy" @error="$el.remove()">
+                                    </template>
+                                </span>
+                                <span class="cgd-match-candidate-copy">
+                                    <strong x-text="candidate.supplier.title"></strong>
+                                    <small x-text="[candidate.supplier.brand, candidate.supplier.vendor_code].filter(Boolean).join(' · ')"></small>
+                                    <em>
+                                        <span x-text="'текст ' + candidate.text_score"></span>
+                                        <span x-text="candidate.image_score === null ? 'фото —' : ('фото ' + candidate.image_score)"></span>
+                                    </em>
+                                </span>
+                                <span class="cgd-match-radio" aria-hidden="true"></span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+
+                <div class="cgd-match-manual">
+                    <div class="cgd-match-block-title">
+                        <div><strong>Не тот товар?</strong><span>Найдите другой в общей базе поставщиков</span></div>
+                    </div>
+                    <form class="cgd-find-row" @submit.prevent="searchSupplierCatalog()">
+                        <label class="cgd-field">
+                            <span class="sr-only">Название или артикул поставщика</span>
+                            <input x-ref="supplierSearchInput" type="search" class="cgd-control"
+                                   x-model="supplierSearchQuery" placeholder="Название, бренд или артикул" autocomplete="off">
+                        </label>
+                        <button type="submit" class="sh-btn sh-btn--secondary sh-btn--md"
+                                :disabled="supplierSearching || supplierSearchQuery.trim().length < 2"
+                                :class="{ 'is-loading': supplierSearching }">Найти</button>
+                    </form>
+                    <p class="cgd-inline-error mt-2" x-show="supplierSearchError" x-text="supplierSearchError"></p>
+                    <div class="cgd-match-search-results" x-show="supplierSearchResults" x-cloak>
+                        <template x-for="supplier in (supplierSearchResults || [])" :key="supplier.id">
+                            <button type="button" class="cgd-match-search-row"
+                                    :class="{ 'is-selected': reviewSupplier?.id === supplier.id }"
+                                    @click="chooseReviewSupplier(supplier)">
+                                <span class="cgd-thumb" aria-hidden="true">
+                                    {{ icon('image', size=15, stroke=1.5) }}
+                                    <template x-if="supplier.photo_url"><img :src="supplier.photo_url" alt="" loading="lazy" @error="$el.remove()"></template>
+                                </span>
+                                <span><strong x-text="supplier.title"></strong><small x-text="[supplier.brand, supplier.vendor_code].filter(Boolean).join(' · ')"></small></span>
+                            </button>
+                        </template>
+                        <p class="cgd-picker-empty" x-show="supplierSearchResults?.length === 0">В исходном каталоге ничего не найдено</p>
+                    </div>
+                </div>
+
+                <div class="cgd-match-selected" x-show="reviewSupplier" x-cloak>
+                    {{ icon('check-circle', size=17) }}
+                    <span>Выбрано: <strong x-text="reviewSupplier?.title"></strong></span>
+                </div>
+            </div>
+            <div class="sh-modal-footer cgd-match-modal-footer">
+                <div class="flex items-center gap-2">
+                    <button type="button" class="sh-btn sh-btn--ghost sh-btn--md"
+                            @click="saveMatchReview('reject')" :disabled="reviewSaving">Не совпадает</button>
+                    <button x-show="reviewItem?.review" type="button" class="sh-btn sh-btn--ghost sh-btn--md"
+                            @click="saveMatchReview('reset')" :disabled="reviewSaving">Сбросить мой выбор</button>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button type="button" class="sh-btn sh-btn--secondary sh-btn--md"
+                            @click="saveMatchReview('confirm', 'analog')"
+                            :disabled="reviewSaving || !reviewSupplier">Это аналог</button>
+                    <button type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                            @click="saveMatchReview('confirm', 'same')"
+                            :disabled="reviewSaving || !reviewSupplier" :class="{ 'is-loading': reviewSaving }">Да, это тот же товар</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# Confirm removal #}
+    <div x-show="pendingRemoval" x-cloak class="sh-modal sh-modal--sm"
+         @keydown.escape.window="closeRemoveDialog()" x-trap.noscroll.inert="!!pendingRemoval"
+         role="alertdialog" aria-modal="true" aria-labelledby="cgd-remove-title" aria-describedby="cgd-remove-desc">
+        <div class="sh-backdrop" @click="closeRemoveDialog()"></div>
+        <div class="sh-modal-panel" @click.stop>
+            <div class="sh-modal-body" style="padding-top:28px;text-align:center">
+                <span class="sh-confirm-icon sh-confirm-icon--danger" aria-hidden="true">{{ icon('trash', size=22) }}</span>
+                <h2 id="cgd-remove-title" class="sh-modal-title mt-4">Убрать товар из мониторинга?</h2>
+                <p id="cgd-remove-desc" class="mt-2 text-sm" style="color:var(--text-muted)"
+                   x-text="pendingRemoval ? (pendingRemoval.title || ('nmID ' + pendingRemoval.nm_id)) : ''"></p>
+            </div>
+            <div class="sh-modal-footer" style="justify-content:center">
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--md" @click="closeRemoveDialog()" :disabled="removing">Оставить</button>
+                <button type="button" class="sh-btn sh-btn--danger sh-btn--md" @click="confirmRemoveProduct()"
+                        :disabled="removing" :class="{ 'is-loading': removing }">Убрать</button>
+            </div>
+        </div>
+    </div>
+
+    {# Price history #}
+    <div x-show="historyProduct" x-cloak class="sh-modal sh-modal--lg"
+         @keydown.escape.window="closeHistory()" x-trap.noscroll.inert="!!historyProduct"
+         role="dialog" aria-modal="true" aria-labelledby="cgd-history-title">
+        <div class="sh-backdrop" @click="closeHistory()"></div>
+        <div class="sh-modal-panel" @click.stop>
+            <div class="sh-modal-header">
+                <div class="min-w-0">
+                    <h2 id="cgd-history-title" class="sh-modal-title">История цен</h2>
+                    <p class="mt-1 text-sm truncate" style="color:var(--text-muted)"
+                       x-text="historyProduct ? (historyProduct.title || ('nmID ' + historyProduct.nm_id)) : ''"></p>
+                </div>
+                <button type="button" class="sh-modal-close" @click="closeHistory()" aria-label="Закрыть">{{ icon('close', size=18) }}</button>
             </div>
             <div class="sh-modal-body">
                 {{ segmented([
@@ -369,386 +935,9 @@
         </div>
     </div>
 </div>
+{% endblock %}
 
+{% block extra_scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script>
-function groupDetail() {
-    return {
-        groupId: {{ group.id }},
-        products: {{ products_data|tojson }},
-
-        compare: null,
-        compareLoading: true,
-        compareError: null,
-
-        syncing: false,
-
-        showAddModal: false,
-        addMode: 'nm_ids',
-        adding: false,
-        nmInput: '',
-        searchQuery: '',
-        searching: false,
-        searchResults: null,
-        searchError: null,
-        selectedNmIds: [],
-        supplierIdInput: '',
-        sellerLoading: false,
-        sellerPreview: null,
-        sellerError: null,
-
-        historyProduct: null,
-        historyPeriod: '30d',
-        historyLoading: false,
-        historyError: null,
-        historyHasData: false,
-        _chart: null,
-
-        init() {
-            this.loadCompare();
-            this.$watch('historyPeriod', () => { if (this.historyProduct) this.loadHistory(); });
-        },
-
-        csrf() { return document.querySelector('meta[name="csrf-token"]')?.content || ''; },
-
-        // Даты с сервера — naive UTC: добавляем 'Z' при парсинге
-        parseUTC(s) {
-            if (!s) return null;
-            const iso = /[zZ]$|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z';
-            const d = new Date(iso);
-            return isNaN(d.getTime()) ? null : d;
-        },
-        fmtPrice(v) {
-            if (v === null || v === undefined) return '—';
-            return new Intl.NumberFormat('ru-RU').format(Math.round(v)) + ' ₽';
-        },
-        shortDate(d) { return d ? d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—'; },
-        shortDateTime(d) {
-            return d ? d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
-        },
-        plural(n, forms) {
-            const m10 = n % 10, m100 = n % 100;
-            if (m10 === 1 && m100 !== 11) return forms[0];
-            if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return forms[1];
-            return forms[2];
-        },
-
-        priceTs(p) { return this.parseUTC(p.last_price_at || p.last_fetched_at); },
-        isStale(p) {
-            const t = this.priceTs(p);
-            return !!t && (Date.now() - t.getTime() > 24 * 3600 * 1000);
-        },
-        discountTone(p) {
-            const d = p.current_discount_percent || 0;
-            return d >= 30 ? 'sh-badge--red' : (d >= 15 ? 'sh-badge--yellow' : 'sh-badge--green');
-        },
-
-        ownPrice() {
-            const o = this.compare && this.compare.own_product;
-            if (!o) return null;
-            return o.discount_price ?? o.price ?? null;
-        },
-
-        async loadCompare() {
-            this.compareLoading = true;
-            this.compareError = null;
-            try {
-                const res = await fetch(`/api/competitors/compare/${this.groupId}`);
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || 'Ошибка загрузки');
-                this.compare = data;
-            } catch (e) {
-                this.compareError = e.message;
-            } finally {
-                this.compareLoading = false;
-            }
-        },
-
-        async forceSync() {
-            this.syncing = true;
-            try {
-                const res = await fetch('/api/competitors/sync', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
-                    body: JSON.stringify({})
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || 'Не удалось запланировать синхронизацию');
-                this.$store.toasts.info(data.message || 'Синхронизация запустится в течение минуты');
-            } catch (e) {
-                this.$store.toasts.error(e.message);
-            } finally {
-                this.syncing = false;
-            }
-        },
-
-        openAdd() {
-            this.showAddModal = true;
-        },
-        closeAdd() {
-            this.showAddModal = false;
-        },
-
-        parsedNm() {
-            const tokens = this.nmInput.split(/[\s,;]+/).filter(Boolean);
-            const seen = new Set();
-            const valid = [];
-            let invalid = 0;
-            for (const t of tokens) {
-                const n = Number(t);
-                if (Number.isInteger(n) && n > 0) {
-                    if (!seen.has(n)) { seen.add(n); valid.push(n); }
-                } else {
-                    invalid++;
-                }
-            }
-            return { valid, invalid };
-        },
-
-        async postProducts(body) {
-            const res = await fetch('/api/competitors/products', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
-                body: JSON.stringify(body)
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Ошибка при добавлении');
-            return data;
-        },
-
-        _afterAddReload() {
-            // Даём тосту показаться, затем перечитываем серверный список
-            setTimeout(() => location.reload(), 900);
-        },
-
-        async addByNmIds() {
-            const { valid } = this.parsedNm();
-            if (!valid.length || valid.length > 300) return;
-            this.adding = true;
-            try {
-                const data = await this.postProducts({ group_id: this.groupId, nm_ids: valid });
-                const parts = [];
-                if (data.added) parts.push('добавлено ' + data.added);
-                if (data.reactivated) parts.push('возвращено ' + data.reactivated);
-                if (data.skipped) parts.push('уже в группе ' + data.skipped);
-                this.$store.toasts.success(
-                    (parts.length ? parts.join(', ') + '. ' : '') + 'Данные подтянутся в течение минуты',
-                    'Товары добавлены');
-                this.closeAdd();
-                this._afterAddReload();
-            } catch (e) {
-                this.$store.toasts.error(e.message);
-            } finally {
-                this.adding = false;
-            }
-        },
-
-        async runSearch() {
-            const q = this.searchQuery.trim();
-            if (!q) return;
-            this.searching = true;
-            this.searchError = null;
-            this.searchResults = null;
-            this.selectedNmIds = [];
-            try {
-                const res = await fetch('/api/competitors/search?q=' + encodeURIComponent(q));
-                const data = await res.json();
-                if (!res.ok) {
-                    const msg = data.error || 'Ошибка поиска';
-                    this.searchError = msg;
-                    this.$store.toasts.error(msg);
-                    return;
-                }
-                this.searchResults = Array.isArray(data) ? data : [];
-            } catch (e) {
-                this.searchError = 'Ошибка поиска';
-                this.$store.toasts.error('Ошибка поиска');
-            } finally {
-                this.searching = false;
-            }
-        },
-
-        async addSelected() {
-            const nmIds = this.selectedNmIds.map(Number).filter(n => Number.isInteger(n) && n > 0);
-            if (!nmIds.length) return;
-            this.adding = true;
-            try {
-                const data = await this.postProducts({ group_id: this.groupId, nm_ids: nmIds });
-                this.$store.toasts.success(
-                    'Добавлено ' + (data.added + (data.reactivated || 0)) + ', данные подтянутся в течение минуты',
-                    'Товары добавлены');
-                this.closeAdd();
-                this._afterAddReload();
-            } catch (e) {
-                this.$store.toasts.error(e.message);
-            } finally {
-                this.adding = false;
-            }
-        },
-
-        async loadSellerPreview() {
-            const sid = parseInt(this.supplierIdInput, 10);
-            if (!sid || sid <= 0) return;
-            this.sellerLoading = true;
-            this.sellerError = null;
-            this.sellerPreview = null;
-            try {
-                const res = await fetch('/api/competitors/seller-catalog?supplier_id=' + sid + '&page=1');
-                const data = await res.json();
-                if (!res.ok) {
-                    const msg = data.error || 'Ошибка загрузки каталога';
-                    this.sellerError = msg;
-                    this.$store.toasts.error(msg);
-                    return;
-                }
-                this.sellerPreview = Array.isArray(data) ? data : [];
-            } catch (e) {
-                this.sellerError = 'Ошибка загрузки каталога';
-                this.$store.toasts.error('Ошибка загрузки каталога');
-            } finally {
-                this.sellerLoading = false;
-            }
-        },
-
-        async importSellerCatalog() {
-            const sid = parseInt(this.supplierIdInput, 10);
-            if (!sid || sid <= 0) return;
-            this.adding = true;
-            try {
-                await this.postProducts({ group_id: this.groupId, wb_supplier_id: sid });
-                this.$store.toasts.success('Каталог продавца подтянется фоновой синхронизацией', 'Импорт запланирован');
-                this.closeAdd();
-                this._afterAddReload();
-            } catch (e) {
-                this.$store.toasts.error(e.message);
-            } finally {
-                this.adding = false;
-            }
-        },
-
-        async removeProduct(p) {
-            if (!confirm('Убрать товар из мониторинга?')) return;
-            try {
-                const res = await fetch(`/api/competitors/products/${p.id}`, {
-                    method: 'DELETE',
-                    headers: { 'X-CSRFToken': this.csrf() }
-                });
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'Не удалось удалить товар');
-                this.products = this.products.filter(x => x.id !== p.id);
-                this.$store.toasts.success('Товар убран из мониторинга');
-            } catch (e) {
-                this.$store.toasts.error(e.message);
-            }
-        },
-
-        showHistoryFor(p) {
-            this.historyProduct = p;
-            this.historyError = null;
-            this.historyHasData = false;
-            this.loadHistory();
-        },
-        closeHistory() {
-            this.historyProduct = null;
-            if (this._chart) { this._chart.destroy(); this._chart = null; }
-        },
-
-        async loadHistory() {
-            const p = this.historyProduct;
-            if (!p) return;
-            this.historyLoading = true;
-            this.historyError = null;
-            try {
-                const res = await fetch(`/api/competitors/products/${p.id}/history?period=${this.historyPeriod}`);
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || 'Ошибка загрузки истории');
-                await this.$nextTick();
-                this.renderHistory(data.history || []);
-            } catch (e) {
-                this.historyError = e.message;
-                this.historyHasData = false;
-                if (this._chart) { this._chart.destroy(); this._chart = null; }
-            } finally {
-                this.historyLoading = false;
-            }
-        },
-
-        renderHistory(history) {
-            this.historyHasData = history.length > 0;
-            if (this._chart) { this._chart.destroy(); this._chart = null; }
-            if (!history.length) return;
-            const canvas = this.$refs.historyChart;
-            if (!canvas || typeof Chart === 'undefined') return;
-
-            const labels = history.map(h => {
-                const d = this.parseUTC(h.created_at);
-                return d ? d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '';
-            });
-            const P = window.shChart;
-            const datasets = [
-                {
-                    label: 'Цена со скидкой',
-                    data: history.map(h => h.sale_price),
-                    borderColor: P.color(1),
-                    backgroundColor: P.fade(P.color(1), 0.08),
-                    fill: true, tension: 0.3, borderWidth: 2,
-                    pointRadius: 2, pointHoverRadius: 5, pointBackgroundColor: P.color(1),
-                    spanGaps: true,
-                },
-                {
-                    label: 'Без скидки',
-                    data: history.map(h => h.price),
-                    borderColor: P.color(3),
-                    borderDash: [4, 4],
-                    fill: false, tension: 0.3, borderWidth: 2,
-                    pointRadius: 0, pointHoverRadius: 4,
-                    spanGaps: true,
-                },
-            ];
-            const own = this.ownPrice();
-            if (own !== null && own !== undefined) {
-                datasets.push({
-                    label: 'Ваша цена',
-                    data: labels.map(() => own),
-                    borderColor: P.color(5),
-                    borderDash: [8, 4],
-                    fill: false, borderWidth: 2, pointRadius: 0,
-                });
-            }
-
-            this._chart = P.register(new Chart(canvas, {
-                type: 'line',
-                data: { labels, datasets },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    interaction: { mode: 'index', intersect: false },
-                    plugins: {
-                        legend: { position: 'bottom', labels: { color: P.textMuted(), usePointStyle: true, boxWidth: 8 } },
-                        tooltip: {
-                            backgroundColor: P._read('--bg-sidebar', '#0a0a0a'),
-                            titleColor: '#ffffff', bodyColor: 'rgba(255,255,255,0.85)',
-                            cornerRadius: 8, padding: 12,
-                        },
-                    },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { color: P.textMuted(), maxTicksLimit: 8 } },
-                        y: { beginAtZero: false, grid: { color: P.grid() }, ticks: { color: P.textMuted() } },
-                    }
-                }
-            }), (c, p) => {
-                c.data.datasets[0].borderColor = p.color(1);
-                c.data.datasets[0].backgroundColor = p.fade(p.color(1), 0.08);
-                c.data.datasets[0].pointBackgroundColor = p.color(1);
-                c.data.datasets[1].borderColor = p.color(3);
-                if (c.data.datasets[2]) c.data.datasets[2].borderColor = p.color(5);
-                c.options.plugins.legend.labels.color = p.textMuted();
-                c.options.plugins.tooltip.backgroundColor = p._read('--bg-sidebar', '#0a0a0a');
-                c.options.scales.x.ticks.color = p.textMuted();
-                c.options.scales.y.ticks.color = p.textMuted();
-                c.options.scales.y.grid.color = p.grid();
-            });
-        },
-    };
-}
-</script>
+<script src="{{ url_for('static', filename='competitors-group.js', v='20260722-7') }}"></script>
 {% endblock %}

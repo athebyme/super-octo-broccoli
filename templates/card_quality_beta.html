@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+
+{% block title %}Качество карточек · beta — Seller Hub{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='card-quality-beta.css') }}">
+
+<script type="application/json" id="cq-bootstrap">{{ {
+    'wbConnected': wb_connected,
+    'urls': {
+        'list': url_for('api_card_quality_list'),
+        'filters': url_for('api_card_quality_filters'),
+        'refresh': url_for('api_card_quality_refresh'),
+        'detailBase': '/api/card-quality/',
+        'productBase': '/products/',
+        'bulkImprove': url_for('card_quality_bulk_improve_page'),
+        'standardPhotos': url_for('card_quality_standard_photos_bulk_page'),
+        'apiSettings': url_for('api_settings'),
+        'classic': url_for('card_quality_page'),
+    },
+} | tojson }}</script>
+
+<div id="card-quality-app" class="shk-page" v-cloak>
+{% raw %}
+    <header class="shk-head">
+        <div>
+            <h1 class="shk-head-title">Что чинить в карточках</h1>
+            <p class="shk-head-sub">
+                Сверху — карточки, где исправление принесёт больше всего: есть спрос, но что-то мешает купить.
+            </p>
+        </div>
+        <div class="shk-head-actions">
+            <button type="button" class="sh-btn sh-btn--primary" :class="{'is-loading': refreshing}"
+                    :disabled="refreshing || !wbConnected" @click="refreshRatings"
+                    title="Подтянуть свежие рейтинги и просмотры с Wildberries и пересчитать оценки">
+                <svg v-if="!refreshing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"/></svg>
+                {{ refreshing ? 'Считаем заново…' : 'Обновить с Wildberries' }}
+            </button>
+            <a class="shk-quiet-link" :href="urls.classic" title="Открыть прежний интерфейс этой страницы">
+                Старая версия
+            </a>
+        </div>
+    </header>
+
+    <div v-if="!wbConnected" class="shk-error" role="status">
+        <span>Wildberries не подключён — оценивать пока нечего.</span>
+        <a class="sh-btn sh-btn--primary" :href="urls.apiSettings">Подключить</a>
+    </div>
+
+    <template v-else>
+        <!-- Что происходит с каталогом: только то, что ведёт к действию -->
+        <div class="shk-stats">
+            <sh-stat label="Требуют внимания" :value="$fmt.int(summary.need_attention)"
+                     :hint="summary.total ? 'из ' + $fmt.int(summary.total) + ' карточек' : ''"
+                     :loading="loading && !items.length"></sh-stat>
+            <sh-stat label="Теряют продажи" :value="$fmt.int(counts.losing)" tone="danger"
+                     hint="есть просмотры, но нет заказов" :loading="loading && !items.length"></sh-stat>
+            <sh-stat label="Не видят покупатели" :value="$fmt.int(counts.invisible)" tone="warn"
+                     hint="меньше 30 просмотров за месяц" :loading="loading && !items.length"></sh-stat>
+            <sh-stat label="Готовы к продаже" :value="$fmt.int(counts.healthy)" tone="ok"
+                     hint="оценка выше 70 и есть заказы" :loading="loading && !items.length"></sh-stat>
+        </div>
+
+        <sh-filter-bar v-model="searchInput" placeholder="Название, артикул или nmID"
+                       :chips="chips" :active-chip="filters.reason" @chip="setReason">
+            <select v-model="filters.bucket" class="cq-select" aria-label="Оценка">
+                <option value="">Любая оценка</option>
+                <option value="poor">Ниже 50</option>
+                <option value="average">50–70</option>
+                <option value="good">Выше 70</option>
+            </select>
+            <select v-model="filters.sort" class="cq-select" aria-label="Сортировка">
+                <option value="impact">Сначала важные</option>
+                <option value="quality_score">Сначала слабые</option>
+                <option value="nm_rating">По рейтингу WB</option>
+            </select>
+            <div class="sh-segmented cq-view" role="group" aria-label="Вид">
+                <button type="button" class="sh-segmented-item"
+                        :class="{'sh-segmented-item--active': view === 'cards'}"
+                        @click="setView('cards')" title="Карточки">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                </button>
+                <button type="button" class="sh-segmented-item"
+                        :class="{'sh-segmented-item--active': view === 'table'}"
+                        @click="setView('table')" title="Таблица">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                </button>
+            </div>
+        </sh-filter-bar>
+
+        <sh-error :message="error" @retry="load"></sh-error>
+
+        <!-- Карточки: приоритет читается с одного взгляда -->
+        <div v-if="view === 'cards'" class="cq-list">
+            <template v-if="loading && !items.length">
+                <div v-for="n in 6" :key="'sk' + n" class="cq-item cq-item--skeleton">
+                    <div class="cq-thumb sh-skeleton"></div>
+                    <div class="cq-body">
+                        <div class="sh-skeleton sh-skeleton--line-70"></div>
+                        <div class="sh-skeleton sh-skeleton--line-50"></div>
+                    </div>
+                </div>
+            </template>
+
+            <sh-empty v-else-if="!items.length"
+                      :title="hasFilters ? 'По этим условиям карточек нет' : 'Все карточки в порядке'"
+                      :text="hasFilters ? 'Снимите часть фильтров, чтобы увидеть остальные.' : 'Как только появится, что улучшать, карточки окажутся здесь.'">
+                <button v-if="hasFilters" type="button" class="sh-btn sh-btn--secondary" @click="resetFilters">Сбросить фильтры</button>
+            </sh-empty>
+
+            <article v-for="item in items" :key="item.product_id" class="cq-item"
+                     :class="{'is-selected': selected.includes(item.product_id)}"
+                     tabindex="0" @click="openDetail(item)" @keydown.enter.prevent="openDetail(item)">
+                <label class="cq-check" @click.stop>
+                    <input type="checkbox" :value="item.product_id" v-model="selected"
+                           :aria-label="'Выбрать ' + (item.title || item.vendor_code)">
+                </label>
+                <div class="cq-thumb">
+                    <img v-if="item.first_photo_url && !imgFailed[item.product_id]"
+                         :src="item.first_photo_url" loading="lazy" alt=""
+                         @error="imgFailed[item.product_id] = true">
+                    <span v-else class="cq-thumb-letter">{{ letterOf(item) }}</span>
+                </div>
+                <div class="cq-body">
+                    <h3 class="cq-title">{{ item.title || 'Без названия' }}</h3>
+                    <div class="cq-meta">
+                        <span class="cq-mono">{{ item.vendor_code || item.nm_id }}</span>
+                        <span v-if="item.price">{{ $fmt.money(item.price) }}</span>
+                        <span :class="{'cq-zero': !item.quantity}">
+                            {{ item.quantity ? $fmt.int(item.quantity) + ' шт' : 'нет на складе' }}
+                        </span>
+                    </div>
+                    <div class="cq-reasons">
+                        <sh-badge v-for="reason in visibleReasons(item)" :key="reason.code"
+                                  :label="reason.label" :tone="reason.tone"></sh-badge>
+                        <span v-if="hiddenReasonCount(item)" class="cq-more">и ещё {{ hiddenReasonCount(item) }}</span>
+                    </div>
+                </div>
+                <div class="cq-funnel">
+                    <div class="cq-funnel-row">
+                        <span class="cq-funnel-label">Смотрят</span>
+                        <span class="cq-funnel-value">{{ item.views_30d === null ? '—' : $fmt.int(item.views_30d) }}</span>
+                    </div>
+                    <div class="cq-funnel-row">
+                        <span class="cq-funnel-label">Заказы</span>
+                        <span class="cq-funnel-value" :class="{'cq-zero': item.views_30d > 30 && !item.orders_30d}">
+                            {{ item.orders_30d === null ? '—' : $fmt.int(item.orders_30d) }}
+                        </span>
+                    </div>
+                    <div class="cq-funnel-row" v-if="item.wb_product_rating">
+                        <span class="cq-funnel-label">Рейтинг</span>
+                        <span class="cq-funnel-value">{{ item.wb_product_rating }}</span>
+                    </div>
+                </div>
+                <div class="cq-score">
+                    <div class="cq-score-ring" :class="'is-' + scoreTone(item.quality_score)">
+                        <span>{{ item.quality_score === null ? '—' : item.quality_score }}</span>
+                    </div>
+                    <span class="cq-score-label">{{ verdictOf(item) }}</span>
+                </div>
+            </article>
+        </div>
+
+        <!-- Таблица: тот же набор данных для беглого сравнения -->
+        <sh-data-table v-else
+                       :columns="columns" :rows="items" row-key="product_id"
+                       :loading="loading" selectable v-model:selected="selected"
+                       @row-click="openDetail"
+                       empty-title="Карточек по этим условиям нет">
+            <template #cell-title="{ row }">
+                <div class="cq-row-product">
+                    <div class="cq-thumb cq-thumb--sm">
+                        <img v-if="row.first_photo_url && !imgFailed[row.product_id]"
+                             :src="row.first_photo_url" loading="lazy" alt=""
+                             @error="imgFailed[row.product_id] = true">
+                        <span v-else class="cq-thumb-letter">{{ letterOf(row) }}</span>
+                    </div>
+                    <div class="cq-row-titles">
+                        <span class="cq-row-name">{{ row.title || 'Без названия' }}</span>
+                        <span class="cq-mono">{{ row.vendor_code || row.nm_id }}</span>
+                    </div>
+                </div>
+            </template>
+            <template #cell-quality_score="{ row }">
+                <span class="cq-score-inline" :class="'is-' + scoreTone(row.quality_score)">
+                    {{ row.quality_score === null ? '—' : row.quality_score }}
+                </span>
+            </template>
+            <template #cell-attention_reasons="{ row }">
+                <span class="cq-reasons cq-reasons--inline">
+                    <sh-badge v-for="reason in visibleReasons(row, 2)" :key="reason.code"
+                              :label="reason.label" :tone="reason.tone"></sh-badge>
+                </span>
+            </template>
+        </sh-data-table>
+
+        <div v-if="items.length" class="cq-foot">
+            <span class="cq-foot-info">Показано {{ items.length }} из {{ $fmt.int(summary.total || 0) }}</span>
+            <button v-if="page < pages" type="button" class="sh-btn sh-btn--secondary"
+                    :class="{'is-loading': loadingMore}" :disabled="loadingMore" @click="loadMore">
+                Показать ещё
+            </button>
+        </div>
+
+        <sh-bulk-bar :count="selected.length" @clear="selected = []">
+            <a class="sh-btn sh-btn--primary sh-btn--sm" :href="bulkImproveHref">Исправить контент</a>
+            <a class="sh-btn sh-btn--secondary sh-btn--sm" :href="standardPhotosHref">Дополнить фото</a>
+        </sh-bulk-bar>
+
+        <!-- Карточка: что именно не так и что с этим сделать -->
+        <sh-drawer :open="drawer.open" :title="drawer.item ? (drawer.item.title || 'Карточка') : ''"
+                   width="460px" @close="closeDetail">
+            <template v-if="drawer.item">
+                <div class="cq-detail-head">
+                    <div class="cq-thumb cq-thumb--lg">
+                        <img v-if="drawer.item.first_photo_url && !imgFailed[drawer.item.product_id]"
+                             :src="drawer.item.first_photo_url" alt=""
+                             @error="imgFailed[drawer.item.product_id] = true">
+                        <span v-else class="cq-thumb-letter">{{ letterOf(drawer.item) }}</span>
+                    </div>
+                    <div class="cq-detail-facts">
+                        <span class="cq-mono">{{ drawer.item.vendor_code || drawer.item.nm_id }}</span>
+                        <div class="cq-detail-score" :class="'is-' + scoreTone(drawer.item.quality_score)">
+                            {{ drawer.item.quality_score === null ? '—' : drawer.item.quality_score }} / 100
+                            <span v-if="scoreDelta !== null" class="cq-delta" :class="scoreDelta >= 0 ? 'is-up' : 'is-down'">
+                                {{ scoreDelta >= 0 ? '+' : '' }}{{ scoreDelta }} за месяц
+                            </span>
+                        </div>
+                        <span class="cq-detail-verdict">{{ verdictOf(drawer.item) }}</span>
+                    </div>
+                </div>
+
+                <!-- Фото карточки: видно глазами, чего не хватает -->
+                <section class="cq-sect" v-if="drawer.photos.length || drawer.loaded">
+                    <h4>Фотографии
+                        <span class="cq-count">
+                            {{ drawer.photos.length }} {{ $fmt.plural(drawer.photos.length, 'штука', 'штуки', 'штук') }}<template v-if="drawer.photos.length < 5">, Wildberries просит минимум 5</template>
+                        </span>
+                    </h4>
+                    <div class="cq-photos">
+                        <div v-for="(url, i) in drawer.photos.slice(0, 10)" :key="i" class="cq-photo">
+                            <img :src="url" loading="lazy" alt="" @error="$event.target.style.display='none'">
+                        </div>
+                        <div v-for="n in Math.max(0, Math.min(10, 5) - drawer.photos.length)" :key="'e' + n"
+                             class="cq-photo cq-photo--empty" title="WB рекомендует минимум 5 фото">+</div>
+                    </div>
+                </section>
+
+                <!-- Из чего складывается оценка: видно, что тянет вниз -->
+                <section class="cq-sect" v-if="drawer.breakdown.length">
+                    <h4>Из чего складывается оценка</h4>
+                    <div class="cq-bars">
+                        <div v-for="dim in drawer.breakdown" :key="dim.key" class="cq-bar-row">
+                            <span class="cq-bar-label">{{ dim.label }}</span>
+                            <div class="cq-bar">
+                                <div class="cq-bar-fill" :class="'is-' + dim.tone"
+                                     :style="{ width: Math.max(2, dim.score) + '%' }"></div>
+                            </div>
+                            <span class="cq-bar-value">{{ dim.score }}</span>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="cq-sect">
+                    <h4>Что мешает продавать</h4>
+                    <p v-if="drawer.loading" class="cq-muted">Загружаем разбор…</p>
+                    <ul v-else-if="drawer.dims.length" class="cq-fixlist">
+                        <li v-for="dim in drawer.dims" :key="dim.key">
+                            <span class="cq-fix-name">{{ dim.label }}</span>
+                            <span class="cq-fix-hint">{{ dim.hint }}</span>
+                        </li>
+                    </ul>
+                    <p v-else class="cq-muted">Явных проблем в контенте не нашли.</p>
+                </section>
+
+                <section class="cq-sect" v-if="drawer.recommendations.length">
+                    <h4>Что сделать</h4>
+                    <ul class="cq-todo">
+                        <li v-for="(rec, i) in drawer.recommendations" :key="i">{{ rec }}</li>
+                    </ul>
+                </section>
+
+                <section class="cq-sect">
+                    <h4>Спрос за 30 дней</h4>
+                    <div class="cq-kv">
+                        <div><dt>Смотрят</dt><dd>{{ drawer.item.views_30d === null ? '—' : $fmt.int(drawer.item.views_30d) }}</dd></div>
+                        <div><dt>Заказы</dt><dd>{{ drawer.item.orders_30d === null ? '—' : $fmt.int(drawer.item.orders_30d) }}</dd></div>
+                        <div><dt>Кладут в корзину</dt><dd>{{ drawer.cartConv === null ? '—' : $fmt.percent(drawer.cartConv) }}</dd></div>
+                        <div><dt>Выкупают</dt><dd>{{ drawer.buyout === null ? '—' : $fmt.percent(drawer.buyout) }}</dd></div>
+                        <div><dt>Рейтинг WB</dt><dd>{{ drawer.item.wb_product_rating || '—' }}</dd></div>
+                        <div><dt>Цена</dt><dd>{{ $fmt.money(drawer.item.price) }}</dd></div>
+                    </div>
+                </section>
+            </template>
+
+            <template #foot v-if="drawer.item">
+                <a class="sh-btn sh-btn--primary" :href="urls.productBase + drawer.item.product_id">
+                    Открыть карточку
+                </a>
+            </template>
+        </sh-drawer>
+    </template>
+{% endraw %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+<script src="{{ url_for('static', filename='sh-vue-kit.js') }}"></script>
+<script src="{{ url_for('static', filename='card-quality-beta.js') }}"></script>
+{% endblock %}

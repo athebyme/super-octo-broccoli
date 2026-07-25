@@ -10,13 +10,16 @@ import tempfile
 import unicodedata
 
 from sqlalchemy.orm import joinedload
-from sqlalchemy import or_
+from sqlalchemy import and_, exists, or_
 
 from models import (
     Marketplace,
     MarketplaceAttributeDefinition,
     MarketplaceAttributeValue,
+    MarketplaceCategoryMapping,
     MarketplaceCredentialEncryptionError,
+    MarketplaceListing,
+    MarketplaceProductDraft,
     MarketplaceProductType,
     MarketplaceReferenceAccount,
     MarketplaceTaxonomyCategory,
@@ -56,6 +59,7 @@ class OzonReferenceService:
     VALUES_MAX_ITEMS = 200_000
     VALUE_SHRINK_GUARD_MIN = 20
     VALUE_SHRINK_GUARD_RATIO = 0.50
+    DEMAND_RETRY_COOLDOWN_MINUTES = 10
 
     @staticmethod
     def _stable_json(value: Any) -> str:
@@ -562,6 +566,7 @@ class OzonReferenceService:
                         is_disabled_upstream=item["disabled"],
                         is_available=is_available,
                         is_enabled=False,
+                        is_seller_selectable=True,
                         last_seen_at=synced_at,
                     )
                     db.session.add(product_type)
@@ -1303,6 +1308,304 @@ class OzonReferenceService:
             >= current_time - timedelta(hours=cls.HARD_TTL_HOURS)
             and attribute.values_snapshot_hash
         )
+
+    @classmethod
+    def tree_is_fresh(
+        cls,
+        marketplace: Marketplace,
+        *,
+        now: Optional[datetime] = None,
+    ) -> bool:
+        current_time = now or datetime.utcnow()
+        return bool(
+            marketplace
+            and marketplace.code == "ozon"
+            and marketplace.is_active
+            and marketplace.categories_synced_at
+            and marketplace.categories_synced_at
+            >= current_time - timedelta(hours=cls.HARD_TTL_HOURS)
+            and marketplace.categories_snapshot_hash
+        )
+
+    @classmethod
+    def sync_demanded_types(
+        cls,
+        marketplace_id: int,
+        *,
+        limit: int = 3,
+        dictionary_limit: int = 6,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Refresh only Ozon schemas referenced by seller-owned state.
+
+        Every official selectable type is discoverable immediately, but an
+        8k+ taxonomy must not turn into an unconditional provider-call queue.
+        A type becomes demanded only after an exact draft, active mapping or
+        listing references it.  Failed provider calls cool down for ten
+        minutes; no 429/5xx retry loop or sleep runs inside this method.
+        """
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= 10
+            or not isinstance(dictionary_limit, int)
+            or isinstance(dictionary_limit, bool)
+            or not 0 <= dictionary_limit <= 50
+        ):
+            return {"success": False, "error": "Invalid Ozon demand limits"}
+
+        marketplace = cls._marketplace(marketplace_id)
+        current_time = now or datetime.utcnow()
+        retry_before = current_time - timedelta(
+            minutes=cls.DEMAND_RETRY_COOLDOWN_MINUTES
+        )
+        refresh_before = current_time - timedelta(
+            hours=cls.TREE_REFRESH_AFTER_HOURS
+        )
+
+        demanded = or_(
+            exists().where(and_(
+                MarketplaceProductDraft.product_type_id
+                == MarketplaceProductType.id,
+                MarketplaceProductDraft.status != "archived",
+            )),
+            exists().where(and_(
+                MarketplaceCategoryMapping.product_type_id
+                == MarketplaceProductType.id,
+                MarketplaceCategoryMapping.mapping_status == "active",
+            )),
+            exists().where(and_(
+                MarketplaceListing.product_type_id
+                == MarketplaceProductType.id,
+                MarketplaceListing.is_available.is_(True),
+            )),
+        )
+        has_demand = MarketplaceProductType.query.filter(
+            MarketplaceProductType.marketplace_id == marketplace.id,
+            MarketplaceProductType.is_seller_selectable.is_(True),
+            MarketplaceProductType.is_available.is_(True),
+            demanded,
+        ).with_entities(MarketplaceProductType.id).first()
+        if has_demand is None:
+            return {
+                "success": True,
+                "selected": 0,
+                "synced": 0,
+                "failed": 0,
+                "dictionaries_synced": 0,
+                "dictionaries_failed": 0,
+                "tree_waiting": False,
+            }
+
+        if not cls.tree_is_fresh(marketplace, now=current_time):
+            cooling_down = bool(
+                marketplace.categories_sync_status == "failed"
+                and marketplace.updated_at
+                and marketplace.updated_at > retry_before
+            )
+            if cooling_down:
+                return {
+                    "success": False,
+                    "selected": 0,
+                    "synced": 0,
+                    "failed": 0,
+                    "dictionaries_synced": 0,
+                    "dictionaries_failed": 0,
+                    "tree_waiting": True,
+                    "error": "Ozon taxonomy refresh is cooling down",
+                }
+            tree_result = cls.sync_tree(
+                marketplace.id,
+                now=current_time,
+            )
+            if not tree_result.get("success"):
+                return {
+                    "success": False,
+                    "selected": 0,
+                    "synced": 0,
+                    "failed": 1,
+                    "dictionaries_synced": 0,
+                    "dictionaries_failed": 0,
+                    "tree_waiting": True,
+                    "error": (
+                        tree_result.get("error")
+                        or "Ozon taxonomy refresh failed"
+                    ),
+                }
+            marketplace = Marketplace.query.filter_by(
+                id=marketplace.id,
+            ).one()
+
+        schema_attempt_allowed = or_(
+            MarketplaceProductType.attributes_sync_status.is_(None),
+            MarketplaceProductType.attributes_sync_status != "failed",
+            MarketplaceProductType.updated_at.is_(None),
+            MarketplaceProductType.updated_at <= retry_before,
+        )
+        schema_due = and_(
+            schema_attempt_allowed,
+            or_(
+                MarketplaceProductType.attributes_synced_at.is_(None),
+                MarketplaceProductType.attributes_synced_at < refresh_before,
+                MarketplaceProductType.attributes_schema_hash.is_(None),
+                MarketplaceProductType.attributes_sync_status.is_(None),
+                MarketplaceProductType.attributes_sync_status != "success",
+            ),
+        )
+        dictionary_attempt_allowed = or_(
+            MarketplaceAttributeDefinition.values_sync_status.is_(None),
+            MarketplaceAttributeDefinition.values_sync_status != "failed",
+            MarketplaceAttributeDefinition.updated_at.is_(None),
+            MarketplaceAttributeDefinition.updated_at <= retry_before,
+        )
+        dictionary_due = exists().where(and_(
+            MarketplaceAttributeDefinition.product_type_id
+            == MarketplaceProductType.id,
+            MarketplaceAttributeDefinition.is_available.is_(True),
+            MarketplaceAttributeDefinition.is_enabled.is_(True),
+            MarketplaceAttributeDefinition.dictionary_id.isnot(None),
+            dictionary_attempt_allowed,
+            or_(
+                MarketplaceAttributeDefinition.values_synced_at.is_(None),
+                MarketplaceAttributeDefinition.values_synced_at
+                < refresh_before,
+                MarketplaceAttributeDefinition.values_snapshot_hash.is_(None),
+                MarketplaceAttributeDefinition.values_sync_status.is_(None),
+                MarketplaceAttributeDefinition.values_sync_status
+                != "success",
+            ),
+        ))
+        dictionary_due_with_fresh_schema = and_(
+            MarketplaceProductType.attributes_sync_status == "success",
+            MarketplaceProductType.attributes_schema_hash.isnot(None),
+            MarketplaceProductType.attributes_synced_at.isnot(None),
+            MarketplaceProductType.attributes_synced_at >= refresh_before,
+            dictionary_due,
+        )
+        product_types = MarketplaceProductType.query.join(
+            MarketplaceTaxonomyCategory,
+            MarketplaceProductType.category_id
+            == MarketplaceTaxonomyCategory.id,
+        ).filter(
+            MarketplaceProductType.marketplace_id == marketplace.id,
+            MarketplaceProductType.is_seller_selectable.is_(True),
+            MarketplaceProductType.is_available.is_(True),
+            MarketplaceTaxonomyCategory.is_available.is_(True),
+            demanded,
+            or_(schema_due, dictionary_due_with_fresh_schema),
+        ).order_by(
+            MarketplaceProductType.attributes_synced_at.asc(),
+            MarketplaceProductType.id.asc(),
+        ).limit(limit).all()
+
+        if not product_types:
+            return {
+                "success": True,
+                "selected": 0,
+                "synced": 0,
+                "failed": 0,
+                "dictionaries_synced": 0,
+                "dictionaries_failed": 0,
+                "tree_waiting": False,
+            }
+
+        adapter, credentials = cls._adapter_credentials(
+            marketplace,
+            now=current_time,
+        )
+        synced = 0
+        failed = 0
+        dictionaries_synced = 0
+        dictionaries_failed = 0
+        for selected in product_types:
+            product_type = MarketplaceProductType.query.filter_by(
+                id=selected.id,
+            ).one()
+            schema_needs_refresh = bool(
+                not product_type.attributes_synced_at
+                or product_type.attributes_synced_at < refresh_before
+                or not product_type.attributes_schema_hash
+                or product_type.attributes_sync_status != "success"
+            )
+            if schema_needs_refresh:
+                if (
+                    product_type.attributes_sync_status == "failed"
+                    and product_type.updated_at
+                    and product_type.updated_at > retry_before
+                ):
+                    continue
+                result = cls.sync_attributes(
+                    product_type.id,
+                    adapter=adapter,
+                    credentials=credentials,
+                    now=current_time,
+                )
+                if result.get("success"):
+                    synced += 1
+                    product_type = MarketplaceProductType.query.filter_by(
+                        id=product_type.id,
+                    ).one()
+                else:
+                    failed += 1
+                    continue
+
+            remaining = (
+                dictionary_limit
+                - dictionaries_synced
+                - dictionaries_failed
+            )
+            if remaining <= 0:
+                continue
+            demanded_dictionaries = (
+                MarketplaceAttributeDefinition.query.filter(
+                    MarketplaceAttributeDefinition.product_type_id
+                    == product_type.id,
+                    MarketplaceAttributeDefinition.is_available.is_(True),
+                    MarketplaceAttributeDefinition.is_enabled.is_(True),
+                    MarketplaceAttributeDefinition.dictionary_id.isnot(None),
+                    or_(
+                        MarketplaceAttributeDefinition.values_sync_status.is_(None),
+                        MarketplaceAttributeDefinition.values_sync_status
+                        != "failed",
+                        MarketplaceAttributeDefinition.updated_at.is_(None),
+                        MarketplaceAttributeDefinition.updated_at
+                        <= retry_before,
+                    ),
+                    or_(
+                        MarketplaceAttributeDefinition.values_synced_at.is_(None),
+                        MarketplaceAttributeDefinition.values_synced_at
+                        < refresh_before,
+                        MarketplaceAttributeDefinition.values_snapshot_hash.is_(None),
+                        MarketplaceAttributeDefinition.values_sync_status.is_(None),
+                        MarketplaceAttributeDefinition.values_sync_status
+                        != "success",
+                    ),
+                ).order_by(
+                    MarketplaceAttributeDefinition.is_required.desc(),
+                    MarketplaceAttributeDefinition.values_synced_at.asc(),
+                    MarketplaceAttributeDefinition.id.asc(),
+                ).limit(remaining).all()
+            )
+            for attribute in demanded_dictionaries:
+                value_result = cls.sync_attribute_values(
+                    attribute.id,
+                    adapter=adapter,
+                    credentials=credentials,
+                    now=current_time,
+                )
+                if value_result.get("success"):
+                    dictionaries_synced += 1
+                else:
+                    dictionaries_failed += 1
+        return {
+            "success": failed == 0 and dictionaries_failed == 0,
+            "selected": len(product_types),
+            "synced": synced,
+            "failed": failed,
+            "dictionaries_synced": dictionaries_synced,
+            "dictionaries_failed": dictionaries_failed,
+            "tree_waiting": False,
+        }
 
     @classmethod
     def set_product_type_enabled(

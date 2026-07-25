@@ -41,6 +41,11 @@ from services.wb_api_client import WildberriesAPIClient, WBAPIException
 
 logger = logging.getLogger(__name__)
 
+from services.price_reconciliation import (  # noqa: E402
+    PriceReconciliationService,
+    STATUS_SUBMITTED as SUBMITTED_STATUS,
+)
+
 # Blueprint для роутов цен
 prices_bp = Blueprint('prices', __name__, url_prefix='/prices')
 
@@ -748,67 +753,213 @@ def batch_apply(batch_id: int):
                 failed_nm_ids.add(nm_id)
                 error_by_nm_id[nm_id] = error.get('error', 'Неизвестная ошибка')
 
+        # Успешный ответ WB означает, что пачка ПРИНЯТА В ОЧЕРЕДЬ, а не что
+        # цена уже стоит на витрине: обработка асинхронная. Поэтому позиция
+        # получает честный статус «отправлено», а Product.price меняется
+        # только после сверки с фактической ценой площадки.
+        submitted_count = 0
         for item in valid_items:
             if item.nm_id in failed_nm_ids:
                 item.status = 'failed'
                 item.error_message = error_by_nm_id.get(item.nm_id, 'Ошибка WB API')
                 failed_count += 1
             else:
-                item.status = 'applied'
-                item.wb_applied_at = datetime.utcnow()
-                applied_count += 1
+                item.status = SUBMITTED_STATUS
+                item.wb_status = 'queued'
+                submitted_count += 1
 
-                # Сохраняем в историю цен
-                price_history = PriceHistory(
-                    product_id=item.product_id,
-                    seller_id=seller.id,
-                    old_price=item.old_price,
-                    new_price=item.new_price,
-                    price_change_percent=item.price_change_percent
-                )
-                db.session.add(price_history)
-
-                # Обновляем цену в Product
-                product = Product.query.get(item.product_id)
-                if product:
-                    product.price = item.new_price
-
-        # Обновляем статус батча
-        batch.applied_count = applied_count
+        batch.applied_count = 0
         batch.failed_count = failed_count
         batch.applied_at = datetime.utcnow()
-
-        if failed_count == 0:
-            batch.status = 'applied'
-        elif applied_count > 0:
-            batch.status = 'partially_applied'
-        else:
-            batch.status = 'failed'
-
+        batch.status = 'submitted' if submitted_count else 'failed'
         batch.apply_errors = result.get('errors')
         db.session.commit()
 
+        # Пробуем подтвердить сразу: часто WB успевает применить цены за
+        # секунды, и продавцу не нужно ждать фонового прохода.
+        reconciliation = None
+        try:
+            reconciliation = PriceReconciliationService.reconcile_batch(
+                batch=batch,
+                api_client=api_client,
+            ).as_dict()
+        except Exception as exc:  # noqa: BLE001 — сверку повторит планировщик
+            db.session.rollback()
+            logger.warning(
+                'Немедленная сверка батча %s не удалась: %s', batch_id, exc
+            )
+
         api_client.close()
 
+        confirmed = (reconciliation or {}).get('confirmed', 0)
+        waiting = submitted_count - confirmed
         return jsonify({
             'success': True,
-            'applied': applied_count,
+            'submitted': submitted_count,
+            'confirmed': confirmed,
+            'waiting': max(0, waiting),
             'failed': failed_count,
-            'status': batch.status
+            'status': batch.status,
+            'message': (
+                f'Отправлено на Wildberries: {submitted_count}. '
+                + (f'Подтверждено сразу: {confirmed}. ' if confirmed else '')
+                + (f'Ждём подтверждения: {waiting}. ' if waiting > 0 else '')
+                + (f'Отклонено: {failed_count}.' if failed_count else '')
+            ).strip(),
         })
 
     except WBAPIException as e:
-        batch.status = 'failed'
-        batch.apply_errors = [{'error': str(e)}]
-        db.session.commit()
+        # Сначала откатываем незавершённую транзакцию: иначе повторный commit
+        # либо упадёт снова, либо зафиксирует несогласованные счётчики батча.
+        db.session.rollback()
+        batch = PriceChangeBatch.query.get(batch_id)
+        if batch:
+            batch.status = 'failed'
+            batch.apply_errors = [{'error': str(e)}]
+            db.session.commit()
         logger.error(f"WB API error applying batch {batch_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
     except Exception as e:
-        batch.status = 'failed'
-        db.session.commit()
+        db.session.rollback()
+        batch = PriceChangeBatch.query.get(batch_id)
+        if batch:
+            batch.status = 'failed'
+            db.session.commit()
         logger.error(f"Error applying batch {batch_id}: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@prices_bp.route('/batch/<int:batch_id>/reconcile', methods=['POST'])
+@login_required
+def batch_reconcile(batch_id: int):
+    """Проверить, какие из отправленных цен реально встали на Wildberries."""
+    seller = get_current_seller()
+    if not seller:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    batch = PriceChangeBatch.query.filter_by(
+        id=batch_id,
+        seller_id=seller.id,
+    ).first_or_404()
+
+    if not seller.has_valid_api_key():
+        return jsonify({'error': 'API ключ не настроен'}), 400
+
+    api_client = WildberriesAPIClient(seller.wb_api_key)
+    try:
+        outcome = PriceReconciliationService.reconcile_batch(
+            batch=batch,
+            api_client=api_client,
+        ).as_dict()
+    except Exception as exc:  # noqa: BLE001
+        db.session.rollback()
+        logger.error(f'Reconcile failed for batch {batch_id}: {exc}')
+        return jsonify({'error': 'Не удалось проверить цены на Wildberries'}), 500
+    finally:
+        api_client.close()
+
+    parts = []
+    if outcome['confirmed']:
+        parts.append(f"подтверждено {outcome['confirmed']}")
+    if outcome['rejected']:
+        parts.append(f"не применилось {outcome['rejected']}")
+    if outcome['still_waiting']:
+        parts.append(f"ещё обрабатывается {outcome['still_waiting']}")
+    return jsonify({
+        'success': True,
+        'status': batch.status,
+        **outcome,
+        'message': ('Проверено: ' + ', '.join(parts)) if parts else 'Изменений нет',
+    })
+
+
+@prices_bp.route('/batch/<int:batch_id>/retry-failed', methods=['POST'])
+@login_required
+def batch_retry_failed(batch_id: int):
+    """Собрать новый батч из позиций, которые WB отклонил.
+
+    Существующий батч после применения уже нельзя применить повторно, поэтому
+    неудавшиеся позиции раньше зависали навсегда. Новый батч берёт ЦЕЛЬ из
+    исходной позиции, а точку отсчёта — из текущей цены товара: за время между
+    попытками цена могла измениться, и повторять старую дельту вслепую нельзя.
+    """
+    seller = get_current_seller()
+    if not seller:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    batch = PriceChangeBatch.query.filter_by(
+        id=batch_id,
+        seller_id=seller.id,
+    ).first_or_404()
+
+    failed_items = batch.items.filter_by(status='failed').all()
+    if not failed_items:
+        return jsonify({
+            'error': 'В этом запуске нет позиций с ошибкой',
+        }), 400
+
+    try:
+        retry_batch = PriceChangeBatch(
+            seller_id=seller.id,
+            name=f'Повтор: {batch.name}',
+            description=f'Повтор неудавшихся позиций запуска #{batch.id}',
+            change_type=batch.change_type or 'manual',
+            change_value=batch.change_value,
+            status='draft',
+        )
+        db.session.add(retry_batch)
+        db.session.flush()
+
+        copied = 0
+        skipped = 0
+        for item in failed_items:
+            product = Product.query.filter_by(
+                id=item.product_id,
+                seller_id=seller.id,
+            ).first()
+            if product is None or not item.new_price or item.new_price <= 0:
+                skipped += 1
+                continue
+            current_price = product.price or item.old_price
+            retry_item = PriceChangeItem(
+                batch_id=retry_batch.id,
+                product_id=item.product_id,
+                nm_id=item.nm_id,
+                vendor_code=item.vendor_code,
+                product_title=item.product_title,
+                old_price=current_price,
+                new_price=item.new_price,
+                safety_level=item.safety_level or 'safe',
+            )
+            retry_item.calculate_change()
+            db.session.add(retry_item)
+            copied += 1
+
+        if not copied:
+            db.session.rollback()
+            return jsonify({
+                'error': 'Не удалось перенести ни одной позиции: товары недоступны',
+            }), 400
+
+        retry_batch.total_items = copied
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'batch_id': retry_batch.id,
+            'items': copied,
+            'skipped': skipped,
+            'message': (
+                f'Создан новый запуск на {copied} '
+                f'{"позицию" if copied == 1 else "позиций"}. '
+                'Проверьте цены и подтвердите отправку.'
+            ),
+        })
+    except Exception as exc:  # noqa: BLE001 — ошибка не должна ронять страницу
+        db.session.rollback()
+        logger.error(f'Error building retry batch from {batch_id}: {exc}')
+        return jsonify({'error': 'Не удалось собрать повторный запуск'}), 500
 
 
 @prices_bp.route('/batch/<int:batch_id>/revert', methods=['POST'])
@@ -846,6 +997,7 @@ def batch_revert(batch_id: int):
         db.session.flush()
 
         # Собираем данные для отката (старые цены)
+        revert_items_by_nm = {}
         prices_data = []
         applied_items = batch.items.filter_by(status='applied').all()
 
@@ -872,6 +1024,7 @@ def batch_revert(batch_id: int):
             )
             revert_item.calculate_change()
             db.session.add(revert_item)
+            revert_items_by_nm[item.nm_id] = (revert_item, item)
 
         # Отправляем в WB
         result = api_client.upload_prices_batch(
@@ -880,31 +1033,63 @@ def batch_revert(batch_id: int):
             seller_id=seller.id
         )
 
-        # Обновляем статусы
-        revert_batch.total_items = len(applied_items)
-        revert_batch.applied_count = result.get('success', 0)
-        revert_batch.failed_count = result.get('failed', 0)
-        revert_batch.applied_at = datetime.utcnow()
-        revert_batch.status = 'applied' if result.get('failed', 0) == 0 else 'partially_applied'
+        # Какие именно nmID WB отклонил. Без этой карты откат раньше писал
+        # старую цену всем подряд, включая позиции, которые WB не принял —
+        # и локальная база начинала врать о реальной цене товара.
+        failed_nm_ids = set()
+        error_by_nm_id = {}
+        for error in result.get('errors', []):
+            for nm_id in error.get('nm_ids', []):
+                failed_nm_ids.add(nm_id)
+                error_by_nm_id[nm_id] = error.get('error', 'Неизвестная ошибка')
 
-        # Обновляем оригинальный батч
-        batch.reverted = True
-        batch.reverted_at = datetime.utcnow()
-        batch.reverted_by_user_id = current_user.id
-        batch.revert_batch_id = revert_batch.id
-
-        # Обновляем цены в Product
-        for item in applied_items:
-            product = Product.query.get(item.product_id)
+        reverted_count = 0
+        rejected_count = 0
+        for nm_id, (revert_item, source_item) in revert_items_by_nm.items():
+            if nm_id in failed_nm_ids:
+                revert_item.status = 'failed'
+                revert_item.error_message = error_by_nm_id.get(
+                    nm_id, 'WB отклонил откат цены'
+                )
+                rejected_count += 1
+                continue
+            revert_item.status = 'applied'
+            revert_item.wb_applied_at = datetime.utcnow()
+            reverted_count += 1
+            # Локальная цена меняется только для подтверждённых позиций
+            product = Product.query.get(source_item.product_id)
             if product:
-                product.price = item.old_price
+                product.price = source_item.old_price
+
+        revert_batch.total_items = len(revert_items_by_nm)
+        revert_batch.applied_count = reverted_count
+        revert_batch.failed_count = rejected_count
+        revert_batch.applied_at = datetime.utcnow()
+        if rejected_count == 0:
+            revert_batch.status = 'applied'
+        elif reverted_count > 0:
+            revert_batch.status = 'partially_applied'
+        else:
+            revert_batch.status = 'failed'
+        revert_batch.apply_errors = result.get('errors')
+
+        # Исходный батч считается откаченным только если откат прошёл целиком:
+        # иначе часть товаров осталась с новой ценой, и это надо видеть.
+        batch.revert_batch_id = revert_batch.id
+        if rejected_count == 0:
+            batch.reverted = True
+            batch.reverted_at = datetime.utcnow()
+            batch.reverted_by_user_id = current_user.id
 
         db.session.commit()
         api_client.close()
 
         return jsonify({
             'success': True,
-            'revert_batch_id': revert_batch.id
+            'revert_batch_id': revert_batch.id,
+            'reverted': reverted_count,
+            'rejected': rejected_count,
+            'status': revert_batch.status,
         })
 
     except Exception as e:

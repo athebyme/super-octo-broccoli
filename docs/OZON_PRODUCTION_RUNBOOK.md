@@ -1,4 +1,4 @@
-# Production runbook: WB parity и staged rollout Ozon
+# Production runbook: WB parity и штатный rollout Ozon
 
 ## 1. Назначение и границы
 
@@ -16,6 +16,10 @@
   `Product` за один batch.
 - Ни один Ozon write не повторяется после ambiguous transport/5xx/malformed
   success. Сначала выполняется read-after-write reconciliation.
+- Platform-native mass editor и необязательный импорт XLSX из завершённого
+  mass-upload run меняют только seller-owned local drafts и сам run; они не
+  создают `MarketplaceOperation` и не обращаются к Ozon. Provider write
+  по-прежнему требует отдельного явного повтора.
 - Выключение write-флага запрещает новые submission, но не бросает уже
   submitted/polling/uncertain operation.
 - Credentials, idempotency keys, exact submitted payload и raw provider response
@@ -35,28 +39,32 @@ distributed-lock rollout; просто масштабировать текущи
 | `MARKETPLACE_WB_PROJECTION_ENABLED` | `1` | bounded local WB backfill/repair |
 | `MARKETPLACE_WB_DUAL_READ_ENABLED` | `1` | durable shadow parity sweeps |
 | `MARKETPLACE_WB_COMMON_READ_ENABLED` | `0` | запрос cutover списка `/products`; при неготовности автоматически fallback |
-| `MARKETPLACE_OZON_ENABLED` | `0` | Ozon UI/read/sync spine |
-| `MARKETPLACE_OZON_PUBLICATION_ENABLED` | `0` | ручной product create/update/rollback |
+| `MARKETPLACE_OZON_ENABLED` | `1` | Ozon UI/read/sync spine; `0` — emergency rollback |
+| `MARKETPLACE_OZON_PUBLICATION_ENABLED` | `1` | ручной product create/update/rollback; `0` — остановить новые submissions |
 | `MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED` | `0` | reviewed price/stock writes |
 | `MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED` | `0` | account-scoped auto-publish |
 
-Нельзя включать все флаги одновременно первым deploy. Рекомендуемый порядок:
+General Ozon и manual publication production-default `1`; это не включает
+автономные или коммерческие записи. Для controlled first deploy допускается
+временный явный override этих двух флагов в `0` до миграций/read-smoke.
+Рекомендуемый порядок:
 
-1. Projection `1`, dual-read `1`, common-read `0`, все Ozon flags `0`.
-2. Дождаться exact WB parity для pilot seller.
-3. Включить `MARKETPLACE_OZON_ENABLED=1`, подключить только pilot cabinets и
-   выполнить read-only catalog/reference smoke.
-4. При зелёном dashboard установить `MARKETPLACE_WB_COMMON_READ_ENABLED=1`.
+1. Projection `1`, dual-read `1`, common-read `0`; auto-publish и commercial `0`.
+2. Дождаться exact WB parity для выбранного seller.
+3. Проверить persistent `ENCRYPTION_KEY`, подключить выбранный кабинет и выполнить
+   read-only catalog/reference smoke.
+4. Оставить/вернуть general/manual в production defaults `1` и выполнить один
+   explicit card-upload smoke.
+5. При зелёном dashboard установить `MARKETPLACE_WB_COMMON_READ_ENABLED=1`.
    Если после deploy появится drift, runtime сам оставит `/products` на legacy.
-5. Включить manual publication только для одного проверенного pilot account.
 6. После ручного create/update/rollback цикла включить commercial writes.
 7. Auto-publish включать последним, отдельно в account settings, с малым daily
    capacity и наблюдением минимум один полный цикл.
 
-Глобальный Ozon read flag показывает UI всем sellers, но provider sync/write
+Глобальный Ozon flag показывает UI всем sellers, но provider sync/write
 возможен только для явно созданного seller-owned active account с credentials.
-Для строгого организационного pilot rollout до отдельного seller allowlist
-создавайте Ozon accounts только выбранным sellers.
+Организационное ограничение rollout выполняется списком реально подключённых
+seller accounts, а не возвратом глобального pilot-banner.
 
 ## 3. Deploy и миграция
 
@@ -67,7 +75,8 @@ distributed-lock rollout; просто масштабировать текущи
    SHA-256/размер/время.
 3. Убедиться, что `.env` содержит `ENCRYPTION_KEY`; не копировать секреты в
    командную историю, issue или runbook.
-4. Оставить Ozon write flags выключенными.
+4. Оставить auto-publish и commercial write flags выключенными. Если выбран
+   maintenance rollout, держать manual publication явно `0` только до read-smoke.
 
 Docker entrypoint fail-fast запускает:
 
@@ -76,7 +85,14 @@ python migrations/migrate_add_marketplace_listings.py \
   data/seller_platform.db --backfill-limit 200
 python migrations/migrate_add_marketplace_product_links.py data/seller_platform.db
 python migrations/migrate_add_marketplace_rollout.py data/seller_platform.db
+python migrations/migrate_add_ozon_product_type_visibility.py \
+  data/seller_platform.db
 ```
+
+Base reference migration сама additive-чинит отсутствующий legacy
+`marketplace_product_types.is_seller_selectable` до создания индекса; следующая
+visibility migration идемпотентно подтверждает значение. Это необходимо, потому
+что обе команды намеренно остаются в указанном backward-compatible порядке.
 
 Первая миграция переносит максимум 200 отсутствующих WB rows. Остальной объём
 должен обработать runtime job; длительный startup больше не считается нормой.
@@ -145,6 +161,24 @@ SKIP_SCHEDULER=1 python scripts/manage_marketplace_rollout.py backfill \
 Конфликтующая non-null canonical link не перетирается backfill-ом: она остаётся
 видимым mismatch и требует ручного разбора.
 
+Отдельный локальный `maintain_marketplace_source_links` постепенно связывает
+существующие Ozon/WB карточки по точному ID поставщика. Он не вызывает API:
+durable `BackgroundJob(job_type=marketplace_source_link_reconcile)` сканирует
+до 200 Ozon listings одного account за batch, максимум три account scopes за
+минуту. Примеры доказанного контракта: `id-7725-1364` (Ozon) и
+`id-7725-1366` (WB) → source ID `7725`; для Андрея принимаются только
+anchored `A`-форматы и уникальный serial внутри supplier scope. После restart
+cursor продолжает `MarketplaceListing.id`; explicit seller unlink исключён.
+`ambiguous` означает реальный дубль/conflict и требует ручного выбора, а не
+fuzzy fallback. Создание недостающей canonical-копии возможно только из
+уникальной seller-scoped тройки supplier+WB+Ozon и не является публикацией.
+Сам mass-upload не ждёт фонового обхода: перед подготовкой выбранных карточек он
+bounded-пакетом повторяет тот же локальный exact preflight. Связанный Ozon listing
+задаёт свой opaque `offer_id`, поэтому `id-7725-1364` обновляется как существующая
+карточка, даже если WB vendor code равен `id-7725-1366`. Если существующий
+source-кандидат ambiguous или был явно отвязан продавцом, item получает
+`existing_ozon_listing_link_unresolved`; create с новым суффиксом запрещён.
+
 Для failed/paused run:
 
 ```bash
@@ -160,14 +194,18 @@ SKIP_SCHEDULER=1 python scripts/manage_marketplace_rollout.py pause --run-id <RU
 
 ## 5. Ozon preflight перед первым write
 
-Для pilot account проверить:
+Для выбранного account проверить:
 
 - connection status `connected`, credential не expired;
-- Ozon category/type tree и используемые schemas/dictionaries имеют fresh
-  successful snapshots;
+- Ozon category/type tree fresh; выбранный official type имеет
+  `is_seller_selectable=true`. Его schema/dictionaries могут быть ещё не
+  загружены: mass flow сохранит `waiting_reference`, bounded minute worker
+  обновит только этот demanded type и продолжит run автоматически;
 - полный catalog sync прошёл `ALL` и `ARCHIVED` до `completed`;
 - listing ↔ canonical link exact или вручную подтверждён;
-- draft после свежей validation имеет status `valid`, explicit price/VAT,
+- draft после свежей validation имеет `status=ready`,
+  `validation_status=valid`, explicit price/VAT
+  (VAT может быть заполнен из явной настройки account, валюта — RUB),
   physical units, media URLs и exact dictionary IDs;
 - `/v1/roles` подтвердил нужную capability;
 - operation quota доступна;
@@ -183,6 +221,151 @@ python scripts/probe_ozon_read_contracts.py --env-file /tmp/ozon_live.env
 Файл должен принадлежать текущему пользователю и иметь mode `0600`. После smoke
 его следует удалить штатным secret-management процессом. Реальные credentials
 никогда не добавляются в git.
+
+Массовый seller-facing путь находится на `/marketplaces/ozon/uploads/`:
+
+- один запуск принимает до 200 exact seller-owned карточек одного кабинета;
+- одно действие «Синхронизировать Ozon» создаёт новую карточку либо выполняет
+  full-state update exact-linked опубликованной; это не patch отдельных полей;
+- перед create/update выбранные карточки локально связываются с существующим
+  каталогом по exact source ID; фактический Ozon `offer_id` сохраняется в draft,
+  а не заменяется WB-кодом с другим seller suffix;
+- запуск обязателен только после явного подтверждения: JSON API принимает literal
+  `confirm_write: true`, HTML form — `confirm_write=1`. Без него операция не
+  создаётся;
+- HTTP только missing-only гидратирует legacy observed snapshot по exact
+  `supplier_product_id`, выполняет three-way source rebase, валидирует полный
+  payload и создаёт durable create/update operations chunk-ами до 50; provider
+  submission выполняет singleton scheduler;
+- rebase обновляет только прежние source defaults, сохраняет seller edits и
+  complex groups. Отсутствующие размеры, цена, НДС и обязательные характеристики
+  не угадываются;
+- выбранный official product type может безопасно заполнить атрибут `8229`
+  («Тип») только через одно exact normalized значение его свежего type-scoped
+  словаря. Модель `9048` получает source vendor code только для deterministic
+  category mapping, где каждая текущая exact-linked карточка группы имеет fresh
+  attributes snapshot не старше 48 часов и её Ozon model exact-normalized равна
+  observed vendor code. Один unknown/mismatch отключает recipe; raw evidence
+  values не сохраняются;
+- упаковочные размеры из supplier snapshot принимаются только из явно
+  package/pack/«упаковка»-полей. Generic размеры изделия не превращаются в
+  упаковку. Полный WB fallback допустим только по exact same-seller FK при
+  `last_sync <= 48h`, `isValid=true` и четырёх положительных фактах; tuple
+  переносится целиком и не смешивается с partial supplier dimensions;
+- price, НДС, ТН ВЭД и признак маркировки не выводятся из категории, похожих
+  карточек или WB по догадке. НДС может прийти только из явного account default
+  либо карточки; product-specific compliance и цена должны быть наблюдены или
+  введены продавцом;
+- для update свежий (не старше 48 часов) exact-account catalog snapshot становится
+  preservation baseline: текущие Ozon attributes/media/physical/commercial и
+  один представимый barcode не исчезают из replace-style payload из-за пробела
+  в canonical source. Текущая галерея и primary сохраняются, новые source URL
+  только добавляются после неё до 30 слотов;
+- baseline fingerprint фиксируется в operation. Перед quota/write scheduler
+  независимо читает exact live info+attributes+prices+pictures; несовпадение
+  даёт `update_before_state_drift`, `attempt_count=0` и ноль write-вызовов.
+  `ozon_listing_snapshot_stale` требует сначала штатный catalog sync, а
+  непредставимые multiple barcodes/empty dictionary display/type/media остаются
+  поштучным `needs_input`, а не превращаются в потенциально destructive update;
+- если current schema больше не принимает часть представимых legacy
+  attributes, mass editor показывает точные `attribute_id/complex_id`, причину
+  и отдельную незаполненную галочку очистки. Только после seller confirmation
+  exact identities сохраняются в `attribute_removals_json`; create этот список
+  отклоняет. Required поле одновременно предлагается заполнить заново.
+  Исчезнувшая identity, сменившийся type или live fingerprint останавливают
+  update до write. Несколько barcode, отсутствующий type ID и непредставимое
+  значение атрибута этим путём не маскируются;
+- если фид содержит несколько штрихкодов, полный список остаётся в observed
+  source, а Ozon draft автоматически использует первый валидный: current import
+  contract принимает один `barcode`, поэтому ручная чистка списка не требуется;
+- brand policy проверяет observed/current/seller-edited бренд по единому exact
+  normalized denylist. `ozon_brand_forbidden` оставляет только эту карточку в
+  `needs_input` и не создаёт provider operation; удалять или подменять бренд
+  автоматически запрещено;
+- после завершения run основной путь «Открыть массовый редактор» работает
+  целиком в Seller Hub. До 200 seller-scoped строк группируются по exact
+  исходной категории; один явно выбранный official Ozon type применяется к
+  отмеченным карточкам группы и при желании сохраняется как manual mapping.
+  Верхняя панель массово заполняет выбранное поле совместимых строк, а внутри
+  каждой строки доступны цена, полный package tuple в mm/g, описание, только
+  недостающие простые required attributes и явный список несовместимых
+  legacy-атрибутов текущей карточки. Boolean requirements выбираются как
+  «Да/Нет», а обязательное некорректное значение можно заменить в том же
+  сохранении. Если bulk-значение оставить пустым, панель берёт первое уже
+  заполненное совместимое значение среди выбранных строк: достаточно один раз
+  выбрать точный ТН ВЭД в autocomplete, затем размножить display по группе.
+  Dictionary ID между типами не копируется — каждая строка независимо разрешает
+  exact display в своём fresh type-scoped справочнике. Type search и dictionary
+  autocomplete читают локальный fresh official cache и не вызывают provider;
+- «Сохранить и проверить» принимает только exact server-rendered rows,
+  optimistic `draft_version` и текущий seller/account/imported-product scope
+  под account lock. Ошибка одной строки сохраняется рядом с ней; уже
+  проверенные строки не откатываются. Результат `ready_to_retry` всё ещё
+  локальный: вызова Ozon и `MarketplaceOperation` на этой кнопке нет;
+- необязательная кнопка «Скачать XLSX» оставлена для офлайн-работы и формирует
+  тот же bounded набор до 200 строк. Жёлтые поля принимают цену, полный package
+  tuple в mm/g, описание и точные значения атрибутов; свежие official
+  dictionary values доступны выпадающим списком. Для запрещённого бренда
+  действие по умолчанию — `ИСКЛЮЧИТЬ`, что исключает только повтор этого run и
+  ничего не удаляет;
+- обратный импорт XLSX принимает только исходный файл до 2 MiB (не более 20 MiB
+  распакованного содержимого), exact contract/run/seller/account, неизменные
+  столбцы, уникальные exact IDs и текущую `draft_version`. Формулы, ZIP anomaly,
+  чужой/добавленный draft, stale version, partial package tuple, неоднозначное
+  или stale dictionary value блокируются. Обновление идёт под account lock;
+  успешная строка получает `ready_to_retry`, но operation ещё не создаётся;
+- итог хранит action, status, exact completeness и bounded причину каждой
+  карточки; полный validation detail остаётся в draft. `already_current` означает,
+  что exact live full-state уже совпал и provider write не выполнялся;
+- один seller-confirmed exact bind можно сохранить для исходной
+  категории/предмета WB; retry применит mapping ко всем однотипным карточкам.
+  Кроме того, bulk preflight один раз локально рассматривает уже связанные
+  карточки этого seller: минимум две разные canonical карточки среди текущих
+  exact-source observations с одним fresh official Ozon type и без единого
+  unknown/conflict создают
+  `deterministic` mapping автоматически. Один пример, manual/non-exact link,
+  stale schema, отсутствующий тип, конфликт или scan свыше 20 000 listings
+  ничего не применяет; поздний конфликт переводит автоматический mapping в
+  `stale`, но никогда не меняет manual/rejected/corrected решение. Если schema
+  ещё отсутствует, item остаётся активным `waiting_reference`: второй retry не
+  нужен;
+- on-demand reference worker выбирает не больше 3 exact типов и 6 словарей за
+  минуту, failed scope имеет cooldown 10 минут. Admin `is_enabled` — только
+  дополнительный refresh-ahead, а не доступность типа продавцу;
+- после reference refresh локальная подготовка добавляет только отсутствующие
+  observed source-backed attributes и не перезаписывает seller values; через
+  6 часов без fresh snapshot показывается `ozon_reference_sync_timeout`;
+- retry берёт только явные
+  `needs_input|ready_to_retry|failed|cancelled`; `excluded|uncertain` никогда
+  автоматически не отправляются повторно.
+
+Schema prerequisite: `migrate_add_marketplace_drafts.py` additive-добавляет
+`attribute_removals_json` старой таблице, потому что запускается раньше
+`migrate_add_marketplace_draft_attribute_removals.py`; dedicated migration
+остаётся идемпотентной. Оба runner-а вызывают их fail-fast до runtime.
+
+Пример JSON-запуска из импортированных товаров:
+
+```json
+{
+  "account_id": 42,
+  "imported_product_ids": [101, 102],
+  "confirm_write": true
+}
+```
+
+Для готовых черновиков используется `POST /marketplaces/ozon/uploads/from-drafts`
+с `draft_ids` и тем же literal `confirm_write: true`. Повтор
+`POST /marketplaces/ozon/uploads/<job_uid>/retry` также требует
+`confirm_write: true`, потому что может создать новый committed write.
+Основной UI:
+`GET /marketplaces/ozon/uploads/<job_uid>/repair`, local-only submit —
+`POST /marketplaces/ozon/uploads/<job_uid>/repair/apply`. Локальные type и
+dictionary search endpoints привязаны к тому же seller/run/draft scope.
+Дополнительные `GET .../repair.xlsx` и multipart `POST .../repair` доступны
+только для завершённого run. Оба local repair POST намеренно не принимают
+`confirm_write`. После статуса `ready_to_retry` оператор отдельно нажимает
+«Повторить готовые» и ещё раз подтверждает возможный provider write.
 
 ## 6. Проверка одного write
 
@@ -238,10 +421,23 @@ item означает partial/uncertain, а не success.
 
 ### Provider drift
 
-- Pre-write drift завершает proposal/rollback как conflict до side effect.
+- Pre-write drift завершает proposal/rollback/update как conflict до side
+  effect. Для product update это `update_before_state_drift` с
+  `attempt_count=0`; карточку нельзя replay-ить до нового catalog sync/review.
+- Current attributes read Ozon не возвращает import-only `8229` («Тип»).
+  Это не drift только когда omission единственный, submitted value является
+  одним exact simple official dictionary value свежего выбранного product type
+  и дословно совпадает с official type name. Pre-write это доказанный
+  `already_current`; post-write требуется также подтверждённый `imported`
+  task ID. Без task ID либо при любом втором отличии operation остаётся
+  `uncertain`.
 - Post-write третье состояние остаётся `uncertain`; не объявлять его success.
 - Обновить local snapshot только штатным catalog sync, затем создать новый
   reviewed diff/proposal.
+- Rollback full payload может дополнить prior live только тем же доказанным
+  import-only `8229`. Если prior state после этого не проходит текущую official
+  required schema (например, в нём ещё нет ставшего обязательным ТН ВЭД),
+  rollback помечается `unavailable` и не отправляется.
 
 ## 8. Аварийное отключение и восстановление
 
@@ -253,8 +449,8 @@ item означает partial/uncertain, а не success.
    `MARKETPLACE_OZON_PUBLICATION_ENABLED=0`.
 2. Не выключать scheduler и не удалять credentials: уже attempted operations
    должны продолжить reconciliation.
-3. Открыть `/marketplaces/operations/`, отфильтровать
-   `submitting|submitted|polling|uncertain` и сохранить IDs.
+3. Открыть `/marketplaces/ozon/uploads/` и `/marketplaces/operations/`,
+   отфильтровать `submitting|submitted|polling|uncertain` и сохранить IDs.
 4. Сделать backup DB до ручных действий.
 5. Для `uncertain` использовать manual stop только если бизнес принимает, что
    upstream outcome остаётся неизвестным. Эта кнопка освобождает local quota, но
@@ -287,15 +483,40 @@ item означает partial/uncertain, а не success.
 
 ## 9. Наблюдаемость и merge/deploy gate
 
-Перед staged seller:
+Перед расширением на следующего seller:
 
 - [ ] Полный test suite зелёный.
 - [ ] Миграции дважды проходят на копии production DB.
 - [ ] `git diff --check` и `py_compile` зелёные.
-- [ ] WB backfill/parity exact для pilot seller.
+- [ ] На representative create и update detail показывает точные required /
+  supplied attributes, фото, штрихкод, content/physical/commercial readiness;
+  карточка с отсутствующим фактом остаётся `needs_input`, а не «готовой».
+- [ ] Повтор неизменённой опубликованной карточки заканчивается
+  `already_current`, `attempt_count=0` и не вызывает `/v3/product/import`.
+- [ ] Для типа с обязательным `8229` тот же no-change gate работает при
+  единственном provider omission; изменённый `8229`, второй пропуск и любой
+  visible drift остаются fail-closed.
+- [ ] Изменённая опубликованная карточка создаёт `product_update`, проходит exact
+  live preflight и отправляет полный payload ровно один раз.
+- [ ] Task-confirmed update с единственным omission `8229` сохраняет actual
+  live fingerprint, не повторяет write и даёт rollback только когда exact prior
+  payload проходит текущую required schema.
+- [ ] Повтор уже завершённого create/update rollback с тем же idempotency key
+  возвращает ту же child-operation при неизменном `attempt_count`, даже когда
+  parent уже имеет `rollback_status=succeeded` либо listing уже archived.
+- [ ] До create/update все source-фото заменены на подписанные immutable JPEG,
+  внешний GET возвращает image/jpeg, а operation всё ещё имеет
+  `attempt_count=0`.
+- [ ] JSON/form/retry без явного `confirm_write` отвергаются до создания job или
+  operation.
+- [ ] Каждый бренд из `services/ozon_brand_policy.py` блокируется до operation;
+  punctuation/case-варианты блокируются, substring вроде `HOT WHEELS` не даёт
+  ложного срабатывания.
+- [ ] WB backfill/parity exact для выбранного seller.
 - [ ] Common-read flag остаётся fail-safe при искусственном mismatch.
 - [ ] Ozon reference/catalog read smoke зелёный.
-- [ ] Dashboard не содержит Client-Id, encrypted credential или raw payload.
+- [ ] UI не содержит API key, encrypted credential или raw provider payload;
+  non-secret Client-Id отображается только как идентификатор кабинета.
 - [ ] Нет `uncertain` operations без владельца/плана разбора.
 - [ ] Backup restore проверен хотя бы на staging-копии.
 - [ ] Topology остаётся single-host/shared-lock либо distributed lock внедрён
@@ -303,3 +524,35 @@ item означает partial/uncertain, а не success.
 
 Для merge P11 не требует реального provider write. Live write smoke относится к
 staged deploy после review branch и выполняется по разделу 6.
+
+## 10. Фото карточек перед create/update
+
+Источник поставщика может открываться в браузере, но возвращать внешнему
+crawler HTML challenge вместо изображения. Поэтому `queued` product
+create/update до первого Ozon API-вызова автоматически:
+
+1. скачивает bounded-порцию исходных фото через SSRF-safe transport с
+   cookie/meta-refresh;
+2. проверяет реальные image bytes и сохраняет immutable JPEG по SHA-256 в
+   `MARKETPLACE_IMAGE_ASSET_DIR`;
+3. атомарно обновляет submitted snapshot/fingerprint при
+   `attempt_count=0`;
+4. отправляет карточку только после `media_asset_state=ready`.
+
+В mass-upload это видно как «Проверяем фото». `media_preparation_pending` и
+`media_preparation_retry` не означают Ozon write; permanent `media_*` failure
+оставляет одну карточку с понятной причиной и не блокирует остальные.
+Публичный endpoint принимает только HMAC-подписанный digest существующего
+файла, не является proxy и не возвращает placeholder.
+
+Production defaults:
+
+- `MARKETPLACE_IMAGE_ASSET_DIR=/app/data/marketplace_image_assets`;
+- `OZON_MEDIA_ASSET_URLS_PER_ATTEMPT=3` (1..10);
+- `OZON_MEDIA_ASSET_ATTEMPT_SECONDS=40` (10..55);
+- `PUBLIC_BASE_URL` — внешний HTTPS origin Seller Hub.
+
+После deploy проверьте один подготовленный URL извне: status 200,
+`Content-Type: image/jpeg`, `X-Content-Type-Options: nosniff`, cache policy
+`public, max-age=31536000, immutable`. Неверная подпись обязана вернуть 403,
+несуществующий либо повреждённый digest — 404.

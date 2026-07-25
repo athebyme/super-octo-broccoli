@@ -50,7 +50,7 @@ class TestWBContentPayload(unittest.TestCase):
                 "dimensions": {"length": 10, "width": 8, "height": 4, "weightBrutto": 0.1},
                 "sizes": [{"price": 1000, "skus": ["2000000000011"]}],
                 "characteristics": [
-                    {"id": "88952", "value": "250 г"},
+                    {"id": 88952, "value": "250 г"},
                     {"id": 14177449, "value": ["Россия"]},
                 ],
             }],
@@ -148,7 +148,7 @@ class TestWBContentPayload(unittest.TestCase):
                 "isValid": True,
             },
             "characteristics": [
-                {"id": "88952", "value": "400 г"},
+                {"id": 88952, "value": "400 г"},
                 {"id": 14177449, "value": "Россия"},
             ],
             "photos": ["https://example.test/photo.jpg"],

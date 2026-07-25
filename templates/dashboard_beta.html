@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block title %}Главная · beta — Seller Hub{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='dashboard-beta.css') }}">
+
+<script type="application/json" id="db-bootstrap">{{ {
+    'wbConnected': wb_connected,
+    'hasAnyChannel': has_any_channel,
+    'userName': current_user.username,
+    'urls': {
+        'attention': url_for('api_dashboard_attention'),
+        'analytics': '/api/analytics/summary',
+        'finances': '/api/finances/summary',
+        'quality': '/api/card-quality/summary',
+        'tasks': '/api/tasks/tray',
+        'apiSettings': url_for('api_settings'),
+        'myProducts': '/my-products/beta',
+        'cardQuality': '/card-quality/beta',
+        'catalog': '/marketplaces/listings/beta',
+        'classic': url_for('dashboard'),
+    },
+} | tojson }}</script>
+
+<div id="dashboard-app" class="shk-page shk-page--narrow" v-cloak>
+{% raw %}
+    <header class="shk-head db-head">
+        <div>
+            <h1 class="shk-head-title">{{ greeting }}</h1>
+            <p class="shk-head-sub">{{ subtitle }}</p>
+        </div>
+        <div class="shk-head-actions">
+            <div class="sh-segmented db-period" role="group" aria-label="Период">
+                <button v-for="p in periods" :key="p.key" type="button"
+                        class="sh-segmented-item"
+                        :class="{'sh-segmented-item--active': period === p.key}"
+                        @click="setPeriod(p.key)">{{ p.label }}</button>
+            </div>
+            <a class="shk-quiet-link" :href="urls.classic">Старая версия</a>
+        </div>
+    </header>
+
+    <div v-if="!hasAnyChannel" class="db-connect">
+        <div>
+            <p class="db-connect-title">Магазин ещё не подключён</p>
+            <p class="db-connect-text">Добавьте Wildberries или кабинет Ozon — и здесь появятся продажи, остатки и задачи по карточкам.</p>
+        </div>
+        <a class="sh-btn sh-btn--primary" :href="urls.apiSettings">Подключить магазин</a>
+    </div>
+
+    <template v-else>
+        <!-- Деньги: крупно и без лишнего -->
+        <div class="shk-stats db-stats">
+            <sh-stat label="Выручка" :value="money.revenue" :hint="periodHint"
+                     :trend="money.revenueTrend" :loading="loading.money"></sh-stat>
+            <sh-stat label="Заказы" :value="money.orders" :hint="periodHint"
+                     :trend="money.ordersTrend" :loading="loading.money"></sh-stat>
+            <sh-stat label="Средний чек" :value="money.average" :hint="periodHint"
+                     :loading="loading.money"></sh-stat>
+            <sh-stat label="Средняя оценка карточек" :value="quality.avg"
+                     :hint="quality.hint" :loading="loading.quality"
+                     :href="urls.cardQuality"></sh-stat>
+        </div>
+
+        <!-- Что сделать сегодня -->
+        <section class="db-section">
+            <div class="db-section-head">
+                <h2 class="db-section-title">Что сделать сегодня</h2>
+                <span v-if="signals.length" class="db-section-count">
+                    {{ signals.length }} {{ $fmt.plural(signals.length, 'задача', 'задачи', 'задач') }}
+                </span>
+            </div>
+
+            <div v-if="loading.attention" class="db-cards">
+                <div v-for="n in 3" :key="'sk' + n" class="db-card db-card--skeleton">
+                    <div class="sh-skeleton sh-skeleton--line-30"></div>
+                    <div class="sh-skeleton sh-skeleton--line-70"></div>
+                </div>
+            </div>
+
+            <sh-empty v-else-if="!signals.length"
+                      title="Всё в порядке"
+                      text="Срочных задач по карточкам сейчас нет. Можно заняться новыми товарами.">
+                <a class="sh-btn sh-btn--primary" :href="urls.myProducts">Открыть мои товары</a>
+            </sh-empty>
+
+            <div v-else class="db-cards">
+                <article v-for="(signal, i) in signals" :key="signal.key"
+                         class="db-card" :class="'db-card--' + signal.tone"
+                         :style="{ '--i': Math.min(i, 8) }"
+                         tabindex="0" role="button"
+                         @click="openSignal(signal)"
+                         @keydown.enter.prevent="openSignal(signal)">
+                    <div class="db-card-top">
+                        <span class="db-card-count">{{ $fmt.int(signal.count) }}</span>
+                        <span class="db-card-title">{{ signal.title }}</span>
+                    </div>
+                    <p class="db-card-text">{{ signal.text }}</p>
+                    <span class="db-card-action">
+                        {{ signal.action }}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                    </span>
+                </article>
+            </div>
+        </section>
+
+        <!-- Что происходит прямо сейчас -->
+        <section class="db-section" v-if="tasks.length">
+            <div class="db-section-head">
+                <h2 class="db-section-title">Сейчас выполняется</h2>
+            </div>
+            <div class="db-tasks">
+                <a v-for="task in tasks" :key="task.kind + task.title" class="db-task"
+                   :href="task.link || '#'">
+                    <span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span>
+                    <span class="db-task-title">{{ task.title }}</span>
+                    <span v-if="task.progress !== null && task.progress !== undefined"
+                          class="db-task-progress">{{ task.progress }}%</span>
+                </a>
+            </div>
+        </section>
+
+        <!-- Быстрые переходы -->
+        <section class="db-section">
+            <div class="db-section-head">
+                <h2 class="db-section-title">Быстрый доступ</h2>
+            </div>
+            <div class="db-links">
+                <a class="db-link" :href="urls.myProducts">
+                    <span class="db-link-title">Мои товары</span>
+                    <span class="db-link-text">Публикация и массовые действия</span>
+                </a>
+                <a class="db-link" :href="urls.cardQuality">
+                    <span class="db-link-title">Качество карточек</span>
+                    <span class="db-link-text">Что мешает продавать</span>
+                </a>
+                <a class="db-link" :href="urls.catalog">
+                    <span class="db-link-title">Каталог маркетплейсов</span>
+                    <span class="db-link-text">Что уже продаётся и по какой цене</span>
+                </a>
+            </div>
+        </section>
+    </template>
+
+    <!-- Всплывающая карточка задачи -->
+    <sh-drawer :open="drawer.open" :title="drawer.signal ? drawer.signal.title : ''"
+               width="420px" @close="drawer.open = false">
+        <template v-if="drawer.signal">
+            <div class="db-drawer-hero" :class="'is-' + drawer.signal.tone">
+                <span class="db-drawer-count">{{ $fmt.int(drawer.signal.count) }}</span>
+                <span class="db-drawer-label">
+                    {{ $fmt.plural(drawer.signal.count, 'карточка', 'карточки', 'карточек') }}
+                </span>
+            </div>
+            <p class="db-drawer-text">{{ drawer.signal.text }}</p>
+            <div class="db-drawer-why">
+                <h4>Почему это важно</h4>
+                <p>{{ whyText(drawer.signal.key) }}</p>
+            </div>
+        </template>
+        <template #foot v-if="drawer.signal">
+            <a class="sh-btn sh-btn--primary" :href="drawer.signal.href">{{ drawer.signal.action }}</a>
+        </template>
+    </sh-drawer>
+{% endraw %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+<script src="{{ url_for('static', filename='sh-vue-kit.js') }}"></script>
+<script src="{{ url_for('static', filename='dashboard-beta.js') }}"></script>
+{% endblock %}

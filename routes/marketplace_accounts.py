@@ -1,5 +1,6 @@
 """Seller-facing marketplace account settings."""
 
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from flask import (
@@ -115,10 +116,37 @@ def index():
     if seller_id is None:
         return "Seller account required", 403
     accounts = MarketplaceAccountService.list_accounts(seller_id=seller_id)
+    now = datetime.utcnow()
+    upload_ready_account_ids = {
+        account.id
+        for account in accounts
+        if (
+            account.marketplace
+            and account.marketplace.code == "ozon"
+            and account.marketplace.is_active
+            and account.is_active
+            and account.connection_status == "connected"
+            and account.has_credentials
+            and account.public_settings.get("default_vat") is not None
+            and (
+                account.credential_expires_at is None
+                or account.credential_expires_at > now
+            )
+        )
+    }
     return render_template(
         "marketplace_accounts.html",
         accounts=accounts,
+        now=now,
+        upload_ready_account_ids=upload_ready_account_ids,
         ozon_enabled=_ozon_enabled(),
+        publication_enabled=bool(
+            _ozon_enabled()
+            and current_app.config.get(
+                "MARKETPLACE_OZON_PUBLICATION_ENABLED",
+                False,
+            )
+        ),
     )
 
 
@@ -151,6 +179,7 @@ def _save_ozon(account_id: Optional[int] = None):
             label=data.get("label"),
             api_key=data.get("api_key"),
             is_default=_is_default(data),
+            default_vat=data.get("default_vat"),
         )
         return _success_response(
             account,

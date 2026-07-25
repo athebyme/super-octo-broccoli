@@ -25,6 +25,8 @@ from .platform_client import PlatformAPIError
 from .tools import create_platform_tools
 from .content_contract import (
     CONTENT_FIELD_LIMITS,
+    WB_TITLE_HARD_ISSUE_CODES,
+    analyze_wb_title,
     content_fields_label,
     extract_explicit_content_fields,
     normalize_content_fields,
@@ -1593,7 +1595,14 @@ class ContentWriterSkill(BaseAgent):
     tool_allowlist = ()
     system_prompt = (
         'Ты редактор карточек Wildberries. Переписывай только явно перечисленные '
-        'поля, сохраняя факты исходной карточки. Не добавляй неподтвержденные свойства.'
+        'поля и сохраняй все подтверждённые факты исходной карточки. Не добавляй '
+        'неподтверждённые свойства. Для title: начинай с типа товара, оставляй '
+        'только один-два важных фактических признака, не включай значение поля '
+        'brand, названия бренда/линейки, повторяющиеся слова, синонимы одного '
+        'понятия, рекламные эпитеты и рекомендации. Каждое понятие используй '
+        'один раз. Лишние, но подтверждённые подробности переноси в description. '
+        'Для description: пиши связный уникальный текст без воды и повторов, '
+        'используя только факты из переданных title, description, brand и category.'
     )
 
     def build_task_prompt(self, task: dict) -> str:
@@ -1764,7 +1773,12 @@ class ContentWriterSkill(BaseAgent):
                 'product_id': {'type': 'integer', 'enum': expected_ids},
             }
             result_properties.update({
-                field: {'type': 'string'} for field in requested_fields
+                field: {
+                    'type': 'string',
+                    'minLength': 1,
+                    'maxLength': CONTENT_FIELD_LIMITS[field],
+                }
+                for field in requested_fields
             })
             schema = {
                 'type': 'object',
@@ -1845,6 +1859,10 @@ class ContentWriterSkill(BaseAgent):
             raw_results = structured.get('data', {}).get('results')
             proposed_by_id = {}
             validation_code = 'invalid_result_shape'
+            validation_error = (
+                'Ответ модели не совпал с подтверждённой областью карточек; '
+                'изменения не сохранены'
+            )
             invalid_output = not isinstance(raw_results, list)
             if not invalid_output and len(raw_results) != len(chunk):
                 invalid_output = True
@@ -1871,27 +1889,53 @@ class ContentWriterSkill(BaseAgent):
                             invalid_output = True
                             validation_code = 'missing_content_field'
                             break
-                        values[field] = value[:CONTENT_FIELD_LIMITS[field]]
+                        if len(value) > CONTENT_FIELD_LIMITS[field]:
+                            invalid_output = True
+                            validation_code = 'content_field_too_long'
+                            validation_error = (
+                                'Модель превысила допустимую длину поля; '
+                                'обрезанная версия не сохранялась'
+                            )
+                            break
+                        values[field] = value
                     if invalid_output:
                         break
                     proposed_by_id[entity_id] = values
             if not invalid_output and set(proposed_by_id) != set(expected_ids):
                 invalid_output = True
                 validation_code = 'product_id_scope_mismatch'
+            if not invalid_output and 'title' in requested_fields:
+                source_by_id = {
+                    int(source['id']): source for source in chunk
+                }
+                for entity_id, values in proposed_by_id.items():
+                    hard_title_issues = [
+                        issue for issue in analyze_wb_title(
+                            values['title'],
+                            source_by_id[entity_id].get('brand') or '',
+                        )
+                        if issue.get('code') in WB_TITLE_HARD_ISSUE_CODES
+                    ]
+                    if hard_title_issues:
+                        invalid_output = True
+                        validation_code = 'wb_title_quality_failed'
+                        validation_error = '; '.join(
+                            str(issue.get('message') or '')
+                            for issue in hard_title_issues
+                            if issue.get('message')
+                        )[:500]
+                        break
             if invalid_output:
                 failed_ids.extend(remaining_ids)
                 hard_failure = True
                 failure_details.extend({
                     'product_id': entity_id,
                     'code': validation_code,
-                    'error': (
-                        'Ответ модели не совпал с подтверждённой областью карточек; '
-                        'изменения не сохранены'
-                    ),
+                    'error': validation_error,
                 } for entity_id in expected_ids)
                 failure_reason = (
-                    'Flash вернул неполный, дублированный или чужой набор карточек; '
-                    'чанк не сохранён и дорогой retry не запускался.'
+                    'Flash вернул непригодный для безопасного WB-контента чанк; '
+                    'изменения не сохранены и дорогой retry не запускался.'
                 )
                 break
 
@@ -1940,10 +1984,16 @@ class ContentWriterSkill(BaseAgent):
                     value = proposed_by_id[entity_id][field]
                     check = checks_by_key[(entity_id, field)]
                     if check.get('has_prohibited') or check.get('has_violations'):
-                        value = str(check.get('filtered_text') or '').strip()[
-                            :CONTENT_FIELD_LIMITS[field]
-                        ]
-                    if not value:
+                        value = str(check.get('filtered_text') or '').strip()
+                    if not value or len(value) > CONTENT_FIELD_LIMITS[field]:
+                        invalid_filtered = True
+                        break
+                    if field == 'title' and any(
+                        issue.get('code') in WB_TITLE_HARD_ISSUE_CODES
+                        for issue in analyze_wb_title(
+                            value, source.get('brand') or '',
+                        )
+                    ):
                         invalid_filtered = True
                         break
                     old_value = str(source.get(field) or '')

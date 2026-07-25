@@ -96,7 +96,8 @@ class ImproveProposalRouteTest(unittest.TestCase):
                    return_value=['own1', 'std1', 'std2']):
             MockProduct.query.filter_by.return_value.first.return_value = product
             mock_build.return_value = {}
-            mock_es.return_value.find_supplier_data.return_value = None
+            mock_es.return_value.find_supplier_data.return_value = MagicMock()
+            mock_es.return_value.build_preview.return_value = {}
 
             # Запрос без тела вообще (task_ids больше не читаются из body)
             resp = self.client.post('/api/card-quality/101/proposal')
@@ -124,12 +125,35 @@ class ImproveProposalRouteTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=[]):
             MockProduct.query.filter_by.return_value.first.return_value = product
             mock_build.return_value = {}
-            mock_es.return_value.find_supplier_data.return_value = None
+            mock_es.return_value.find_supplier_data.return_value = MagicMock()
+            mock_es.return_value.build_preview.return_value = {}
 
             resp = self.client.post('/api/card-quality/101/proposal',
                                     json={'task_ids': {'card-doctor': 'tid-999'}})
             self.assertEqual(resp.status_code, 200)
             self.assertEqual(mock_build.call_args.args[1], [])
+
+    def test_proposal_without_supplier_source_returns_clear_conflict(self):
+        user = _user()
+        product = MagicMock()
+        product.id = 101
+        product.nm_id = 555
+        with patch('routes.card_quality.current_user', user), \
+             patch('flask_login.utils._get_user', return_value=user), \
+             patch('routes.card_quality.Product') as MockProduct, \
+             patch('routes.card_quality.build_proposal_from_tasks',
+                   return_value={}), \
+             patch('routes.card_quality.get_enrichment_service') as mock_es:
+            MockProduct.query.filter_by.return_value.first.return_value = product
+            mock_es.return_value.find_supplier_data.return_value = None
+
+            resp = self.client.post('/api/card-quality/101/proposal', json={})
+
+            self.assertEqual(resp.status_code, 409)
+            self.assertEqual(
+                resp.get_json()['code'],
+                'supplier_source_unavailable',
+            )
 
     def test_improve_returns_403_without_api_key(self):
         user = _user(has_key=False)

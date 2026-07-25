@@ -103,6 +103,7 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             content_json TEXT NOT NULL DEFAULT '{}',
             attributes_json TEXT NOT NULL DEFAULT '[]',
             complex_attributes_json TEXT NOT NULL DEFAULT '[]',
+            attribute_removals_json TEXT NOT NULL DEFAULT '[]',
             media_json TEXT NOT NULL DEFAULT '{}',
             dimensions_json TEXT NOT NULL DEFAULT '{}',
             barcodes_json TEXT NOT NULL DEFAULT '[]',
@@ -134,6 +135,17 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             )
         )
     ''')
+    # The base draft migration precedes the dedicated additive migration in
+    # both startup runners.  Keep it backward-compatible with databases whose
+    # table predates explicit full-state attribute cleanup.
+    if "attribute_removals_json" not in _columns(
+        connection,
+        "marketplace_product_drafts",
+    ):
+        connection.execute(
+            "ALTER TABLE marketplace_product_drafts "
+            "ADD COLUMN attribute_removals_json TEXT NOT NULL DEFAULT '[]'"
+        )
 
     statements = (
         "CREATE INDEX IF NOT EXISTS ix_marketplace_category_mappings_seller_id "
@@ -190,6 +202,7 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             "offer_id",
             "source_fact_hash",
             "attributes_json",
+            "attribute_removals_json",
             "validation_status",
             "version",
         },

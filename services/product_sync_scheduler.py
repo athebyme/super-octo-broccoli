@@ -201,6 +201,16 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True
     )
 
+    # Сверка отправленных цен с фактическими на WB (каждые 5 минут).
+    # Без неё позиции навсегда зависали бы в статусе «отправлено».
+    scheduler.add_job(
+        func=lambda: reconcile_submitted_prices(flask_app),
+        trigger=IntervalTrigger(minutes=5),
+        id='reconcile_submitted_prices',
+        name='Reconcile submitted WB prices with actual marketplace prices',
+        replace_existing=True
+    )
+
     # Добавляем задачу проверки настроек мониторинга цен (каждые 5 минут)
     scheduler.add_job(
         func=lambda: check_and_monitor_prices_all_sellers(flask_app),
@@ -247,6 +257,19 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True,
     )
 
+    # Seller-visible Ozon types do not require a global 8k-schema preload.
+    # Once a draft/mapping/listing references an exact type, this small,
+    # frequent read-only worker loads its schema and required dictionaries.
+    scheduler.add_job(
+        func=lambda: sync_ozon_demanded_references(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='sync_ozon_demanded_references',
+        name='Refresh seller-demanded Ozon references (bounded)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Первый reference refresh не должен ждать сутки после нового deploy.
     scheduler.add_job(
         func=lambda: sync_marketplaces(flask_app),
@@ -275,6 +298,19 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         trigger=IntervalTrigger(minutes=1),
         id='supplier_catalog_enrichment',
         name='Process durable shared supplier catalog enrichment runs',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Seller WB enrichment has two durable phases: a leased dispatch cursor
+    # and read-only confirmation against the asynchronous WB read model. The
+    # same singleton tick resumes both after a web-worker/container restart.
+    scheduler.add_job(
+        func=lambda: process_wb_supplier_enrichment(flask_app),
+        trigger=IntervalTrigger(seconds=20),
+        id='wb_supplier_enrichment',
+        name='Dispatch and reconcile durable WB supplier enrichment',
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -324,6 +360,29 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         run_date=datetime.utcnow() + timedelta(seconds=15),
         id='maintain_marketplace_projection_initial',
         name='Initial bounded WB listing projection maintenance',
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Existing Ozon offers and WB vendor codes may use different historical
+    # seller suffixes around the same supplier ID.  Reconcile that local
+    # backlog by a durable keyset (no provider/LLM), at most three account
+    # scopes and 200 listings per minute.
+    scheduler.add_job(
+        func=lambda: maintain_marketplace_source_links(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='maintain_marketplace_source_links',
+        name='Reconcile exact supplier identities across Ozon and WB',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        func=lambda: maintain_marketplace_source_links(flask_app),
+        trigger='date',
+        run_date=datetime.utcnow() + timedelta(seconds=30),
+        id='maintain_marketplace_source_links_initial',
+        name='Initial exact Ozon/WB source identity reconciliation',
         replace_existing=True,
         max_instances=1,
     )
@@ -508,6 +567,19 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    # Shared competitor identity matching: one bounded seller job at a time.
+    # Supplier/photo/LLM evidence is cached globally by nmID fingerprint;
+    # seller decisions and price comparisons remain tenant-scoped.
+    scheduler.add_job(
+        func=lambda: _run_competitor_matching_tick(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='competitor_matching_tick',
+        name='Match competitor nmIDs to shared supplier catalog (bounded)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Компакция старых снимков конкурентов (раз в сутки)
     scheduler.add_job(
         func=lambda: _compact_competitor_snapshots(flask_app),
@@ -559,6 +631,40 @@ def process_supplier_catalog_enrichment_runs(flask_app):
             SupplierCatalogEnrichmentService.process_due_runs(limit=2)
         except Exception:
             logger.exception('Supplier catalog enrichment scheduler tick failed')
+        finally:
+            db.session.remove()
+
+
+def process_wb_supplier_enrichment(flask_app):
+    """Advance durable seller enrichment and confirm accepted WB writes."""
+    try:
+        from services.supplier_enrichment import process_due_enrichment_jobs
+        process_due_enrichment_jobs(flask_app, max_jobs=1)
+    except Exception:
+        logger.exception('WB supplier enrichment dispatch tick failed')
+
+    try:
+        from services.supplier_update_hub import process_due_photo_jobs
+        process_due_photo_jobs(flask_app, max_jobs=1)
+    except Exception:
+        logger.exception('WB supplier photo-hub dispatch tick failed')
+
+    try:
+        from services.supplier_update_hub import process_due_verify_jobs
+        process_due_verify_jobs(flask_app, max_jobs=1)
+    except Exception:
+        logger.exception('WB supplier verify dispatch tick failed')
+
+    with flask_app.app_context():
+        from models import db
+        from services.wb_enrichment_reconciliation import (
+            process_due_reconciliations,
+        )
+        try:
+            process_due_reconciliations()
+        except Exception:
+            db.session.rollback()
+            logger.exception('WB supplier enrichment reconciliation tick failed')
         finally:
             db.session.remove()
 
@@ -1233,6 +1339,66 @@ def maintain_marketplace_projection(flask_app, *, seller_limit=3, batch_size=200
         return result
 
 
+def maintain_marketplace_source_links(
+    flask_app,
+    *,
+    account_limit=3,
+    batch_size=200,
+):
+    """Advance durable local Ozon/WB source-link reconciliation."""
+    with flask_app.app_context():
+        if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            return {
+                'created': 0,
+                'processed_account_batches': 0,
+                'linked': 0,
+                'materialized': 0,
+                'ambiguous': 0,
+                'busy': 0,
+                'failed': 0,
+            }
+        try:
+            from services.marketplace_source_link_reconciliation import (
+                MarketplaceSourceLinkReconciliation,
+            )
+            result = MarketplaceSourceLinkReconciliation.maintenance_tick(
+                account_limit=account_limit,
+                batch_size=batch_size,
+            )
+        except Exception:
+            logger.exception(
+                'Marketplace source identity reconciliation failed'
+            )
+            return {
+                'created': 0,
+                'processed_account_batches': 0,
+                'linked': 0,
+                'materialized': 0,
+                'ambiguous': 0,
+                'busy': 0,
+                'failed': 1,
+            }
+        if (
+            result['created']
+            or result['linked']
+            or result['materialized']
+            or result['ambiguous']
+            or result['failed']
+        ):
+            logger.info(
+                'Marketplace source links: created=%s batches=%s linked=%s '
+                'materialized=%s ambiguous=%s busy=%s failed=%s',
+                result['created'],
+                result['processed_account_batches'],
+                result['linked'],
+                result['materialized'],
+                result['ambiguous'],
+                result['busy'],
+                result['failed'],
+            )
+        return result
+
+
 def sync_marketplace_characteristics(flask_app, limit: int = 50):
     """Refresh a bounded stale-schema batch for every active marketplace."""
     from models import Marketplace
@@ -1289,9 +1455,75 @@ def sync_marketplace_characteristics(flask_app, limit: int = 50):
                     )
 
 
+def sync_ozon_demanded_references(
+    flask_app,
+    *,
+    limit: int = 3,
+    dictionary_limit: int = 6,
+):
+    """Refresh the exact Ozon types currently demanded by seller state."""
+    from models import Marketplace
+    from services.ozon_reference_service import OzonReferenceService
+
+    result = {
+        'marketplaces': 0,
+        'selected': 0,
+        'synced': 0,
+        'failed': 0,
+        'dictionaries_synced': 0,
+        'dictionaries_failed': 0,
+    }
+    with flask_app.app_context():
+        if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            return result
+        marketplaces = Marketplace.query.filter_by(
+            is_active=True,
+            code='ozon',
+        ).all()
+        result['marketplaces'] = len(marketplaces)
+        for marketplace in marketplaces:
+            try:
+                refreshed = OzonReferenceService.sync_demanded_types(
+                    marketplace.id,
+                    limit=limit,
+                    dictionary_limit=dictionary_limit,
+                )
+            except Exception:
+                logger.exception(
+                    'Demanded Ozon reference refresh crashed marketplace_id=%s',
+                    marketplace.id,
+                )
+                result['failed'] += 1
+                continue
+            for key in (
+                'selected',
+                'synced',
+                'failed',
+                'dictionaries_synced',
+                'dictionaries_failed',
+            ):
+                result[key] += int(refreshed.get(key, 0) or 0)
+            if (
+                refreshed.get('failed')
+                or refreshed.get('dictionaries_failed')
+                or refreshed.get('tree_waiting')
+            ):
+                logger.warning(
+                    'Demanded Ozon references waiting marketplace_id=%s '
+                    'selected=%s failed=%s dictionaries_failed=%s tree_waiting=%s',
+                    marketplace.id,
+                    refreshed.get('selected', 0),
+                    refreshed.get('failed', 0),
+                    refreshed.get('dictionaries_failed', 0),
+                    bool(refreshed.get('tree_waiting')),
+                )
+        return result
+
+
 def poll_ozon_marketplace_operations(flask_app, limit: int = 20):
     """Advance a bounded due batch without ever logging payloads or secrets."""
     from services.marketplace_publications import MarketplacePublicationService
+    from services.ozon_bulk_upload import OzonBulkUploadService
 
     with flask_app.app_context():
         allow_submission = bool(
@@ -1308,7 +1540,7 @@ def poll_ozon_marketplace_operations(flask_app, limit: int = 20):
             )
         except Exception:
             logger.exception('Durable Ozon operation poll failed')
-            return {
+            result = {
                 'selected': 0,
                 'processed': 0,
                 'busy': 0,
@@ -1323,6 +1555,15 @@ def poll_ozon_marketplace_operations(flask_app, limit: int = 20):
                 result['failed'],
                 allow_submission,
             )
+        # Seller-facing bulk runs only reflect already durable operation rows;
+        # this hook performs no provider call and remains safe when writes are
+        # disabled after a rollout.
+        try:
+            upload_runs = OzonBulkUploadService.reconcile_active_runs(limit=20)
+        except Exception:
+            logger.exception('Ozon bulk upload run reconciliation failed')
+            upload_runs = {'selected': 0, 'reconciled': 0, 'failed': 1}
+        result['upload_runs'] = upload_runs
         return result
 
 
@@ -1886,6 +2127,15 @@ def _run_competitor_monitor_tick(flask_app):
         logger.error(f"Ошибка competitor monitor tick: {e}")
 
 
+def _run_competitor_matching_tick(flask_app):
+    """Изолированный wrapper общей очереди сопоставлений конкурентов."""
+    try:
+        from services.competitor_matching import run_competitor_matching_tick
+        run_competitor_matching_tick(flask_app)
+    except Exception as e:
+        logger.error(f"Ошибка competitor matching tick: {e}")
+
+
 def _compact_competitor_snapshots(flask_app):
     """Чанковая компакция снимков конкурентов (без длинного write-lock)."""
     try:
@@ -1893,3 +2143,55 @@ def _compact_competitor_snapshots(flask_app):
         compact_competitor_snapshots(flask_app)
     except Exception as e:
         logger.error(f"Ошибка компакции снимков конкурентов: {e}")
+
+
+def reconcile_submitted_prices(flask_app):
+    """Подтвердить или отклонить отправленные цены по факту с площадки.
+
+    Bounded: до трёх продавцов и до трёх запусков на продавца за тик, только
+    чтение WB. Повторных отправок цен здесь нет — неудачные позиции остаются
+    продавцу для явного решения.
+    """
+    with flask_app.app_context():
+        from models import PriceChangeBatch, Seller, db
+        from services.price_reconciliation import PriceReconciliationService
+        from services.wb_api_client import WildberriesAPIClient
+
+        seller_ids = [
+            row[0] for row in db.session.query(
+                PriceChangeBatch.seller_id
+            ).filter(
+                PriceChangeBatch.status.in_(('submitted', 'applying'))
+            ).distinct().limit(3).all()
+        ]
+        for seller_id in seller_ids:
+            seller = Seller.query.get(seller_id)
+            if not seller or not seller.has_valid_api_key():
+                continue
+            batches = PriceReconciliationService.pending_batches(
+                seller_id=seller_id, limit=3,
+            )
+            if not batches:
+                continue
+            api_client = WildberriesAPIClient(seller.wb_api_key)
+            try:
+                for batch in batches:
+                    try:
+                        outcome = PriceReconciliationService.reconcile_batch(
+                            batch=batch, api_client=api_client,
+                        )
+                        logger.info(
+                            'Price reconcile batch=%s confirmed=%s rejected=%s waiting=%s',
+                            batch.id, outcome.confirmed, outcome.rejected,
+                            outcome.still_waiting,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        db.session.rollback()
+                        logger.error(
+                            'Price reconcile failed for batch %s: %s', batch.id, exc
+                        )
+            finally:
+                try:
+                    api_client.close()
+                except Exception:  # noqa: BLE001
+                    pass

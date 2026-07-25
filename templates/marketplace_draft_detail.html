@@ -87,7 +87,8 @@
             <div class="rounded border p-3" style="border-color:var(--border)">
                 <div class="text-xs" style="color:var(--text-muted)">Категория Ozon</div>
                 <div class="mt-1 text-sm font-medium" style="color:{{ 'var(--ok)' if readiness.category.status in ['exact_mapping', 'linked_listing'] else ('var(--warn)' if readiness.category.status == 'selected' else 'var(--danger)') }}">
-                    {% if readiness.category.status == 'exact_mapping' and readiness.category.mapping_source_type == 'wb' %}Точное сопоставление по категории WB
+                    {% if readiness.category.status == 'exact_mapping' and readiness.category.mapping_origin == 'deterministic' %}Подтверждено связанными карточками Ozon
+                    {% elif readiness.category.status == 'exact_mapping' and readiness.category.mapping_source_type == 'wb' %}Точное сопоставление по категории WB
                     {% elif readiness.category.status == 'exact_mapping' %}Точное сопоставление по категории поставщика
                     {% elif readiness.category.status == 'linked_listing' %}Из связанной карточки на Ozon
                     {% elif readiness.category.status == 'selected' %}Выбрана вручную
@@ -98,7 +99,7 @@
             </div>
             <div class="rounded border p-3" style="border-color:var(--border)">
                 <div class="text-xs" style="color:var(--text-muted)">Схема Ozon</div>
-                <div class="mt-1 text-sm font-medium" style="color:{{ 'var(--ok)' if readiness.schema.fresh else 'var(--danger)' }}">{{ 'Свежая' if readiness.schema.fresh else 'Нет свежей схемы' }}</div>
+                <div class="mt-1 text-sm font-medium" style="color:{{ 'var(--ok)' if readiness.schema.fresh else 'var(--warn)' }}">{{ 'Свежая' if readiness.schema.fresh else 'Загружается автоматически' }}</div>
                 <p class="mt-1 text-xs" style="color:var(--text-secondary)">версия {{ readiness.schema.version or '—' }}</p>
             </div>
             <div class="rounded border p-3" style="border-color:var(--border)">
@@ -197,9 +198,8 @@
                     <input type="hidden" name="product_type_id" value="{{ item.id }}">
                     <input type="hidden" name="save_mapping" value="1">
                     <span style="color:var(--text)">{{ item.category_path }} / <b>{{ item.name }}</b></span>
-                    <span class="text-xs" style="color:var(--text-muted)">схема {{ 'актуальна' if item.schema_fresh else 'устарела' }}</span>
-                    <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit"
-                            {% if not item.schema_fresh %}disabled title="Сначала дождитесь синхронизации схемы"{% endif %}>Привязать</button>
+                    <span class="text-xs" style="color:var(--text-muted)">{{ 'схема актуальна' if item.schema_fresh else 'схема загрузится после привязки' }}</span>
+                    <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">Привязать</button>
                 </form>
                 {% endfor %}
             </div>
@@ -226,12 +226,12 @@
                 <select name="product_type_id" required class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                         style="border-color:var(--border);color:var(--text)">
                     {% for item in type_options %}
-                    <option value="{{ item.id }}">{{ item.category_path }} / {{ item.name }} · схема {{ 'актуальна' if item.schema_fresh else 'устарела' }}</option>
+                    <option value="{{ item.id }}">{{ item.category_path }} / {{ item.name }} · {{ 'схема актуальна' if item.schema_fresh else 'загрузится автоматически' }}</option>
                     {% endfor %}
                 </select>
                 <label class="mt-2 inline-flex items-center gap-2 text-xs" style="color:var(--text-secondary)">
                     <input type="checkbox" name="save_mapping" value="1" checked>
-                    Запомнить точное сопоставление для этой категории поставщика и продавца
+                    Запомнить для этой точной исходной категории или предмета WB
                 </label>
             </label>
             <div class="flex items-end"><button class="sh-btn sh-btn--primary" type="submit">Привязать</button></div>
@@ -362,6 +362,45 @@
                               style="border-color:var(--border);color:var(--text)">{{ draft_data.dimensions | tojson(indent=2) }}</textarea>
                 </details>
             </section>
+
+            {% if draft.published_listing_id or draft_data.attribute_removals %}
+            <section class="sh-card p-4">
+                <h2 class="font-semibold" style="color:var(--text)">
+                    Явная очистка атрибутов Ozon
+                    {% if draft_data.attribute_removals %}
+                    <span class="text-xs font-normal" style="color:var(--warn)">
+                        · {{ draft_data.attribute_removals | length }}
+                    </span>
+                    {% endif %}
+                </h2>
+                <p class="mt-1 text-xs" style="color:var(--text-muted)">
+                    Список действует только при полном обновлении существующей
+                    карточки. Пустой список сохраняет всё live-состояние.
+                    Массовый редактор формирует его из точных ошибок текущей
+                    схемы; перед записью карточка повторно сверяется с Ozon.
+                </p>
+                {% if draft_data.attribute_removals %}
+                <ul class="mt-3 text-xs" style="color:var(--text-secondary)">
+                    {% for item in draft_data.attribute_removals %}
+                    <li>
+                        Атрибут {{ item.attribute_id }}
+                        {% if item.complex_id != '0' %}
+                        · complex {{ item.complex_id }}
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+                <details class="mt-3">
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">
+                        Проверить или очистить список как JSON
+                    </summary>
+                    <textarea name="attribute_removals_json" rows="6"
+                              class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
+                              style="border-color:var(--border);color:var(--text)">{{ draft_data.attribute_removals | tojson(indent=2) }}</textarea>
+                </details>
+            </section>
+            {% endif %}
 
             <section class="sh-card p-4">
                 <h2 class="font-semibold" style="color:var(--text)">Медиа</h2>

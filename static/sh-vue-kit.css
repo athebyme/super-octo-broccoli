@@ -1,0 +1,463 @@
+/* Seller Hub · Vue Kit — стили общих компонентов.
+   Только токены «Тёплой редакции» из base.html: обе темы работают сами. */
+
+[v-cloak] { display: none !important; }
+
+.shk-page {
+    display: block;
+    max-width: 1560px;
+    margin: 0 auto;
+    padding: 20px 24px 48px;
+}
+.shk-page--narrow { max-width: 1180px; }
+
+/* ---------- Шапка страницы ---------- */
+.shk-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+.shk-head-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+}
+.shk-head-sub {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.shk-head-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.shk-btn-icon { width: 15px; height: 15px; margin-right: 6px; flex: none; }
+
+/* Переключатель на прежний интерфейс — временная служебная ссылка,
+   она не должна выглядеть равной действию страницы. */
+.shk-quiet-link {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--border);
+    padding-bottom: 1px;
+    transition: color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+.shk-quiet-link:hover { color: var(--text-secondary); border-color: var(--text-muted); }
+.shk-quiet-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* ---------- Плитки показателей ---------- */
+.shk-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+}
+.shk-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    text-decoration: none;
+    transition: border-color var(--dur-1) var(--ease-out),
+                box-shadow var(--dur-2) var(--ease-out),
+                transform var(--dur-2) var(--ease-out);
+}
+.shk-stat--link:hover {
+    border-color: var(--accent);
+    box-shadow: var(--shadow-1);
+    transform: translateY(-1px);
+}
+.shk-stat--link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.shk-stat-label {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+.shk-stat-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+}
+.shk-stat-foot { display: flex; align-items: baseline; gap: 8px; min-height: 16px; }
+.shk-stat-trend { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.shk-stat-trend.is-up { color: var(--ok); }
+.shk-stat-trend.is-down { color: var(--danger); }
+.shk-stat-hint { font-size: 11px; color: var(--text-muted); }
+.shk-stat--danger { border-color: var(--danger-border); background: var(--danger-bg); }
+.shk-stat--danger .shk-stat-value { color: var(--danger); }
+.shk-stat--warn { border-color: var(--warn-border); background: var(--warn-bg); }
+.shk-stat--warn .shk-stat-value { color: var(--warn); }
+.shk-stat--ok { border-color: var(--ok-border); background: var(--ok-bg); }
+.shk-stat--ok .shk-stat-value { color: var(--ok); }
+
+/* ---------- Строка фильтров ---------- */
+.shk-filters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 0 12px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--border-light);
+}
+.shk-filters.is-sticky {
+    position: sticky;
+    top: 56px; /* высота .sh-topbar */
+    z-index: var(--z-sticky, 1010);
+    background: color-mix(in srgb, var(--bg) 90%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+.shk-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 240px;
+    min-width: 200px;
+    max-width: 420px;
+    padding: 0 12px;
+    height: 36px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.shk-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+.shk-search svg { width: 15px; height: 15px; color: var(--text-muted); flex: none; }
+.shk-search input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    font-size: 13px;
+    color: var(--text);
+    background: transparent;
+    border: none;
+    outline: none;
+}
+.shk-search input::placeholder { color: var(--text-muted); }
+.shk-search kbd {
+    flex: none;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--text-muted);
+    padding: 3px 6px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xs);
+}
+.shk-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.shk-chip-n {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    padding-left: 3px;
+}
+.sh-chip--active .shk-chip-n { color: inherit; opacity: 0.75; }
+.shk-chip--alarm { color: var(--danger); border-color: var(--danger-border); }
+.shk-chip--alarm .shk-chip-n { color: var(--danger); }
+.shk-filters-tools { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+
+/* ---------- Таблица ---------- */
+.shk-table-wrap {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    overflow-x: auto;
+}
+.shk-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.shk-table th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    user-select: none;
+}
+.shk-table th.is-sortable { cursor: pointer; }
+.shk-table th.is-sortable:hover { color: var(--text-secondary); }
+.shk-sort { color: var(--accent); margin-left: 2px; }
+.shk-table td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border-light);
+    color: var(--text-secondary);
+    vertical-align: middle;
+}
+.shk-table tbody tr {
+    cursor: pointer;
+    transition: background-color var(--dur-1) var(--ease-out);
+}
+.shk-table tbody tr:hover { background: var(--bg-hover); }
+.shk-table tbody tr:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.shk-table tbody tr.is-selected { background: var(--accent-light); }
+.shk-table tbody tr:last-child td { border-bottom: none; }
+.shk-table tbody tr.shk-row-skeleton { cursor: default; }
+.shk-table tbody tr.shk-row-skeleton:hover { background: transparent; }
+.shk-th-num, .shk-td-num { text-align: right; font-variant-numeric: tabular-nums; }
+.shk-td-num { color: var(--text); font-weight: 500; white-space: nowrap; }
+.shk-th-check, .shk-td-check { width: 38px; padding-right: 0; }
+.shk-th-check input, .shk-td-check input { accent-color: var(--accent); cursor: pointer; }
+
+/* ---------- Панель массовых действий ---------- */
+.shk-bulkbar {
+    position: sticky;
+    bottom: 16px;
+    z-index: var(--z-sticky, 1010);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    padding: 10px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-3);
+}
+.shk-bulkbar-count { font-size: 13px; font-weight: 500; color: var(--text); }
+.shk-bulkbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.shk-bulkbar-clear {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 4px 6px;
+    border-radius: var(--r-xs);
+}
+.shk-bulkbar-clear:hover { color: var(--text); background: var(--bg-hover); }
+.shk-bulkbar-clear:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* ---------- Боковая панель ---------- */
+.shk-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 8, 6, 0.4);
+    z-index: var(--z-backdrop, 1040);
+}
+.shk-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-3);
+    z-index: var(--z-overlay, 1050);
+}
+.shk-drawer-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-light);
+}
+.shk-drawer-title {
+    font-family: var(--font-body, 'Inter', sans-serif);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-right: auto;
+}
+.shk-drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.shk-drawer-foot { padding: 12px 16px; border-top: 1px solid var(--border-light); }
+.shk-drawer-foot .sh-btn { width: 100%; justify-content: center; }
+
+/* ---------- Пустые состояния и ошибки ---------- */
+.shk-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    text-align: center;
+    padding: 56px 20px;
+}
+.shk-empty-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.shk-empty-text { font-size: 13px; color: var(--text-secondary); max-width: 420px; margin-bottom: 6px; }
+.shk-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: var(--danger);
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--r-md);
+}
+
+/* ---------- Меню массовых действий ---------- */
+.shk-actions { position: relative; display: inline-block; }
+.shk-actions-caret { width: 13px; height: 13px; margin-left: 4px; }
+.shk-actions-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    min-width: 268px;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-3);
+    z-index: var(--z-dropdown, 1000);
+}
+.shk-actions-group { padding: 4px 0; border-bottom: 1px solid var(--border-light); }
+.shk-actions-group:last-child { border-bottom: none; }
+.shk-actions-group-title {
+    display: block;
+    padding: 4px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+.shk-actions-item {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    width: 100%;
+    padding: 7px 10px;
+    text-align: left;
+    border-radius: var(--r-sm);
+    transition: background-color var(--dur-1) var(--ease-out);
+}
+.shk-actions-item:hover:not(:disabled) { background: var(--bg-hover); }
+.shk-actions-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.shk-actions-item:disabled { opacity: 0.45; cursor: not-allowed; }
+.shk-actions-item-label { font-size: 13px; color: var(--text); }
+.shk-actions-item-hint { font-size: 11px; color: var(--text-muted); }
+.shk-actions-item.is-danger .shk-actions-item-label { color: var(--danger); }
+.shk-actions-item.is-danger:hover:not(:disabled) { background: var(--danger-bg); }
+
+/* ---------- Подтверждение ---------- */
+.shk-confirm {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(440px, calc(100vw - 32px));
+    padding: 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-3);
+    z-index: var(--z-overlay, 1050);
+}
+.shk-confirm-title {
+    font-family: var(--font-body, 'Inter', sans-serif);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+.shk-confirm-text { font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+.shk-confirm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+    border-radius: var(--r-sm);
+}
+.shk-confirm-list li { display: flex; gap: 6px; }
+.shk-confirm-list li::before { content: '·'; color: var(--text-muted); }
+.shk-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.shk-rise-enter-from .shk-confirm, .shk-rise-leave-to .shk-confirm { transform: translate(-50%, -46%); }
+
+/* ---------- Ход фоновой задачи ---------- */
+.shk-job {
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+}
+.shk-job--ok { border-color: var(--ok-border); background: var(--ok-bg); }
+.shk-job--warn { border-color: var(--warn-border); background: var(--warn-bg); }
+.shk-job--danger { border-color: var(--danger-border); background: var(--danger-bg); }
+.shk-job-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.shk-job-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.shk-job-count { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; margin-left: auto; }
+.shk-job-close {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 2px 6px;
+    border-radius: var(--r-xs);
+}
+.shk-job-close:hover { color: var(--text); background: var(--bg-hover); }
+.shk-job-message { font-size: 12px; color: var(--text-secondary); margin-top: 8px; line-height: 1.45; }
+.shk-job-result { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.shk-job-stat { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.shk-job-stat.is-ok { color: var(--ok); }
+.shk-job-stat.is-danger { color: var(--danger); }
+
+/* ---------- Бейджи ---------- */
+.shk-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    padding: 4px 8px;
+    border-radius: var(--r-pill);
+    white-space: nowrap;
+}
+.shk-badge--ok { color: var(--ok); background: var(--ok-bg); border: 1px solid var(--ok-border); }
+.shk-badge--info { color: var(--info); background: var(--info-bg); border: 1px solid var(--info-border); }
+.shk-badge--warn { color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-border); }
+.shk-badge--danger { color: var(--danger); background: var(--danger-bg); border: 1px solid var(--danger-border); }
+.shk-badge--muted { color: var(--text-secondary); background: var(--bg-hover); border: 1px solid var(--border); }
+.shk-badge--accent { color: var(--accent); background: var(--accent-light); border: 1px solid var(--accent-light); }
+
+/* ---------- Переходы ---------- */
+.shk-fade-enter-active, .shk-fade-leave-active { transition: opacity var(--dur-2) var(--ease-out); }
+.shk-fade-enter-from, .shk-fade-leave-to { opacity: 0; }
+.shk-slide-enter-active, .shk-slide-leave-active { transition: transform var(--dur-3) var(--ease-out); }
+.shk-slide-enter-from, .shk-slide-leave-to { transform: translateX(100%); }
+.shk-rise-enter-active, .shk-rise-leave-active {
+    transition: transform var(--dur-2) var(--ease-out), opacity var(--dur-2) var(--ease-out);
+}
+.shk-rise-enter-from, .shk-rise-leave-to { transform: translateY(8px); opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+    .shk-fade-enter-active, .shk-fade-leave-active,
+    .shk-slide-enter-active, .shk-slide-leave-active,
+    .shk-rise-enter-active, .shk-rise-leave-active { transition: none; }
+    .shk-stat--link:hover { transform: none; }
+}
+
+/* ---------- Мобильный ---------- */
+@media (max-width: 720px) {
+    .shk-page { padding: 14px 14px 40px; }
+    .shk-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+    .shk-stat-value { font-size: 19px; }
+    .shk-filters-tools { margin-left: 0; }
+    .shk-search { max-width: none; }
+    .shk-bulkbar { bottom: 8px; }
+}

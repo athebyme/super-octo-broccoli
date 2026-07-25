@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
 
-{% block title %}Массовое обновление фото WB — Seller Hub{% endblock %}
+{% block title %}Массовое обновление {{ 'характеристик' if preset == 'characteristics' else 'фото' }} WB — Seller Hub{% endblock %}
 
 {% block content %}
 <style>
@@ -33,6 +33,7 @@
   .be-fields { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; margin-top:12px; }
   .be-field { display:flex; align-items:flex-start; gap:10px; min-width:0; padding:12px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--bg); cursor:pointer; }
   .be-field:hover { background:var(--bg-hover); }
+  .be-field.is-active { border-color:var(--accent); background:var(--accent-light); }
   .be-field input { width:16px; height:16px; margin-top:1px; accent-color:var(--accent); flex-shrink:0; }
   .be-summary { position:sticky; top:76px; }
   .be-summary-list { display:flex; flex-direction:column; gap:11px; }
@@ -47,7 +48,7 @@
   .be-status-icon { width:40px; height:40px; display:flex; align-items:center; justify-content:center; border-radius:var(--r-md); background:var(--accent-light); color:var(--accent); }
   .be-status-icon.is-ok { background:var(--ok-bg); color:var(--ok); }
   .be-status-icon.is-error { background:var(--danger-bg); color:var(--danger); }
-  .be-stat-grid { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; margin-top:18px; }
+  .be-stat-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin-top:18px; }
   .be-stat { padding:13px; border:1px solid var(--border); border-radius:var(--r-md); background:var(--bg); }
   .be-stat-value { display:block; color:var(--text); font-size:21px; font-weight:650; font-variant-numeric:tabular-nums; }
   .be-stat-label { color:var(--text-muted); font-size:11px; }
@@ -55,6 +56,7 @@
   .be-result-title { display:flex; align-items:center; gap:8px; }
   .be-result-status { display:inline-flex; align-items:center; padding:3px 8px; border-radius:var(--r-pill); font-size:11px; font-weight:600; white-space:nowrap; }
   .be-result-status.is-success { color:var(--ok); background:var(--ok-bg); }
+  .be-result-status.is-submitted { color:var(--accent); background:var(--accent-light); }
   .be-result-status.is-skipped { color:var(--warn); background:var(--warn-bg); }
   .be-result-status.is-failed { color:var(--danger); background:var(--danger-bg); }
   .be-muted { color:var(--text-muted); }
@@ -79,11 +81,23 @@
   <div class="sh-page-header">
     <div class="sh-page-header-content">
       <div>
-        <h1 class="sh-page-title">Массовое обновление фото</h1>
-        <p class="sh-page-subtitle">Один запуск — все выбранные карточки WB. Ошибка одной карточки не остановит остальные.</p>
+        <h1 class="sh-page-title">
+          {{ 'Отправка характеристик на WB' if preset == 'characteristics' else 'Массовое обновление фото' }}
+        </h1>
+        <p class="sh-page-subtitle">
+          {% if preset == 'characteristics' %}
+          Характеристики и габариты отправятся на WB только после вашего подтверждения. Ошибка одной карточки не остановит остальные.
+          {% else %}
+          Один запуск — все выбранные карточки WB. Ошибка одной карточки не остановит остальные.
+          {% endif %}
+        </p>
         <div class="be-header-meta">
           <span class="be-header-pill">{{ icon('check-circle', size=15) }} Выбрано: {{ count }}</span>
+          {% if preset == 'characteristics' %}
+          <span class="be-header-pill">{{ icon('package', size=15) }} Связано с поставщиком: {{ matched_count }}</span>
+          {% else %}
           <span class="be-header-pill">{{ icon('image', size=15) }} С фото поставщика: {{ photo_ready_count }}</span>
+          {% endif %}
         </div>
       </div>
       <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--white-outline sh-btn--md">
@@ -94,7 +108,17 @@
   </div>
 
   <section x-show="phase === 'config'" aria-labelledby="bulk-config-title">
-    {% if photo_ready_count < count %}
+    {% if preset == 'characteristics' %}
+    <div class="sh-alert sh-alert--info" role="status">
+      <div class="sh-alert-icon">{{ icon('info-circle', size=18) }}</div>
+      <div class="sh-alert-content">
+        Это отдельная запись на WB. Непустые live-значения сохраняются; добавляются
+        отсутствующие и только доказанно более полные характеристики. Фотографии
+        здесь выключены.
+      </div>
+    </div>
+    {% endif %}
+    {% if photo_ready_count < count and preset != 'characteristics' %}
     <div class="sh-alert sh-alert--warning" role="status">
       <div class="sh-alert-icon">{{ icon('warning', size=18) }}</div>
       <div class="sh-alert-content">
@@ -108,7 +132,13 @@
         <div class="sh-card-header">
           <div>
             <h2 id="bulk-config-title" class="sh-card-title">Что обновить</h2>
-            <p class="be-copy">По умолчанию выбраны только фотографии. Название, описание и характеристики не изменятся.</p>
+            <p class="be-copy">
+              {% if preset == 'characteristics' %}
+              Предвыбраны характеристики и габариты. Название, описание, бренд и фотографии не изменятся.
+              {% else %}
+              По умолчанию выбраны только фотографии. Название, описание и характеристики не изменятся.
+              {% endif %}
+            </p>
           </div>
         </div>
 
@@ -118,17 +148,17 @@
             <input type="checkbox" x-model="fields.photos" class="be-check" aria-label="Обновить фотографии">
             <span>
               <span class="be-title">Фотографии</span>
-              <span class="be-copy block">Актуальная галерея поставщика будет последовательно загружена во все выбранные карточки WB.</span>
+              <span class="be-copy block">Галерея поставщика будет сопоставлена со свежими фото WB; добавятся только безопасно определённые отсутствующие фото.</span>
             </span>
           </label>
         </div>
 
         <div x-show="fields.photos" x-transition>
           <div class="be-mode-list" role="radiogroup" aria-label="Режим обновления фотографий">
-            <label class="be-mode" :class="{'is-active': photoStrategy === 'replace'}">
-              <input type="radio" x-model="photoStrategy" value="replace">
-              <span class="be-mode-name"><span class="be-mode-dot"></span>Обновить галерею</span>
-              <span class="be-mode-desc">Подходит для дообновления существующих карточек: фото поставщика загружаются заново по порядку.</span>
+            <label class="be-mode" :class="{'is-active': photoStrategy === 'smart_merge'}">
+              <input type="radio" x-model="photoStrategy" value="smart_merge">
+              <span class="be-mode-name"><span class="be-mode-dot"></span>Умно дополнить</span>
+              <span class="be-mode-desc">Live-фото WB сравниваются с фото поставщика. Ручные фото и порядок сохраняются, добавляются только отсутствующие.</span>
             </label>
             <label class="be-mode" :class="{'is-active': photoStrategy === 'only_if_empty'}">
               <input type="radio" x-model="photoStrategy" value="only_if_empty">
@@ -138,30 +168,30 @@
           </div>
         </div>
 
-        <details class="be-advanced">
+        <details class="be-advanced" {% if preset == 'characteristics' %}open{% endif %}>
           <summary>
             {{ icon('chevron-right', size=16) }}
-            Дополнительно обновить другие поля
+            {{ 'Характеристики и другие поля' if preset == 'characteristics' else 'Дополнительно обновить другие поля' }}
             <span class="sh-badge sh-badge--gray sh-badge--sm" x-text="extraFieldsCount ? extraFieldsCount + ' выбрано' : 'не выбрано'"></span>
           </summary>
           <div class="be-fields">
-            <label class="be-field">
+            <label class="be-field" :class="{'is-active': fields.title}">
               <input type="checkbox" x-model="fields.title">
               <span><span class="be-title block">Заголовок</span><span class="be-copy block">SEO-название поставщика</span></span>
             </label>
-            <label class="be-field">
+            <label class="be-field" :class="{'is-active': fields.description}">
               <input type="checkbox" x-model="fields.description">
               <span><span class="be-title block">Описание</span><span class="be-copy block">Полное описание товара</span></span>
             </label>
-            <label class="be-field">
+            <label class="be-field" :class="{'is-active': fields.characteristics}">
               <input type="checkbox" x-model="fields.characteristics">
-              <span><span class="be-title block">Характеристики</span><span class="be-copy block">Только после проверки словарей WB</span></span>
+              <span><span class="be-title block">Характеристики</span><span class="be-copy block">Новые и строго более полные; более полные live-значения WB сохраняются</span></span>
             </label>
-            <label class="be-field">
+            <label class="be-field" :class="{'is-active': fields.dimensions}">
               <input type="checkbox" x-model="fields.dimensions">
               <span><span class="be-title block">Габариты</span><span class="be-copy block">Длина, ширина, высота и вес</span></span>
             </label>
-            <label class="be-field">
+            <label class="be-field" :class="{'is-active': fields.brand}">
               <input type="checkbox" x-model="fields.brand">
               <span><span class="be-title block">Бренд</span><span class="be-copy block" style="color:var(--warn)">Может повлиять на SEO и позиции</span></span>
             </label>
@@ -177,8 +207,8 @@
             <span class="be-summary-value">{{ count }}</span>
           </div>
           <div class="be-summary-row">
-            <span class="be-summary-label">Доступно фото</span>
-            <span class="be-summary-value">{{ photo_ready_count }}</span>
+            <span class="be-summary-label">{{ 'Связано с поставщиком' if preset == 'characteristics' else 'Доступно фото' }}</span>
+            <span class="be-summary-value">{{ matched_count if preset == 'characteristics' else photo_ready_count }}</span>
           </div>
           <div class="be-summary-row">
             <span class="be-summary-label">Выбрано полей</span>
@@ -191,7 +221,7 @@
                   :class="{'is-loading': starting}"
                   class="sh-btn sh-btn--accent sh-btn--lg">
             <span class="sh-btn-icon">{{ icon('check', size=16) }}</span>
-            <span x-text="isPhotoOnly ? 'Подтвердить обновление фото' : 'Запустить обновление'"></span>
+            <span x-text="isPhotoOnly ? 'Подтвердить обновление фото' : (isCharacteristicsOnly ? 'Подтвердить отправку характеристик' : 'Запустить обновление')"></span>
           </button>
           <a href="{{ url_for('products_list') }}" class="sh-btn sh-btn--secondary sh-btn--md">Отмена</a>
         </div>
@@ -228,7 +258,10 @@
 
       <div class="be-stat-grid">
         <div class="be-stat"><span class="be-stat-value" x-text="progress.total"></span><span class="be-stat-label">Всего</span></div>
-        <div class="be-stat" style="background:var(--ok-bg);border-color:var(--ok-border)"><span class="be-stat-value" style="color:var(--ok)" x-text="progress.succeeded"></span><span class="be-stat-label">Обновлено</span></div>
+        <div class="be-stat" style="background:var(--accent-light);border-color:var(--accent)"><span class="be-stat-value" style="color:var(--accent)" x-text="progress.succeeded"></span><span class="be-stat-label">Отправлено</span></div>
+        <div class="be-stat" style="background:var(--ok-bg);border-color:var(--ok-border)"><span class="be-stat-value" style="color:var(--ok)" x-text="progress.confirmed"></span><span class="be-stat-label">Подтверждено WB</span></div>
+        <div class="be-stat" style="background:var(--warn-bg);border-color:var(--warn-border)"><span class="be-stat-value" style="color:var(--warn)" x-text="progress.reconciliationPending"></span><span class="be-stat-label">Ожидает сверки</span></div>
+        <div class="be-stat" style="background:var(--danger-bg);border-color:var(--danger-border)"><span class="be-stat-value" style="color:var(--danger)" x-text="progress.conflicted"></span><span class="be-stat-label">Конфликтов WB</span></div>
         <div class="be-stat" style="background:var(--warn-bg);border-color:var(--warn-border)"><span class="be-stat-value" style="color:var(--warn)" x-text="progress.skipped"></span><span class="be-stat-label">Пропущено</span></div>
         <div class="be-stat" style="background:var(--danger-bg);border-color:var(--danger-border)"><span class="be-stat-value" style="color:var(--danger)" x-text="progress.failed"></span><span class="be-stat-label">Ошибок</span></div>
       </div>
@@ -267,6 +300,9 @@ function bulkEnrichApp(productIds) {
     pollTimer: null,
     starting: false,
     jobFailed: false,
+    jobErrorText: null,
+    reconcilePolling: false,
+    dispatchToastShown: false,
     {% if preset == 'characteristics' %}
     // Явный переход «Отправить характеристики» из «Моих товаров»:
     // предвыбраны характеристики и габариты, фото выключены.
@@ -289,9 +325,9 @@ function bulkEnrichApp(productIds) {
       brand: false,
     },
     {% endif %}
-    // Existing WB cards must not be skipped in the default photo refresh.
-    photoStrategy: 'replace',
-    progress: { total: productIds.length, processed: 0, succeeded: 0, failed: 0, skipped: 0, pct: 0 },
+    // Default is append-only after perceptual matching against the live gallery.
+    photoStrategy: 'smart_merge',
+    progress: { total: productIds.length, processed: 0, succeeded: 0, confirmed: 0, conflicted: 0, reconciliationPending: 0, failed: 0, skipped: 0, pct: 0 },
     results: [],
 
     get selectedFieldsCount() {
@@ -303,11 +339,26 @@ function bulkEnrichApp(productIds) {
     get isPhotoOnly() {
       return this.fields.photos && this.selectedFieldsCount === 1;
     },
+    get isCharacteristicsOnly() {
+      return !this.fields.photos
+        && this.fields.characteristics
+        && this.fields.dimensions
+        && this.selectedFieldsCount === 2;
+    },
     get statusTitle() {
-      if (this.phase === 'running') return this.isPhotoOnly ? 'Обновляем фотографии…' : 'Обновляем карточки…';
-      if (this.jobFailed) return 'Задача остановилась с ошибкой';
-      if (this.progress.failed) return 'Обновление завершено с отдельными ошибками';
-      return 'Обновление завершено';
+      if (this.phase === 'running') {
+        if (this.isPhotoOnly) return 'Обновляем фотографии…';
+        if (this.isCharacteristicsOnly) return 'Отправляем характеристики…';
+        return 'Обновляем карточки…';
+      }
+      if (this.jobFailed) {
+        return this.jobErrorText
+          ? 'Отправка остановлена: ' + this.jobErrorText
+          : 'Задача остановилась с ошибкой';
+      }
+      if (this.progress.failed || this.progress.conflicted) return 'Отправка завершена с отдельными проблемами';
+      if (this.progress.reconciliationPending) return 'Отправка завершена — WB проверяется';
+      return 'Изменения подтверждены WB';
     },
 
     notify(type, title, message) {
@@ -371,6 +422,9 @@ function bulkEnrichApp(productIds) {
           total: data.total || 0,
           processed: data.processed || 0,
           succeeded: data.succeeded || 0,
+          confirmed: data.confirmed || 0,
+          conflicted: data.conflicted || 0,
+          reconciliationPending: data.reconciliation_pending || 0,
           failed: data.failed || 0,
           skipped: data.skipped || 0,
           pct: data.progress_pct || 0,
@@ -378,15 +432,23 @@ function bulkEnrichApp(productIds) {
         this.results = Array.isArray(data.results) ? data.results : [];
 
         if (data.status === 'done' || data.status === 'failed') {
-          if (this.pollTimer) clearInterval(this.pollTimer);
-          this.pollTimer = null;
           this.jobFailed = data.status === 'failed';
+          this.jobErrorText = data.last_error_text || null;
           this.phase = 'done';
-          if (!this.jobFailed) {
+          if (this.jobFailed || !data.reconciliation_pending) {
+            if (this.pollTimer) clearInterval(this.pollTimer);
+            this.pollTimer = null;
+          } else if (!this.reconcilePolling) {
+            if (this.pollTimer) clearInterval(this.pollTimer);
+            this.pollTimer = setInterval(() => this.pollStatus(), 10000);
+            this.reconcilePolling = true;
+          }
+          if (!this.jobFailed && !this.dispatchToastShown) {
+            this.dispatchToastShown = true;
             this.notify(
               data.failed ? 'warning' : 'success',
-              'Массовое обновление завершено',
-              'Обновлено: ' + data.succeeded + ', пропущено: ' + data.skipped + ', ошибок: ' + data.failed,
+              'Отправка массового дообогащения завершена',
+              'Отправлено: ' + data.succeeded + ', ожидает сверки WB: ' + data.reconciliation_pending + ', пропущено: ' + data.skipped + ', ошибок до отправки: ' + data.failed,
             );
           }
         }
@@ -396,13 +458,21 @@ function bulkEnrichApp(productIds) {
     },
 
     statusLabel(status) {
-      return {success: 'Обновлено', skipped: 'Пропущено', failed: 'Ошибка'}[status] || status;
+      return {submitted: 'Отправлено, сверяется', success: 'Подтверждено', skipped: 'Пропущено', failed: 'Ошибка'}[status] || status;
     },
 
     resultMessage(row) {
-      if (row.status === 'success') {
+      const charCounts = row.merge_summary?.characteristics || {};
+      const preservedChars = (charCounts.preserved_existing || 0) + (charCounts.unchanged || 0);
+      const photoMatchingBlocked = row.merge_summary?.photos?.matching_status === 'blocked';
+      if (row.status === 'success' || row.status === 'submitted') {
         const labels = {photos: 'фотографии', title: 'заголовок', description: 'описание', characteristics: 'характеристики', dimensions: 'габариты', brand: 'бренд'};
-        return (row.fields_applied || []).map(field => labels[field] || field).join(', ') || 'Готово';
+        const applied = (row.fields_applied || []).map(field => labels[field] || field).join(', ') || 'Готово';
+        const details = [];
+        if (preservedChars) details.push('сохранено live-характеристик: ' + preservedChars);
+        if (photoMatchingBlocked) details.push('несопоставленные фото безопасно пропущены');
+        if (row.status === 'submitted') details.push('результат проверяется по live-карточке WB');
+        return details.length ? applied + '; ' + details.join('; ') : applied;
       }
       const reasons = {
         not_found: 'Карточка больше недоступна',
@@ -412,8 +482,12 @@ function bulkEnrichApp(productIds) {
         invalid_photo_urls_json: 'Повреждены данные фотографий',
         photos_not_cached_after_timeout: 'Не удалось получить фото поставщика',
         already_has_photos: 'На WB уже есть фотографии',
+        all_supplier_photos_already_present: 'Все фото поставщика уже есть на WB',
+        gallery_full: 'Галерея WB заполнена; существующие фото сохранены',
+        photo_match_unavailable: 'Не удалось безопасно сопоставить фото',
         nothing_to_update: 'Нет доступных изменений',
       };
+      if (!row.error && preservedChars) return 'Сохранено более полных live-характеристик: ' + preservedChars;
       return row.error || reasons[row.reason] || 'Без изменений';
     },
 

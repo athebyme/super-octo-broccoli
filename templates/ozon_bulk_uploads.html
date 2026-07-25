@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Синхронизация Ozon — Seller Hub{% endblock %}
+
+{% block content %}
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
+        <div>
+            <h1 class="sh-page-title">Синхронизация карточек Ozon</h1>
+            <p class="sh-page-subtitle">Один запуск создаёт новые карточки, полностью обновляет существующие и сохраняет понятный результат по каждой.</p>
+        </div>
+        <div class="sh-page-actions">
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('seller_my_products') }}">Выбрать товары</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index') }}">Черновики</a>
+        </div>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    {% if not ozon_enabled or not publication_enabled %}
+    <div class="sh-alert sh-alert--warning mb-5" role="status">
+        <div class="sh-alert-content">Новые загрузки временно выключены оператором. Уже начатые операции продолжают безопасную сверку результата.</div>
+    </div>
+    {% endif %}
+
+    <section class="sh-card p-4 mb-5">
+        <h2 class="font-semibold" style="color:var(--text)">Как синхронизировать много карточек</h2>
+        <ol class="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3" style="color:var(--text-secondary)">
+            <li><strong style="color:var(--text)">1. Выберите товары</strong><br>В «Моих товарах» отметьте до 200 строк.</li>
+            <li><strong style="color:var(--text)">2. Нажмите «Синхронизировать Ozon»</strong><br>Новые карточки создадутся, существующие пройдут безопасное full-state обновление.</li>
+            <li><strong style="color:var(--text)">3. Откройте один итог</strong><br>Увидите созданные, обновлённые, уже актуальные карточки и точные причины отказа.</li>
+        </ol>
+    </section>
+
+    {% if runs %}
+    <div class="space-y-3">
+        {% for run in runs %}
+        {% set summary = run.summary %}
+        <a class="sh-card block p-4" href="{{ url_for('ozon_bulk_uploads.detail', job_uid=run.job_uid) }}">
+            <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                    <div class="flex flex-wrap items-center gap-2 text-xs" style="color:var(--text-muted)">
+                        <span class="sh-badge sh-badge--sm sh-badge--blue">Ozon</span>
+                        <span>{{ run.account_label or ('Кабинет #' ~ run.account_id) }}</span>
+                        <span>{{ run.created_at[:16].replace('T', ' ') if run.created_at else '—' }}</span>
+                    </div>
+                    <h2 class="mt-2 font-semibold" style="color:var(--text)">
+                        {% if summary.outcome == 'running' %}Синхронизация выполняется
+                        {% elif summary.outcome == 'success' %}Все карточки синхронизированы
+                        {% elif summary.outcome == 'partial' %}Синхронизация завершена частично
+                        {% else %}Карточки требуют внимания{% endif %}
+                    </h2>
+                    <p class="mt-1 text-sm" style="color:var(--text-secondary)">
+                        Создано: {{ summary.created or 0 }} · обновлено: {{ summary.updated or 0 }} · уже актуальны: {{ (summary.already_current or 0) + (summary.already_published or 0) }} · требуют данных: {{ summary.needs_input or 0 }} · ошибок: {{ summary.failed or 0 }}{% if summary.uncertain %} · неопределённый итог: {{ summary.uncertain }}{% endif %}
+                    </p>
+                </div>
+                <div class="sh-btn sh-btn--secondary sh-btn--sm">Открыть итог</div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="sh-card px-4 py-12 text-center">
+        <p class="font-medium" style="color:var(--text)">Массовых синхронизаций ещё не было</p>
+        <p class="mt-1 text-sm" style="color:var(--text-muted)">Выберите карточки в «Моих товарах» — отдельная подготовка черновиков больше не нужна.</p>
+        <a class="sh-btn sh-btn--primary mt-4" href="{{ url_for('seller_my_products') }}">Перейти к товарам</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

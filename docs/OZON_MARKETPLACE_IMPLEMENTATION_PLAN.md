@@ -331,11 +331,24 @@ marketplace/account. Связь хранится через `imported_product_id
 
 Успешная публикация связывает Ozon listing с исходной карточкой напрямую.
 Catalog import существующих карточек делает только deterministic exact
-offer/vendor reconciliation. Одно уникальное совпадение связывается
-автоматически; несколько совпадений дают `ambiguous`; title similarity и LLM
-никогда не создают связь. UI позволяет seller-scoped поиск и optimistic manual
-confirmation. После связи Ozon draft строится из того же neutral fact pack и
-переиспользует `SupplierProduct.ai_parsed_data_json`, без повторного AI parsing.
+offer/vendor/source-ID reconciliation. Закрытый anchored parser знает
+исторические обёртки Сексоптовика (`id-7725-1364` в Ozon и
+`id-7725-1366` в WB имеют source ID `7725`, legacy `S` использует тот же
+source scope) и Андрея (`...A<external>` и unique trailing serial); любые
+неизвестные форматы остаются unmatched. В частности, legacy `K/L` имеют
+пересекающиеся с Сексоптовиком числовые ID и не связываются без собственного
+source registry.
+Одно уникальное совпадение связывается автоматически; несколько совпадений
+дают `ambiguous`; title/category/barcode/transliteration и LLM никогда не
+создают связь. Если seller ещё не имеет `ImportedProduct`, bounded local
+reconciliation создаёт его только из уникальной тройки connected
+`SupplierProduct + Product + MarketplaceListing`, не вызывая WB/Ozon.
+Существующая конфликтующая связь и явный seller unlink не перезаписываются.
+Backlog идёт durable keyset-пакетами по 200 listings/до 3 Ozon accounts за
+минуту и возобновляется после restart. UI позволяет seller-scoped поиск и
+optimistic manual confirmation. После связи Ozon draft строится из того же
+neutral fact pack и переиспользует `SupplierProduct.ai_parsed_data_json`, без
+повторного AI parsing.
 
 #### MarketplaceAttributeValue
 
@@ -379,7 +392,10 @@ Category/type/attribute-scoped dictionary cache:
 ### 5.2 Freshness policy
 
 - Complete category tree: refresh every 24h и event-triggered invalidation.
-- Enabled type schemas: refresh-ahead after 24h; hard TTL 48h.
+- Все official available types seller-selectable сразу. Admin `is_enabled`
+  означает только proactive refresh-ahead; exact тип из active
+  draft/mapping/listing синхронизируется on-demand (до 3 типов и 6 словарей за
+  minute tick, retry cooldown 10 минут). Hard TTL — 48h.
 - Required/small dictionaries: eager cache; large dictionaries: paginated/lazy search + bounded local cache.
 - Removed/disabled nodes and values остаются исторически, `is_available=false`.
 - Empty, malformed, duplicate or anomalously shrunk snapshot не заменяет last good state.
@@ -482,7 +498,13 @@ Definition of done: master plan accepted by codebase documentation; no productio
 - [x] Ozon/WB connection tests with mocked HTTP only.
 - [x] Idempotent migration, static marketplace seeds and documented WB compatibility policy.
 
-Реализовано в `feature/ozon-marketplace`: Ozon UI по умолчанию dark (`MARKETPLACE_OZON_ENABLED=0`), legacy admin WB actions reject Ozon definition, а отключение feature flag всё равно позволяет удалить seller credential. Live Ozon smoke намеренно не выполняется unit-тестами.
+Исторически P1 вышел dark. После production rollout 2026-07 manual Ozon
+account/catalog/card upload default-on (`MARKETPLACE_OZON_ENABLED=1`,
+`MARKETPLACE_OZON_PUBLICATION_ENABLED=1`); оба флага остаются аварийными
+operator switches. Auto-publish и commercial writes по-прежнему default-off.
+Legacy admin WB actions reject Ozon definition, а отключение feature flag всё
+равно позволяет удалить seller credential. Live Ozon smoke намеренно не
+выполняется unit-тестами.
 
 Definition of done: seller can save/test Ozon credentials without secret disclosure or cross-tenant access.
 
@@ -494,6 +516,8 @@ Definition of done: seller can save/test Ozon credentials without secret disclos
 - [x] Freshness/version/hash/checkpoint/shrink guards.
 - [x] Admin browse/toggle/instruction/restriction UI.
 - [x] Scheduler refresh-ahead and non-blocking cross-process claims.
+- [x] Seller-visible taxonomy без global schema preload и bounded on-demand
+  refresh только exact demanded типов.
 - [x] Fixture tests for malformed types, duplicates, disabled nodes and partial pagination.
 
 Реализовано в `feature/ozon-marketplace`: global reference credential физически
@@ -504,6 +528,10 @@ hash/timestamp остаётся usable до hard TTL 48 часов даже по
 refresh-attempt. Dictionary checkpoint является только наблюдаемым прогрессом:
 retry всегда начинает sweep с cursor 0, потому что безопасного resume без staging
 таблицы быть не может. Admin allowlist может лишь сузить fresh official dictionary.
+`is_seller_selectable=true` отделяет доступность официального типа продавцу от
+admin refresh-ahead toggle. Поэтому новый seller видит весь available taxonomy,
+но scheduler не создаёт очередь из тысяч неиспользуемых schemas: demand
+доказывается только локальным FK из active draft/mapping/listing.
 
 Definition of done: selected Ozon schema is usable as typed SQL truth with no LLM call.
 
@@ -566,7 +594,9 @@ Validator не вызывает Ozon или LLM. Он fail-closed проверя
 credential presence, source fact drift, required `offer_id`, fresh tree/schema и
 словари, exact dictionary ID+display+admin restriction, ordinary/complex attribute
 semantics, data types/counts, явные positive dimensions/units, public media URLs,
-barcodes и explicit price/old_price/VAT/currency_code=RUB для текущего rollout.
+barcodes и полный commercial state. Price берётся только из observed/calculated
+product fact или явной карточки; `currency_code=RUB` детерминирован, VAT приходит
+только из явного account default либо явной карточки и никогда не угадывается.
 `images360` запрещён согласно изменению 10.07.2026.
 Результат содержит machine-readable errors/warnings и schema hash/version; UI
 находится на `/marketplaces/drafts/`. P4 сам не выполняет side effect; кнопку
@@ -578,12 +608,21 @@ Definition of done: draft can be proven publishable/blocked with exact structure
 
 - [x] Full whitelist-only `/v3/product/import` payload builder for one validated draft.
 - [x] Strict offer/title/attributes/description-4191/media/barcode/physical/price/VAT contract; `images360` absent.
-- [x] `/v4/product/info/limit` preflight, typed `operation_limits` parsing and local quota reservation.
+- [x] `/v4/product/info/limit` preflight: cap-only `operation_limits` не
+  считаются remaining, consumable quota берётся из strict daily/total counters;
+  local active reservations вычитаются отдельно.
 - [x] Durable `MarketplaceOperation` + `MarketplaceListingSnapshot` committed before write.
 - [x] Create-only live preflight across `ALL` and `ARCHIVED`; existing offer fails before quota/write.
 - [x] Task polling, exact per-item result normalization and listing projection finalization.
 - [x] Ambiguous transport/malformed-success reconciliation without automatic write retry.
-- [x] Separate dark write flag, seller-scoped audit UI/API and minute scheduler recovery.
+- [x] Separate emergency write flag, seller-scoped audit UI/API and minute scheduler recovery.
+- [x] Seller-facing mass upload до 200 карточек с одним durable run, chunk-ами
+  до 50 operations, поштучным результатом/причиной и безопасным retry только
+  доказанных terminal failures.
+- [x] Active `waiting_reference`: после одного exact type bind schema/dictionaries
+  загружаются on-demand, deterministic source-backed атрибуты дозаполняются
+  preserve-existing merge-ом, а run сам продолжает validation/enqueue без
+  второго клика и без provider write из HTTP.
 - [x] Account-level lock across submission/reconciliation, credential edit, connection check and disconnect.
 - [x] Tenant/CSRF/strict JSON/no-secret/migration/recovery/deadline tests.
 
@@ -595,6 +634,31 @@ Operation и exact submitted snapshot фиксируются до HTTP; `submitt
 `uncertain`. Scheduler продолжает submitted/polling/uncertain reconciliation
 даже после выключения write flag. После 24 часов без подтверждаемого task status
 автоматический polling останавливается, но ручная сверка остаётся доступна.
+
+Основной UI `/marketplaces/ozon/uploads/` одним явно подтверждённым mass-sync
+создаёт отсутствующие offers и full-state обновляет exact-linked опубликованные
+карточки. JSON требует literal `confirm_write=true`; HTTP provider не вызывает.
+Перед validation legacy `ImportedProduct.original_data` missing-only
+гидратируется observed supplier facts по exact FK, после чего deterministic
+three-way rebase обновляет только прежние source defaults и сохраняет seller
+edits/complex groups. Account defaults применяются только к отсутствующим
+значениям; VAT не угадывается. Exact completeness показывает required/supplied
+schema, content, media, physical и commercial readiness. Один
+`BackgroundJob(job_type=ozon_bulk_upload)` хранит action/result до 200 карточек и
+ставит create/update operations отдельными chunk-ами до 50; restart
+восстанавливает operation link по exact seller+draft, а `uncertain` никогда не
+попадает в automatic retry. Если full live state уже равен desired payload,
+update завершается успешным `already_current` без provider write.
+Единый exact-normalized brand denylist применяется к observed/current/draft
+brand до enqueue: запрещённая строка остаётся `needs_input` с
+`ozon_brand_forbidden`, не вызывает provider и не мешает остальным карточкам
+batch. Fuzzy/substring matching и автоматическая замена бренда запрещены.
+Если тип выбран раньше schema, item остаётся running как `waiting_reference`.
+Minute scheduler после fresh reference добавляет только отсутствующие flat
+attributes из observed fact snapshot, сохраняет seller edits и complex groups,
+повторно валидирует и создаёт committed queue operation. Через 6 часов без
+reference success состояние становится явным retryable timeout вместо вечного
+spinner.
 
 Disconnect отменяет только никогда не отправленную очередь (`attempt_count=0`).
 Credentials и account identity нельзя изменить или удалить, пока они нужны
@@ -618,6 +682,12 @@ Live probe остаётся обязательным staging gate для кон�
 контракты дополнительно закреплены synthetic exact-shape fixtures.
 
 - [x] Separate full-state update operation for an existing offer; create path never mutates it implicitly.
+- [x] One confirmed up-to-200-card seller flow routes missing offers to create and exact-linked published drafts to update, with per-card action/outcome.
+- [x] Selected-card exact source preflight reuses the existing Ozon opaque `offer_id` across WB/Ozon seller suffixes and blocks unresolved duplicates before create.
+- [x] Missing-only exact-FK source hydration, three-way default rebase and exact completeness prevent stale legacy snapshots from silently dropping observed photos/dimensions/barcodes/RRP.
+- [x] Platform-native mass repair stores only explicitly confirmed exact legacy-attribute removals, revalidates required replacements, and keeps prior/full-state fingerprint gates authoritative.
+- [x] Exact live no-change update finishes as `already_current` with zero write attempts.
+- [x] Exact-normalized forbidden-brand policy blocks single/bulk create/update before operation without fuzzy false positives or automatic brand rewriting.
 - [x] Media ordering/primary-image/current pictures v2 contract; `primary + images <= 30`, optional color image, no images360.
 - [x] Live post-write comparison against exact prior/submitted/third state.
 - [x] `/v1/product/archive` conflict-aware compensation for an unchanged newly created listing; beta visibility is not substituted.
@@ -671,10 +741,11 @@ items. `ImportedProduct.import_status` остаётся WB projection и ник�
 локальному draft для каждого enabled Ozon target; ручная pause останавливает
 writes, но не подготовку локальных drafts.
 
-Новый Ozon side effect требует три независимых dark-by-default флага:
-`MARKETPLACE_OZON_ENABLED`, `MARKETPLACE_OZON_PUBLICATION_ENABLED` и
-`MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED`, а также явное включение конкретного
-account scope в UI. Перед очередью выполняется один advisory quota read, но
+Новый Ozon side effect требует независимых flags и точного account scope.
+General/manual flags production-default `1`, но могут быть аварийно выключены;
+`MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED` остаётся default `0` и дополнительно
+требует явного включения конкретного account scope в UI. Перед очередью
+выполняется один advisory quota read, но
 каждая durable operation повторно делает собственный live quota preflight.
 Хвост сверх provider/daily capacity становится `deferred`, не success.
 
@@ -1030,16 +1101,19 @@ Definition of done: WB behavior is parity-tested and Ozon is production-ready fo
 
 ## 12. Rollout
 
-1. Все Ozon flags равны `0`: schema/code dark launch.
-2. Enable account UI for admins/internal seller only.
-3. Enable reference sync and catalog read-only.
-4. Enable draft validation for allowlisted categories.
-5. Enable one-off manual publication for allowlisted sellers.
-6. Enable prices/stocks proposals.
-7. После quota/reconciliation SLO включить отдельный
+1. До первого deploy применить миграции, задать persistent `ENCRYPTION_KEY` и
+   сделать backup; при maintenance rollout можно временно явно выставить
+   general/manual flags в `0`.
+2. Production defaults включают account UI, read sync и manual card upload;
+   без seller-owned connected account и явного submit provider write невозможен.
+3. Проверить reference/catalog read и одну заранее выбранную карточку через
+   durable mass-upload result.
+4. Расширять manual upload на sellers только после quota/reconciliation SLO.
+5. Prices/stocks proposals остаются read/review until отдельного commercial flag.
+6. После quota/reconciliation SLO включить отдельный
    `MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED=1`; manual publication flag сам по себе
    не разрешает auto-publish.
-8. Expand analytics/orders/finance independently by capability flag.
+7. Expand analytics/orders/finance independently by capability flag.
 
 Publication rollback switch отдельный: его выключение останавливает новые writes и
 не отправляет safe queued rows, но submitted/polling/uncertain операции продолжают

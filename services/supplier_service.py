@@ -1795,6 +1795,28 @@ class SupplierService:
     # -----------------------------------------------------------------------
 
     @staticmethod
+    def build_imported_product_from_supplier(
+        seller_id: int,
+        supplier_product: SupplierProduct,
+    ) -> ImportedProduct:
+        """Build, but do not persist, one exact seller-owned source copy.
+
+        Marketplace identity reconciliation reuses this constructor when an
+        already observed WB card and an Ozon listing both point to the same
+        unique supplier row.  Keeping construction here prevents that local
+        recovery path from inventing a second, poorer canonical snapshot.
+        """
+        if (
+            not isinstance(seller_id, int)
+            or isinstance(seller_id, bool)
+            or seller_id <= 0
+        ):
+            raise ValueError("seller_id должен быть положительным целым числом")
+        if not isinstance(supplier_product, SupplierProduct):
+            raise ValueError("supplier_product должен быть SupplierProduct")
+        return _copy_to_imported_product(seller_id, supplier_product)
+
+    @staticmethod
     def import_to_seller(
         seller_id: int,
         supplier_product_ids: List[int],
@@ -1859,7 +1881,10 @@ class SupplierService:
                     result.skipped += 1
                     continue
 
-                imported = _copy_to_imported_product(seller_id, sp)
+                imported = SupplierService.build_imported_product_from_supplier(
+                    seller_id,
+                    sp,
+                )
                 # Per-item savepoint keeps one malformed supplier row from
                 # poisoning the whole exact seller import transaction. The
                 # flush is required before local marketplace drafts can use
@@ -4628,6 +4653,119 @@ def _supplier_barcodes_payload(sp: SupplierProduct) -> Optional[str]:
     return None
 
 
+def _supplier_observed_snapshot(sp: SupplierProduct) -> Optional[str]:
+    """Return the complete observed supplier snapshot used by channel drafts.
+
+    Older feed integrations stored normalized photos, dimensions and
+    characteristics in their dedicated columns but left those fields out of
+    ``original_data_json``.  Marketplace fact packs intentionally read the
+    seller's copied source snapshot, so that omission made otherwise complete
+    products look empty to Ozon.  Merge only missing observed fields here;
+    never copy AI/marketplace suggestions and never replace a value already
+    present in the raw source snapshot.
+    """
+
+    try:
+        original = json.loads(sp.original_data_json or "{}")
+    except (TypeError, ValueError):
+        original = {}
+    if not isinstance(original, dict):
+        original = {}
+
+    def parsed_json(raw_value, expected_type):
+        if isinstance(raw_value, expected_type):
+            return raw_value
+        try:
+            value = json.loads(raw_value or "")
+        except (TypeError, ValueError):
+            return expected_type()
+        return value if isinstance(value, expected_type) else expected_type()
+
+    characteristics = parsed_json(sp.characteristics_json, dict)
+    if not characteristics:
+        characteristics = parsed_json(sp.characteristics_json, list)
+    additions = {
+        "photo_urls": parsed_json(sp.photo_urls_json, list),
+        "dimensions": parsed_json(sp.dimensions_json, dict),
+        "characteristics": characteristics,
+        "barcodes": parsed_json(sp.barcodes_json, list),
+    }
+    if not additions["barcodes"] and sp.barcode:
+        additions["barcodes"] = [sp.barcode]
+    if sp.recommended_retail_price is not None:
+        additions["recommended_retail_price"] = sp.recommended_retail_price
+
+    for key, value in additions.items():
+        if original.get(key) in (None, "", [], {}) and value not in (
+            None,
+            "",
+            [],
+            {},
+        ):
+            original[key] = value
+    if not original:
+        return None
+    return json.dumps(
+        original,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def hydrate_missing_imported_observed_snapshot(
+    imp: ImportedProduct,
+) -> bool:
+    """Fill only absent source facts from the exact linked supplier row.
+
+    This is used by an explicitly confirmed Ozon synchronization to repair
+    legacy ImportedProduct snapshots that predate full photo/dimension/
+    characteristic copying.  Existing snapshot values and seller-owned card
+    fields are never replaced, and ``supplier_content_revision`` is deliberately
+    left unchanged because this is not a full supplier-card refresh.
+    """
+    if (
+        not isinstance(imp, ImportedProduct)
+        or imp.supplier_product_id is None
+        or imp.supplier_product is None
+        or imp.supplier_product.id != imp.supplier_product_id
+    ):
+        return False
+    raw_supplier = _supplier_observed_snapshot(imp.supplier_product)
+    if not raw_supplier:
+        return False
+    try:
+        supplier_snapshot = json.loads(raw_supplier)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(supplier_snapshot, dict):
+        return False
+    try:
+        current = json.loads(imp.original_data or "{}")
+    except (TypeError, ValueError):
+        current = {}
+    if not isinstance(current, dict):
+        current = {}
+
+    changed = False
+    for key, value in supplier_snapshot.items():
+        if (
+            current.get(key) in (None, "", [], {})
+            and value not in (None, "", [], {})
+        ):
+            current[key] = value
+            changed = True
+    if not changed:
+        return False
+    imp.original_data = json.dumps(
+        current,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return True
+
+
 def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedProduct:
     """Копировать данные из SupplierProduct в новый ImportedProduct"""
     imp = ImportedProduct(
@@ -4659,7 +4797,7 @@ def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedPr
         recommended_retail_price=sp.recommended_retail_price,
         supplier_quantity=sp.supplier_quantity,
         import_status='pending',
-        original_data=sp.original_data_json,
+        original_data=_supplier_observed_snapshot(sp),
     )
 
     # Копируем resolved brand
@@ -4718,8 +4856,9 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
     if barcodes_payload:
         imp.barcodes = barcodes_payload
     # Свежие наблюдённые данные поставщика (raw_extra, габариты, РРЦ и т.д.)
-    if sp.original_data_json:
-        imp.original_data = sp.original_data_json
+    observed_snapshot = _supplier_observed_snapshot(sp)
+    if observed_snapshot:
+        imp.original_data = observed_snapshot
 
     # Обновляем фото (общие для всех продавцов)
     if sp.photo_urls_json:

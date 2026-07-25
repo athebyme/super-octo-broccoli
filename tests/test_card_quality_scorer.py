@@ -123,7 +123,7 @@ class TestDescriptionV2(unittest.TestCase):
         card = _perfect_card(); card['description_dup'] = True
         d = compute_card_quality(card)['dimensions']['description']
         self.assertEqual(d['score'], 40)  # 100 * 0.4
-        self.assertEqual(d['status'], 'warning')
+        self.assertEqual(d['status'], 'error')
 
     def test_low_unique_words_penalty(self):
         card = _perfect_card()
@@ -145,17 +145,59 @@ class TestTitleV2(unittest.TestCase):
     def test_word_spam_penalty(self):
         card = _perfect_card(); card['title'] = 'платье платье платье красное летнее'
         d = compute_card_quality(card)['dimensions']['title']
-        self.assertEqual(d['score'], 80)  # 100 - 20 за повтор ≥3
-        self.assertEqual(d['status'], 'warning')
+        self.assertEqual(d['score'], 40)
+        self.assertEqual(d['status'], 'error')
+        self.assertIn('повторяющиеся', d['hint'])
+
+    def test_two_repeated_meaningful_words_are_wb_index_error(self):
+        card = _perfect_card()
+        card['title'] = 'Платье летнее платье женское хлопковое'
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 40)
+        self.assertEqual(d['status'], 'error')
+
+    def test_brand_in_title_is_wb_index_error(self):
+        card = _perfect_card()
+        card['brand'] = 'BrandX'
+        card['title'] = 'Платье BrandX летнее женское хлопковое'
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 40)
+        self.assertEqual(d['status'], 'error')
+        self.assertIn('поле «Бренд»', d['hint'])
+
+    def test_brand_match_uses_whole_words_not_substring(self):
+        card = _perfect_card()
+        card['brand'] = 'арт'
+        card['title'] = 'Картина настенная интерьерная на холсте'
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 100)
+        self.assertEqual(d['status'], 'ok')
+
+    def test_promotional_filler_is_wb_index_error(self):
+        card = _perfect_card()
+        card['title'] = 'Чарующий комплект белья из экокожи'
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 55)
+        self.assertEqual(d['status'], 'error')
+        self.assertIn('подтверждённые детали', d['hint'])
+
+    def test_repeat_check_ignores_service_words(self):
+        card = _perfect_card()
+        card['title'] = 'Комплект для дома и для поездки складной'
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 100)
+        self.assertEqual(d['status'], 'ok')
 
     def test_caps_penalty(self):
         card = _perfect_card(); card['title'] = 'ПЛАТЬЕ ЛЕТНЕЕ ЖЕНСКОЕ ХЛОПКОВОЕ МИДИ'
         d = compute_card_quality(card)['dimensions']['title']
         self.assertEqual(d['score'], 80); self.assertEqual(d['status'], 'warning')
 
-    def test_over_60_still_50(self):
+    def test_over_60_is_wb_index_error(self):
         card = _perfect_card(); card['title'] = 'х' * 61
-        self.assertEqual(compute_card_quality(card)['dimensions']['title']['score'], 50)
+        d = compute_card_quality(card)['dimensions']['title']
+        self.assertEqual(d['score'], 40)
+        self.assertEqual(d['status'], 'error')
 
 
 class TestCharacteristicsV2(unittest.TestCase):
@@ -170,11 +212,29 @@ class TestCharacteristicsV2(unittest.TestCase):
         d = compute_card_quality(self._card({'Цвет': 'красный', 'Состав': 'хлопок'}, av))
         self.assertEqual(d['dimensions']['characteristics']['score'], 100)
 
-    def test_required_weighted_x3(self):
+    def test_required_dominates_score(self):
         av = [{'name': 'Цвет', 'required': True}, {'name': 'Состав', 'required': False}]
-        # заполнен только optional: 1 / (3+1) = 25
+        # Обязательное не заполнено: остаётся только доля необязательных (30%)
         d = compute_card_quality(self._card({'Состав': 'хлопок'}, av))
-        self.assertEqual(d['dimensions']['characteristics']['score'], 25)
+        chars = d['dimensions']['characteristics']
+        self.assertEqual(chars['score'], 30)
+        self.assertEqual(chars['status'], 'warning')
+        self.assertIn('обязательных', chars['hint'])
+
+    def test_optional_scale_saturates_and_does_not_punish_large_categories(self):
+        """Категория с сотней необязательных полей не должна топить карточку.
+
+        До перекалибровки доля считалась от всех характеристик категории,
+        поэтому на проде под-оценка была ниже порога у 100% каталога.
+        """
+        av = [{'name': 'Цвет', 'required': True}]
+        av += [{'name': f'Доп{i}', 'required': False} for i in range(100)]
+        chars = {'Цвет': 'красный'}
+        chars.update({f'Доп{i}': 'значение' for i in range(10)})
+        score = compute_card_quality(
+            self._card(chars, av)
+        )['dimensions']['characteristics']['score']
+        self.assertEqual(score, 100)
 
     def test_name_match_case_insensitive(self):
         av = [{'name': 'Цвет', 'required': False}]

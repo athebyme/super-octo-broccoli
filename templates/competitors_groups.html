@@ -44,6 +44,10 @@
         <p class="sh-page-subtitle">Организуйте конкурентов по группам и привяжите свой товар для сравнения цен</p>
       </div>
       <div class="sh-page-actions">
+        <a href="{{ url_for('competitors_comparison') }}" class="sh-btn sh-btn--white-outline sh-btn--sm">
+          <span class="sh-btn-icon">{{ icon('chart', size=16) }}</span>
+          Сводное сравнение
+        </a>
         <a href="{{ url_for('competitors_dashboard') }}" class="sh-btn sh-btn--white-outline sh-btn--sm">
           <span class="sh-btn-icon">{{ icon('arrow-left', size=16) }}</span>
           К мониторингу
@@ -67,7 +71,7 @@
             <th style="text-align:right">Товаров</th>
             <th>Свой товар</th>
             <th>Импорт</th>
-            <th style="width:90px"><span class="sr-only">Действия</span></th>
+            <th style="width:126px"><span class="sr-only">Действия</span></th>
           </tr>
         </thead>
         <tbody>
@@ -107,6 +111,8 @@
               </td>
               <td>
                 <div style="display:flex;gap:4px;justify-content:flex-end">
+                  <a class="sh-icon-btn sh-icon-btn--sm" :href="'/competitors/groups/' + g.id + '?add=seller'"
+                     :aria-label="'Добавить продавца в группу ' + g.name" title="Добавить продавца">{{ icon('office', size=16) }}</a>
                   <button type="button" class="sh-icon-btn sh-icon-btn--sm" @click="openEdit(g)"
                           :aria-label="'Редактировать группу ' + g.name" title="Редактировать">{{ icon('edit', size=16) }}</button>
                   <button type="button" class="sh-icon-btn sh-icon-btn--sm cg-del" @click="deleteGroup(g)"
@@ -145,9 +151,14 @@
     <div class="sh-modal-panel" x-show="modalOpen"
          x-transition:enter="sh-modal-enter" x-transition:leave="sh-modal-leave" @click.stop>
       <div class="sh-modal-header">
-        <h2 id="cg-modal-title" class="sh-modal-title"
-            x-text="editingId ? 'Редактировать группу' : 'Создать группу'"></h2>
-        <button type="button" class="sh-modal-close" @click="modalOpen = false" aria-label="Закрыть">&times;</button>
+        <div>
+          <h2 id="cg-modal-title" class="sh-modal-title"
+              x-text="editingId ? 'Редактировать группу' : 'Новая группа мониторинга'"></h2>
+          <p x-show="!editingId" style="font-size:12px;color:var(--text-muted);margin:3px 0 0">
+            После создания откроем каталог продавца для выбора товаров
+          </p>
+        </div>
+        <button type="button" class="sh-modal-close" @click="modalOpen = false" aria-label="Закрыть">{{ icon('close', size=18) }}</button>
       </div>
       <div class="sh-modal-body">
         <label class="cg-field">
@@ -213,7 +224,7 @@
         <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="modalOpen = false">Отмена</button>
         <button type="button" class="sh-btn sh-btn--primary sh-btn--sm" :class="saving ? 'is-loading' : ''"
                 :disabled="!form.name.trim() || saving" @click="saveGroup()"
-                x-text="editingId ? 'Сохранить' : 'Создать'"></button>
+                x-text="editingId ? 'Сохранить' : 'Создать и выбрать товары'"></button>
       </div>
     </div>
   </div>
@@ -328,11 +339,11 @@ function competitorGroups() {
                     const idx = this.groups.findIndex(g => g.id === this.editingId);
                     if (idx >= 0) this.groups.splice(idx, 1, data);
                     this.$store.toasts.success('Группа обновлена');
+                    this.modalOpen = false;
                 } else {
-                    this.groups.unshift(data);
-                    this.$store.toasts.success('Группа создана');
+                    window.location.assign('/competitors/groups/' + data.id + '?add=seller');
+                    return;
                 }
-                this.modalOpen = false;
             } catch (e) {
                 this.$store.toasts.error('Сеть недоступна — попробуйте ещё раз');
             } finally {

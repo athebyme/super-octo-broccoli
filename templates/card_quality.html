@@ -17,6 +17,8 @@
     <div><h1 class="sh-page-title">Качество карточек</h1>
       <p class="sh-page-subtitle">WB-рейтинг и наш Quality Score</p></div>
     <div class="sh-page-actions">
+      <a href="{{ url_for('card_quality_beta_page') }}" class="sh-btn sh-btn--accent sh-btn--sm"
+         title="Очередь работ: сверху карточки, где исправление принесёт больше всего">Новая версия</a>
       <button @click="refresh()" :disabled="refreshing" class="sh-btn sh-btn--white-outline sh-btn--sm" x-text="refreshing ? 'Обновление…' : 'Обновить рейтинги'"></button>
       <a href="{{ url_for('card_quality_bulk_improve_page') }}"
          :class="!summary.need_attention ? 'opacity-50 pointer-events-none' : ''"
@@ -419,9 +421,10 @@
                   <div style="margin-top:4px;font-size:11px" x-show="h.wb_synced !== null">
                     <span x-show="h.wb_synced" style="color:var(--success,#16a34a)">&#10003; синхронизировано с WB</span>
                     <span x-show="!h.wb_synced && h.wb_sync_status === 'failed'" style="color:var(--danger,#dc2626)">&#10007; ошибка синхронизации WB</span>
-                    <span x-show="!h.wb_synced && h.wb_sync_status === 'pending'" style="color:var(--text-muted)">&#8987; ожидает синхронизации</span>
+                    <span x-show="!h.wb_synced && ['pending','submitted','uncertain','partial'].includes(h.wb_sync_status)" style="color:var(--text-muted)">&#8987; Запись сохранена, идёт live-сверка WB</span>
+                    <span x-show="!h.wb_synced && h.wb_sync_status === 'conflict'" style="color:var(--danger,#dc2626)">&#9888; конфликт live-данных WB</span>
                     <span x-show="!h.wb_synced && h.wb_sync_status === 'skipped'" style="color:var(--text-muted)">— не отправлено на WB</span>
-                    <span x-show="!h.wb_synced && !['failed','pending','skipped'].includes(h.wb_sync_status)" style="color:var(--text-muted)" x-text="h.wb_sync_status ? ('статус: ' + h.wb_sync_status) : 'не синхронизировано'"></span>
+                    <span x-show="!h.wb_synced && !['failed','pending','submitted','uncertain','partial','conflict','skipped'].includes(h.wb_sync_status)" style="color:var(--text-muted)" x-text="h.wb_sync_status ? ('статус: ' + h.wb_sync_status) : 'не синхронизировано'"></span>
                   </div>
                 </div>
               </template>
@@ -591,10 +594,18 @@ function cardQualityPage() {
         const reasons = new Set();
         chosen.forEach(it => (it.attention_reasons || [])
           .forEach(r => reasons.add(this.reasonLabel(r))));
+        const hasTextDefect = chosen.some(it =>
+          (it.attention_reasons || []).some(r =>
+            r === 'weak_title' || r === 'weak_description'));
         const message = 'Улучши карточки (' + ids.length + ' шт.)' +
           (arts ? ': артикулы ' + arts : '') +
           (reasons.size ? '. Основные проблемы: ' + Array.from(reasons).join(', ') : '') +
-          '. Составь план исправления контента.';
+          (hasTextDefect
+            ? '. Исправь наименование и описание. Для наименования убери значение ' +
+              'отдельного поля производителя, повторы и синонимы, рекламные и ' +
+              'лишние подробности; подтверждённые детали перенеси в описание'
+            : '') +
+          '. Подготовь исправление контента.';
         const mr = await fetch('/agents/api/conversations/' + cid + '/messages', {
           method: 'POST', headers: hdrs,
           body: JSON.stringify({
@@ -738,11 +749,15 @@ function cardQualityPage() {
       }
       try {
         const r = await fetch('/api/card-quality/' + id + '/apply',
-          {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({updates})});
+          {method:'POST', headers:{'Content-Type':'application/json'},
+           body: JSON.stringify({fields: Object.keys(updates)})});
         const d = await r.json();
         if (r.ok && d.success) {
-          this.$store.toasts.success('Quality ' + Math.round(d.old_quality ?? 0) + ' → ' + Math.round(d.new_quality ?? 0),
-                                     'Карточка улучшена');
+          this.$store.toasts.success(
+            d.reconciliation_pending
+              ? 'Изменения отправлены и будут подтверждены live-сверкой WB'
+              : 'Live-данные WB сохранены; безопасный merge завершён',
+            d.reconciliation_pending ? 'Отправлено на сверку' : 'Карточка проверена');
           this.supplierDiff = null; this.proposal = {}; this.selected = {};
           await this.openDetail(id);
           await this.load();

@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title %}Сводное сравнение — Конкуренты{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='competitors-comparison.css', v='20260723-2') }}">
+{% endblock %}
+
+{% block topbar_left %}
+<nav class="sh-crumbs" aria-label="Хлебные крошки">
+    <a href="{{ url_for('competitors_dashboard') }}">Конкуренты</a>
+    <span class="sh-crumbs-sep" aria-hidden="true">/</span>
+    <span class="sh-crumbs-current">Сводное сравнение</span>
+</nav>
+{% endblock %}
+
+{% block content %}
+<main class="ccp-shell" x-data="competitorComparison()" x-init="init()">
+    <header class="sh-page-header ccp-header">
+        <div class="sh-page-header-content">
+            <div>
+                <div class="ccp-title-line">
+                    <span class="ccp-title-icon">{{ icon('chart', size=21, stroke=1.7) }}</span>
+                    <h1 class="sh-page-title">Сводное сравнение</h1>
+                    <span class="sh-chip ccp-live-chip">
+                        <i></i> актуальные наблюдения
+                    </span>
+                </div>
+                <p class="sh-page-subtitle">
+                    Одинаковые товары: цена до скидок и витринная цена покупателя сравниваются отдельно
+                </p>
+            </div>
+            <div class="sh-page-actions">
+                <a href="{{ url_for('competitors_groups') }}" class="sh-btn sh-btn--white-outline sh-btn--md">
+                    <span class="sh-btn-icon">{{ icon('office', size=16) }}</span>
+                    Продавцы
+                </a>
+                <button type="button" class="sh-btn sh-btn--white sh-btn--md"
+                        @click="load()" :disabled="loading" :class="{ 'is-loading': loading }">
+                    <span class="sh-btn-icon">{{ icon('refresh', size=16) }}</span>
+                    Обновить экран
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <section class="ccp-boundary" aria-label="Как строится сравнение">
+        <span class="ccp-boundary-icon">{{ icon('shield', size=18) }}</span>
+        <div>
+            <strong>Сводим только точные совпадения.</strong>
+            <p>Общий ключ — исходный товар поставщика. Подтверждение продавца важнее общей подсказки;
+                слабые shared-подсказки, отклонённые и возможные аналоги сюда не попадают.
+                Витринные цены обеих сторон берём из одного публичного WB-контракта;
+                персональные WB Клуб/кошелёк могут отличаться.</p>
+        </div>
+        <span class="ccp-boundary-tag">без новых AI-вызовов</span>
+    </section>
+
+    <section class="ccp-stats" aria-label="Сводка">
+        <article class="ccp-stat">
+            <span class="ccp-stat-icon is-violet">{{ icon('package', size=18) }}</span>
+            <div><strong x-text="fmtNumber(summary().identities)">0</strong><span>совпавших товаров</span></div>
+        </article>
+        <article class="ccp-stat">
+            <span class="ccp-stat-icon is-blue">{{ icon('check-circle', size=18) }}</span>
+            <div><strong x-text="fmtNumber(summary().with_own)">0</strong><span>с нашей карточкой</span></div>
+        </article>
+        <article class="ccp-stat">
+            <span class="ccp-stat-icon is-cyan">{{ icon('office', size=18) }}</span>
+            <div><strong x-text="fmtNumber(summary().offers)">0</strong><span>предложений конкурентов</span></div>
+        </article>
+        <article class="ccp-stat">
+            <span class="ccp-stat-icon is-amber">{{ icon('arrow-down', size=18) }}</span>
+            <div><strong x-text="fmtNumber(summary().undercut_final)">0</strong><span>где наша витринная выше</span></div>
+        </article>
+    </section>
+
+    <section class="ccp-toolbar">
+        <div class="ccp-filter ccp-filter--competitor">
+            <label for="ccp-group">Кого сравниваем</label>
+            <div class="ccp-select-wrap">
+                <span>{{ icon('office', size=16) }}</span>
+                <select id="ccp-group" x-model="groupId" @change="applyFilters()">
+                    <option value="">Все продавцы вместе</option>
+                    <template x-for="group in groups()" :key="group.id">
+                        <option :value="String(group.id)"
+                                x-text="group.name + ' · ' + group.products_count"></option>
+                    </template>
+                </select>
+                <i>{{ icon('chevron-down', size=14) }}</i>
+            </div>
+        </div>
+
+        <div class="ccp-filter ccp-filter--search">
+            <label for="ccp-search">Товар</label>
+            <div class="ccp-search-wrap">
+                <span>{{ icon('search', size=16) }}</span>
+                <input id="ccp-search" type="search" x-model="query"
+                       placeholder="Название, артикул или nmID"
+                       @input.debounce.350ms="applyFilters()">
+                <button type="button" x-show="query" x-cloak @click="query=''; applyFilters()"
+                        aria-label="Очистить поиск">{{ icon('close', size=14) }}</button>
+            </div>
+        </div>
+
+        <div class="ccp-filter ccp-filter--sort">
+            <label for="ccp-sort">Сначала</label>
+            <div class="ccp-select-wrap">
+                <select id="ccp-sort" x-model="sort" @change="applyFilters()">
+                    <option value="coverage">Больше продавцов</option>
+                    <option value="gap">Разрыв витринной цены</option>
+                    <option value="price">Минимальная витринная</option>
+                    <option value="name">По названию</option>
+                </select>
+                <i>{{ icon('chevron-down', size=14) }}</i>
+            </div>
+        </div>
+
+        <div class="ccp-scope" role="group" aria-label="Наличие нашей карточки">
+            <button type="button" :class="{ 'is-active': scope === 'all' }"
+                    @click="setScope('all')">Все</button>
+            <button type="button" :class="{ 'is-active': scope === 'linked' }"
+                    @click="setScope('linked')">С нашей карточкой</button>
+            <button type="button" :class="{ 'is-active': scope === 'missing' }"
+                    @click="setScope('missing')">Без нашей</button>
+        </div>
+    </section>
+
+    <div class="ccp-limit-note" x-show="data?.bounds?.offers_truncated || data?.bounds?.groups_truncated" x-cloak>
+        {{ icon('info-circle', size=16) }}
+        <span>Показана bounded-выборка. Выберите конкретного продавца, чтобы сузить сравнение.</span>
+    </div>
+
+    <section class="ccp-loading" x-show="loading && !data" x-cloak aria-label="Загрузка">
+        <template x-for="index in [1,2,3]" :key="index">
+            <article class="ccp-skeleton-card">
+                <div class="ccp-skeleton-line is-wide"></div>
+                <div class="ccp-skeleton-line"></div>
+                <div class="ccp-skeleton-grid"><i></i><i></i><i></i></div>
+            </article>
+        </template>
+    </section>
+
+    <section class="ccp-error" x-show="error" x-cloak role="alert">
+        <span>{{ icon('warning', size=19) }}</span>
+        <div><strong>Не удалось собрать сравнение</strong><p x-text="error"></p></div>
+        <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="load()">Повторить</button>
+    </section>
+
+    <section class="ccp-empty" x-show="!loading && !error && data && !items().length" x-cloak>
+        <span class="ccp-empty-art">
+            <i>{{ icon('package', size=25, stroke=1.5) }}</i>
+            <b></b>
+            <i>{{ icon('office', size=25, stroke=1.5) }}</i>
+        </span>
+        <div>
+            <h2 x-text="emptyTitle()"></h2>
+            <p x-text="emptyText()"></p>
+        </div>
+        <a href="{{ url_for('competitors_groups') }}" class="sh-btn sh-btn--primary sh-btn--sm">
+            Открыть продавцов
+        </a>
+    </section>
+
+    <section class="ccp-results" x-show="items().length" x-cloak>
+        <div class="ccp-results-meta">
+            <p>
+                <strong x-text="fmtNumber(pagination().total)"></strong>
+                <span x-text="plural(pagination().total, ['товар','товара','товаров'])"></span>
+                <span x-show="selectedGroupName()" x-text="'у «' + selectedGroupName() + '»'"></span>
+            </p>
+            <span x-show="loading" class="ccp-soft-loading"><i></i> обновляем</span>
+        </div>
+
+        <div class="ccp-product-list">
+            <template x-for="item in items()" :key="item.supplier.id">
+                <article class="ccp-product-card">
+                    <header class="ccp-product-head">
+                        <div class="ccp-identity">
+                            <span class="ccp-product-image">
+                                {{ icon('image', size=18, stroke=1.5) }}
+                                <template x-if="item.supplier.photo_url">
+                                    <img :src="item.supplier.photo_url" alt="" loading="lazy" @error="$el.remove()">
+                                </template>
+                            </span>
+                            <div class="ccp-identity-copy">
+                                <span class="ccp-eyebrow">Исходный товар поставщика · #<b x-text="item.supplier.id"></b></span>
+                                <h2 x-text="item.supplier.title || 'Товар без названия'"></h2>
+                                <p>
+                                    <span x-text="item.supplier.brand" x-show="item.supplier.brand"></span>
+                                    <span x-text="item.supplier.vendor_code" x-show="item.supplier.vendor_code"></span>
+                                    <span x-text="item.supplier.category" x-show="item.supplier.category"></span>
+                                </p>
+                            </div>
+                        </div>
+                        <div class="ccp-coverage">
+                            <strong x-text="item.metrics.competitor_count"></strong>
+                            <span x-text="plural(item.metrics.competitor_count, ['продавец','продавца','продавцов'])"></span>
+                            <small x-text="item.metrics.offer_count + ' ' + plural(item.metrics.offer_count, ['карточка','карточки','карточек'])"></small>
+                        </div>
+                    </header>
+
+                    <div class="ccp-price-board">
+                        <div class="ccp-price-board-title">
+                            <span>Сравнение соответствующих цен</span>
+                            <template x-if="item.own_product">
+                                <a :href="'https://www.wildberries.ru/catalog/' + item.own_product.nm_id + '/detail.aspx'"
+                                   target="_blank" rel="noopener">
+                                    <span x-text="item.own_product.title || ('nmID ' + item.own_product.nm_id)"></span>
+                                    {{ icon('external', size=12) }}
+                                </a>
+                            </template>
+                            <template x-if="!item.own_product">
+                                <small>Нет нашей карточки по точной связи импорта</small>
+                            </template>
+                        </div>
+                        <div class="ccp-price-columns" aria-hidden="true">
+                            <span>Срез</span><span>Мы</span><span>Минимум рынка</span>
+                            <span>Медиана</span><span>Наша позиция</span>
+                        </div>
+                        <template x-for="lane in priceLanes(item)" :key="lane.key">
+                            <div class="ccp-price-lane" :class="'is-' + lane.key">
+                                <div class="ccp-lane-name">
+                                    <strong x-text="lane.label"></strong>
+                                    <small x-text="lane.hint"></small>
+                                </div>
+                                <div class="ccp-lane-value is-own">
+                                    <strong x-text="fmtPrice(lane.ownPrice)"></strong>
+                                    <small x-show="lane.key === 'base' && lane.ownSource === 'seller_api_fallback'">
+                                        из кабинета, витрина ещё синхронизируется
+                                    </small>
+                                    <small x-show="lane.key === 'final' && !lane.ownPrice && item.own_product">
+                                        ждём публичную цену WB
+                                        <template x-if="item.own_product.seller_discount_price">
+                                            <span x-text="' · в кабинете ' + fmtPrice(item.own_product.seller_discount_price)"></span>
+                                        </template>
+                                    </small>
+                                </div>
+                                <div class="ccp-lane-value">
+                                    <strong x-text="fmtPrice(lane.metrics.min_competitor_price)"></strong>
+                                </div>
+                                <div class="ccp-lane-value">
+                                    <strong x-text="fmtPrice(lane.metrics.median_competitor_price)"></strong>
+                                    <small x-show="lane.metrics.competitor_spread_percent !== null"
+                                           x-text="'разброс ' + lane.metrics.competitor_spread_percent + '%'"></small>
+                                </div>
+                                <div class="ccp-lane-position">
+                                    <template x-if="lane.metrics.own_position">
+                                        <div>
+                                            <strong x-text="lane.metrics.own_position + ' из ' + lane.metrics.total_with_own"></strong>
+                                            <em :class="gapTone(lane.metrics.own_vs_min_percent)"
+                                                x-text="ownGapText(lane.metrics.own_vs_min_percent)"></em>
+                                        </div>
+                                    </template>
+                                    <template x-if="!lane.metrics.own_position">
+                                        <div><strong>—</strong><small>нужны обе цены</small></div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="ccp-offers-head">
+                        <span>Предложения конкурентов</span>
+                        <small>до скидок · витринная</small>
+                    </div>
+                    <div class="ccp-offers">
+                        <template x-for="offer in visibleOffers(item)" :key="offer.id">
+                            <article class="ccp-offer" :class="offerTone(offer)">
+                                <div class="ccp-offer-top">
+                                    <span class="ccp-seller-dot" :style="'background:' + offer.competitor.color"></span>
+                                    <div>
+                                        <strong x-text="offer.competitor.group_name"></strong>
+                                        <small x-text="offer.competitor.supplier_name || (offer.competitor.wb_supplier_id ? ('ID ' + offer.competitor.wb_supplier_id) : 'продавец WB')"></small>
+                                    </div>
+                                    <span class="ccp-review-mark" x-show="offer.match.reviewed" title="Подтверждено вами">
+                                        {{ icon('check-circle', size=15) }}
+                                    </span>
+                                </div>
+                                <div class="ccp-offer-product">
+                                    <span class="ccp-offer-image">
+                                        {{ icon('image', size=14, stroke=1.5) }}
+                                        <template x-if="offer.image_url">
+                                            <img :src="offer.image_url" alt="" loading="lazy" @error="$el.remove()">
+                                        </template>
+                                    </span>
+                                    <a :href="'https://www.wildberries.ru/catalog/' + offer.nm_id + '/detail.aspx'"
+                                       target="_blank" rel="noopener"
+                                       x-text="offer.title || ('nmID ' + offer.nm_id)"></a>
+                                </div>
+                                <div class="ccp-offer-prices">
+                                    <div>
+                                        <span>До скидок</span>
+                                        <strong class="is-base" x-text="fmtPrice(offer.base_price)"></strong>
+                                        <em x-show="offer.base_delta_to_own_percent !== null"
+                                            :class="gapTone(-offer.base_delta_to_own_percent)"
+                                            x-text="offerDeltaText(offer.base_delta_to_own_percent)"></em>
+                                    </div>
+                                    <div>
+                                        <span>Витринная</span>
+                                        <strong x-text="fmtPrice(offer.final_price)"></strong>
+                                        <em x-show="offer.final_delta_to_own_percent !== null"
+                                            :class="gapTone(-offer.final_delta_to_own_percent)"
+                                            x-text="offerDeltaText(offer.final_delta_to_own_percent)"></em>
+                                    </div>
+                                </div>
+                                <div class="ccp-offer-meta">
+                                    <span x-show="offer.total_stock !== null" x-text="'остаток ' + fmtNumber(offer.total_stock)"></span>
+                                    <span x-show="offer.rating" x-text="'★ ' + offer.rating"></span>
+                                    <span x-text="freshness(offer.last_price_at)"></span>
+                                </div>
+                            </article>
+                        </template>
+                    </div>
+                    <button type="button" class="ccp-expand"
+                            x-show="item.offers.length > offerPreviewLimit" x-cloak
+                            @click="toggleExpanded(item.supplier.id)">
+                        <span x-text="expanded[item.supplier.id] ? 'Свернуть' : ('Показать ещё ' + (item.offers.length - offerPreviewLimit))"></span>
+                        <span :class="{ 'is-up': expanded[item.supplier.id] }">{{ icon('chevron-down', size=14) }}</span>
+                    </button>
+                </article>
+            </template>
+        </div>
+
+        <nav class="ccp-pagination" x-show="pagination().pages > 1" x-cloak aria-label="Страницы сравнения">
+            <button type="button" :disabled="!pagination().has_previous || loading" @click="goPage(page - 1)">
+                {{ icon('chevron-left', size=15) }} Назад
+            </button>
+            <span>Страница <strong x-text="page"></strong> из <strong x-text="pagination().pages"></strong></span>
+            <button type="button" :disabled="!pagination().has_next || loading" @click="goPage(page + 1)">
+                Вперёд {{ icon('chevron-right', size=15) }}
+            </button>
+        </nav>
+    </section>
+</main>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='competitors-comparison.js', v='20260723-2') }}"></script>
+{% endblock %}

@@ -1,5 +1,6 @@
 """Seller-facing marketplace product drafts and deterministic validation."""
 
+from datetime import datetime
 import json
 import secrets
 from typing import Any, Dict, Optional
@@ -24,6 +25,7 @@ from services.marketplace_drafts import (
     MarketplaceDraftValidationError,
 )
 from services.marketplace_publications import MarketplacePublicationService
+from services.ozon_reference_service import OzonReferenceService
 
 
 marketplace_drafts_bp = Blueprint(
@@ -193,6 +195,21 @@ def index():
             seller_id=seller_id,
             marketplace_code="ozon",
         )
+        now = datetime.utcnow()
+        upload_ready_account_ids = {
+            account.id
+            for account in accounts
+            if (
+                account.is_active
+                and account.connection_status == "connected"
+                and account.has_credentials
+                and account.public_settings.get("default_vat") is not None
+                and (
+                    account.credential_expires_at is None
+                    or account.credential_expires_at > now
+                )
+            )
+        }
         sources = MarketplaceDraftService.recent_sources(seller_id=seller_id)
     except MarketplaceDraftError as exc:
         return _error_response(exc)
@@ -205,6 +222,7 @@ def index():
         filters=filters,
         ozon_enabled=_feature_enabled(),
         publication_enabled=_publication_enabled(),
+        upload_ready_account_ids=upload_ready_account_ids,
     )
 
 
@@ -579,6 +597,7 @@ def _form_patch(data: Dict[str, Any]) -> dict:
         "content_json": "content",
         "attributes_json": "attributes",
         "complex_attributes_json": "complex_attributes",
+        "attribute_removals_json": "attribute_removals",
         "media_json": "media",
         "dimensions_json": "dimensions",
         "barcodes_json": "barcodes",
@@ -631,7 +650,18 @@ def update(draft_id: int):
             "success": True,
             "draft": draft.to_public_dict(detail=True),
         })
-    flash("Черновик сохранён; выполните повторную валидацию", "success")
+    if (
+        "product_type_id" in patch
+        and draft.product_type
+        and not OzonReferenceService.reference_is_fresh(draft.product_type)
+    ):
+        flash(
+            "Тип привязан. Официальная схема Ozon загрузится автоматически; "
+            "повторять привязку не нужно.",
+            "success",
+        )
+    else:
+        flash("Черновик сохранён; выполните повторную валидацию", "success")
     return redirect(url_for("marketplace_drafts.detail", draft_id=draft.id))
 
 

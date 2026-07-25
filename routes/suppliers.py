@@ -18,11 +18,48 @@ from models import (
     db, Supplier, SupplierProduct, SellerSupplier,
     ImportedProduct, Seller, AIHistory, log_admin_action, Product,
     BackgroundJob, Notification, AgentChangeSnapshot, Marketplace,
-    SellerMarketplaceAccount, MarketplaceProductDraft,
+    SellerMarketplaceAccount, MarketplaceListing, MarketplaceProductDraft,
 )
 from services.supplier_service import SupplierService
 
 logger = logging.getLogger(__name__)
+
+MAX_BULK_PRODUCTS = 200
+
+
+def _bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
+    """Строгий разбор product_ids для массовых действий.
+
+    Инвариант проекта: один запрос — не больше 200 уникальных positive integer
+    ID. Bool/float/строки и дубли отклоняют весь запрос, а не фильтруются
+    молча: иначе продавец думает, что действие применилось ко всей выборке.
+    """
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ValueError('Не выбраны товары')
+    if len(raw_ids) > limit:
+        raise ValueError(
+            f'За один раз можно выбрать не более {limit} карточек'
+        )
+    normalized = []
+    seen = set()
+    for index, value in enumerate(raw_ids):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f'Некорректный идентификатор товара в позиции {index + 1}')
+        if value in seen:
+            raise ValueError('Товары в списке повторяются')
+        normalized.append(value)
+        seen.add(value)
+    return normalized
+
+
+MY_PRODUCTS_PAGE_SIZE = 200
+MY_PRODUCTS_UPDATES_PAGE_SIZE = 200
+MY_PRODUCTS_STATUSES = frozenset({
+    'pending', 'validated', 'imported', 'failed',
+})
+MY_PRODUCTS_SORTS = frozenset({
+    'oldest', 'price_asc', 'price_desc', 'title',
+})
 
 
 # ============================================================================
@@ -69,6 +106,74 @@ def _redirect_seller_supplier_catalog(supplier_id):
     if sid is None:
         return redirect(url_for('supplier_catalog'))
     return redirect(url_for('supplier_catalog_products', supplier_id=sid))
+
+
+def _my_products_return_args(args):
+    """Canonical same-screen state for POST -> GET redirects.
+
+    The supplier-updates view is mutually exclusive with the regular status
+    tabs.  Only known filters are carried so a crafted query cannot turn a
+    local ``url_for`` redirect into an arbitrary or unbounded URL.
+    """
+    result = {}
+    updates_filter = (
+        isinstance(args.get('updates'), str)
+        and args.get('updates').strip() == '1'
+    )
+    if updates_filter:
+        result['updates'] = 1
+    else:
+        status = args.get('status')
+        status = status.strip() if isinstance(status, str) else ''
+        if status in MY_PRODUCTS_STATUSES:
+            result['status'] = status
+
+    search = args.get('search')
+    search = search.strip() if isinstance(search, str) else ''
+    if search and len(search) <= 200:
+        result['search'] = search
+
+    supplier = args.get('supplier')
+    supplier = supplier.strip() if isinstance(supplier, str) else ''
+    if supplier == 'none':
+        result['supplier'] = supplier
+    else:
+        supplier_id = _coerce_positive_int(supplier)
+        if supplier_id is not None:
+            result['supplier'] = supplier_id
+
+    for key in ('brand', 'wb_category'):
+        value = args.get(key)
+        value = value.strip() if isinstance(value, str) else ''
+        if value and len(value) <= 200:
+            result[key] = value
+
+    has_photos = args.get('has_photos')
+    if has_photos in ('yes', 'no'):
+        result['has_photos'] = has_photos
+
+    stock = args.get('stock')
+    if stock in ('in_stock', 'out_of_stock', 'unknown'):
+        result['stock'] = stock
+
+    for key in ('price_min', 'price_max'):
+        value = args.get(key)
+        value = value.strip() if isinstance(value, str) else ''
+        if value and len(value) <= 32 and re.fullmatch(r'\d+(?:\.\d+)?', value):
+            result[key] = value
+
+    sort = args.get('sort')
+    sort = sort.strip() if isinstance(sort, str) else ''
+    if sort in MY_PRODUCTS_SORTS:
+        result['sort'] = sort
+    return result
+
+
+def _redirect_seller_my_products(args=None, **extra):
+    """Return to the same canonical «Мои товары» view after a POST."""
+    target_args = _my_products_return_args(args or {})
+    target_args.update(extra)
+    return redirect(url_for('seller_my_products', **target_args))
 
 
 # ============================================================================
@@ -1962,6 +2067,83 @@ def register_supplier_routes(app):
     # -------------------------------------------------------------------
     # Мои импортированные товары — просмотр и управление
     # -------------------------------------------------------------------
+    @app.route('/my-products/beta')
+    @login_required
+    @seller_required
+    def seller_my_products_beta():
+        """Экран массовых операций: выбор → предупреждение → прогресс → итог."""
+        seller = current_user.seller
+        ozon_enabled = bool(
+            current_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+        )
+        ozon_accounts = []
+        if ozon_enabled:
+            ozon_accounts = [
+                {'id': account.id, 'label': account.label}
+                for account in SellerMarketplaceAccount.query.join(Marketplace).filter(
+                    SellerMarketplaceAccount.seller_id == seller.id,
+                    SellerMarketplaceAccount.is_active.is_(True),
+                    Marketplace.code == 'ozon',
+                ).all()
+            ]
+        suppliers_payload = [
+            {'id': row.id, 'name': row.name}
+            for row in Supplier.query.join(
+                SellerSupplier, SellerSupplier.supplier_id == Supplier.id,
+            ).filter(SellerSupplier.seller_id == seller.id).all()
+        ]
+        try:
+            ozon_uploads_url = url_for('ozon_bulk_uploads.index')
+        except Exception:
+            ozon_uploads_url = '/marketplaces/ozon/uploads/'
+        return render_template(
+            'my_products_beta.html',
+            wb_connected=bool(seller.has_valid_api_key()),
+            ozon_enabled=ozon_enabled,
+            ozon_accounts=ozon_accounts,
+            suppliers_payload=suppliers_payload,
+            ozon_uploads_url=ozon_uploads_url,
+        )
+
+    @app.route('/api/my-products')
+    @login_required
+    @seller_required
+    def api_my_products_list():
+        """Списочный read-model «Моих товаров» для интерфейса на Vue."""
+        from services.my_products_feed import MyProductsFeed, MyProductsFeedError
+
+        seller = current_user.seller
+        try:
+            payload = MyProductsFeed.list_products(
+                seller_id=seller.id,
+                status=request.args.get('status') or None,
+                search=request.args.get('search') or None,
+                supplier=request.args.get('supplier') or None,
+                brand=request.args.get('brand') or None,
+                wb_category=request.args.get('wb_category') or None,
+                has_photos=request.args.get('has_photos') or None,
+                stock=request.args.get('stock') or None,
+                updates_only=request.args.get('updates') == '1',
+                sort=request.args.get('sort') or None,
+                page=request.args.get('page', 1, type=int) or 1,
+                per_page=request.args.get('per_page', 50, type=int) or 50,
+            )
+        except MyProductsFeedError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
+        return jsonify({'success': True, **payload})
+
+    @app.route('/api/my-products/facets')
+    @login_required
+    @seller_required
+    def api_my_products_facets():
+        """Счётчики вкладок одним агрегатом."""
+        from services.my_products_feed import MyProductsFeed
+
+        return jsonify({
+            'success': True,
+            **MyProductsFeed.facets(seller_id=current_user.seller.id),
+        })
+
     @app.route('/my-products')
     @login_required
     @seller_required
@@ -1970,6 +2152,8 @@ def register_supplier_routes(app):
         seller = current_user.seller
         page = request.args.get('page', 1, type=int)
         status = request.args.get('status', '').strip()
+        if status not in MY_PRODUCTS_STATUSES:
+            status = ''
         search = request.args.get('search', '').strip()
         supplier_filter = request.args.get('supplier', '').strip()
         brand_filter = request.args.get('brand', '').strip()
@@ -2071,7 +2255,13 @@ def register_supplier_routes(app):
             'title': ImportedProduct.title.asc(),
         }
         query = query.order_by(sort_map.get(sort, ImportedProduct.created_at.desc()))
-        pagination = query.paginate(page=page, per_page=40, error_out=False)
+        per_page = (
+            MY_PRODUCTS_UPDATES_PAGE_SIZE
+            if updates_filter else MY_PRODUCTS_PAGE_SIZE
+        )
+        pagination = query.paginate(
+            page=page, per_page=per_page, error_out=False,
+        )
 
         # Статистика
         base_q = ImportedProduct.query.filter_by(seller_id=seller.id)
@@ -2196,12 +2386,19 @@ def register_supplier_routes(app):
             ImportedProduct.mapped_wb_category != '',
         ).distinct().order_by(ImportedProduct.mapped_wb_category).all()]
 
-        # Непустые query-параметры для ссылок пагинации и вкладок статусов
-        page_args = {
-            k: v for k, v in request.args.items()
-            if k != 'page' and v
+        # Только канонические query-параметры для пагинации, форм действий и
+        # вкладок. Обычные status-вкладки и supplier-updates взаимоисключающие:
+        # переход между ними не должен сохранять скрытый `updates=1`.
+        page_args = _my_products_return_args(request.args)
+        status_link_args = {
+            k: v for k, v in page_args.items()
+            if k not in ('status', 'updates')
         }
-        status_link_args = {k: v for k, v in page_args.items() if k != 'status'}
+        reset_args = (
+            {'updates': 1}
+            if updates_filter else
+            ({'status': status} if status else {})
+        )
         active_filters = sum(1 for k in (
             'supplier', 'brand', 'wb_category', 'has_photos',
             'stock', 'price_min', 'price_max',
@@ -2252,6 +2449,8 @@ def register_supplier_routes(app):
 
         marketplace_accounts = []
         default_marketplace_account = None
+        ozon_upload_accounts = []
+        default_ozon_upload_account = None
         if current_app.config.get('MARKETPLACE_OZON_ENABLED', False):
             marketplace_accounts = SellerMarketplaceAccount.query.join(
                 Marketplace
@@ -2272,13 +2471,35 @@ def register_supplier_routes(app):
                 marketplace_accounts[0]
                 if len(marketplace_accounts) == 1 else None,
             )
+            now = datetime.utcnow()
+            ozon_upload_accounts = [
+                account for account in marketplace_accounts
+                if (
+                    account.connection_status == 'connected'
+                    and account.has_credentials
+                    and account.public_settings.get('default_vat') is not None
+                    and (
+                        account.credential_expires_at is None
+                        or account.credential_expires_at > now
+                    )
+                )
+            ]
+            default_ozon_upload_account = next(
+                (
+                    account for account in ozon_upload_accounts
+                    if account.is_default
+                ),
+                ozon_upload_accounts[0]
+                if len(ozon_upload_accounts) == 1 else None,
+            )
             # channel bar (mp_nav) переиспользует уже загруженные кабинеты
             from services.marketplace_nav import prime_ozon_accounts_cache
             prime_ozon_accounts_cache(marketplace_accounts)
 
         # Ozon-черновики карточек текущей страницы (для колонки «Каналы»)
-        # и общий счётчик для стат-строки. Один bulk SELECT на страницу.
+        # и уже связанные Ozon-листинги. Два bounded bulk SELECT на страницу.
         ozon_drafts_map = {}
+        ozon_listings_map = {}
         ozon_drafts_total = 0
         if marketplace_accounts:
             account_ids = [account.id for account in marketplace_accounts]
@@ -2303,6 +2524,27 @@ def register_supplier_routes(app):
                         ),
                         'status': draft.status,
                         'validation_status': draft.validation_status,
+                        'published_listing_id': draft.published_listing_id,
+                    })
+                listing_rows = MarketplaceListing.query.filter(
+                    MarketplaceListing.seller_id == seller.id,
+                    MarketplaceListing.account_id.in_(account_ids),
+                    MarketplaceListing.imported_product_id.in_(page_ids),
+                ).order_by(
+                    MarketplaceListing.account_id.asc(),
+                    MarketplaceListing.id.asc(),
+                ).all()
+                for listing in listing_rows:
+                    ozon_listings_map.setdefault(
+                        listing.imported_product_id, []
+                    ).append({
+                        'id': listing.id,
+                        'account_id': listing.account_id,
+                        'account_label': account_labels.get(
+                            listing.account_id, 'Ozon'
+                        ),
+                        'status': listing.normalized_status,
+                        'is_available': listing.is_available,
                     })
             ozon_drafts_total = MarketplaceProductDraft.query.filter(
                 MarketplaceProductDraft.seller_id == seller.id,
@@ -2329,13 +2571,17 @@ def register_supplier_routes(app):
             wb_categories_list=wb_categories_list,
             page_args=page_args,
             status_link_args=status_link_args,
+            reset_args=reset_args,
             active_filters=active_filters,
             has_wb_key=seller.has_valid_api_key(),
             recent_imports=recent_imports,
             brand_category_map=brand_category_map,
             marketplace_accounts=marketplace_accounts,
             default_marketplace_account=default_marketplace_account,
+            ozon_upload_accounts=ozon_upload_accounts,
+            default_ozon_upload_account=default_ozon_upload_account,
             ozon_drafts_map=ozon_drafts_map,
+            ozon_listings_map=ozon_listings_map,
             ozon_drafts_total=ozon_drafts_total,
             supplier_updates_count=supplier_updates_count,
             updates_filter=updates_filter,
@@ -2564,10 +2810,10 @@ def register_supplier_routes(app):
             return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
 
         data = request.get_json(silent=True) or {}
-        product_ids = data.get('product_ids', [])
-
-        if not product_ids:
-            return jsonify({'success': False, 'error': 'Не выбраны товары'}), 400
+        try:
+            product_ids = _bulk_product_ids(data.get('product_ids'))
+        except ValueError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 400
 
         # Создаём фоновую задачу
         job_uid = f"bulk_wb_{uuid.uuid4().hex[:12]}"
@@ -2882,7 +3128,7 @@ def register_supplier_routes(app):
         db.session.commit()
 
         flash(f'Товар «{title}» удалён и доступен для повторного импорта', 'success')
-        return redirect(url_for('seller_my_products'))
+        return _redirect_seller_my_products(request.args)
 
     @app.route('/my-products/delete-bulk', methods=['POST'])
     @login_required
@@ -2891,10 +3137,10 @@ def register_supplier_routes(app):
         """Массовое удаление импортированных товаров."""
         seller = current_user.seller
         data = request.get_json() or {}
-        product_ids = data.get('product_ids', [])
-
-        if not product_ids:
-            return jsonify({'error': 'Не выбраны товары'}), 400
+        try:
+            product_ids = _bulk_product_ids(data.get('product_ids'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         # Удаляем связанные agent_change_snapshots перед удалением товаров
         AgentChangeSnapshot.query.filter(
@@ -2925,7 +3171,10 @@ def register_supplier_routes(app):
         if imp.import_status != 'imported' or not imp.product_id:
             return jsonify({'error': 'Товар ещё не загружен на WB'}), 400
 
-        product = Product.query.get(imp.product_id)
+        product = Product.query.filter_by(
+            id=imp.product_id,
+            seller_id=seller.id,
+        ).first()
         if not product or not product.nm_id:
             return jsonify({'error': 'Карточка WB не найдена в базе'}), 400
 
@@ -2997,7 +3246,7 @@ def register_supplier_routes(app):
     @login_required
     @seller_required
     def seller_wb_reupload_photos(product_id):
-        """Повторно загрузить фотографии товара на WB."""
+        """Безопасно дозагрузить отсутствующие фото, сохранив live-галерею."""
         seller = current_user.seller
         imp = ImportedProduct.query.filter_by(
             id=product_id, seller_id=seller.id
@@ -3006,21 +3255,55 @@ def register_supplier_routes(app):
         if imp.import_status != 'imported' or not imp.product_id:
             return jsonify({'success': False, 'error': 'Товар ещё не загружен на WB'}), 400
 
-        product = Product.query.get(imp.product_id)
+        product = Product.query.filter_by(
+            id=imp.product_id,
+            seller_id=seller.id,
+        ).first()
         if not product or not product.nm_id:
             return jsonify({'success': False, 'error': 'Карточка WB не найдена'}), 400
 
         if not seller.has_valid_api_key():
             return jsonify({'success': False, 'error': 'API ключ WB не настроен'}), 400
 
-        from services.wb_product_importer import WBProductImporter
-        importer = WBProductImporter(seller)
-
+        from services.supplier_enrichment import get_enrichment_service
+        from services.wb_api_client import WildberriesAPIClient
+        api = None
         try:
-            importer._upload_photos_for_card(product.nm_id, imp)
-            return jsonify({'success': True, 'message': 'Фотографии загружены на WB'})
+            api = WildberriesAPIClient(seller.wb_api_key)
+            result = get_enrichment_service().apply_enrichment(
+                product,
+                imp,
+                ['photos'],
+                'smart_merge',
+                seller,
+                api,
+            )
+            photos = result.get('photos') or {}
+            if result.get('deferred') or result.get('reconciliation_pending'):
+                return jsonify({
+                    **result,
+                    'message': (
+                        'Дозагрузка отложена до завершения предыдущей '
+                        'операции WB'
+                        if result.get('deferred') else
+                        'Фото отправлены и сверяются с live-галереей WB'
+                    ),
+                }), 202
+            if not result.get('success'):
+                return jsonify(result), 409
+            if photos.get('skipped'):
+                message = (
+                    'Live-галерея WB сохранена; новых отсутствующих фото нет'
+                )
+            else:
+                message = 'Отсутствующие фото дозагружены без замены live-слотов'
+            return jsonify({**result, 'message': message}), 200
         except Exception as e:
             return jsonify({'success': False, 'error': f'Ошибка загрузки фото: {str(e)[:200]}'}), 500
+        finally:
+            close = getattr(api, 'close', None)
+            if callable(close):
+                close()
 
     # -------------------------------------------------------------------
     # Повторная установка цены на WB
@@ -3104,30 +3387,19 @@ def register_supplier_routes(app):
         if not sp:
             return jsonify({'success': False, 'error': 'Не найден товар поставщика для обогащения'}), 400
 
-        # Собираем данные для обновления из AI парсинга и SupplierProduct
-        updates = {}
-        updated_fields = []
+        # Старый CTA теперь использует тот же live-aware service contract, что
+        # одиночный и массовый экраны. SupplierProduct остаётся свежим source,
+        # но ни один путь больше не вызывает raw full-card replacement.
+        from types import SimpleNamespace
 
-        # Title — из AI SEO title или из спаршенного title
         ai_title = sp.ai_seo_title or imp.ai_seo_title
-        if ai_title and len(ai_title) >= 5:
-            updates['title'] = ai_title[:60]
-            updated_fields.append('название')
-
-        # Description — из AI описания или sp описания
-        ai_desc = sp.ai_description if hasattr(sp, 'ai_description') else None
-        if not ai_desc and imp.description:
-            ai_desc = imp.description
-        if ai_desc and len(ai_desc) >= 50:
-            updates['description'] = ai_desc[:5000]
-            updated_fields.append('описание')
-
-        # Характеристики — из ai_marketplace_json (уже в формате WB)
+        ai_desc = sp.ai_description or imp.description
         try:
             marketplace_data = json_mod.loads(sp.ai_marketplace_json) if sp.ai_marketplace_json else None
         except (json_mod.JSONDecodeError, TypeError):
             marketplace_data = None
 
+        charcs = None
         if marketplace_data and isinstance(marketplace_data, dict):
             charcs = marketplace_data.get('characteristics', [])
             meta = marketplace_data.get('_meta')
@@ -3146,9 +3418,8 @@ def register_supplier_routes(app):
                     if not str(name).startswith('_')
                     and value not in (None, '', [])
                 }
-            if charcs:
-                updates['characteristics'] = charcs
-                updated_fields.append(f'характеристики ({len(charcs)} шт.)')
+        if not charcs:
+            charcs = sp.characteristics_json or imp.characteristics
 
         # Габариты — из AI или sp. Сбор через общий WB helper, чтобы
         # weightBrutto оставался внутри dimensions и в килограммах.
@@ -3177,47 +3448,103 @@ def register_supplier_routes(app):
         for source in dimension_sources:
             dimensions.update(extract_dimensions(source))
 
+        selected_fields = []
+        if ai_title and len(ai_title) >= 5:
+            selected_fields.append('title')
+        if ai_desc and len(ai_desc) >= 50:
+            selected_fields.append('description')
+        if charcs:
+            selected_fields.append('characteristics')
         if dimensions:
-            updates['dimensions'] = dimensions
-            updated_fields.append('габариты')
+            selected_fields.append('dimensions')
 
-        if not updates:
+        if not selected_fields:
             return jsonify({
                 'success': False,
                 'error': 'Нет AI-данных для обогащения. Сначала выполните AI-парсинг товара у поставщика.'
             }), 400
 
-        # Отправляем обновление на WB
+        source = SimpleNamespace(
+            id=imp.id,
+            seller_id=imp.seller_id,
+            product_id=imp.product_id,
+            supplier_id=imp.supplier_id,
+            supplier_product_id=imp.supplier_product_id,
+            external_id=imp.external_id,
+            source_type=imp.source_type,
+            title=(ai_title[:60] if ai_title and len(ai_title) >= 5 else None),
+            ai_seo_title=None,
+            brand=imp.brand,
+            ai_detected_brand=None,
+            description=(
+                ai_desc[:5000] if ai_desc and len(ai_desc) >= 50 else None
+            ),
+            characteristics=charcs or '',
+            materials=sp.materials_json or imp.materials,
+            gender=sp.gender or imp.gender,
+            ai_dimensions=(
+                json_mod.dumps(dimensions, ensure_ascii=False)
+                if dimensions else None
+            ),
+            photo_urls=imp.photo_urls,
+            created_at=imp.created_at,
+        )
+
         from services.wb_api_client import WildberriesAPIClient
+        from services.supplier_enrichment import get_enrichment_service
         api = WildberriesAPIClient(seller.wb_api_key)
 
         try:
-            api.update_card(
-                nm_id=product.nm_id,
-                updates=updates,
-                merge_with_existing=True,
-                log_to_db=True,
-                seller_id=seller.id
+            result = get_enrichment_service().apply_enrichment(
+                product,
+                source,
+                selected_fields,
+                'smart_merge',
+                seller,
+                api,
             )
-
-            # Обновляем локальные данные
-            if 'title' in updates:
-                product.title = updates['title']
-            if 'description' in updates:
-                product.description = updates['description']
-            product.last_sync = datetime.utcnow()
-            db.session.commit()
-
-            return jsonify({
-                'success': True,
-                'message': f'Карточка обогащена: {", ".join(updated_fields)}',
-                'updated_fields': updated_fields,
-            })
+            if not result.get('success'):
+                if result.get('reconciliation_pending'):
+                    return jsonify({
+                        **result,
+                        'message': (
+                            'Отправка отложена до завершения предыдущей '
+                            'операции WB; новая запись ещё не выполнялась'
+                            if result.get('deferred') else
+                            'Исход отправки уточняется по live WB; '
+                            'автоматический повтор не выполняется'
+                        ),
+                    }), 202
+                return jsonify(result), 409
+            labels = {
+                'title': 'название',
+                'description': 'описание',
+                'characteristics': 'характеристики',
+                'dimensions': 'габариты',
+            }
+            applied = list(result.get('fields_applied') or [])
+            response = {
+                **result,
+                'message': (
+                    'Изменения отправлены на WB и ожидают сверки: '
+                    + ', '.join(labels.get(field, field) for field in applied)
+                    if applied else
+                    'Более полные live-данные WB сохранены без изменений'
+                ),
+                'updated_fields': [labels.get(field, field) for field in applied],
+            }
+            return jsonify(response), (
+                202 if result.get('reconciliation_pending') else 200
+            )
         except Exception as e:
             return jsonify({
                 'success': False,
                 'error': f'Ошибка обновления карточки WB: {str(e)[:200]}'
             }), 500
+        finally:
+            close = getattr(api, 'close', None)
+            if callable(close):
+                close()
 
     # -------------------------------------------------------------------
     # Rich-контент (инфографика) для продавца
@@ -3433,10 +3760,13 @@ def register_supplier_routes(app):
             return jsonify({'error': 'API ключ WB не настроен'}), 400
 
         data = request.get_json(silent=True) or {}
-        product_ids = data.get('product_ids', [])
-
-        if not product_ids:
-            return jsonify({'error': 'Не выбраны товары'}), 400
+        try:
+            # Здесь на каждую карточку идёт отдельный вызов WB, поэтому
+            # ограничение особенно важно: без него один клик держит поток
+            # и упирается в rate limit площадки.
+            product_ids = _bulk_product_ids(data.get('product_ids'), limit=50)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         # Берём только импортированные товары
         imported = ImportedProduct.query.filter(
@@ -3530,6 +3860,27 @@ def register_supplier_routes(app):
             or request.form.getlist('product_ids')
         )
         product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+
+        # «Обновить весь каталог поставщика»: явный флаг вместо списка ID.
+        # Набор всегда собирается seller-scoped на сервере, browser его не задаёт.
+        if not product_ids and request.form.get('update_all_for_supplier') == '1':
+            if not supplier_id:
+                flash('Не указан поставщик для обновления', 'warning')
+                return _redirect_seller_supplier_catalog(supplier_id)
+            product_ids = [
+                row.id for row in ImportedProduct.query.with_entities(
+                    ImportedProduct.id
+                ).filter_by(
+                    seller_id=seller.id,
+                    supplier_id=supplier_id,
+                ).all()
+            ]
+            if not product_ids:
+                flash(
+                    'У этого поставщика пока нет импортированных карточек',
+                    'warning',
+                )
+                return _redirect_seller_supplier_catalog(supplier_id)
 
         if not product_ids:
             flash('Не выбраны карточки для обновления', 'warning')
@@ -3638,28 +3989,44 @@ def register_supplier_routes(app):
         после обновления предлагается отдельный подтверждаемый переход в
         массовое обогащение характеристик."""
         seller = current_user.seller
-        raw_ids = request.form.getlist('selected_ids')
-        ids = []
-        for raw in raw_ids:
-            if not raw.isdigit():
-                flash('Некорректный выбор карточек.', 'warning')
-                return redirect(url_for('seller_my_products'))
-            ids.append(int(raw))
-        ids = list(dict.fromkeys(ids))
-        if not ids or len(ids) > 200:
-            flash('Выберите от 1 до 200 карточек.', 'warning')
-            return redirect(url_for('seller_my_products'))
+        # Страница на Vue шлёт JSON, классическая форма — selected_ids[].
+        # Без этой ветки JSON-клиент получал redirect и трактовал его как
+        # истёкшую сессию.
+        wants_json = request.is_json
+        if wants_json:
+            payload = request.get_json(silent=True) or {}
+            try:
+                ids = _bulk_product_ids(payload.get('product_ids'))
+            except ValueError as exc:
+                return jsonify({'success': False, 'error': str(exc)}), 400
+        else:
+            raw_ids = request.form.getlist('selected_ids')
+            ids = []
+            for raw in raw_ids:
+                if not raw.isdigit():
+                    flash('Некорректный выбор карточек.', 'warning')
+                    return _redirect_seller_my_products(request.args)
+                ids.append(int(raw))
+            ids = list(dict.fromkeys(ids))
+            if not ids or len(ids) > 200:
+                flash('Выберите от 1 до 200 карточек.', 'warning')
+                return _redirect_seller_my_products(request.args)
 
         rows = ImportedProduct.query.filter(
             ImportedProduct.seller_id == seller.id,
             ImportedProduct.id.in_(ids),
         ).all()
         if len(rows) != len(ids):
+            if wants_json:
+                return jsonify({
+                    'success': False,
+                    'error': 'Часть выбранных карточек недоступна — обновите список',
+                }), 400
             flash(
                 'Часть выбранных карточек недоступна. Обновите список.',
                 'warning',
             )
-            return redirect(url_for('seller_my_products'))
+            return _redirect_seller_my_products(request.args)
 
         supplier_product_ids = [
             row.supplier_product_id for row in rows if row.supplier_product_id
@@ -3683,12 +4050,20 @@ def register_supplier_routes(app):
         message = f'Обновлено локальных карточек: {refreshed}.'
         if skipped:
             message += f' Без связи с каталогом поставщика: {skipped}.'
+        if wants_json:
+            return jsonify({
+                'success': True,
+                'updated': refreshed,
+                'skipped': skipped,
+                'message': message,
+                'wb_ready': len(wb_product_ids),
+            })
         flash(message, 'success')
-        return redirect(url_for(
-            'seller_my_products',
+        return _redirect_seller_my_products(
+            request.args,
             refreshed=refreshed,
             wb_ready=len(wb_product_ids),
-        ))
+        )
 
     # -------------------------------------------------------------------
     # Дашборд качества парсинга (HTML)

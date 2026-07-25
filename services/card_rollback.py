@@ -101,8 +101,17 @@ def _canonical_nested(value: Any) -> Any:
 def _canonical_wire_dimensions(value: Any) -> Any:
     if not isinstance(value, Mapping):
         raise WBValidationError('Снимок dimensions должен быть объектом')
-    from services.wb_content_payload import normalize_dimensions
-    return _canonical_nested(normalize_dimensions(defaults=value))
+    # Presence is part of the fact.  The legacy normalizer fills omitted keys
+    # with 10x10x5/0.1 defaults, which made an absent live dimension
+    # indistinguishable from a fabricated one during reconciliation/rollback.
+    # Strip response-only metadata but preserve exactly which canonical keys
+    # WB actually returned.
+    exact = {
+        key: value[key]
+        for key in ('length', 'width', 'height', 'weightBrutto')
+        if key in value
+    }
+    return _canonical_nested(exact)
 
 
 def classify_wb_card_history_state(
@@ -313,7 +322,11 @@ def prepare_wb_card_history_rollback(
             + ', '.join(conflict_fields)
         )
 
-    prepared = prepare_card_for_update(current_card, restore_updates)
+    prepared = prepare_card_for_update(
+        current_card,
+        restore_updates,
+        preserve_live_fields=True,
+    )
     if restored_dimensions is not None:
         if restored_dimensions:
             prepared['dimensions'] = restored_dimensions
@@ -322,7 +335,18 @@ def prepare_wb_card_history_rollback(
         # Batch boundary normalizes dimensions as well. Normalize here so the
         # prepared payload, local mirror and actual wire payload stay identical.
         from services.wb_content_payload import normalize_update_card_payload
-        prepared = normalize_update_card_payload(prepared)
+        from services.wb_validators import WB_PREPARED_CONTEXT_KEY
+        # The prepared context is an opaque in-process capability whose token
+        # intentionally fails if deep-copied. Dimension normalization is a
+        # JSON-shape transform, so keep that capability outside the deepcopy
+        # and restore the exact same object afterwards.
+        prepared_context = prepared.pop(WB_PREPARED_CONTEXT_KEY, None)
+        prepared = normalize_update_card_payload(
+            prepared,
+            fill_missing_dimensions=False,
+        )
+        if prepared_context is not None:
+            prepared[WB_PREPARED_CONTEXT_KEY] = prepared_context
     if restored_characteristics is not None or removed_characteristic_ids:
         prepared = prepare_card_for_characteristic_rollback(
             prepared,

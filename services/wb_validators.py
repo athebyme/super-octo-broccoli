@@ -86,14 +86,15 @@ def _strict_characteristic_ids(characteristics, source_label):
             raise WBValidationError(
                 f'{source_label}: характеристика #{index + 1} должна быть объектом'
             )
-        try:
-            if isinstance(item.get('id'), bool):
-                raise ValueError
-            charc_id = int(item.get('id'))
-        except (TypeError, ValueError):
+        charc_id = item.get('id')
+        if (
+            not isinstance(charc_id, int)
+            or isinstance(charc_id, bool)
+            or charc_id <= 0
+        ):
             raise WBValidationError(
                 f'{source_label}: характеристика #{index + 1} не содержит '
-                'числовой id'
+                'typed positive integer id'
             )
         if charc_id in result:
             raise WBValidationError(
@@ -452,7 +453,9 @@ def validate_characteristics_value(
 
 def prepare_card_for_update(
     full_card: Dict[str, Any],
-    updates: Dict[str, Any]
+    updates: Dict[str, Any],
+    *,
+    preserve_live_fields: bool = False,
 ) -> Dict[str, Any]:
     """
     Подготовка карточки для обновления в WB API
@@ -610,7 +613,10 @@ def prepare_card_for_update(
 
     from services.wb_content_payload import normalize_update_card_payload
 
-    prepared = normalize_update_card_payload(prepared)
+    prepared = normalize_update_card_payload(
+        prepared,
+        fill_missing_dimensions=not preserve_live_fields,
+    )
 
     # Проверяем обязательные поля
     required_fields = ['nmID', 'vendorCode', 'sizes']
@@ -636,22 +642,20 @@ def prepare_card_for_update(
                 f"размеров без chrtID — WB может создать дубли баркодов"
             )
 
-    # Исправляем некорректные габариты
-    if 'dimensions' in prepared and prepared['dimensions']:
+    # Невалидный вес НЕ удаляется ни в одном из режимов. Удаление ключа было
+    # тихой мутацией: карточка уходила в WB вообще без веса упаковки, а
+    # локальная валидация при этом молчала, потому что проверяет вес только при
+    # его наличии. Наблюдённое значение сохраняется, чтобы вызывающий код либо
+    # починил его из заявленного продавцом факта, либо честно отказался от
+    # записи с внятной причиной.
+    if (
+        not preserve_live_fields
+        and 'dimensions' in prepared
+        and prepared['dimensions']
+    ):
         dims = prepared['dimensions']
 
-        # Проверяем вес - если <= 0, удаляем или ставим дефолт
-        if 'weightBrutto' in dims:
-            try:
-                weight = float(dims['weightBrutto'])
-                if weight <= 0:
-                    logger.warning(f"Invalid weight {weight}, removing from dimensions")
-                    dims.pop('weightBrutto', None)
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid weight value {dims.get('weightBrutto')}, removing")
-                dims.pop('weightBrutto', None)
-
-        # Если dimensions пустой после очистки - удаляем его
+        # Если dimensions пустой - удаляем его
         if not dims or all(v is None or v == '' for v in dims.values()):
             prepared.pop('dimensions', None)
             logger.info("Removed empty dimensions")
@@ -679,6 +683,12 @@ def prepare_card_for_update(
             lost_characteristic_ids & PACKED_WEIGHT_CHARC_IDS
         )
         unsafe_removed_ids = lost_characteristic_ids - deprecated_removed_ids
+        if preserve_live_fields:
+            # Even a technically deprecated characteristic is still an
+            # observed seller fact.  Supplier enrichment must not turn an
+            # unrelated title/description update into an implicit migration.
+            unsafe_removed_ids |= deprecated_removed_ids
+            deprecated_removed_ids = set()
         if unsafe_removed_ids:
             raise WBValidationError(
                 'Нормализация молча удалила характеристики WB: '
@@ -714,6 +724,7 @@ def prepare_card_for_characteristic_rollback(
     prepared = prepare_card_for_update(
         full_card,
         {'characteristics': restored_characteristics},
+        preserve_live_fields=True,
     )
     context = prepared.pop(WB_PREPARED_CONTEXT_KEY, None)
     if context is None:
@@ -862,7 +873,8 @@ def clean_characteristics_for_update(
 
 def validate_and_log_errors(
     card_data: Dict[str, Any],
-    operation: str = "update"
+    operation: str = "update",
+    errors_out: Optional[List[str]] = None,
 ) -> bool:
     """
     Валидация данных и логирование ошибок
@@ -873,8 +885,13 @@ def validate_and_log_errors(
 
     Returns:
         True если валидация прошла успешно
+
+    ``errors_out`` позволяет вызывающему коду показать те же безопасные
+    конкретные причины пользователю, не заменяя их общим ``Validation failed``.
     """
     is_valid, errors = validate_card_update(card_data)
+    if errors_out is not None:
+        errors_out.extend(errors)
 
     if not is_valid:
         logger.error(f"❌ Валидация карточки nmID={card_data.get('nmID')} не прошла:")

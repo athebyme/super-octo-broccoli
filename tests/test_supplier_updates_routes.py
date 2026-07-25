@@ -2,6 +2,7 @@
 """Тесты роутов раздела «Обновление карточек» (supplier-updates)."""
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 
@@ -42,47 +43,60 @@ class SupplierUpdatesRouteTest(unittest.TestCase):
 
     def test_start_409_when_job_active(self):
         user, _ = self._login_ctx()
-        active = MagicMock()
-        active.job_uid = 'busy-job'
+        from services.supplier_update_hub import SupplierUpdateJobAlreadyActive
         with patch('routes.supplier_updates.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
-             patch('routes.supplier_updates.BackgroundJob') as MockJob:
-            MockJob.query.filter_by.return_value.filter.return_value.first.return_value = active
+             patch('routes.supplier_updates.Product') as MockProduct, \
+             patch(
+                 'routes.supplier_updates.create_supplier_update_job',
+                 side_effect=SupplierUpdateJobAlreadyActive('busy-job'),
+             ):
+            own = MagicMock(); own.id = 1
+            MockProduct.query.filter.return_value.all.return_value = [own]
             resp = self.client.post('/api/supplier-updates/photos/start',
                                     json={'product_ids': [1]})
         self.assertEqual(resp.status_code, 409)
         self.assertEqual(resp.get_json()['job_uid'], 'busy-job')
 
-    def test_start_filters_foreign_ids_and_launches_thread(self):
+    def test_start_rejects_mixed_foreign_ids(self):
         user, _ = self._login_ctx()
         own = MagicMock()
         own.id = 11
         with patch('routes.supplier_updates.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
-             patch('routes.supplier_updates.BackgroundJob') as MockJob, \
              patch('routes.supplier_updates.Product') as MockProduct, \
-             patch('routes.supplier_updates.db'), \
              patch('routes.supplier_updates.threading.Thread') as MockThread:
-            MockJob.query.filter_by.return_value.filter.return_value.first.return_value = None
             MockProduct.query.filter.return_value.all.return_value = [own]
             resp = self.client.post('/api/supplier-updates/photos/start',
                                     json={'product_ids': [11, 999]})
+        self.assertEqual(resp.status_code, 400)
+        MockThread.assert_not_called()
+
+    def test_start_exact_owned_ids_launches_thread(self):
+        user, _ = self._login_ctx()
+        own = MagicMock(); own.id = 11
+        with patch('routes.supplier_updates.current_user', user), \
+             patch('flask_login.utils._get_user', return_value=user), \
+             patch('routes.supplier_updates.Product') as MockProduct, \
+             patch(
+                 'routes.supplier_updates.create_supplier_update_job',
+                 return_value=SimpleNamespace(job_uid='created-job'),
+             ) as create_job, \
+             patch('routes.supplier_updates.threading.Thread') as MockThread:
+            MockProduct.query.filter.return_value.all.return_value = [own]
+            resp = self.client.post('/api/supplier-updates/photos/start',
+                                    json={'product_ids': [11]})
         self.assertEqual(resp.status_code, 200)
-        data = resp.get_json()
-        self.assertTrue(data['success'])
-        self.assertEqual(data['total'], 1)
-        MockThread.assert_called_once()
-        # product_ids, переданные в поток, — только свои
-        args = MockThread.call_args.kwargs.get('args') or MockThread.call_args.args
+        self.assertEqual(resp.get_json()['job_uid'], 'created-job')
+        create_job.assert_called_once()
+        args = MockThread.call_args.kwargs['args']
         self.assertEqual(args[3], [11])
 
     def test_start_400_when_nothing_to_do(self):
         user, _ = self._login_ctx()
         with patch('routes.supplier_updates.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
-             patch('routes.supplier_updates.BackgroundJob') as MockJob, \
              patch('routes.supplier_updates.Product') as MockProduct:
-            MockJob.query.filter_by.return_value.filter.return_value.first.return_value = None
             MockProduct.query.filter.return_value.all.return_value = []
             resp = self.client.post('/api/supplier-updates/photos/start',
                                     json={'product_ids': [999]})
@@ -92,18 +106,25 @@ class SupplierUpdatesRouteTest(unittest.TestCase):
         user, _ = self._login_ctx()
         with patch('routes.supplier_updates.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
-             patch('routes.supplier_updates.BackgroundJob') as MockJob, \
              patch('routes.supplier_updates.expand_filter_to_ids',
                    return_value=[1, 2, 3]) as mock_expand, \
-             patch('routes.supplier_updates.db'), \
+             patch(
+                 'routes.supplier_updates.create_supplier_update_job',
+                 return_value=SimpleNamespace(job_uid='select-all-job'),
+             ), \
              patch('routes.supplier_updates.threading.Thread'):
-            MockJob.query.filter_by.return_value.filter.return_value.first.return_value = None
             resp = self.client.post('/api/supplier-updates/photos/start',
                                     json={'select_all': True, 'supplier_id': 2,
                                           'only_new': True, 'search': ''})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json()['total'], 3)
-        mock_expand.assert_called_once_with(7, supplier_id=2, only_new=True, search='')
+        mock_expand.assert_called_once_with(
+            7,
+            supplier_id=2,
+            only_new=True,
+            search='',
+            limit=201,
+        )
 
     def test_status_scoped_to_seller(self):
         user, _ = self._login_ctx()

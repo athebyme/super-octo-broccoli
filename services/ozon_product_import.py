@@ -297,8 +297,19 @@ class OzonProductImportContract:
         }]
 
     @classmethod
-    def build_payload(cls, draft: MarketplaceProductDraft) -> dict:
-        """Build one full, current Ozon import item from normalized draft state."""
+    def build_payload(
+        cls,
+        draft: MarketplaceProductDraft,
+        *,
+        documents: Optional[dict] = None,
+    ) -> dict:
+        """Build one full, current Ozon import item from normalized draft state.
+
+        ``documents`` is an optional already seller-scoped effective view used
+        by full-state updates.  It contains the same normalized blocks as the
+        draft, with a fresh exact Ozon listing supplying only preservation
+        fallbacks.  The whitelist and all wire validation remain identical.
+        """
         if not isinstance(draft, MarketplaceProductDraft):
             raise OzonProductImportPayloadError(
                 "MarketplaceProductDraft is required"
@@ -307,13 +318,41 @@ class OzonProductImportContract:
             raise OzonProductImportPayloadError(
                 "Draft has no exact Ozon category/type binding"
             )
+        if documents is not None:
+            expected_document_keys = {
+                "content",
+                "attributes",
+                "complex_attributes",
+                "media",
+                "dimensions",
+                "barcodes",
+                "commercial",
+            }
+            if (
+                not isinstance(documents, dict)
+                or set(documents) != expected_document_keys
+                or not isinstance(documents.get("content"), dict)
+                or not isinstance(documents.get("attributes"), list)
+                or not isinstance(documents.get("complex_attributes"), list)
+                or not isinstance(documents.get("media"), dict)
+                or not isinstance(documents.get("dimensions"), dict)
+                or not isinstance(documents.get("barcodes"), list)
+                or not isinstance(documents.get("commercial"), dict)
+            ):
+                raise OzonProductImportPayloadError(
+                    "Effective draft documents are malformed"
+                )
 
         offer_id = cls._required_text(
             draft.offer_id,
             "offer_id",
             maximum=cls.MAX_OFFER_ID_CHARS,
         )
-        content = cls._stored_json(draft.content_json, dict)
+        content = (
+            documents["content"]
+            if documents is not None
+            else cls._stored_json(draft.content_json, dict)
+        )
         name = cls._required_text(
             content.get("name"),
             "content.name",
@@ -326,7 +365,11 @@ class OzonProductImportContract:
             allow_newlines=True,
         )
 
-        raw_attributes = cls._stored_json(draft.attributes_json, list)
+        raw_attributes = (
+            documents["attributes"]
+            if documents is not None
+            else cls._stored_json(draft.attributes_json, list)
+        )
         if len(raw_attributes) > 5_000:
             raise OzonProductImportPayloadError("Too many Ozon attributes")
         attributes = [
@@ -339,7 +382,11 @@ class OzonProductImportContract:
             attributes,
         )
 
-        raw_complex = cls._stored_json(draft.complex_attributes_json, list)
+        raw_complex = (
+            documents["complex_attributes"]
+            if documents is not None
+            else cls._stored_json(draft.complex_attributes_json, list)
+        )
         if len(raw_complex) > 500:
             raise OzonProductImportPayloadError("Too many Ozon complex groups")
         complex_attributes = []
@@ -363,7 +410,11 @@ class OzonProductImportContract:
                 ]
             })
 
-        media = cls._stored_json(draft.media_json, dict)
+        media = (
+            documents["media"]
+            if documents is not None
+            else cls._stored_json(draft.media_json, dict)
+        )
         if set(media) - {"images", "primary_image", "color_image"}:
             raise OzonProductImportPayloadError(
                 "Draft media contains fields outside the current Ozon contract"
@@ -411,7 +462,11 @@ class OzonProductImportContract:
                     "Ozon color_image duplicates a main image"
                 )
 
-        dimensions = cls._stored_json(draft.dimensions_json, dict)
+        dimensions = (
+            documents["dimensions"]
+            if documents is not None
+            else cls._stored_json(draft.dimensions_json, dict)
+        )
         expected_dimensions = {
             "width",
             "height",
@@ -429,13 +484,21 @@ class OzonProductImportContract:
         if dimension_unit is None or weight_unit is None:
             raise OzonProductImportPayloadError("Unsupported Ozon physical unit")
 
-        barcodes = cls._stored_json(draft.barcodes_json, list)
+        barcodes = (
+            documents["barcodes"]
+            if documents is not None
+            else cls._stored_json(draft.barcodes_json, list)
+        )
         if len(barcodes) > 1:
             raise OzonProductImportPayloadError(
                 "/v3/product/import accepts one barcode; use the barcode workflow for extras"
             )
 
-        commercial = cls._stored_json(draft.commercial_json, dict)
+        commercial = (
+            documents["commercial"]
+            if documents is not None
+            else cls._stored_json(draft.commercial_json, dict)
+        )
         if set(commercial) - {"price", "old_price", "vat", "currency_code"}:
             raise OzonProductImportPayloadError(
                 "Draft commercial data contains unknown fields"
@@ -831,6 +894,7 @@ class OzonProductImportContract:
             )
 
         entries: List[dict] = []
+        operation_caps: List[dict] = []
         source = "operation_limits"
         if "operation_limits" in response:
             raw_limits = response["operation_limits"]
@@ -840,11 +904,38 @@ class OzonProductImportContract:
                         "Ozon operation_limits must be a bounded non-empty list"
                     )
                 for index, raw in enumerate(raw_limits):
-                    entries.append(cls._quota_counter(
-                        raw,
-                        f"operation_limits[{index}]",
-                        default_name=f"operation_{index}",
-                    ))
+                    field_name = f"operation_limits[{index}]"
+                    if not isinstance(raw, dict):
+                        raise OzonProductImportProtocolError(
+                            f"Ozon {field_name} must be an object"
+                        )
+                    # Current /v4/product/info/limit (observed 2026-07-24)
+                    # returns operation capability rows as
+                    # {limit_type, limit} without usage. They are not a
+                    # remaining-quota counter; daily_create/daily_update and
+                    # total below are the authoritative consumable counters.
+                    if (
+                        "usage" not in raw
+                        and "used" not in raw
+                        and set(raw) == {"limit_type", "limit"}
+                    ):
+                        operation_caps.append({
+                            "limit_type": cls._provider_text(
+                                raw["limit_type"],
+                                f"{field_name}.limit_type",
+                                maximum=200,
+                            ),
+                            "limit": cls._provider_integer(
+                                raw["limit"],
+                                f"{field_name}.limit",
+                            ),
+                        })
+                    else:
+                        entries.append(cls._quota_counter(
+                            raw,
+                            field_name,
+                            default_name=f"operation_{index}",
+                        ))
             elif isinstance(raw_limits, dict):
                 if "limit" in raw_limits:
                     entries.append(cls._quota_counter(
@@ -872,17 +963,35 @@ class OzonProductImportContract:
                 raise OzonProductImportProtocolError(
                     "Ozon operation_limits has an unsupported type"
                 )
-            relevant = [
-                entry for entry in entries
-                if cls._quota_name_relevant(entry["name"], mode)
-            ]
-            if len(entries) == 1:
-                relevant = entries
-            if not relevant:
-                raise OzonProductImportProtocolError(
-                    "Ozon operation_limits has no applicable product counter"
-                )
-            entries = relevant
+            if entries:
+                relevant = [
+                    entry for entry in entries
+                    if cls._quota_name_relevant(entry["name"], mode)
+                ]
+                if len(entries) == 1:
+                    relevant = entries
+                if not relevant:
+                    raise OzonProductImportProtocolError(
+                        "Ozon operation_limits has no applicable product counter"
+                    )
+                entries = relevant
+            elif operation_caps:
+                # Mixed current response: validate the cap rows, then use the
+                # exact daily + total counters. Never infer remaining capacity
+                # from a cap that has no usage.
+                source = "operation_caps_with_daily_counters"
+                legacy_names = [f"daily_{mode}", "total"]
+                for name in legacy_names:
+                    if name in response:
+                        entries.append(cls._quota_counter(
+                            response[name],
+                            name,
+                            default_name=name,
+                        ))
+                if not entries:
+                    raise OzonProductImportProtocolError(
+                        "Ozon operation caps contain no consumable quota counters"
+                    )
         else:
             source = "legacy_daily_counters"
             legacy_names = [f"daily_{mode}", "total"]
@@ -905,4 +1014,5 @@ class OzonProductImportContract:
             "mode": mode,
             "remaining": remaining,
             "entries": entries,
+            "operation_caps": operation_caps,
         }

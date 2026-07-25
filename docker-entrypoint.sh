@@ -13,6 +13,16 @@ export PYTHONPATH=/app:${PYTHONPATH:-}
 if [ "$(id -u)" = "0" ]; then
   mkdir -p /app/data /app/uploads /app/processed /app/data/ssl
   chown -R app:app /app/data /app/uploads /app/processed
+  marketplace_lock_dir=/tmp/seller-hub-marketplace-publication-locks
+  if [ -L "$marketplace_lock_dir" ] || {
+    [ -e "$marketplace_lock_dir" ] && [ ! -d "$marketplace_lock_dir" ]
+  }; then
+    echo "Unsafe marketplace operation lock path: $marketplace_lock_dir" >&2
+    exit 1
+  fi
+  mkdir -p "$marketplace_lock_dir"
+  chown app:app "$marketplace_lock_dir"
+  chmod 0700 "$marketplace_lock_dir"
   exec gosu app "$0" "$@"
 fi
 # ─────────────────────────────────────────────────────────────────────
@@ -135,6 +145,7 @@ python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db |
 python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace tables migration skipped (already applied or error)"
 python migrations/migrate_add_marketplace_accounts.py /app/data/seller_platform.db
 python migrations/migrate_add_ozon_references.py /app/data/seller_platform.db
+python migrations/migrate_add_ozon_product_type_visibility.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_reference_freshness.py /app/data/seller_platform.db
 python migrations/migrate_add_brand_category_external_id.py /app/data/seller_platform.db
 python migrations/migrate_add_wb_dictionary_provenance.py /app/data/seller_platform.db
@@ -144,6 +155,8 @@ python migrations/migrate_add_marketplace_product_links.py /app/data/seller_plat
 python migrations/migrate_add_marketplace_canonical_content.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_rollout.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_drafts.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_draft_attribute_removals.py \
+  /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_operations.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_commercial.py /app/data/seller_platform.db
 python migrations/migrate_add_marketplace_product_updates.py /app/data/seller_platform.db
@@ -180,8 +193,18 @@ python migrations/migrate_add_enrichment_inference.py /app/data/seller_platform.
 python migrations/migrate_clean_characteristic_dimensions.py /app/data/seller_platform.db
 # Fail-fast: ORM читает колонки WB-ревизии сразу после старта
 python migrations/migrate_add_wb_card_audit.py /app/data/seller_platform.db
+# Fail-fast: история карточки хранит bounded решения smart enrichment merge
+python migrations/migrate_add_enrichment_merge_audit.py /app/data/seller_platform.db
+# Fail-fast: durable bulk cursor + asynchronous WB reconciliation state
+python migrations/migrate_enrichment_reliability_v2.py /app/data/seller_platform.db
 # Fail-fast: мониторинг конкурентов v2 (интервалы, честные наблюдения) + чистка v1-мусора снимков
 python migrations/migrate_competitor_monitor_v2.py /app/data/seller_platform.db
+python migrations/migrate_add_competitor_matching.py /app/data/seller_platform.db
+# Fail-fast: comparison reads public basic/final prices from dedicated columns.
+python migrations/migrate_add_competitor_price_lanes.py /app/data/seller_platform.db
+# Fail-fast: legacy imports regain exact supplier provenance by the unique
+# (supplier_id, external_id) source key; no title/AI/fuzzy matching.
+python migrations/migrate_backfill_imported_supplier_links.py /app/data/seller_platform.db
 python migrations/migrate_compact_competitor_snapshots.py /app/data/seller_platform.db
 unset SKIP_SCHEDULER
 

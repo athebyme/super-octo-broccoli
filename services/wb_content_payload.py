@@ -412,11 +412,60 @@ def normalize_create_cards_payload(cards: List[Dict[str, Any]]) -> List[Dict[str
     return normalized
 
 
-def normalize_update_card_payload(card: Dict[str, Any]) -> Dict[str, Any]:
-    """Deep-copy and normalize one /content/v2/cards/update card."""
+def normalize_update_card_payload(
+    card: Dict[str, Any],
+    *,
+    fill_missing_dimensions: bool = True,
+) -> Dict[str, Any]:
+    """Deep-copy and normalize one /content/v2/cards/update card.
+
+    ``fill_missing_dimensions`` retains the legacy generic update behaviour.
+    Preserve-live enrichment disables it: a read/update path must never invent
+    package facts merely because WB's live card omitted one of the keys.
+    """
     normalized = copy.deepcopy(card)
     chars, dims_from_chars = sanitize_wb_characteristics(normalized.get("characteristics", []))
     if "characteristics" in normalized:
         normalized["characteristics"] = chars
-    normalized["dimensions"] = build_dimensions(normalized.get("dimensions") or DEFAULT_DIMENSIONS, dims_from_chars)
+    if fill_missing_dimensions:
+        raw_dimensions = normalized.get("dimensions")
+        built = build_dimensions(
+            raw_dimensions or DEFAULT_DIMENSIONS,
+            dims_from_chars,
+        )
+        if isinstance(raw_dimensions, Mapping):
+            # Отсутствующий ключ legacy-путь по-прежнему добирает дефолтом, но
+            # ПРИСУТСТВУЮЩИЙ невалидный габарит подменять захардкоженным
+            # значением нельзя: вес упаковки определяет логистический тариф WB,
+            # и выдуманные 0.1 кг хуже честной остановки на валидации. Наблюдённое
+            # значение сохраняется, чтобы вызывающий код мог починить его из
+            # заявленного продавцом факта либо явно отказаться от записи.
+            for key in ("length", "width", "height", "weightBrutto"):
+                if key not in raw_dimensions or key in dims_from_chars:
+                    continue
+                if _coerce_dimension_value(key, raw_dimensions.get(key), key) is not None:
+                    continue
+                built[key] = copy.deepcopy(raw_dimensions.get(key))
+        normalized["dimensions"] = built
+    else:
+        raw_dimensions = normalized.get("dimensions")
+        if isinstance(raw_dimensions, Mapping):
+            observed: Dict[str, Any] = {}
+            for key in ("length", "width", "height", "weightBrutto"):
+                if key not in raw_dimensions:
+                    continue
+                # This is already the canonical WB response field, not an
+                # untrusted supplier value with units in its name. In
+                # particular, a legitimate live ``weightBrutto=50`` means
+                # 50 kg and must never hit the supplier heuristic that treats
+                # values above 30 as grams. Preserve the exact typed value;
+                # malformed strings/bools then fail downstream validation
+                # instead of being reinterpreted or silently removed.
+                observed[key] = copy.deepcopy(raw_dimensions.get(key))
+            observed.update(dims_from_chars)
+            normalized["dimensions"] = observed
+        elif dims_from_chars:
+            normalized["dimensions"] = dict(dims_from_chars)
+        elif "dimensions" not in normalized:
+            normalized.pop("dimensions", None)
     return normalized

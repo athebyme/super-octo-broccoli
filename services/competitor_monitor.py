@@ -14,6 +14,7 @@
 HTTP-слой — services/competitor_fetch.py (глобальный rate limiter,
 circuit breaker, кросс-селлер кэш).
 """
+import json
 import logging
 import time
 from datetime import datetime, timedelta
@@ -39,6 +40,11 @@ SUPPLIER_PAGES_PER_SYNC = 5
 BRAND_PAGES_PER_SYNC = 2
 IMPORT_PAGES_PER_TICK = 3
 IMPORT_MAX_PRODUCTS = 300
+IMPORT_RETRY_MINUTES = 10
+OWN_PUBLIC_PRICE_MAX_TARGETS = 300
+OWN_PUBLIC_PRICE_BATCH_SIZE = 100
+OWN_PUBLIC_PRICE_REFRESH_MINUTES = 20
+OWN_PUBLIC_PRICE_MAX_LINK_ROWS = 1200
 
 COMPETITOR_NOTIFICATION_TITLE = 'Конкуренты: изменения'
 NOTIFICATION_DEDUP_HOURS = 4
@@ -127,6 +133,102 @@ def _observation_changed(product, obs):
     )
 
 
+def _own_public_price_targets(seller_id, competitor_nm_ids, now):
+    """Resolve bounded seller cards behind effective exact identities."""
+    from models import (
+        CompetitorProductMatch,
+        ImportedProduct,
+        Product,
+        SellerCompetitorMatchReview,
+    )
+    from services.competitor_matching import (
+        shared_exact_match_is_admissible,
+    )
+
+    nm_ids = {
+        int(value) for value in competitor_nm_ids
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+    }
+    if not nm_ids:
+        return []
+    matches = {
+        int(row.nm_id): row
+        for row in CompetitorProductMatch.query.filter(
+            CompetitorProductMatch.nm_id.in_(nm_ids),
+        ).all()
+    }
+    match_ids = [row.id for row in matches.values()]
+    reviews = {
+        row.match_id: row
+        for row in SellerCompetitorMatchReview.query.filter(
+            SellerCompetitorMatchReview.seller_id == seller_id,
+            SellerCompetitorMatchReview.match_id.in_(match_ids),
+        ).all()
+    } if match_ids else {}
+    supplier_ids = set()
+    for match in matches.values():
+        review = reviews.get(match.id)
+        if review:
+            if (
+                review.status == 'confirmed'
+                and review.match_type == 'same'
+                and review.supplier_product_id
+            ):
+                supplier_ids.add(int(review.supplier_product_id))
+        elif shared_exact_match_is_admissible(match):
+            supplier_ids.add(int(match.suggested_supplier_product_id))
+    if not supplier_ids:
+        return []
+
+    imported_rows = (
+        ImportedProduct.query
+        .filter(
+            ImportedProduct.seller_id == seller_id,
+            ImportedProduct.supplier_product_id.in_(supplier_ids),
+            ImportedProduct.product_id.isnot(None),
+        )
+        .order_by(ImportedProduct.id.desc())
+        .limit(OWN_PUBLIC_PRICE_MAX_LINK_ROWS)
+        .all()
+    )
+    product_ids = {
+        int(row.product_id) for row in imported_rows if row.product_id
+    }
+    products = {
+        row.id: row for row in Product.query.filter(
+            Product.seller_id == seller_id,
+            Product.id.in_(product_ids),
+        ).all()
+    } if product_ids else {}
+    # Match the comparison read model: newest exact import wins per source
+    # product. Do not pick an arbitrary duplicate Product.
+    selected = {}
+    for imported in imported_rows:
+        supplier_id = imported.supplier_product_id
+        product = products.get(imported.product_id)
+        if (
+            supplier_id
+            and product
+            and supplier_id not in selected
+            and isinstance(product.nm_id, int)
+            and not isinstance(product.nm_id, bool)
+            and product.nm_id > 0
+        ):
+            selected[int(supplier_id)] = product
+        if len(selected) >= OWN_PUBLIC_PRICE_MAX_TARGETS:
+            break
+    stale_before = now - timedelta(
+        minutes=OWN_PUBLIC_PRICE_REFRESH_MINUTES,
+    )
+    return [
+        product for product in selected.values()
+        if (
+            product.wb_public_price_synced_at is None
+            or product.wb_public_price_synced_at < stale_before
+        )
+    ]
+
+
 def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
     """Один bounded sync продавца. Возвращает summary-dict."""
     from models import (
@@ -136,8 +238,11 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
 
     started = time.time()
     now = now or datetime.utcnow()
-    result = {'status': 'ok', 'observed': 0, 'misses': 0,
-              'snapshots': 0, 'alerts': 0, 'deactivated': 0}
+    result = {
+        'status': 'ok', 'observed': 0, 'misses': 0,
+        'snapshots': 0, 'alerts': 0, 'deactivated': 0,
+        'own_prices_observed': 0, 'own_price_misses': 0,
+    }
 
     with flask_app.app_context():
         settings = CompetitorMonitorSettings.query.filter_by(
@@ -188,7 +293,14 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                     continue
                 fetched = 0
                 exhausted = False
-                for page in range(1, IMPORT_PAGES_PER_TICK + 1):
+                # WB часто пропускает только одну catalog-страницу за окно
+                # anti-bot. После уже импортированной полной сотни начинаем
+                # следующий тик со следующей bounded-страницы, иначе каждый
+                # retry навсегда повторял бы page=1 и не продвигал очередь.
+                start_page = min(
+                    IMPORT_PAGES_PER_TICK + 1,
+                    import_existing[group.id] // 100 + 1)
+                for page in range(start_page, IMPORT_PAGES_PER_TICK + 1):
                     if out_of_budget() or (
                             import_existing[group.id] + fetched
                             >= IMPORT_MAX_PRODUCTS):
@@ -197,6 +309,14 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                         items = service.fetch_seller_catalog_page(
                             import_supplier_id, page=page)
                     except WBRateLimitedError:
+                        break
+                    # Пустая первая страница может быть временным ответом
+                    # catalog.wb.ru/anti-bot, а не доказательством пустого
+                    # каталога. Не снимаем durable-заявку, пока не увидели
+                    # хотя бы одну настоящую строку. Пустая следующая страница
+                    # после данных, напротив, является обычным концом каталога.
+                    if not items:
+                        exhausted = fetched > 0
                         break
                     for item in items:
                         import_rows.append((group.id, item))
@@ -208,20 +328,27 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                                  >= IMPORT_MAX_PRODUCTS):
                     import_done.add(group.id)
 
+            pending_import = bool(
+                {group.id for group in import_groups} - import_done)
+
             if not products and not import_rows:
                 settings.last_sync_at = now
-                settings.last_sync_status = 'idle'
+                settings.last_sync_status = (
+                    'waiting_wb' if pending_import else 'idle')
+                settings.last_sync_error = None
                 settings.total_products_monitored = 0
                 settings.next_sync_due_at = now + timedelta(
-                    minutes=normalize_sync_interval_minutes(
-                        settings.sync_interval_minutes))
+                    minutes=(IMPORT_RETRY_MINUTES if pending_import
+                             else normalize_sync_interval_minutes(
+                                 settings.sync_interval_minutes)))
                 settings.is_running = False
                 for done_group_id in import_done:
                     grp = db.session.get(CompetitorGroup, done_group_id)
                     if grp:
                         grp.import_requested = False
                 db.session.commit()
-                result['status'] = 'no_products'
+                result['status'] = (
+                    'waiting_wb' if pending_import else 'no_products')
                 return result
 
             # A1: метаданные — отсутствующие/протухшие/подозрительные на gone
@@ -287,6 +414,45 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
             for nm_id, obs in observations.items():
                 put_cached_observation(nm_id, obs)
 
+            # A3: наша витринная цена. Только карточки за уже принятыми
+            # exact-identity, exact nmID batches по 100. Seller discountedPrice
+            # сюда не подставляется: он не включает скидку площадки.
+            own_price_targets = _own_public_price_targets(
+                seller_id,
+                [product.nm_id for product in products],
+                now,
+            )
+            own_price_observations = {}
+            own_price_attempted = set()
+            uncached_own_targets = []
+            for own_product in own_price_targets:
+                cached = get_cached_observation(own_product.nm_id)
+                if cached is not None:
+                    own_price_observations[own_product.nm_id] = cached
+                    own_price_attempted.add(own_product.nm_id)
+                else:
+                    uncached_own_targets.append(own_product)
+            for offset in range(
+                0, len(uncached_own_targets), OWN_PUBLIC_PRICE_BATCH_SIZE,
+            ):
+                if out_of_budget():
+                    result['status'] = 'partial'
+                    break
+                batch = uncached_own_targets[
+                    offset:offset + OWN_PUBLIC_PRICE_BATCH_SIZE
+                ]
+                batch_nm_ids = [product.nm_id for product in batch]
+                try:
+                    found = service.fetch_exact_prices(batch_nm_ids)
+                except WBRateLimitedError:
+                    break
+                if not isinstance(found, dict):
+                    found = {}
+                own_price_attempted.update(batch_nm_ids)
+                own_price_observations.update(found)
+                for nm_id, observation in found.items():
+                    put_cached_observation(nm_id, observation)
+
             # ---------- Фаза B: запись ----------
             # B0: создать товары из импорта каталога (идемпотентно по nm_id)
             for group_id, item in import_rows:
@@ -310,6 +476,16 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                             supplier_name=item.get('supplier_name'),
                             wb_supplier_id=item.get('wb_supplier_id'),
                             image_url=item.get('image_url'),
+                            subject_id=item.get('subject_id'),
+                            subject_name=item.get('subject_name'),
+                            photo_count=item.get('photo_count'),
+                            characteristics_json=(
+                                json.dumps(
+                                    item.get('characteristics') or [],
+                                    ensure_ascii=False,
+                                    separators=(',', ':'),
+                                )
+                                if item.get('characteristics') else None),
                             current_price=item.get('price'),
                             current_sale_price=item.get('sale_price'),
                             current_rating=item.get('rating'),
@@ -349,6 +525,17 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                                 meta.get('wb_supplier_id') or product.wb_supplier_id)
                             product.image_url = (
                                 meta.get('image_url') or product.image_url)
+                            if meta.get('subject_id') is not None:
+                                product.subject_id = meta['subject_id']
+                            product.subject_name = (
+                                meta.get('subject_name') or product.subject_name)
+                            if meta.get('photo_count') is not None:
+                                product.photo_count = meta['photo_count']
+                            if 'characteristics' in meta:
+                                product.characteristics_json = json.dumps(
+                                    meta.get('characteristics') or [],
+                                    ensure_ascii=False,
+                                    separators=(',', ':'))
                             if meta.get('is_adult') is not None:
                                 product.is_adult = meta['is_adult']
                             product.metadata_synced_at = now
@@ -406,17 +593,45 @@ def sync_seller_competitors(seller_id, flask_app, fetch_service=None, now=None):
                     logger.exception('Ошибка записи товара %s (seller=%s)',
                                      product.nm_id, seller_id)
 
+            for own_product in own_price_targets:
+                if own_product.nm_id not in own_price_attempted:
+                    continue
+                observation = own_price_observations.get(own_product.nm_id)
+                price_observed = observation is not None and (
+                    observation.get('price') is not None
+                    or observation.get('sale_price') is not None
+                )
+                if price_observed:
+                    own_product.wb_public_base_price = observation.get('price')
+                    own_product.wb_public_final_price = observation.get(
+                        'sale_price')
+                    own_product.wb_public_price_synced_at = now
+                    own_product.wb_public_price_miss_count = 0
+                    result['own_prices_observed'] += 1
+                else:
+                    # Fetch-miss does not erase the last public observation.
+                    own_product.wb_public_price_miss_count = (
+                        own_product.wb_public_price_miss_count or 0
+                    ) + 1
+                    result['own_price_misses'] += 1
+
             settings.last_sync_at = now
-            settings.last_sync_status = (
-                'success' if result['status'] == 'ok' else 'partial')
+            if pending_import:
+                result['status'] = 'waiting_wb'
+                settings.last_sync_status = 'waiting_wb'
+            else:
+                settings.last_sync_status = (
+                    'success' if result['status'] == 'ok' else 'partial')
             settings.last_sync_error = None
             settings.last_full_cycle_duration = round(time.time() - started, 2)
-            settings.total_products_monitored = result['observed']
+            settings.total_products_monitored = CompetitorProduct.query.filter_by(
+                seller_id=seller_id, is_active=True).count()
             settings.total_cycles_completed = (
                 settings.total_cycles_completed or 0) + 1
             settings.next_sync_due_at = now + timedelta(
-                minutes=normalize_sync_interval_minutes(
-                    settings.sync_interval_minutes))
+                minutes=(IMPORT_RETRY_MINUTES if pending_import
+                         else normalize_sync_interval_minutes(
+                             settings.sync_interval_minutes)))
             settings.is_running = False
             db.session.commit()
 

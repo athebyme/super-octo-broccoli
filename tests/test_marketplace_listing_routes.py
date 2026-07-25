@@ -17,6 +17,7 @@ from models import (
     Marketplace,
     MarketplaceCanonicalContentProposal,
     MarketplaceListing,
+    Product,
     Seller,
     SellerMarketplaceAccount,
     User,
@@ -160,6 +161,8 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         for relative_path in (
             "templates/base.html",
             "templates/marketplace_listing_detail.html",
+            "templates/marketplace_listings_beta.html",
+            "templates/marketplace_listing_beta_detail.html",
         ):
             endpoint_names.update(re.findall(
                 r"url_for\(['\"]([^'\"]+)",
@@ -196,6 +199,218 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         listing.attributes_synced_at = datetime.utcnow()
         db.session.commit()
         return listing
+
+    def test_beta_page_renders_for_seller(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.get("/marketplaces/listings/beta")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "marketplace-catalog-app",
+            response.get_data(as_text=True),
+        )
+
+    def test_beta_page_requires_seller_profile(self):
+        user_patch, login_patch = self._auth(None)
+        with user_patch, login_patch:
+            response = self.client.get("/marketplaces/listings/beta")
+        self.assertEqual(response.status_code, 403)
+
+    def test_list_api_exposes_bounded_primary_image(self):
+        with self.app.app_context():
+            listing = db.session.get(MarketplaceListing, self.own_id)
+            listing.media_json = (
+                '{"primary_image": "https://cdn.test/img-1.jpg",'
+                ' "images": ["https://cdn.test/img-2.jpg"]}'
+            )
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.get(
+                "/marketplaces/listings/api",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 200)
+        items = {item["id"]: item for item in response.get_json()["items"]}
+        self.assertEqual(
+            items[self.own_id]["primary_image"],
+            "https://cdn.test/img-1.jpg",
+        )
+
+    def test_list_api_expands_wb_photo_slots_into_cdn_preview(self):
+        with self.app.app_context():
+            wb = Marketplace(
+                name="Wildberries",
+                code="wb",
+                adapter_code="wb",
+                is_active=True,
+            )
+            db.session.add(wb)
+            db.session.flush()
+            product = Product(
+                seller_id=self.seller1_id,
+                nm_id=123456789,
+                photos_json="[1, 2]",
+            )
+            db.session.add(product)
+            db.session.flush()
+            listing = MarketplaceListing(
+                seller_id=self.seller1_id,
+                marketplace_id=wb.id,
+                legacy_product_id=product.id,
+                offer_id="wb-offer",
+                external_product_id="wb-123",
+                title="WB projection",
+                normalized_status="active",
+                sync_fingerprint="c" * 64,
+            )
+            db.session.add(listing)
+            db.session.commit()
+            listing_id = listing.id
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.get(
+                "/marketplaces/listings/api?marketplace=wb",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 200)
+        items = {item["id"]: item for item in response.get_json()["items"]}
+        row = items[listing_id]
+        self.assertIn("wbbasket.ru", row["primary_image"])
+        self.assertTrue(row["primary_image"].endswith("/1.webp"))
+        self.assertTrue(row["hover_image"].endswith("/2.webp"))
+
+    def test_groups_api_merges_channels_of_one_canonical_product(self):
+        with self.app.app_context():
+            wb = Marketplace(
+                name="Wildberries",
+                code="wb",
+                adapter_code="wb",
+                is_active=True,
+            )
+            db.session.add(wb)
+            db.session.flush()
+            wb_product = Product(
+                seller_id=self.seller1_id,
+                nm_id=555001,
+                photos_json="[1]",
+            )
+            db.session.add(wb_product)
+            db.session.flush()
+            wb_listing = MarketplaceListing(
+                seller_id=self.seller1_id,
+                marketplace_id=wb.id,
+                legacy_product_id=wb_product.id,
+                imported_product_id=self.own_source_id,
+                offer_id="wb-group-offer",
+                external_product_id="wb-group-1",
+                title="WB side",
+                normalized_status="active",
+                sync_fingerprint="d" * 64,
+            )
+            own = db.session.get(MarketplaceListing, self.own_id)
+            own.imported_product_id = self.own_source_id
+            db.session.add(wb_listing)
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.get(
+                "/marketplaces/listings/api/groups",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["pagination"]["total"], 1)
+        group = payload["items"][0]
+        self.assertEqual(group["key"], f"p{self.own_source_id}")
+        self.assertEqual(group["listing_count"], 2)
+        codes = [row["marketplace_code"] for row in group["listings"]]
+        self.assertEqual(codes, ["wb", "ozon"])
+
+    def test_beta_detail_renders_channel_members_and_is_tenant_scoped(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            own = self.client.get(f"/marketplaces/listings/beta/{self.own_id}")
+            foreign = self.client.get(
+                f"/marketplaces/listings/beta/{self.foreign_id}",
+            )
+        self.assertEqual(own.status_code, 200)
+        self.assertIn(
+            "marketplace-detail-app",
+            own.get_data(as_text=True),
+        )
+        self.assertEqual(foreign.status_code, 404)
+
+    def test_facets_api_counts_statuses_and_channels_in_one_call(self):
+        with self.app.app_context():
+            listing = db.session.get(MarketplaceListing, self.own_id)
+            listing.normalized_status = "error"
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.get(
+                "/marketplaces/listings/api/facets",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["statuses"]["error"], 1)
+        self.assertEqual(payload["statuses"]["all"], 1)
+        self.assertEqual(payload["channels"]["ozon"], 1)
+        self.assertEqual(
+            payload["channels"][f"ozon:{self.account1_id}"],
+            1,
+        )
+        # Чужой продавец в счётчики не попадает
+        self.assertEqual(payload["channels"]["all"], 1)
+
+    def test_search_matches_cyrillic_regardless_of_case(self):
+        with self.app.app_context():
+            listing = db.session.get(MarketplaceListing, self.own_id)
+            listing.title = "Свеча ароматическая"
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            lower = self.client.get(
+                "/marketplaces/listings/api?search=свеча",
+                headers={"Accept": "application/json"},
+            )
+            upper = self.client.get(
+                "/marketplaces/listings/api?search=СВЕЧА",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(lower.get_json()["pagination"]["total"], 1)
+        self.assertEqual(upper.get_json()["pagination"]["total"], 1)
+
+    def test_beta_detail_json_bootstrap_includes_members_and_gallery(self):
+        with self.app.app_context():
+            listing = db.session.get(MarketplaceListing, self.own_id)
+            listing.media_json = (
+                '{"primary_image": "https://cdn.test/a.jpg",'
+                ' "images": ["https://cdn.test/b.jpg"]}'
+            )
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.get(
+                f"/marketplaces/listings/beta/{self.own_id}",
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["listing"]["id"], self.own_id)
+        self.assertEqual(
+            payload["gallery"],
+            ["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"],
+        )
+        self.assertEqual(
+            [row["id"] for row in payload["members"]],
+            [self.own_id],
+        )
+        self.assertIn("attribute_names", payload)
 
     def test_list_and_detail_are_tenant_scoped(self):
         user_patch, login_patch = self._auth(self.seller1_id)

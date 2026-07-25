@@ -73,6 +73,60 @@ def try_wb_seller_media_lock(seller_id: Any) -> Optional[Any]:
     )
 
 
+def try_wb_seller_content_lock(seller_id: Any) -> Optional[Any]:
+    """Serialize every WB full-card content replacement for one seller."""
+    return _try_operation_lock(
+        "wb-content-seller",
+        _positive_integer(seller_id, "seller_id"),
+    )
+
+
+def try_wb_seller_enrichment_job_lock(seller_id: Any) -> Optional[Any]:
+    """Serialize active enrichment-job creation for one seller on this host."""
+    return _try_operation_lock(
+        "wb-enrichment-job-seller",
+        _positive_integer(seller_id, "seller_id"),
+    )
+
+
+def try_wb_seller_supplier_photo_job_lock(
+    seller_id: Any,
+) -> Optional[Any]:
+    """Serialize supplier photo BackgroundJob check+insert per seller."""
+    return _try_operation_lock(
+        "wb-supplier-photo-job-seller",
+        _positive_integer(seller_id, "seller_id"),
+    )
+
+
+def try_wb_seller_supplier_verify_job_lock(
+    seller_id: Any,
+) -> Optional[Any]:
+    """Serialize supplier verify BackgroundJob check+insert per seller."""
+    return _try_operation_lock(
+        "wb-supplier-verify-job-seller",
+        _positive_integer(seller_id, "seller_id"),
+    )
+
+
+def try_marketplace_source_link_lock(seller_id: Any) -> Optional[Any]:
+    """Serialize canonical materialization/source-link repair for one seller."""
+    return _try_operation_lock(
+        "marketplace-source-link-seller",
+        _positive_integer(seller_id, "seller_id"),
+    )
+
+
+def try_marketplace_category_mapping_lock(
+    seller_id: Any,
+) -> Optional[Any]:
+    """Serialize observed Ozon category-mapping reconciliation per seller."""
+    return _try_operation_lock(
+        "marketplace-category-mapping-seller",
+        _positive_integer(seller_id, "seller_id"),
+    )
+
+
 def release_marketplace_operation_lock(lock_file: Any) -> None:
     if lock_file is None:
         return
@@ -87,4 +141,24 @@ def release_account_operation_lock(lock_file: Any) -> None:
 
 
 def release_wb_seller_media_lock(lock_file: Any) -> None:
+    release_marketplace_operation_lock(lock_file)
+
+
+def release_wb_seller_content_lock(lock_file: Any) -> None:
+    release_marketplace_operation_lock(lock_file)
+
+
+def release_wb_seller_enrichment_job_lock(lock_file: Any) -> None:
+    release_marketplace_operation_lock(lock_file)
+
+
+def release_wb_seller_supplier_job_lock(lock_file: Any) -> None:
+    release_marketplace_operation_lock(lock_file)
+
+
+def release_marketplace_source_link_lock(lock_file: Any) -> None:
+    release_marketplace_operation_lock(lock_file)
+
+
+def release_marketplace_category_mapping_lock(lock_file: Any) -> None:
     release_marketplace_operation_lock(lock_file)

@@ -11,6 +11,16 @@ import re
 from datetime import datetime
 from typing import Dict, Any
 
+from agents.content_contract import (
+    WB_TITLE_HARD_ISSUE_CODES,
+    analyze_wb_title,
+)
+
+# Сколько НЕобязательных характеристик считается достаточным набором.
+# Категории WB объявляют десятки необязательных полей; заполнение всех не
+# требуется площадкой и не даёт продавцу выигрыша, поэтому шкала насыщается.
+_OPTIONAL_CHARS_TARGET = 10
+
 WEIGHTS = {
     'characteristics': 25,
     'photos': 20,
@@ -93,26 +103,48 @@ def _dim_characteristics(card) -> tuple:
             return sub, 'warning', f'Мало характеристик ({count}) — WB может отклонить'
         return sub, 'ok', f'Заполнено {count}; для точной оценки нужен конфиг категории'
     filled = _filled_char_names(card.get('characteristics'))
-    total_w = filled_w = total_n = filled_n = 0
+    required_n = required_filled = optional_n = optional_filled = total_n = 0
     for ch in available:
         name = _norm_char_name(ch.get('name'))
         if not name:
             continue
-        w = 3 if ch.get('required') else 1
-        total_w += w
         total_n += 1
-        if name in filled:
-            filled_w += w
-            filled_n += 1
-    if total_w == 0:
+        is_filled = name in filled
+        if ch.get('required'):
+            required_n += 1
+            required_filled += 1 if is_filled else 0
+        else:
+            optional_n += 1
+            optional_filled += 1 if is_filled else 0
+    filled_n = required_filled + optional_filled
+    if total_n == 0:
         return (100, 'ok', '') if count else (0, 'error', 'Заполните характеристики товара')
-    sub = round(100 * filled_w / total_w)
+    # Доля от ВСЕХ характеристик категории — негодная шкала: у категорий WB их
+    # бывает под сотню, заполнить все нельзя и не нужно. Считаем то, что
+    # действительно влияет на выдачу: все обязательные плюс разумный набор
+    # дополнительных (насыщение на _OPTIONAL_CHARS_TARGET).
+    required_part = required_filled / required_n if required_n else 1.0
+    optional_target = min(_OPTIONAL_CHARS_TARGET, optional_n)
+    optional_part = (
+        min(1.0, optional_filled / optional_target) if optional_target else 1.0
+    )
+    sub = round(100 * (0.7 * required_part + 0.3 * optional_part))
     if filled_n == 0:
         return 0, 'error', f'Заполните характеристики (0 из {total_n})'
-    if sub < 60:
-        return sub, 'warning', f'Заполнено {filled_n} из {total_n} характеристик категории'
+    if required_n and required_filled < required_n:
+        missing = required_n - required_filled
+        return (
+            sub,
+            'warning',
+            f'Не заполнено обязательных характеристик: {missing} из {required_n}',
+        )
     if sub < 100:
-        return sub, 'ok', f'Можно заполнить ещё ({filled_n}/{total_n})'
+        return (
+            sub,
+            'ok',
+            f'Обязательные заполнены; можно добавить ещё '
+            f'({optional_filled} из {optional_target} дополнительных)',
+        )
     return sub, 'ok', ''
 
 
@@ -123,16 +155,18 @@ def _dim_description(card) -> tuple:
         return 0, 'error', 'Добавьте описание товара'
     sub = min(100, length * 100 // 600)
     hints = []
+    hard_error = False
     if card.get('description_dup'):
         sub = int(sub * 0.4)
         hints.append('Описание дублируется у нескольких карточек — сделайте уникальным')
+        hard_error = True
     if len(set(_significant_words(text))) < 15:
         sub = int(sub * 0.6)
         hints.append('Описание малосодержательное — добавьте конкретики')
     if length < 300:
         hints.append('Короткое описание — расширьте до 600+ символов')
     if hints:
-        return sub, 'warning', '; '.join(hints)
+        return sub, ('error' if hard_error else 'warning'), '; '.join(hints)
     return sub, 'ok', ('' if sub >= 100 else 'Можно расширить описание до 600+ символов')
 
 
@@ -141,27 +175,35 @@ def _dim_title(card) -> tuple:
     length = len(title)
     if length == 0:
         return 0, 'error', 'Нет заголовка'
-    if length > 60:
-        return 50, 'warning', 'Заголовок длиннее 60 символов — WB обрежет'
+
     sub = 100 if length >= 25 else min(100, length * 100 // 25)
     hints = [] if length >= 25 else ['Короткий заголовок — добавьте деталей']
     words = _significant_words(title)
     if len(words) < 4:
         sub -= 30
         hints.append('Мало значимых слов в заголовке (нужно 4+)')
-    counts = {}
-    for w in words:
-        counts[w] = counts.get(w, 0) + 1
-    if counts and max(counts.values()) >= 3:
-        sub -= 20
-        hints.append('Слово повторяется 3+ раз — уберите спам')
+
+    title_issues = analyze_wb_title(title, card.get('brand') or '')
+    hard_issues = [
+        issue for issue in title_issues
+        if issue.get('code') in WB_TITLE_HARD_ISSUE_CODES
+    ]
+    for issue in hard_issues:
+        message = str(issue.get('message') or '').strip()
+        if message:
+            hints.append(message)
+        if issue.get('code') == 'title_promo':
+            sub = min(sub, 55)
+        else:
+            sub = min(sub, 40)
+
     letters = [c for c in title if c.isalpha()]
     if len(letters) >= 10 and all(c.isupper() for c in letters):
         sub -= 20
         hints.append('Заголовок капсом — снижает доверие')
     sub = max(0, sub)
     if hints:
-        return sub, 'warning', '; '.join(hints)
+        return sub, ('error' if hard_issues else 'warning'), '; '.join(hints)
     return sub, 'ok', ''
 
 
@@ -332,6 +374,13 @@ def card_quality_detail(product) -> Dict[str, Any]:
     """
     card_input = product_to_card_input(product)
     photos = card_input.get('photos') or []
+    # photos_json хранит слоты галереи WB ([1, 2, 3]); интерфейсу нужны ссылки,
+    # иначе показать продавцу его же фотографии нечем.
+    nm_id = getattr(product, 'nm_id', None)
+    if nm_id and photos and not isinstance(photos[0], str):
+        from services.wb_media import normalize_photo_urls
+
+        photos = normalize_photo_urls(nm_id, photos[:10], 'big')
 
     persisted_score = getattr(product, 'quality_score', None)
     persisted_breakdown = None

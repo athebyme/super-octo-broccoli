@@ -114,6 +114,10 @@
                                 Бренд
                             {% elif field == 'characteristics' %}
                                 Характеристики
+                            {% elif field == 'dimensions' %}
+                                Габариты
+                            {% elif field == 'photos' %}
+                                Фотографии
                             {% else %}
                                 {{ field }}
                             {% endif %}
@@ -121,6 +125,94 @@
                         {% endfor %}
                     </div>
                 </div>
+                {% endif %}
+
+                {% if history.merge_decisions %}
+                {% set receipt = history.merge_decisions %}
+                {% set content_receipt = receipt if receipt.get('fields') else receipt.get('content', {}) %}
+                {% set characteristic_receipt = content_receipt.get('characteristics', {}) %}
+                {% set photo_receipt = receipt.get('photos', {}) %}
+                {% set field_receipts = content_receipt.get('fields', {}) %}
+                <details class="cursor-pointer mb-4">
+                    <summary class="text-sm font-semibold text-indigo-700 hover:text-indigo-900">
+                        Показать решения умного дообогащения
+                    </summary>
+                    <div class="mt-3 space-y-3 text-sm">
+                        {% if field_receipts %}
+                        <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                            <p class="font-semibold text-gray-900">Решения по полям карточки</p>
+                            <div class="mt-2 space-y-1">
+                                {% for field, field_receipt in field_receipts.items() %}
+                                <p class="text-xs text-gray-700">
+                                    <span class="font-medium">
+                                        {% if field == 'title' %}Название
+                                        {% elif field == 'description' %}Описание
+                                        {% elif field == 'brand' %}Бренд
+                                        {% elif field == 'characteristics' %}Характеристики
+                                        {% elif field == 'dimensions' %}Габариты
+                                        {% else %}{{ field }}{% endif %}
+                                    </span> —
+                                    {% if field_receipt.get('decision') == 'update' %}применено
+                                    {% elif field_receipt.get('decision') == 'unchanged' %}уже совпадает с live WB
+                                    {% elif field_receipt.get('decision') == 'preserve_live' %}live-значение сохранено
+                                    {% else %}{{ field_receipt.get('decision', 'без изменения') }}{% endif %}
+                                    {% if field_receipt.get('existing_length') is not none %}
+                                    (WB: {{ field_receipt.get('existing_length') }}, кандидат: {{ field_receipt.get('candidate_length') }} симв.)
+                                    {% endif %}
+                                </p>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        {% if characteristic_receipt %}
+                        {% set counts = characteristic_receipt.get('counts', {}) %}
+                        <div class="rounded-lg border border-indigo-100 bg-indigo-50 p-3">
+                            <p class="font-semibold text-gray-900">Характеристики</p>
+                            <p class="mt-1 text-gray-700">
+                                Добавлено: {{ counts.get('added', 0) }} ·
+                                заменено более полными: {{ counts.get('replaced_more_complete', 0) }} ·
+                                сохранено с WB: {{ counts.get('preserved_existing', 0) }} ·
+                                без изменений: {{ counts.get('unchanged', 0) }}
+                            </p>
+                            {% if characteristic_receipt.get('items') %}
+                            <div class="mt-2 space-y-1">
+                                {% for item in characteristic_receipt.get('items', []) %}
+                                <p class="text-xs text-gray-700">
+                                    <span class="font-medium">{{ item.get('name') }}</span> —
+                                    {% if item.get('decision') == 'added' %}новое поле добавлено
+                                    {% elif item.get('decision') == 'replaced_more_complete' %}заменено более полным значением
+                                    {% elif item.get('decision') == 'preserved_existing' %}сохранено более полное значение WB
+                                    {% elif item.get('decision') == 'unchanged' %}значения совпадают
+                                    {% else %}пустое значение пропущено{% endif %}
+                                    (WB: {{ item.get('existing', {}).get('completeness', 0) }},
+                                    кандидат: {{ item.get('candidate', {}).get('completeness', 0) }} симв.)
+                                </p>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+
+                        {% if photo_receipt %}
+                        {% set photo_counts = photo_receipt.get('counts', {}) %}
+                        <div class="rounded-lg border border-green-100 bg-green-50 p-3">
+                            <p class="font-semibold text-gray-900">Фотографии</p>
+                            <p class="mt-1 text-gray-700">
+                                Live-фото сохранено: {{ photo_receipt.get('live_count', 0) }} ·
+                                уже были на WB: {{ photo_counts.get('already_present', 0) }} ·
+                                добавлено: {{ photo_counts.get('append', 0) }} ·
+                                дублей пропущено: {{ photo_counts.get('duplicate_candidate', 0) }} ·
+                                не поместилось: {{ photo_counts.get('skipped_capacity', 0) }} ·
+                                без безопасного матча: {{ photo_counts.get('skipped_match_unavailable', 0) }}
+                            </p>
+                            {% if photo_receipt.get('matching_status') == 'blocked' %}
+                            <p class="mt-1 text-xs text-amber-700">Часть live-превью WB была недоступна для perceptual-сравнения; несопоставленные кандидаты безопасно пропущены, существующие слоты не перезаписывались.</p>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </details>
                 {% endif %}
 
                 <!-- Детальное сравнение -->
@@ -145,6 +237,10 @@
                                             Бренд
                                         {% elif field == 'characteristics' %}
                                             Характеристики
+                                        {% elif field == 'dimensions' %}
+                                            Габариты
+                                        {% elif field == 'photos' %}
+                                            Фотографии
                                         {% else %}
                                             {{ field }}
                                         {% endif %}
@@ -193,11 +289,36 @@
                         <pre class="whitespace-pre-wrap">{{ history.snapshot_before | tojson(indent=2) }}</pre>
                         <p class="mt-2"><strong>snapshot_after:</strong></p>
                         <pre class="whitespace-pre-wrap">{{ history.snapshot_after | tojson(indent=2) }}</pre>
+                        {% if history.merge_decisions %}
+                        <p class="mt-2"><strong>merge_decisions:</strong></p>
+                        <pre class="whitespace-pre-wrap">{{ history.merge_decisions | tojson(indent=2) }}</pre>
+                        {% endif %}
                     </div>
                 </details>
 
                 <!-- Статус синхронизации -->
-                {% if not history.wb_synced %}
+                {% if history.wb_sync_status == 'skipped' %}
+                <div class="mt-4 p-3 bg-gray-50 border border-gray-200 rounded">
+                    <p class="text-sm text-gray-700">
+                        Изменений на WB не потребовалось: более полные live-данные сохранены.
+                    </p>
+                </div>
+                {% elif history.wb_sync_status in ['pending', 'submitted', 'uncertain', 'partial'] and history.wb_reconcile_due_at %}
+                <div class="mt-4 p-3 bg-blue-50 border border-blue-200 rounded">
+                    <p class="text-sm text-blue-800">
+                        ⏳ WB принял запрос; фактическое состояние сверяется автоматически
+                        (попыток: {{ history.wb_reconcile_attempts or 0 }}).
+                    </p>
+                    {% if history.wb_error_message %}
+                    <p class="text-sm text-blue-700 mt-1">{{ history.wb_error_message }}</p>
+                    {% endif %}
+                </div>
+                {% elif history.wb_sync_status == 'conflict' %}
+                <div class="mt-4 p-3 bg-red-50 border border-red-200 rounded">
+                    <p class="text-sm text-red-800">⚠️ Обнаружен конфликт с live-карточкой WB; автоматический повтор остановлен.</p>
+                    {% if history.wb_error_message %}<p class="text-sm text-red-700 mt-1">{{ history.wb_error_message }}</p>{% endif %}
+                </div>
+                {% elif not history.wb_synced %}
                 <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
                     <p class="text-sm text-yellow-800">
                         ⚠️ Изменения не синхронизированы с Wildberries

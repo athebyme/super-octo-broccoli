@@ -11,26 +11,134 @@
 
 import json
 import logging
+import os
 import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 # Базовая директория для кэша фото
 PHOTO_CACHE_BASE = Path('data/photo_cache')
+SAFE_ENRICHMENT_PHOTO_STRATEGIES = frozenset({
+    'smart_merge', 'replace', 'append', 'only_if_empty',
+})
+ALLOWED_ENRICHMENT_FIELDS = frozenset({
+    'title', 'brand', 'description',
+    'characteristics', 'dimensions', 'photos',
+})
+
+
+def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def enrichment_items_per_tick() -> int:
+    return _bounded_env_int('WB_ENRICHMENT_ITEMS_PER_TICK', 3, 1, 20)
+
+
+def enrichment_tick_seconds() -> int:
+    return _bounded_env_int('WB_ENRICHMENT_TICK_SECONDS', 45, 10, 55)
+
+
+def enrichment_lease_seconds() -> int:
+    return _bounded_env_int('WB_ENRICHMENT_LEASE_SECONDS', 600, 120, 1800)
 
 
 class WbMediaOperationBusy(RuntimeError):
     """Another WB photo/gallery write owns the seller-wide boundary."""
 
 
+class WbLiveMediaDrift(RuntimeError):
+    """The live WB gallery changed after append positions were planned."""
+
+
+class WbEnrichmentAwaitingReconciliation(RuntimeError):
+    """A prior asynchronous enrichment write must settle before another one."""
+
+    def __init__(self, *, history_id: Optional[int], operation_kind: str):
+        self.history_id = history_id
+        self.operation_kind = operation_kind
+        label = 'фото' if operation_kind == 'photos' else 'контента'
+        suffix = f' (операция #{history_id})' if history_id is not None else ''
+        super().__init__(
+            f'Предыдущая отправка {label} на WB ещё проверяется{suffix}; '
+            'новая отправка отложена'
+        )
+
+
+class EnrichmentJobAlreadyActive(RuntimeError):
+    """A seller already owns a durable pending/running enrichment cursor."""
+
+    def __init__(self, job_id: Optional[str] = None):
+        self.job_id = job_id
+        super().__init__('Массовое обновление уже выполняется')
+
+
 class EnrichmentService:
     """Supplier-driven WB card enrichment service."""
+
+    @staticmethod
+    def _assert_no_unreconciled_write(
+        *,
+        seller_id: int,
+        nm_id: int,
+        operation_kind: str,
+    ) -> None:
+        """Fail closed while an older write can still be absent from live WB.
+
+        The caller invokes this under the corresponding seller-wide provider
+        lock.  That ordering closes the check→receipt race between two local
+        workers while still allowing content and media lifecycles to reconcile
+        independently.
+        """
+        if operation_kind not in {'content', 'photos'}:
+            raise ValueError('Unsupported enrichment operation kind')
+
+        from models import CardEditHistory, Product
+        from services.wb_enrichment_reconciliation import RECONCILABLE_STATUSES
+
+        rows = CardEditHistory.query.join(
+            Product,
+            Product.id == CardEditHistory.product_id,
+        ).filter(
+            CardEditHistory.seller_id == seller_id,
+            Product.seller_id == seller_id,
+            Product.nm_id == nm_id,
+            CardEditHistory.reverted.is_(False),
+            CardEditHistory.wb_sync_status.in_(tuple(RECONCILABLE_STATUSES)),
+            CardEditHistory.wb_reconcile_due_at.isnot(None),
+        ).order_by(CardEditHistory.id.desc()).limit(51).all()
+        for history in rows[:50]:
+            fields = {
+                str(field) for field in (history.changed_fields or [])
+                if isinstance(field, str)
+            }
+            relevant = (
+                'photos' in fields
+                if operation_kind == 'photos'
+                else bool(fields - {'photos'})
+            )
+            if relevant:
+                raise WbEnrichmentAwaitingReconciliation(
+                    history_id=history.id,
+                    operation_kind=operation_kind,
+                )
+        if len(rows) > 50:
+            # An unexpectedly large unresolved journal must not let an older
+            # relevant receipt hide beyond the bounded scan.
+            raise WbEnrichmentAwaitingReconciliation(
+                history_id=None,
+                operation_kind=operation_kind,
+            )
 
     @staticmethod
     def upload_photos_to_card_locked(
@@ -60,9 +168,344 @@ class EnrichmentService:
         finally:
             release_wb_seller_media_lock(claim)
 
+    @staticmethod
+    def merge_photos_to_card_locked(
+        wb_client,
+        *,
+        seller_id: int,
+        nm_id: int,
+        photo_paths: List[str],
+        strategy: str,
+        before_upload_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        before_live_read_callback: Optional[Callable[[], None]] = None,
+    ) -> Dict[str, Any]:
+        """Match against the exact live gallery and append only missing photos.
+
+        The seller-wide media lock covers the live read, perceptual match,
+        durable pre-write callback and multipart writes.  Therefore another
+        Seller Hub media operation cannot invalidate the selected append slots.
+        """
+        if strategy not in SAFE_ENRICHMENT_PHOTO_STRATEGIES:
+            raise ValueError('Unsupported supplier enrichment photo strategy')
+
+        from services.marketplace_operation_locks import (
+            release_wb_seller_media_lock,
+            try_wb_seller_media_lock,
+        )
+        from services.wb_api_client import MAX_WB_MEDIA_FILES
+        from services.wb_enrichment_merge import (
+            MERGE_POLICY_VERSION,
+            PHOTO_MATCH_THRESHOLD,
+            fingerprint_local_photo,
+            fingerprint_remote_photo,
+            live_wb_photo_match_urls,
+            live_wb_photo_urls,
+            plan_photo_merge,
+            photo_similarity,
+        )
+
+        claim = try_wb_seller_media_lock(seller_id)
+        if claim is None:
+            raise WbMediaOperationBusy(
+                'Для продавца уже выполняется другая операция с фото WB'
+            )
+        try:
+            if before_live_read_callback is not None:
+                before_live_read_callback()
+            live_card = wb_client.get_card_by_nm_id(
+                nm_id,
+                seller_id=seller_id,
+            )
+            if not isinstance(live_card, dict):
+                raise RuntimeError(
+                    'Нельзя безопасно обновить фото: live-карточка WB не получена'
+                )
+            live_urls = live_wb_photo_urls(live_card)
+            live_match_urls = live_wb_photo_match_urls(live_card)
+
+            if strategy == 'only_if_empty' and live_urls:
+                report = {
+                    'policy': MERGE_POLICY_VERSION,
+                    'mode': 'preserve_live_append_missing',
+                    'requested_strategy': strategy,
+                    'live_count': len(live_urls),
+                    'candidate_count': len(photo_paths),
+                    'live_fingerprint_failures': 0,
+                    'matching_status': 'not_needed',
+                    'append_indices': [],
+                    'counts': {
+                        'already_present': 0,
+                        'append': 0,
+                        'duplicate_candidate': 0,
+                        'skipped_capacity': 0,
+                        'skipped_match_unavailable': 0,
+                        'skipped_unreadable': 0,
+                        'skipped_non_empty_gallery': len(photo_paths),
+                    },
+                    'items': [],
+                }
+                receipt = {
+                    'report': report,
+                    'live_urls_before': live_urls,
+                    'planned_photos_after': list(live_urls),
+                }
+                if before_upload_callback is not None:
+                    before_upload_callback(receipt)
+                return {
+                    'success': True,
+                    'uploaded': 0,
+                    'failed': 0,
+                    'skipped': True,
+                    'reason': 'already_has_photos',
+                    'merge_report': report,
+                    'live_urls_before': live_urls,
+                    'snapshot_after_photos': list(live_urls),
+                }
+
+            live_fingerprints = []
+            for url in live_match_urls:
+                try:
+                    live_fingerprints.append(fingerprint_remote_photo(url))
+                except Exception as exc:
+                    logger.info(
+                        '[Enrich] Live WB photo fingerprint unavailable (%s)',
+                        type(exc).__name__,
+                    )
+                    live_fingerprints.append(None)
+
+            candidate_fingerprints = []
+            for path in photo_paths:
+                try:
+                    candidate_fingerprints.append(
+                        fingerprint_local_photo(path))
+                except Exception as exc:
+                    logger.info(
+                        '[Enrich] Supplier photo fingerprint unavailable (%s)',
+                        type(exc).__name__,
+                    )
+                    candidate_fingerprints.append(None)
+
+            report = plan_photo_merge(
+                live_fingerprints,
+                candidate_fingerprints,
+                max_images=MAX_WB_MEDIA_FILES,
+            )
+            report['requested_strategy'] = strategy
+            report['comparison_variant'] = 'square_preferred'
+            append_indices = report['append_indices']
+            # Bounded hashes let the delayed reconciler prove that every
+            # pre-existing position survived and every submitted candidate
+            # actually appeared in the provider gallery.
+            report['live_position_fingerprints'] = [
+                dict(value) if isinstance(value, dict) else None
+                for value in live_fingerprints
+            ]
+            report['expected_append_fingerprints'] = [
+                dict(candidate_fingerprints[index])
+                for index in append_indices
+                if isinstance(candidate_fingerprints[index], dict)
+            ]
+            append_paths = [photo_paths[index] for index in append_indices]
+            planned_tokens = [
+                'enrichment-sha256:' + str(
+                    candidate_fingerprints[index]['pixel_sha'])
+                for index in append_indices
+            ]
+            receipt = {
+                'report': report,
+                'live_urls_before': live_urls,
+                'planned_photos_after': list(live_urls) + planned_tokens,
+            }
+            if before_upload_callback is not None:
+                before_upload_callback(receipt)
+
+            if not append_paths:
+                counts = report['counts']
+                if counts['skipped_capacity']:
+                    reason = 'gallery_full'
+                elif (
+                    counts['skipped_unreadable']
+                    or counts['skipped_match_unavailable']
+                ):
+                    reason = 'photo_match_unavailable'
+                else:
+                    reason = 'all_supplier_photos_already_present'
+                return {
+                    'success': True,
+                    'uploaded': 0,
+                    'failed': 0,
+                    'skipped': True,
+                    'reason': reason,
+                    'merge_report': report,
+                    'live_urls_before': live_urls,
+                    'snapshot_after_photos': list(live_urls),
+                }
+
+            # Fingerprinting and durable receipt persistence both widen the
+            # read→write window. Re-read the exact gallery immediately before
+            # multipart I/O and refuse to use stale X-Photo-Number positions.
+            try:
+                preflight_card = wb_client.get_card_by_nm_id(
+                    nm_id,
+                    seller_id=seller_id,
+                )
+            except Exception as exc:
+                raise WbLiveMediaDrift(
+                    'Не удалось повторно прочитать live-галерею WB; '
+                    'дозагрузка безопасно остановлена'
+                ) from exc
+            if not isinstance(preflight_card, dict):
+                raise WbLiveMediaDrift(
+                    'Повторный live-read WB не вернул галерею'
+                )
+            preflight_urls = live_wb_photo_urls(preflight_card)
+            if preflight_urls != live_urls:
+                raise WbLiveMediaDrift(
+                    'Live-галерея WB изменилась перед дозагрузкой; '
+                    'операция безопасно остановлена'
+                )
+            preflight_match_urls = live_wb_photo_match_urls(preflight_card)
+            try:
+                preflight_fingerprints = [
+                    fingerprint_remote_photo(url)
+                    for url in preflight_match_urls
+                ]
+                append_fingerprints = [
+                    fingerprint_local_photo(path)
+                    for path in append_paths
+                ]
+            except Exception as exc:
+                raise WbLiveMediaDrift(
+                    'Не удалось повторно подтвердить байты фото перед '
+                    'дозагрузкой; операция безопасно остановлена'
+                ) from exc
+            if any(
+                original is None
+                or photo_similarity(original, current)
+                < PHOTO_MATCH_THRESHOLD
+                for original, current in zip(
+                    live_fingerprints, preflight_fingerprints
+                )
+            ):
+                raise WbLiveMediaDrift(
+                    'Содержимое live-фото WB изменилось перед дозагрузкой; '
+                    'операция безопасно остановлена'
+                )
+            if any(
+                planned.get('pixel_sha') != current.get('pixel_sha')
+                or (
+                    planned.get('source_sha256') is not None
+                    and planned.get('source_sha256')
+                    != current.get('source_sha256')
+                )
+                for planned, current in zip(
+                    (
+                        candidate_fingerprints[index]
+                        for index in append_indices
+                    ),
+                    append_fingerprints,
+                )
+            ):
+                raise WbLiveMediaDrift(
+                    'Локальный source-файл изменился после построения плана; '
+                    'дозагрузка безопасно остановлена'
+                )
+
+            upload_kwargs = {}
+            if all(
+                isinstance(value.get('source_sha256'), str)
+                for value in append_fingerprints
+            ):
+                upload_kwargs['expected_source_sha256'] = [
+                    str(value['source_sha256'])
+                    for value in append_fingerprints
+                ]
+            upload_results = wb_client.upload_photos_to_card(
+                nm_id,
+                append_paths,
+                seller_id=seller_id,
+                start_photo_number=len(live_urls) + 1,
+                **upload_kwargs,
+            )
+            uploaded_count = sum(
+                1 for item in upload_results if item.get('success'))
+            uncertain_count = sum(
+                1 for item in upload_results
+                if item.get('request_may_have_been_applied')
+            )
+            rejected_count = sum(
+                1 for item in upload_results
+                if not item.get('success')
+                and not item.get('request_may_have_been_applied')
+            )
+            not_attempted_count = max(
+                0, len(append_paths) - len(upload_results),
+            )
+            failed_count = rejected_count + not_attempted_count
+            upload_items = []
+            for item in upload_results[:MAX_WB_MEDIA_FILES]:
+                if item.get('success'):
+                    status = 'accepted'
+                elif item.get('request_may_have_been_applied'):
+                    status = 'uncertain'
+                else:
+                    status = 'rejected'
+                upload_items.append({
+                    'photo_number': item.get('photo_number'),
+                    'status': status,
+                    'error': (
+                        str(item.get('error'))[:300]
+                        if item.get('error') else None
+                    ),
+                })
+            potentially_submitted_tokens = [
+                planned_tokens[index]
+                for index, item in enumerate(upload_results)
+                if (
+                    item.get('success')
+                    or item.get('request_may_have_been_applied')
+                ) and index < len(planned_tokens)
+            ]
+            return {
+                'success': (
+                    uploaded_count == len(append_paths)
+                    and failed_count == 0
+                    and uncertain_count == 0
+                ),
+                'uploaded': uploaded_count,
+                'uncertain': uncertain_count,
+                'failed': failed_count,
+                'rejected': rejected_count,
+                'not_attempted': not_attempted_count,
+                'total': len(append_paths),
+                'strategy': 'smart_merge',
+                'requested_strategy': strategy,
+                'merge_report': report,
+                'live_urls_before': live_urls,
+                'snapshot_after_photos': (
+                    list(live_urls) + potentially_submitted_tokens
+                ),
+                'upload_items': upload_items,
+                'error': next((
+                    item['error'] for item in upload_items
+                    if item.get('error')
+                ), None),
+            }
+        finally:
+            release_wb_seller_media_lock(claim)
+
     # =========================================================================
     # MATCHING: Product → ImportedProduct
     # =========================================================================
+
+    @staticmethod
+    def _unique_source_match(query, *, label: str):
+        """Return one exact source row or fail closed on ambiguity."""
+        rows = query.order_by(None).limit(2).all()
+        if len(rows) > 1:
+            logger.error('[Enrich] Ambiguous supplier source: %s', label)
+            return None, True
+        return (rows[0] if rows else None), False
 
     def find_supplier_data(self, product, seller_id: int):
         """
@@ -82,20 +525,33 @@ class EnrichmentService:
             return None
 
         # 1. Прямая FK-связь (самый надёжный)
-        imp = ImportedProduct.query.filter_by(
-            product_id=product.id,
-            seller_id=seller_id
-        ).first()
+        imp, ambiguous = self._unique_source_match(
+            ImportedProduct.query.filter_by(
+                product_id=product.id,
+                seller_id=seller_id,
+            ),
+            label=f'product_id={product.id},seller_id={seller_id}',
+        )
+        if ambiguous:
+            return None
         if imp:
             logger.debug(f"[Enrich] Match by product_id FK (seller): product={product.id} → imp={imp.id}")
             return imp
 
         # 2. По supplier_vendor_code карточки
         if product.supplier_vendor_code:
-            imp = ImportedProduct.query.filter_by(
-                external_vendor_code=product.supplier_vendor_code,
-                seller_id=seller_id
-            ).first()
+            imp, ambiguous = self._unique_source_match(
+                ImportedProduct.query.filter_by(
+                    external_vendor_code=product.supplier_vendor_code,
+                    seller_id=seller_id,
+                ),
+                label=(
+                    'external_vendor_code='
+                    f'{product.supplier_vendor_code},seller_id={seller_id}'
+                ),
+            )
+            if ambiguous:
+                return None
             if imp:
                 logger.debug(f"[Enrich] Match by supplier_vendor_code: {product.supplier_vendor_code}")
                 return imp
@@ -121,10 +577,17 @@ class EnrichmentService:
                 unique_ids = [x for x in candidate_ids if not (x in seen or seen.add(x))]
 
                 for ext_id in unique_ids:
-                    imp = ImportedProduct.query.filter_by(
-                        external_id=ext_id,
-                        seller_id=seller_id
-                    ).first()
+                    imp, ambiguous = self._unique_source_match(
+                        ImportedProduct.query.filter_by(
+                            external_id=ext_id,
+                            seller_id=seller_id,
+                        ),
+                        label=(
+                            f'external_id={ext_id},seller_id={seller_id}'
+                        ),
+                    )
+                    if ambiguous:
+                        return None
                     if imp:
                         logger.debug(
                             f"[Enrich] Match by vendor_code pattern: "
@@ -138,9 +601,17 @@ class EnrichmentService:
             sp = self._find_supplier_product(product, seller_id)
             if sp:
                 # Ищем ImportedProduct привязанный к этому SupplierProduct
-                imp = ImportedProduct.query.filter_by(
-                    supplier_product_id=sp.id, seller_id=seller_id
-                ).first()
+                imp, ambiguous = self._unique_source_match(
+                    ImportedProduct.query.filter_by(
+                        supplier_product_id=sp.id,
+                        seller_id=seller_id,
+                    ),
+                    label=(
+                        f'supplier_product_id={sp.id},seller_id={seller_id}'
+                    ),
+                )
+                if ambiguous:
+                    return None
                 if imp:
                     logger.debug(f"[Enrich] Match via SupplierProduct: sp={sp.id} → imp={imp.id}")
                     return imp
@@ -173,13 +644,31 @@ class EnrichmentService:
             if numeric_pid:
                 candidates = [str(numeric_pid), f'id-{numeric_pid}']
                 for ext_id in candidates:
-                    sp = base_query.filter_by(external_id=ext_id).first()
+                    sp, ambiguous = self._unique_source_match(
+                        base_query.filter_by(external_id=ext_id),
+                        label=(
+                            f'SupplierProduct.external_id={ext_id},'
+                            f'seller_id={seller_id}'
+                        ),
+                    )
+                    if ambiguous:
+                        return None
                     if sp:
                         return sp
 
         # По supplier_vendor_code
         if product.supplier_vendor_code:
-            sp = base_query.filter_by(vendor_code=product.supplier_vendor_code).first()
+            sp, ambiguous = self._unique_source_match(
+                base_query.filter_by(
+                    vendor_code=product.supplier_vendor_code,
+                ),
+                label=(
+                    'SupplierProduct.vendor_code='
+                    f'{product.supplier_vendor_code},seller_id={seller_id}'
+                ),
+            )
+            if ambiguous:
+                return None
             if sp:
                 return sp
 
@@ -453,25 +942,59 @@ class EnrichmentService:
         external_id = str(getattr(imp, 'external_id', None) or '')
 
         supplier_product_id = getattr(imp, 'supplier_product_id', None)
-        if supplier_product_id:
+        if supplier_product_id is not None:
             from models import db, SupplierProduct
 
+            if (
+                not isinstance(supplier_product_id, int)
+                or isinstance(supplier_product_id, bool)
+                or supplier_product_id <= 0
+            ):
+                logger.error(
+                    '[Enrich] ImportedProduct %s has invalid exact '
+                    'supplier_product_id=%r',
+                    getattr(imp, 'id', None),
+                    supplier_product_id,
+                )
+                return [], supplier_type, external_id
             supplier_product = db.session.get(
                 SupplierProduct, supplier_product_id
             )
-            if supplier_product is not None:
-                latest = supplier_product.get_photos()
-                if isinstance(latest, list) and latest:
-                    photo_urls = latest
-                external_id = str(
-                    supplier_product.external_id or external_id
+            if supplier_product is None:
+                logger.error(
+                    '[Enrich] ImportedProduct %s references missing exact '
+                    'supplier_product_id=%s',
+                    getattr(imp, 'id', None),
+                    supplier_product_id,
                 )
-                supplier = getattr(supplier_product, 'supplier', None)
-                supplier_type = (
-                    getattr(supplier, 'code', None) or supplier_type
+                return [], supplier_type, external_id
+            imported_supplier_id = getattr(imp, 'supplier_id', None)
+            if (
+                imported_supplier_id is not None
+                and supplier_product.supplier_id != imported_supplier_id
+            ):
+                logger.error(
+                    '[Enrich] ImportedProduct %s has mismatched exact '
+                    'supplier_product_id=%s',
+                    getattr(imp, 'id', None),
+                    supplier_product_id,
                 )
+                return [], supplier_type, external_id
+            latest = supplier_product.get_photos()
+            # An observed empty/malformed current supplier gallery is a
+            # fact too. Falling back to the stale ImportedProduct copy
+            # would resurrect photos that the supplier has removed.
+            photo_urls = latest if isinstance(latest, list) else []
+            external_id = str(
+                supplier_product.external_id or external_id
+            )
+            supplier = getattr(supplier_product, 'supplier', None)
+            supplier_type = (
+                getattr(supplier, 'code', None) or supplier_type
+            )
 
-        return photo_urls, supplier_type, external_id
+        from services.wb_api_client import MAX_WB_MEDIA_FILES
+        return photo_urls[:MAX_WB_MEDIA_FILES], supplier_type, external_id
 
     @staticmethod
     def _parse_supplier_chars(chars_raw: Any) -> List[Dict]:
@@ -579,6 +1102,23 @@ class EnrichmentService:
         if isinstance(gender, str):
             gender = gender.strip() or None
 
+        # ``original_data`` is the seller-local copy of the latest observed
+        # SupplierProduct.original_data_json. Package dimensions stay separate
+        # from characteristics and must not be reconstructed from defaults or
+        # normalized/AI product dimensions.
+        observed_dimensions = {}
+        raw_original = getattr(imp, 'original_data', None)
+        if isinstance(raw_original, str):
+            try:
+                raw_original = json.loads(raw_original)
+            except (json.JSONDecodeError, TypeError):
+                raw_original = None
+        if isinstance(raw_original, dict):
+            raw_dimensions = raw_original.get('dimensions')
+            if isinstance(raw_dimensions, (dict, list)):
+                from services.wb_content_payload import extract_dimensions
+                observed_dimensions = extract_dimensions(raw_dimensions)
+
         parsed = cls._parse_supplier_chars(values)
         if cls._has_supplier_value(materials):
             cls._upsert_preview_characteristic(
@@ -592,6 +1132,7 @@ class EnrichmentService:
             'gender': gender,
             'parsed': parsed,
             'has_data': bool(parsed) or raw_values_present,
+            'observed_dimensions': observed_dimensions,
         }
 
     def _trigger_photo_cache(self, imp):
@@ -670,7 +1211,7 @@ class EnrichmentService:
             product: Product ORM объект
             imp: ImportedProduct ORM объект
             fields: список полей для обогащения ['title','brand','description','characteristics','dimensions','photos']
-            photo_strategy: 'replace' | 'append' | 'only_if_empty'
+            photo_strategy: 'smart_merge' | legacy safe aliases
             seller: Seller ORM объект
             wb_client: WildberriesAPIClient экземпляр
             bulk_edit_id: ID bulk-операции для связи с историей
@@ -693,6 +1234,25 @@ class EnrichmentService:
                 'error': 'Access denied: seller scope mismatch',
                 'wb_sync': False,
             }
+        if (
+            not isinstance(fields, list)
+            or not fields
+            or len(fields) > len(ALLOWED_ENRICHMENT_FIELDS)
+            or any(
+                not isinstance(field, str)
+                or field not in ALLOWED_ENRICHMENT_FIELDS
+                for field in fields
+            )
+            or len(set(fields)) != len(fields)
+            or photo_strategy not in SAFE_ENRICHMENT_PHOTO_STRATEGIES
+        ):
+            return {
+                'success': False,
+                'fields_applied': [],
+                'photos': {'skipped': True},
+                'error': 'Invalid enrichment fields or photo strategy',
+                'wb_sync': False,
+            }
 
         snapshot_before_local = _create_product_snapshot(product)
         snapshot_before = snapshot_before_local
@@ -700,30 +1260,32 @@ class EnrichmentService:
         wb_updates = {}
         fields_applied = []
         errors = []
+        merge_decisions = {}
 
         # --- Текстовые поля ---
         if 'title' in fields:
             sup_title = imp.ai_seo_title or imp.title
             if sup_title:
                 wb_updates['title'] = sup_title[:60]
-                fields_applied.append('title')
 
         if 'brand' in fields:
             sup_brand = imp.ai_detected_brand or imp.brand
             if sup_brand:
                 wb_updates['brand'] = sup_brand
-                fields_applied.append('brand')
 
         if 'description' in fields and imp.description:
             wb_updates['description'] = imp.description[:5000]
-            fields_applied.append('description')
 
-        if 'characteristics' in fields:
+        if 'characteristics' in fields or 'dimensions' in fields:
             supplier_characteristics = self._build_supplier_characteristic_source(imp)
         else:
             supplier_characteristics = None
 
-        if supplier_characteristics and supplier_characteristics['has_data']:
+        if (
+            'characteristics' in fields
+            and supplier_characteristics
+            and supplier_characteristics['has_data']
+        ):
             from services.marketplace_validator import (
                 WBCharacteristicValidationError,
             )
@@ -744,7 +1306,35 @@ class EnrichmentService:
                 }
             if mapped_chars:
                 wb_updates['characteristics'] = mapped_chars
-                fields_applied.append('characteristics')
+
+        # A dimensions-only request must still extract package dimensions
+        # that arrived in the supplier characteristics column, without also
+        # applying unrelated characteristics the seller did not select.
+        if (
+            'dimensions' in fields
+            and 'characteristics' not in fields
+            and supplier_characteristics
+            and supplier_characteristics['has_data']
+        ):
+            from services.marketplace_validator import (
+                partition_supplier_characteristic_input,
+            )
+            partition = partition_supplier_characteristic_input(
+                product.subject_id,
+                supplier_characteristics['values'],
+                materials=supplier_characteristics['materials'],
+                gender=supplier_characteristics['gender'],
+                validation_cache=(
+                    validation_cache
+                    if validation_cache is not None else {}
+                ),
+            )
+            supplier_characteristics['skipped_characteristics'] = (
+                partition['skipped']
+            )
+            supplier_characteristics['extracted_dimensions'] = (
+                partition['dimensions']
+            )
 
         if 'dimensions' in fields:
             dims = {}
@@ -752,7 +1342,14 @@ class EnrichmentService:
                 try:
                     parsed_dims = json.loads(imp.ai_dimensions)
                     if isinstance(parsed_dims, dict):
-                        dims.update(parsed_dims)
+                        from services.wb_content_payload import (
+                            extract_dimensions,
+                        )
+                        # Canonicalize aliases before the merge decision. If
+                        # aliases were accepted as arbitrary keys and only
+                        # dropped later by the wire normalizer, history could
+                        # claim a dimensions change that was never sent.
+                        dims.update(extract_dimensions(parsed_dims))
                 except (json.JSONDecodeError, TypeError):
                     pass
             # Наблюдённые габариты упаковки, исторически лежавшие среди
@@ -760,18 +1357,37 @@ class EnrichmentService:
             if supplier_characteristics:
                 dims.update(
                     supplier_characteristics.get('extracted_dimensions') or {})
+                # Актуальный original_data snapshot является каноническим
+                # observed source и сильнее staging/AI значений.
+                dims.update(
+                    supplier_characteristics.get('observed_dimensions') or {})
             if dims:
                 wb_updates['dimensions'] = dims
-                fields_applied.append('dimensions')
 
         # --- Обновление через WB API (текстовые поля) ---
         wb_sync_success = False
         wb_error = None
         content_history = None
         content_history_id = None
+        photo_history = None
 
         if wb_updates:
             from services.card_snapshot import overlay_snapshot_with_wb_card
+
+            def actual_content_fields(exact_snapshot):
+                explicit = exact_snapshot.get('applied_update_fields')
+                if isinstance(explicit, list):
+                    return [
+                        field for field in explicit
+                        if field in wb_updates
+                    ]
+                before = exact_snapshot.get('before') or {}
+                after = exact_snapshot.get('after') or {}
+                result = []
+                for field in wb_updates:
+                    if before.get(field) != after.get(field):
+                        result.append(field)
+                return result
 
             def mirror_sent_card_to_product(after_wb):
                 if 'title' in wb_updates:
@@ -802,21 +1418,44 @@ class EnrichmentService:
                     snapshot_before_local,
                     exact_snapshot['after'],
                 )
+                changed_fields = actual_content_fields(exact_snapshot)
+                decisions = exact_snapshot.get('merge_decisions')
+                if isinstance(decisions, dict):
+                    merge_decisions['content'] = decisions
                 content_history = CardEditHistory(
                     product_id=product.id,
                     seller_id=seller.id,
                     bulk_edit_id=bulk_edit_id,
                     action='update',
-                    changed_fields=list(wb_updates),
+                    changed_fields=changed_fields,
                     snapshot_before=snapshot_before,
                     snapshot_after=snapshot_after,
+                    merge_decisions=decisions,
                     wb_synced=False,
                     wb_sync_status='pending',
                     user_comment='Обогащение от поставщика',
                 )
+                from services.wb_enrichment_reconciliation import (
+                    schedule_history_reconciliation,
+                )
+                # Persist a recovery marker before network I/O. If the process
+                # dies immediately afterwards, a read-only reconciliation can
+                # still determine whether the request reached WB; it is never
+                # blindly replayed.
+                schedule_history_reconciliation(
+                    content_history,
+                    status='pending',
+                )
                 db.session.add(content_history)
                 db.session.commit()
                 content_history_id = content_history.id
+
+            def assert_content_settled():
+                self._assert_no_unreconciled_write(
+                    seller_id=seller.id,
+                    nm_id=product.nm_id,
+                    operation_kind='content',
+                )
 
             try:
                 wb_client.update_card(
@@ -826,12 +1465,15 @@ class EnrichmentService:
                     seller_id=seller.id,
                     snapshot_context=wb_snapshot_context,
                     before_send_callback=persist_pending_content_history,
+                    preserve_richer_enrichment=True,
+                    before_live_read_callback=assert_content_settled,
                 )
             except Exception as e:
                 # A successfully committed pending row survives this rollback;
                 # a callback/DB failure happens before the HTTP request.
                 db.session.rollback()
                 wb_error = str(e)
+                from services.wb_api_client import WBContentOperationBusy
                 if content_history_id is not None:
                     content_history = CardEditHistory.query.filter_by(
                         id=content_history_id,
@@ -839,47 +1481,79 @@ class EnrichmentService:
                         seller_id=seller.id,
                     ).first()
                     if content_history is not None:
-                        reconciliation = 'conflict'
-                        try:
-                            from services.card_rollback import (
-                                classify_wb_card_history_state,
+                        from services.wb_api_client import (
+                            WBAPIException,
+                            WBAuthException,
+                            WBContentOperationBusy,
+                            WBLiveCardDrift,
+                            WBRateLimitException,
+                            WBTransportUncertainException,
+                        )
+                        if isinstance(e, WBTransportUncertainException):
+                            definitely_not_sent = not (
+                                e.request_may_have_been_applied
                             )
-                            live_card = wb_client.get_card_by_nm_id(
-                                product.nm_id,
-                                seller_id=seller.id,
-                            )
-                            reconciliation = classify_wb_card_history_state(
-                                live_card,
-                                content_history.snapshot_before,
-                                content_history.snapshot_after,
-                                content_history.changed_fields,
-                            )
-                        except Exception as reconcile_error:
-                            logger.warning(
-                                '[Enrich] Could not reconcile nmID=%s after '
-                                'ambiguous update: %s',
-                                product.nm_id,
-                                reconcile_error,
-                            )
-
-                        if reconciliation == 'after':
-                            # WB confirms the exact sent values despite the
-                            # transport exception: finish local state normally.
-                            wb_sync_success = True
-                            content_history.wb_synced = True
-                            content_history.wb_sync_status = 'success'
-                            content_history.wb_error_message = None
-                            mirror_sent_card_to_product(
-                                wb_snapshot_context['after'])
                         else:
-                            # before/conflict may be eventual consistency. Keep
-                            # an explicit uncertain row; conflict-aware rollback
-                            # remains available after the short in-flight window.
+                            # Explicit API rejection, auth/rate/validation,
+                            # local content lock and observed live drift cannot
+                            # have produced an accepted provider mutation.
+                            definitely_not_sent = isinstance(e, (
+                                WBAPIException,
+                                WBAuthException,
+                                WBContentOperationBusy,
+                                WBLiveCardDrift,
+                                WBRateLimitException,
+                            ))
+                        if definitely_not_sent:
                             content_history.wb_synced = False
-                            content_history.wb_sync_status = 'uncertain'
+                            content_history.wb_sync_status = 'failed'
+                            content_history.wb_reconcile_due_at = None
+                            content_history.wb_reconciled_at = datetime.utcnow()
+                            content_history.wb_reconcile_code = 'request_not_sent'
                             content_history.wb_error_message = wb_error
+                        else:
+                            from services.wb_enrichment_reconciliation import (
+                                schedule_history_reconciliation,
+                            )
+                            schedule_history_reconciliation(
+                                content_history,
+                                status='uncertain',
+                                error=wb_error,
+                            )
                         db.session.commit()
                 logger.error(f"[Enrich] WB API error for nmID={product.nm_id}: {e}")
+                if (
+                    isinstance(e, (
+                        WbEnrichmentAwaitingReconciliation,
+                        WBContentOperationBusy,
+                    ))
+                    and content_history_id is None
+                ):
+                    return {
+                        'success': False,
+                        'fields_applied': [],
+                        'photos': {
+                            'skipped': True,
+                            'reason': (
+                                'content_operation_busy'
+                                if isinstance(e, WBContentOperationBusy)
+                                else 'previous_content_write_pending'
+                            ),
+                        },
+                        'skipped_characteristics': (
+                            (supplier_characteristics or {}).get(
+                                'skipped_characteristics'
+                            ) or []
+                        ),
+                        'merge_decisions': merge_decisions,
+                        'wb_audit': None,
+                        'error': str(e),
+                        'wb_sync': False,
+                        'wb_confirmed': False,
+                        'reconciliation_pending': True,
+                        'fields_pending': sorted(set(fields)),
+                        'deferred': True,
+                    }
                 if not wb_sync_success:
                     errors.append(f"WB API: {e}")
                     fields_applied = [
@@ -890,103 +1564,308 @@ class EnrichmentService:
                         }
                     ]
             else:
-                wb_sync_success = True
-                logger.info(
-                    f"[Enrich] WB API updated nmID={product.nm_id}: "
-                    f"{list(wb_updates.keys())}"
-                )
+                write_required = wb_snapshot_context.get(
+                    'write_required', True)
+                actual_fields = actual_content_fields(wb_snapshot_context)
+                fields_applied.extend(actual_fields)
 
-                # Real client invokes the callback before HTTP. Keep a guarded
-                # fallback for compatible test/custom clients, while preserving
-                # exact snapshots supplied through snapshot_context.
-                if content_history is None:
-                    persist_pending_content_history(wb_snapshot_context)
-
-                mirror_sent_card_to_product(wb_snapshot_context['after'])
-
-                content_history.wb_synced = True
-                content_history.wb_sync_status = 'success'
-                content_history.wb_error_message = None
-                # If this local commit fails, the already committed pending row
-                # remains a durable recovery marker with exact before/after.
-                try:
-                    db.session.commit()
-                except Exception:
-                    db.session.rollback()
-                    # WB already returned success. Retry the local finalization
-                    # over the durable pending row before surfacing an error.
-                    content_history = CardEditHistory.query.filter_by(
-                        id=content_history_id,
-                        product_id=product.id,
-                        seller_id=seller.id,
-                    ).first()
+                if not write_required:
+                    # The live card already won every merge decision. Persist
+                    # the receipt even though no provider write was needed.
                     if content_history is None:
-                        raise
-                    content_history.wb_synced = True
-                    content_history.wb_sync_status = 'success'
-                    content_history.wb_error_message = None
+                        persist_pending_content_history(wb_snapshot_context)
+                    from services.wb_enrichment_reconciliation import (
+                        schedule_history_reconciliation,
+                    )
+                    schedule_history_reconciliation(content_history)
+                    content_history.user_comment = (
+                        'Дообогащение: live-данные WB сохранены, изменений нет'
+                    )
+                    # Product is a local projection of WB.  Even when the
+                    # provider write is a no-op, retain the richer observed
+                    # live values locally instead of leaving an older staging
+                    # value that would mislead the next preview.
                     mirror_sent_card_to_product(wb_snapshot_context['after'])
                     db.session.commit()
+                else:
+                    wb_sync_success = True
+                    logger.info(
+                        f"[Enrich] WB API updated nmID={product.nm_id}: "
+                        f"{actual_fields}"
+                    )
+
+                    # Real client invokes the callback before HTTP. Keep a guarded
+                    # fallback for compatible test/custom clients, while preserving
+                    # exact snapshots supplied through snapshot_context.
+                    if content_history is None:
+                        persist_pending_content_history(wb_snapshot_context)
+
+                    from services.wb_enrichment_reconciliation import (
+                        schedule_history_reconciliation,
+                    )
+                    schedule_history_reconciliation(
+                        content_history,
+                        status='submitted',
+                    )
+                    # If this local commit fails, the already committed
+                    # uncertain row remains a durable recovery marker.
+                    try:
+                        db.session.commit()
+                    except Exception:
+                        db.session.rollback()
+                        # WB already returned success. Retry the local finalization
+                        # over the durable pending row before surfacing an error.
+                        content_history = CardEditHistory.query.filter_by(
+                            id=content_history_id,
+                            product_id=product.id,
+                            seller_id=seller.id,
+                        ).first()
+                        if content_history is None:
+                            raise
+                        schedule_history_reconciliation(
+                            content_history,
+                            status='submitted',
+                        )
+                        db.session.commit()
 
         # --- Фото ---
         # Photo changes are intentionally recorded separately: WB media has no
         # supported rollback path and must not make content history unrevertible.
         photo_result = {'skipped': True}
-        if 'photos' in fields and (not wb_updates or wb_sync_success):
-            photo_snapshot_before = _create_product_snapshot(product)
-            photo_history = CardEditHistory(
-                product_id=product.id,
-                seller_id=seller.id,
-                bulk_edit_id=bulk_edit_id,
-                action='update',
-                changed_fields=['photos'],
-                snapshot_before=photo_snapshot_before,
-                snapshot_after=photo_snapshot_before,
-                wb_synced=False,
-                wb_sync_status='pending',
-                user_comment=(
-                    'Обогащение фото от поставщика '
-                    f'(стратегия: {photo_strategy})'
-                ),
-            )
-            db.session.add(photo_history)
-            db.session.commit()
+        content_noop = wb_snapshot_context.get('write_required') is False
+        if 'photos' in fields and photo_strategy == 'selective':
+            photo_result = {'skipped': True, 'reason': 'selective_mode'}
+        elif 'photos' in fields and (
+            not wb_updates or wb_sync_success or content_noop
+        ):
+            photo_history = None
+            photo_history_id = None
+
+            def persist_photo_plan(receipt):
+                nonlocal photo_history, photo_history_id
+                report = receipt.get('report') or {}
+                merge_decisions['photos'] = report
+                before = _create_product_snapshot(product)
+                before['photos'] = list(receipt.get('live_urls_before') or [])
+                before['photos_json'] = json.dumps(
+                    before['photos'], ensure_ascii=False)
+                after = dict(before)
+                after['photos'] = list(
+                    receipt.get('planned_photos_after') or before['photos'])
+                after['photos_json'] = json.dumps(
+                    after['photos'], ensure_ascii=False)
+                write_planned = bool(report.get('append_indices'))
+                photo_history = CardEditHistory(
+                    product_id=product.id,
+                    seller_id=seller.id,
+                    bulk_edit_id=bulk_edit_id,
+                    action='update',
+                    changed_fields=['photos'] if write_planned else [],
+                    snapshot_before=before,
+                    snapshot_after=after,
+                    merge_decisions={'photos': report},
+                    wb_synced=False,
+                    wb_sync_status='pending' if write_planned else 'skipped',
+                    user_comment=(
+                        'Умное дообогащение фото: live-галерея WB сохранена'
+                    ),
+                )
+                if write_planned:
+                    from services.wb_enrichment_reconciliation import (
+                        schedule_history_reconciliation,
+                    )
+                    schedule_history_reconciliation(
+                        photo_history,
+                        status='pending',
+                    )
+                db.session.add(photo_history)
+                db.session.commit()
+                photo_history_id = photo_history.id
+
+            def assert_photo_settled():
+                self._assert_no_unreconciled_write(
+                    seller_id=seller.id,
+                    nm_id=product.nm_id,
+                    operation_kind='photos',
+                )
 
             photo_result = self._apply_photos(
                 product, imp, photo_strategy, seller, wb_client,
                 is_bulk=is_bulk,
+                before_upload_callback=persist_photo_plan,
+                before_live_read_callback=assert_photo_settled,
             )
+            if photo_result.get('deferred'):
+                pending_fields = {'photos'}
+                for history in (content_history,):
+                    if (
+                        history is not None
+                        and history.wb_reconcile_due_at is not None
+                    ):
+                        pending_fields.update(history.changed_fields or [])
+                return {
+                    'success': False,
+                    'fields_applied': fields_applied,
+                    'photos': photo_result,
+                    'skipped_characteristics': (
+                        (supplier_characteristics or {}).get(
+                            'skipped_characteristics'
+                        ) or []
+                    ),
+                    'merge_decisions': merge_decisions,
+                    'wb_audit': None,
+                    'error': photo_result.get('error'),
+                    'wb_sync': wb_sync_success,
+                    'wb_confirmed': False,
+                    'reconciliation_pending': True,
+                    'fields_pending': sorted(pending_fields),
+                    'deferred': True,
+                }
+            if photo_history is None:
+                # No live plan was reached (for example, no supplier bytes).
+                # Keep a durable no-op receipt instead of silently losing the
+                # attempted field decision.
+                reason = photo_result.get('reason') or photo_result.get(
+                    'error') or 'photo_plan_unavailable'
+                from services.wb_enrichment_merge import MERGE_POLICY_VERSION
+                report = {
+                    'policy': MERGE_POLICY_VERSION,
+                    'mode': 'preserve_live_append_missing',
+                    'requested_strategy': photo_strategy,
+                    'decision': 'skipped_before_live_plan',
+                    'reason': str(reason)[:100],
+                }
+                merge_decisions['photos'] = report
+                snapshot = _create_product_snapshot(product)
+                photo_history = CardEditHistory(
+                    product_id=product.id,
+                    seller_id=seller.id,
+                    bulk_edit_id=bulk_edit_id,
+                    action='update',
+                    changed_fields=[],
+                    snapshot_before=snapshot,
+                    snapshot_after=snapshot,
+                    merge_decisions={'photos': report},
+                    wb_synced=False,
+                    wb_sync_status=(
+                        'skipped' if photo_result.get('skipped') else 'failed'
+                    ),
+                    wb_error_message=(
+                        None if photo_result.get('skipped') else str(reason)
+                    ),
+                    user_comment='Дообогащение фото без изменений',
+                )
+                db.session.add(photo_history)
+                db.session.commit()
+                photo_history_id = photo_history.id
+
             uploaded_count = int(photo_result.get('uploaded') or 0)
+            uncertain_count = int(photo_result.get('uncertain') or 0)
             failed_count = int(photo_result.get('failed') or 0)
-            if uploaded_count > 0:
+            potentially_submitted = (
+                uploaded_count + uncertain_count
+                if set(photo_history.changed_fields or []) == {'photos'}
+                else 0
+            )
+            if potentially_submitted > 0:
                 fields_applied.append('photos')
-                photo_history.wb_synced = True
-                photo_history.snapshot_after = _create_product_snapshot(product)
-                if failed_count > 0:
-                    photo_history.wb_sync_status = 'partial'
+                actual_after = dict(photo_history.snapshot_after or {})
+                if 'snapshot_after_photos' in photo_result:
+                    actual_after['photos'] = list(
+                        photo_result.get('snapshot_after_photos') or [])
+                    actual_after['photos_json'] = json.dumps(
+                        actual_after['photos'], ensure_ascii=False)
+                photo_history.snapshot_after = actual_after
+                photo_receipt = dict(photo_history.merge_decisions or {})
+                photo_report = dict(photo_receipt.get('photos') or {})
+                photo_report['upload'] = {
+                    'uploaded': uploaded_count,
+                    'uncertain': uncertain_count,
+                    'potentially_submitted': potentially_submitted,
+                    'failed': failed_count,
+                    'rejected': int(photo_result.get('rejected') or 0),
+                    'not_attempted': int(
+                        photo_result.get('not_attempted') or 0
+                    ),
+                    'items': list(photo_result.get('upload_items') or [])[:30],
+                }
+                photo_receipt['photos'] = photo_report
+                photo_history.merge_decisions = photo_receipt
+                from services.wb_enrichment_reconciliation import (
+                    schedule_history_reconciliation,
+                )
+                if uncertain_count > 0:
+                    photo_error = (
+                        f'подтверждено отправкой {uploaded_count}, '
+                        f'исход {uncertain_count} фото пока неизвестен, '
+                        f'не отправлено {failed_count}'
+                    )
+                    schedule_history_reconciliation(
+                        photo_history,
+                        status='uncertain',
+                        error=photo_error,
+                    )
+                    errors.append(f'Фото WB: {photo_error}')
+                elif failed_count > 0:
                     photo_error = (
                         f'загружено {uploaded_count}, '
                         f'не загружено {failed_count}'
                     )
-                    photo_history.wb_error_message = photo_error
+                    schedule_history_reconciliation(
+                        photo_history,
+                        status='partial',
+                        error=photo_error,
+                    )
                     errors.append(f'Фото WB: {photo_error}')
                 else:
-                    photo_history.wb_sync_status = 'success'
+                    schedule_history_reconciliation(
+                        photo_history,
+                        status='submitted',
+                    )
             elif photo_result.get('skipped'):
-                # No WB side effect occurred, so a history row is unnecessary.
-                db.session.delete(photo_history)
+                photo_history.wb_sync_status = 'skipped'
+                photo_history.wb_reconcile_due_at = None
+                photo_history.wb_reconciled_at = datetime.utcnow()
+                photo_history.wb_reconcile_code = 'no_change'
             else:
                 photo_error = (
                     photo_result.get('error')
                     or f'не загружено, ошибок: {photo_result.get("failed", 0)}'
                 )
                 photo_history.wb_sync_status = 'failed'
+                photo_history.wb_reconcile_due_at = None
+                photo_history.wb_reconciled_at = datetime.utcnow()
+                photo_history.wb_reconcile_code = str(
+                    photo_result.get('reconcile_code') or 'upload_failed'
+                )[:64]
                 photo_history.wb_error_message = str(photo_error)
                 errors.append(f'Фото WB: {photo_error}')
+            photo_result.pop('live_urls_before', None)
+            photo_result.pop('snapshot_after_photos', None)
         elif 'photos' in fields:
             photo_result = {
                 'skipped': True,
                 'reason': 'content_update_failed',
+            }
+
+        # A transport-uncertain content write may still appear in WB later.
+        # When photos were selected in the same durable row, advancing the
+        # cursor here would silently drop that follow-up. Keep the row parked;
+        # restart recovery will remove content from remaining_fields and build
+        # a fresh photo-only plan after content reconciliation is terminal.
+        photo_followup_deferred = bool(
+            'photos' in fields
+            and content_history is not None
+            and content_history.wb_reconcile_due_at is not None
+            and not wb_sync_success
+            and not content_noop
+        )
+        if photo_followup_deferred:
+            photo_result = {
+                **photo_result,
+                'skipped': True,
+                'reason': 'awaiting_content_reconciliation',
+                'deferred': True,
             }
 
         # --- Связываем ImportedProduct с Product (если ещё не) ---
@@ -997,27 +1876,38 @@ class EnrichmentService:
         db.session.commit()
 
         photo_sync_success = int(photo_result.get('uploaded') or 0) > 0
+        reconciliation_pending = any(
+            history is not None
+            and history.wb_reconcile_due_at is not None
+            for history in (content_history, photo_history)
+        )
+        fields_pending = sorted({
+            field
+            for history in (content_history, photo_history)
+            if history is not None and history.wb_reconcile_due_at is not None
+            for field in (history.changed_fields or [])
+        })
+        if photo_followup_deferred and 'photos' not in fields_pending:
+            fields_pending.append('photos')
+            fields_pending.sort()
         skipped_characteristics = (
             (supplier_characteristics or {}).get('skipped_characteristics')
             or []
         )
-
-        # Happy-path read-after-write: одиночный поток сразу сверяет
-        # live-состояние карточки на WB. Bulk делает это одним батчем
-        # в конце job, чтобы не удваивать запросы на каждую карточку.
-        wb_audit_entry = None
-        if (wb_sync_success or photo_sync_success) and not is_bulk:
-            from services.wb_card_audit import audit_single_card_after_write
-            wb_audit_entry = audit_single_card_after_write(seller, product)
 
         return {
             'success': not bool(errors),
             'fields_applied': fields_applied,
             'photos': photo_result,
             'skipped_characteristics': skipped_characteristics,
-            'wb_audit': wb_audit_entry,
+            'merge_decisions': merge_decisions,
+            'wb_audit': None,
             'error': '; '.join(errors) if errors else None,
             'wb_sync': wb_sync_success or photo_sync_success,
+            'wb_confirmed': False,
+            'reconciliation_pending': reconciliation_pending,
+            'fields_pending': fields_pending,
+            'deferred': photo_followup_deferred,
         }
 
     def _map_characteristics(
@@ -1074,6 +1964,8 @@ class EnrichmentService:
         strategy: str,
         seller,
         wb_client,
+        *,
+        expected_source_urls: Optional[List[str]] = None,
     ) -> Dict:
         """
         Применяет выборочные фото от поставщика к WB-карточке.
@@ -1082,7 +1974,7 @@ class EnrichmentService:
             product: Product ORM объект
             imp: ImportedProduct ORM объект
             photo_indices: список индексов фото поставщика для применения
-            strategy: 'replace' | 'append' | 'only_if_empty'
+            strategy: 'smart_merge' | legacy safe aliases
             seller: Seller ORM объект
             wb_client: WildberriesAPIClient экземпляр
 
@@ -1091,6 +1983,7 @@ class EnrichmentService:
         """
         from models import db, CardEditHistory
         from services.photo_cache import get_photo_cache
+        from services.wb_api_client import MAX_WB_MEDIA_FILES
 
         seller_id = getattr(seller, 'id', None)
         if (
@@ -1103,34 +1996,70 @@ class EnrichmentService:
                 'uploaded': 0,
                 'error': 'Access denied: seller scope mismatch',
             }
+        if (
+            strategy not in SAFE_ENRICHMENT_PHOTO_STRATEGIES
+            or
+            not isinstance(photo_indices, list)
+            or not 1 <= len(photo_indices) <= MAX_WB_MEDIA_FILES
+            or any(
+                not isinstance(idx, int)
+                or isinstance(idx, bool)
+                or idx < 0
+                for idx in photo_indices
+            )
+            or len(set(photo_indices)) != len(photo_indices)
+        ):
+            return {
+                'success': False,
+                'uploaded': 0,
+                'error': (
+                    'Invalid photo strategy or photo_indices; indices must '
+                    'be unique non-negative integers'
+                ),
+            }
 
-        if not imp.photo_urls:
-            return {'success': False, 'error': 'Нет фото у поставщика'}
+        all_photos, supplier_type, external_id = self._photo_source(imp)
+        if not all_photos:
+            return {'success': False, 'uploaded': 0, 'error': 'Нет фото у поставщика'}
 
-        try:
-            all_photos = json.loads(imp.photo_urls)
-        except (json.JSONDecodeError, TypeError):
-            return {'success': False, 'error': 'Ошибка данных фото'}
-
-        # Фильтруем только запрошенные индексы
-        selected_photos = []
-        for idx in photo_indices:
-            if 0 <= idx < len(all_photos):
-                selected_photos.append(all_photos[idx])
-
-        if not selected_photos:
-            return {'success': False, 'error': 'Нет валидных фото по указанным индексам'}
-
-        # Проверка стратегии
-        current_photos = self._safe_json_loads(product.photos_json, [])
-        if not isinstance(current_photos, list):
-            current_photos = []
-        if strategy == 'only_if_empty' and current_photos:
-            return {'success': True, 'uploaded': 0, 'skipped': True, 'reason': 'already_has_photos'}
+        if any(idx >= len(all_photos) for idx in photo_indices):
+            return {
+                'success': False,
+                'uploaded': 0,
+                'error': 'photo_indices contains an unavailable position',
+            }
+        if expected_source_urls is not None:
+            if (
+                not isinstance(expected_source_urls, list)
+                or len(expected_source_urls) != len(photo_indices)
+                or any(
+                    not isinstance(value, str) or not value
+                    for value in expected_source_urls
+                )
+            ):
+                return {
+                    'success': False,
+                    'uploaded': 0,
+                    'error': 'Invalid expected selective photo source',
+                    'definitely_not_sent': True,
+                }
+            current_source_urls = [
+                self._photo_url(all_photos[idx]) for idx in photo_indices
+            ]
+            if current_source_urls != expected_source_urls:
+                return {
+                    'success': False,
+                    'uploaded': 0,
+                    'reason': 'supplier_photo_source_drift',
+                    'error': (
+                        'Галерея поставщика изменилась после выбора; '
+                        'фото не отправлялись'
+                    ),
+                    'definitely_not_sent': True,
+                }
+        selected_photos = [all_photos[idx] for idx in photo_indices]
 
         cache = get_photo_cache()
-        supplier_type = imp.source_type or 'unknown'
-        external_id = imp.external_id or ''
 
         # Получаем auth cookies
         auth_cookies = None
@@ -1139,138 +2068,273 @@ class EnrichmentService:
 
         # Загружаем выбранные фото в кэш
         for ph in selected_photos:
-            if not isinstance(ph, dict):
-                continue
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
+            url = self._photo_url(ph)
             if url and not cache.is_cached(supplier_type, external_id, url):
-                fallbacks = []
-                if ph.get('blur') and ph['blur'] != url:
-                    fallbacks.append(ph['blur'])
-                if ph.get('original') and ph['original'] != url:
-                    fallbacks.append(ph['original'])
                 cache.queue_download(supplier_type, external_id, url,
                                      auth_cookies=auth_cookies,
-                                     fallback_urls=fallbacks)
+                                     fallback_urls=self._photo_fallbacks(ph, url))
 
         # Ждём кэширования (max 30 сек, early exit при stall)
         cached_paths = self._wait_for_cached_photos(selected_photos, supplier_type, external_id, cache, timeout=30)
 
         if not cached_paths:
-            return {'success': False, 'error': 'Не удалось загрузить фото поставщика'}
+            return {
+                'success': False,
+                'uploaded': 0,
+                'error': 'Не удалось загрузить фото поставщика',
+            }
 
-        # Снапшот и durable pending-история до внешнего side effect.
-        snapshot_before = _create_product_snapshot(product)
-        history = CardEditHistory(
-            product_id=product.id,
-            seller_id=seller.id,
-            action='update',
-            changed_fields=['photos'],
-            snapshot_before=snapshot_before,
-            snapshot_after=snapshot_before,
-            wb_synced=False,
-            wb_sync_status='pending',
-            user_comment=(
-                f'Выборочное обогащение фото ({len(photo_indices)} шт, '
-                f'стратегия: {strategy})'
-            ),
-        )
-        db.session.add(history)
-        db.session.commit()
-        history_id = history.id
+        history = None
+        history_id = None
 
-        # Загружаем в WB
+        def persist_photo_plan(receipt):
+            nonlocal history, history_id
+            report = receipt.get('report') or {}
+            before = _create_product_snapshot(product)
+            before['photos'] = list(receipt.get('live_urls_before') or [])
+            before['photos_json'] = json.dumps(
+                before['photos'], ensure_ascii=False)
+            after = dict(before)
+            after['photos'] = list(
+                receipt.get('planned_photos_after') or before['photos'])
+            after['photos_json'] = json.dumps(
+                after['photos'], ensure_ascii=False)
+            write_planned = bool(report.get('append_indices'))
+            history = CardEditHistory(
+                product_id=product.id,
+                seller_id=seller.id,
+                action='update',
+                changed_fields=['photos'] if write_planned else [],
+                snapshot_before=before,
+                snapshot_after=after,
+                merge_decisions={'photos': report},
+                wb_synced=False,
+                wb_sync_status='pending' if write_planned else 'skipped',
+                user_comment=(
+                    f'Выборочное умное дообогащение фото '
+                    f'({len(photo_indices)} выбрано)'
+                ),
+            )
+            if write_planned:
+                from services.wb_enrichment_reconciliation import (
+                    schedule_history_reconciliation,
+                )
+                schedule_history_reconciliation(
+                    history,
+                    status='pending',
+                )
+            db.session.add(history)
+            db.session.commit()
+            history_id = history.id
+
+        def assert_photo_settled():
+            self._assert_no_unreconciled_write(
+                seller_id=seller.id,
+                nm_id=product.nm_id,
+                operation_kind='photos',
+            )
+
         try:
-            upload_results = self.upload_photos_to_card_locked(
+            result = self.merge_photos_to_card_locked(
                 wb_client,
                 seller_id=seller.id,
                 nm_id=product.nm_id,
                 photo_paths=cached_paths,
+                strategy=strategy,
+                before_upload_callback=persist_photo_plan,
+                before_live_read_callback=assert_photo_settled,
             )
-            uploaded_count = sum(1 for r in upload_results if r.get('success'))
-            failed_count = len(upload_results) - uploaded_count
+            uploaded_count = int(result.get('uploaded') or 0)
+            uncertain_count = int(result.get('uncertain') or 0)
+            failed_count = int(result.get('failed') or 0)
+            potentially_submitted = uploaded_count + uncertain_count
 
             product.updated_at = datetime.utcnow()
 
-            snapshot_after = _create_product_snapshot(product)
-            history.snapshot_after = snapshot_after
-            history.wb_synced = uploaded_count > 0
-            if uploaded_count > 0 and failed_count == 0:
-                history.wb_sync_status = 'success'
-            elif uploaded_count > 0:
-                history.wb_sync_status = 'partial'
-                history.wb_error_message = (
-                    f'загружено {uploaded_count}, '
-                    f'не загружено {failed_count}'
-                )
-            else:
-                history.wb_sync_status = 'failed'
-                history.wb_error_message = 'Ни одно фото не загружено'
+            if history is not None:
+                actual_after = dict(history.snapshot_after or {})
+                actual_after['photos'] = list(
+                    result.get('snapshot_after_photos') or [])
+                actual_after['photos_json'] = json.dumps(
+                    actual_after['photos'], ensure_ascii=False)
+                history.snapshot_after = actual_after
+                photo_receipt = dict(history.merge_decisions or {})
+                photo_report = dict(photo_receipt.get('photos') or {})
+                photo_report['upload'] = {
+                    'uploaded': uploaded_count,
+                    'uncertain': uncertain_count,
+                    'potentially_submitted': potentially_submitted,
+                    'failed': failed_count,
+                    'rejected': int(result.get('rejected') or 0),
+                    'not_attempted': int(
+                        result.get('not_attempted') or 0
+                    ),
+                    'items': list(result.get('upload_items') or [])[:30],
+                }
+                photo_receipt['photos'] = photo_report
+                history.merge_decisions = photo_receipt
+                if uncertain_count > 0:
+                    from services.wb_enrichment_reconciliation import (
+                        schedule_history_reconciliation,
+                    )
+                    photo_error = (
+                        f'подтверждено отправкой {uploaded_count}, '
+                        f'исход {uncertain_count} фото пока неизвестен, '
+                        f'не отправлено {failed_count}'
+                    )
+                    schedule_history_reconciliation(
+                        history,
+                        status='uncertain',
+                        error=photo_error,
+                    )
+                elif uploaded_count > 0 and failed_count == 0:
+                    from services.wb_enrichment_reconciliation import (
+                        schedule_history_reconciliation,
+                    )
+                    schedule_history_reconciliation(
+                        history,
+                        status='submitted',
+                    )
+                elif uploaded_count > 0:
+                    from services.wb_enrichment_reconciliation import (
+                        schedule_history_reconciliation,
+                    )
+                    photo_error = (
+                        f'загружено {uploaded_count}, '
+                        f'не загружено {failed_count}'
+                    )
+                    schedule_history_reconciliation(
+                        history,
+                        status='partial',
+                        error=photo_error,
+                    )
+                elif result.get('skipped'):
+                    history.wb_sync_status = 'skipped'
+                    history.wb_reconcile_due_at = None
+                    history.wb_reconciled_at = datetime.utcnow()
+                    history.wb_reconcile_code = 'no_change'
+                else:
+                    history.wb_sync_status = 'failed'
+                    history.wb_error_message = str(
+                        result.get('error') or 'Ни одно фото не загружено'
+                    )[:1000]
+                    history.wb_reconcile_due_at = None
+                    history.wb_reconciled_at = datetime.utcnow()
+                    history.wb_reconcile_code = str(
+                        result.get('reconcile_code') or 'upload_failed'
+                    )[:64]
             db.session.commit()
 
+            result['error'] = history.wb_error_message if history else None
+            result['wb_confirmed'] = False
+            result['reconciliation_pending'] = potentially_submitted > 0
+            result.pop('live_urls_before', None)
+            result.pop('snapshot_after_photos', None)
+            return result
+        except WbEnrichmentAwaitingReconciliation as e:
+            db.session.rollback()
             return {
-                'success': uploaded_count > 0 and failed_count == 0,
-                'uploaded': uploaded_count,
-                'failed': failed_count,
-                'total': len(cached_paths),
-                'strategy': strategy,
-                'error': history.wb_error_message,
+                'success': False,
+                'uploaded': 0,
+                'uncertain': 0,
+                'skipped': True,
+                'reason': 'previous_photo_write_pending',
+                'error': str(e),
+                'deferred': True,
+                'reconciliation_pending': True,
             }
         except WbMediaOperationBusy as e:
             db.session.rollback()
-            persisted_history = CardEditHistory.query.filter_by(
-                id=history_id,
-                product_id=product.id,
-                seller_id=seller.id,
-            ).first()
+            return {
+                'success': False,
+                'uploaded': 0,
+                'uncertain': 0,
+                'skipped': True,
+                'reason': 'media_operation_busy',
+                'error': str(e),
+                'deferred': True,
+                'reconciliation_pending': True,
+            }
+        except WbLiveMediaDrift as e:
+            db.session.rollback()
+            persisted_history = (
+                CardEditHistory.query.filter_by(
+                    id=history_id,
+                    product_id=product.id,
+                    seller_id=seller.id,
+                ).first()
+                if history_id is not None else None
+            )
             if persisted_history is not None:
                 persisted_history.wb_sync_status = 'failed'
                 persisted_history.wb_error_message = str(e)
+                persisted_history.wb_reconcile_due_at = None
+                persisted_history.wb_reconciled_at = datetime.utcnow()
+                persisted_history.wb_reconcile_code = (
+                    'live_photo_drift'
+                )
                 db.session.commit()
-            return {'success': False, 'uploaded': 0, 'error': str(e)}
+            return {
+                'success': False,
+                'uploaded': 0,
+                'uncertain': 0,
+                'error': str(e),
+                'definitely_not_sent': True,
+            }
         except Exception as e:
             db.session.rollback()
-            persisted_history = CardEditHistory.query.filter_by(
-                id=history_id,
-                product_id=product.id,
-                seller_id=seller.id,
-            ).first()
+            persisted_history = (
+                CardEditHistory.query.filter_by(
+                    id=history_id,
+                    product_id=product.id,
+                    seller_id=seller.id,
+                ).first()
+                if history_id is not None else None
+            )
             if persisted_history is not None:
-                # A timeout/commit error after upload is ambiguous; retain the
-                # pending marker instead of claiming WB definitely rejected it.
-                persisted_history.wb_sync_status = 'pending'
-                persisted_history.wb_error_message = str(e)
+                # A timeout/commit error after upload is ambiguous; retain a
+                # durable read-only reconciliation instead of retrying upload.
+                from services.wb_enrichment_reconciliation import (
+                    schedule_history_reconciliation,
+                )
+                schedule_history_reconciliation(
+                    persisted_history,
+                    status='uncertain',
+                    error=str(e),
+                )
                 db.session.commit()
             logger.error(f"[Enrich] Selective photo upload error for nmID={product.nm_id}: {e}")
-            return {'success': False, 'uploaded': 0, 'error': str(e)}
+            return {
+                'success': False,
+                'uploaded': 0,
+                'uncertain': 1 if persisted_history is not None else 0,
+                'error': str(e),
+                'reconciliation_pending': persisted_history is not None,
+            }
 
-    def _apply_photos(self, product, imp, strategy: str, seller, wb_client,
-                      is_bulk: bool = False) -> Dict:
+    def _apply_photos(
+        self,
+        product,
+        imp,
+        strategy: str,
+        seller,
+        wb_client,
+        is_bulk: bool = False,
+        before_upload_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        before_live_read_callback: Optional[Callable[[], None]] = None,
+    ) -> Dict:
         """
         Скачивает фото поставщика (через кэш) и загружает в карточку WB.
 
         strategy:
-            'replace'      - заменить все фото
-            'append'       - добавить в конец
+            'smart_merge'  - сохранить live-галерею и добавить отсутствующие
+            'replace'/'append' - legacy aliases того же безопасного merge
             'only_if_empty' - только если у карточки нет фото
-            'selective'    - пропустить (фото обрабатываются через apply_selective_photos)
         is_bulk:
             True при вызове из _run_bulk_job — использует синхронную загрузку
             для надёжности (queue_download ненадёжен в bulk-режиме)
         """
-        from services.photo_cache import get_photo_cache, PhotoCacheManager
-
-        # Стратегия selective — фото обрабатываются отдельно
-        if strategy == 'selective':
-            logger.info(f"[Enrich] Photos skipped (strategy=selective, handled separately)")
-            return {'skipped': True, 'reason': 'selective_mode'}
-
-        # Проверка стратегии
-        current_photos = self._safe_json_loads(product.photos_json, [])
-        if not isinstance(current_photos, list):
-            current_photos = []
-        if strategy == 'only_if_empty' and current_photos:
-            logger.info(f"[Enrich] Photos skipped (strategy=only_if_empty, has {len(current_photos)} photos)")
-            return {'skipped': True, 'reason': 'already_has_photos'}
+        from services.photo_cache import get_photo_cache
 
         photo_urls, supplier_type, external_id = self._photo_source(imp)
 
@@ -1341,27 +2405,74 @@ class EnrichmentService:
                 exc,
             )
 
-        # Загружаем в WB
+        # Live-aware merge under one seller media lock. Legacy names no longer
+        # authorize replacement: enrichment always preserves manual WB slots.
         try:
-            upload_results = self.upload_photos_to_card_locked(
+            result = self.merge_photos_to_card_locked(
                 wb_client,
                 seller_id=seller.id,
                 nm_id=product.nm_id,
                 photo_paths=cached_paths,
+                strategy=strategy,
+                before_upload_callback=before_upload_callback,
+                before_live_read_callback=before_live_read_callback,
             )
-            uploaded_count = sum(1 for r in upload_results if r.get('success'))
-            failed_count = len(upload_results) - uploaded_count
-
-            logger.info(f"[Enrich] Photos uploaded for nmID={product.nm_id}: {uploaded_count} ok, {failed_count} failed")
+            logger.info(
+                '[Enrich] Smart photo merge nmID=%s: %s uploaded, %s preserved',
+                product.nm_id,
+                result.get('uploaded', 0),
+                (result.get('merge_report') or {}).get('live_count', 0),
+            )
+            return result
+        except WbEnrichmentAwaitingReconciliation as e:
+            logger.info(
+                '[Enrich] Photo upload deferred for nmID=%s: %s',
+                product.nm_id,
+                e,
+            )
             return {
-                'uploaded': uploaded_count,
-                'failed': failed_count,
-                'total': len(cached_paths),
-                'strategy': strategy,
+                'success': False,
+                'uploaded': 0,
+                'uncertain': 0,
+                'skipped': True,
+                'reason': 'previous_photo_write_pending',
+                'error': str(e),
+                'deferred': True,
+                'reconciliation_pending': True,
+            }
+        except WbMediaOperationBusy as e:
+            logger.info(
+                '[Enrich] Photo upload deferred while media lock is busy '
+                'for nmID=%s',
+                product.nm_id,
+            )
+            return {
+                'success': False,
+                'uploaded': 0,
+                'uncertain': 0,
+                'skipped': True,
+                'reason': 'media_operation_busy',
+                'error': str(e),
+                'deferred': True,
+                'reconciliation_pending': True,
+            }
+        except WbLiveMediaDrift as e:
+            logger.error(
+                '[Enrich] Photo upload safely stopped for nmID=%s: %s',
+                product.nm_id,
+                e,
+            )
+            return {
+                'uploaded': 0,
+                'uncertain': 0,
+                'error': str(e),
+                'reason': 'live_photo_drift',
+                'reconcile_code': 'live_photo_drift',
+                'definitely_not_sent': True,
             }
         except Exception as e:
             logger.error(f"[Enrich] Photo upload error for nmID={product.nm_id}: {e}")
-            return {'uploaded': 0, 'error': str(e)}
+            return {'uploaded': 0, 'uncertain': 1, 'error': str(e)}
 
     def _wait_for_cached_photos(
         self,
@@ -1504,31 +2615,156 @@ class EnrichmentService:
         fields: List[str],
         photo_strategy: str,
         seller,
+        *,
+        fields_by_product: Optional[Dict[int, List[str]]] = None,
     ) -> str:
-        """
-        Запускает массовое обогащение в фоновом потоке.
+        """Create a durable bulk cursor and kick one bounded worker tick.
 
-        Returns:
-            job_id (UUID строка)
+        ``fields_by_product`` is used by review screens where every row can
+        have its own explicit checkbox selection.  It is persisted in the
+        same leased cursor as the product IDs; a worker never widens one row
+        to the union selected for another row.
         """
-        from models import db, EnrichmentJob
+        from models import BulkEditHistory, db, EnrichmentJob
 
-        job_id = str(uuid.uuid4())
-        job = EnrichmentJob(
-            id=job_id,
-            seller_id=seller.id,
-            status='pending',
-            total=len(product_ids),
-            processed=0,
-            succeeded=0,
-            failed=0,
-            skipped=0,
-            fields_config=json.dumps(fields),
-            photo_strategy=photo_strategy,
-            results=json.dumps([])
+        if (
+            not isinstance(product_ids, list)
+            or not 1 <= len(product_ids) <= 200
+            or any(
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value <= 0
+                for value in product_ids
+            )
+            or len(set(product_ids)) != len(product_ids)
+        ):
+            raise ValueError('product_ids must contain 1..200 unique positive integers')
+        if (
+            not isinstance(fields, list)
+            or not fields
+            or len(fields) > len(ALLOWED_ENRICHMENT_FIELDS)
+            or any(
+                not isinstance(field, str)
+                or field not in ALLOWED_ENRICHMENT_FIELDS
+                for field in fields
+            )
+            or len(set(fields)) != len(fields)
+            or photo_strategy not in SAFE_ENRICHMENT_PHOTO_STRATEGIES
+        ):
+            raise ValueError('invalid enrichment fields or photo strategy')
+        fields_payload: Any = list(fields)
+        if fields_by_product is not None:
+            if (
+                not isinstance(fields_by_product, dict)
+                or set(fields_by_product) != set(product_ids)
+                or any(
+                    not isinstance(product_id, int)
+                    or isinstance(product_id, bool)
+                    or product_id <= 0
+                    for product_id in fields_by_product
+                )
+            ):
+                raise ValueError(
+                    'fields_by_product must exactly match product_ids'
+                )
+            normalized_by_product = {}
+            for product_id in product_ids:
+                item_fields = fields_by_product.get(product_id)
+                if (
+                    not isinstance(item_fields, list)
+                    or not item_fields
+                    or len(item_fields) > len(ALLOWED_ENRICHMENT_FIELDS)
+                    or any(
+                        not isinstance(field, str)
+                        or field not in ALLOWED_ENRICHMENT_FIELDS
+                        for field in item_fields
+                    )
+                    or len(set(item_fields)) != len(item_fields)
+                ):
+                    raise ValueError(
+                        'fields_by_product contains invalid enrichment fields'
+                    )
+                normalized_by_product[str(product_id)] = list(item_fields)
+            if set(fields) != {
+                field
+                for item_fields in normalized_by_product.values()
+                for field in item_fields
+            }:
+                raise ValueError(
+                    'fields must exactly equal fields_by_product union'
+                )
+            fields_payload = {
+                'version': 1,
+                'default': list(fields),
+                'by_product': normalized_by_product,
+            }
+        if (
+            not isinstance(getattr(seller, 'id', None), int)
+            or isinstance(seller.id, bool)
+            or seller.id <= 0
+        ):
+            raise ValueError('seller must have a positive integer id')
+
+        from services.marketplace_operation_locks import (
+            release_wb_seller_enrichment_job_lock,
+            try_wb_seller_enrichment_job_lock,
         )
-        db.session.add(job)
-        db.session.commit()
+        creation_claim = try_wb_seller_enrichment_job_lock(seller.id)
+        if creation_claim is None:
+            raise EnrichmentJobAlreadyActive()
+        try:
+            active_job = EnrichmentJob.query.filter(
+                EnrichmentJob.seller_id == seller.id,
+                EnrichmentJob.status.in_(('pending', 'running')),
+            ).order_by(EnrichmentJob.created_at.desc()).first()
+            if active_job is not None:
+                raise EnrichmentJobAlreadyActive(active_job.id)
+
+            job_id = str(uuid.uuid4())
+            bulk_history = BulkEditHistory(
+                seller_id=seller.id,
+                operation_type='supplier_enrichment',
+                operation_params={
+                    'job_id': job_id,
+                    'fields': fields,
+                    'photo_strategy': photo_strategy,
+                    'per_product_fields': fields_by_product is not None,
+                },
+                description=(
+                    'Массовое дообогащение фото карточек от поставщика'
+                    if fields == ['photos']
+                    else 'Дообогащение карточек данными поставщика'
+                ),
+                status='in_progress',
+                total_products=len(product_ids),
+                success_count=0,
+                error_count=0,
+                errors_details=[],
+                wb_synced=False,
+            )
+            db.session.add(bulk_history)
+            db.session.flush()
+            job = EnrichmentJob(
+                id=job_id,
+                seller_id=seller.id,
+                status='pending',
+                total=len(product_ids),
+                processed=0,
+                succeeded=0,
+                failed=0,
+                skipped=0,
+                confirmed=0,
+                conflicted=0,
+                fields_config=json.dumps(fields_payload, ensure_ascii=False),
+                photo_strategy=photo_strategy,
+                results=json.dumps([]),
+                product_ids_json=json.dumps(product_ids),
+                bulk_edit_id=bulk_history.id,
+            )
+            db.session.add(job)
+            db.session.commit()
+        finally:
+            release_wb_seller_enrichment_job_lock(creation_claim)
 
         # Захватываем Flask app для фонового потока
         # ВАЖНО: не делаем `from seller_platform import app` в потоке —
@@ -1540,9 +2776,9 @@ class EnrichmentService:
             flask_app = None
 
         if not flask_app:
-            logger.error("[Enrich] No Flask app context — bulk enrichment cannot start")
-            job.status = 'failed'
-            db.session.commit()
+            # The singleton scheduler owns recovery. Lack of a request-bound
+            # app object must never turn a durable pending job into a failure.
+            logger.info('[Enrich] Job %s queued for scheduler', job_id)
             return job_id
 
         # Запускаем в фоне
@@ -1552,6 +2788,10 @@ class EnrichmentService:
                 job_id, list(product_ids), list(fields), photo_strategy,
                 seller.id, flask_app,
             ),
+            kwargs={
+                'item_limit': enrichment_items_per_tick(),
+                'time_budget_seconds': enrichment_tick_seconds(),
+            },
             daemon=True,
             name=f'EnrichJob-{job_id[:8]}'
         )
@@ -1559,8 +2799,7 @@ class EnrichmentService:
             thread.start()
         except Exception:
             logger.exception('[Enrich] Could not start bulk job %s', job_id)
-            job.status = 'failed'
-            db.session.commit()
+            # Still pending and recoverable by the scheduler.
             return job_id
 
         logger.info(f"[Enrich] Bulk job {job_id} started: {len(product_ids)} products, fields={fields}")
@@ -1573,10 +2812,20 @@ class EnrichmentService:
         fields: List[str],
         photo_strategy: str,
         seller_id: int,
-        flask_app=None
+        flask_app=None,
+        *,
+        item_limit: Optional[int] = None,
+        time_budget_seconds: Optional[int] = None,
     ):
-        """Фоновая задача с изоляцией результата и commit на каждой карточке."""
-        from models import db, EnrichmentJob, Product, Seller
+        """Advance a leased durable job; every completed row is committed."""
+        from models import (
+            BulkEditHistory,
+            CardEditHistory,
+            db,
+            EnrichmentJob,
+            Product,
+            Seller,
+        )
         from services.wb_api_client import WildberriesAPIClient
 
         if not flask_app:
@@ -1584,56 +2833,328 @@ class EnrichmentService:
             return
 
         with flask_app.app_context():
-            from models import BulkEditHistory
-
-            results = []
-            succeeded = 0
-            failed = 0
-            skipped = 0
-            bulk_edit_id = None
-
+            claim_token = uuid.uuid4().hex
+            wb_client = None
             try:
                 job = db.session.get(EnrichmentJob, job_id)
                 if not job:
                     logger.error('[Enrich] Job %s not found', job_id)
                     return
 
-                job.status = 'running'
-                job.updated_at = datetime.utcnow()
+                if job.status in {'done', 'failed'}:
+                    return
+
+                # Backward compatibility for durable rows created before v2
+                # (and for direct unit/maintenance calls).
+                try:
+                    persisted_ids = json.loads(job.product_ids_json or '[]')
+                except (TypeError, ValueError):
+                    persisted_ids = []
+                legacy_payload = not persisted_ids
+                if legacy_payload and product_ids:
+                    persisted_ids = list(product_ids)
+                    job.product_ids_json = json.dumps(persisted_ids)
+                    job.total = len(persisted_ids)
+                try:
+                    persisted_fields_payload = json.loads(
+                        job.fields_config or '[]'
+                    )
+                except (TypeError, ValueError):
+                    persisted_fields_payload = []
+                if (
+                    (legacy_payload or not persisted_fields_payload)
+                    and fields
+                ):
+                    persisted_fields_payload = list(fields)
+                    job.fields_config = json.dumps(persisted_fields_payload)
+
+                item_fields_by_product = None
+                if isinstance(persisted_fields_payload, dict):
+                    if set(persisted_fields_payload) != {
+                        'version', 'default', 'by_product',
+                    } or persisted_fields_payload.get('version') != 1:
+                        raise RuntimeError('invalid_durable_job_payload')
+                    persisted_fields = persisted_fields_payload.get('default')
+                    raw_by_product = persisted_fields_payload.get('by_product')
+                    if not isinstance(raw_by_product, dict):
+                        raise RuntimeError('invalid_durable_job_payload')
+                    parsed_by_product = {}
+                    for raw_product_id, item_fields in raw_by_product.items():
+                        if (
+                            not isinstance(raw_product_id, str)
+                            or not raw_product_id.isdigit()
+                            or raw_product_id.startswith('0')
+                        ):
+                            raise RuntimeError('invalid_durable_job_payload')
+                        product_id = int(raw_product_id)
+                        if product_id in parsed_by_product:
+                            raise RuntimeError('invalid_durable_job_payload')
+                        parsed_by_product[product_id] = item_fields
+                    if set(parsed_by_product) != set(persisted_ids):
+                        raise RuntimeError('invalid_durable_job_payload')
+                    item_fields_by_product = parsed_by_product
+                else:
+                    persisted_fields = persisted_fields_payload
+                if (
+                    not isinstance(persisted_ids, list)
+                    or not 1 <= len(persisted_ids) <= 200
+                    or len(persisted_ids) != job.total
+                    or any(
+                        not isinstance(value, int)
+                        or isinstance(value, bool)
+                        or value <= 0
+                        for value in persisted_ids
+                    )
+                    or len(set(persisted_ids)) != len(persisted_ids)
+                    or not isinstance(persisted_fields, list)
+                    or not persisted_fields
+                    or len(persisted_fields) > len(ALLOWED_ENRICHMENT_FIELDS)
+                    or any(
+                        not isinstance(field, str)
+                        or field not in ALLOWED_ENRICHMENT_FIELDS
+                        for field in persisted_fields
+                    )
+                    or len(set(persisted_fields)) != len(persisted_fields)
+                    or (
+                        item_fields_by_product is not None
+                        and any(
+                            not isinstance(item_fields, list)
+                            or not item_fields
+                            or len(item_fields)
+                            > len(ALLOWED_ENRICHMENT_FIELDS)
+                            or any(
+                                not isinstance(field, str)
+                                or field not in ALLOWED_ENRICHMENT_FIELDS
+                                for field in item_fields
+                            )
+                            or len(set(item_fields)) != len(item_fields)
+                            for item_fields in item_fields_by_product.values()
+                        )
+                    )
+                    or (
+                        item_fields_by_product is not None
+                        and set(persisted_fields) != {
+                            field
+                            for item_fields in item_fields_by_product.values()
+                            for field in item_fields
+                        }
+                    )
+                ):
+                    raise RuntimeError('invalid_durable_job_payload')
+                product_ids = persisted_ids
+                fields = persisted_fields
+                photo_strategy = job.photo_strategy or photo_strategy or 'smart_merge'
+                if photo_strategy not in SAFE_ENRICHMENT_PHOTO_STRATEGIES:
+                    raise RuntimeError('invalid_durable_job_payload')
+                if (
+                    not isinstance(job.seller_id, int)
+                    or isinstance(job.seller_id, bool)
+                    or job.seller_id <= 0
+                ):
+                    raise RuntimeError('invalid_durable_job_payload')
+                seller_id = job.seller_id
+
+                now = datetime.utcnow()
+                claimed = EnrichmentJob.query.filter(
+                    EnrichmentJob.id == job_id,
+                    EnrichmentJob.status.in_(('pending', 'running')),
+                    db.or_(
+                        EnrichmentJob.claim_token.is_(None),
+                        EnrichmentJob.claim_expires_at.is_(None),
+                        EnrichmentJob.claim_expires_at <= now,
+                    ),
+                ).update({
+                    EnrichmentJob.status: 'running',
+                    EnrichmentJob.claim_token: claim_token,
+                    EnrichmentJob.claim_expires_at: now + timedelta(
+                        seconds=enrichment_lease_seconds()
+                    ),
+                    EnrichmentJob.heartbeat_at: now,
+                    EnrichmentJob.updated_at: now,
+                }, synchronize_session=False)
                 db.session.commit()
+                if claimed != 1:
+                    return
+                db.session.expire_all()
+                job = db.session.get(EnrichmentJob, job_id)
+                if not job or job.claim_token != claim_token:
+                    return
 
                 seller = db.session.get(Seller, seller_id)
                 if not seller:
                     raise RuntimeError('seller_not_found')
 
                 wb_client = WildberriesAPIClient(seller.wb_api_key)
-
-                bulk_history = BulkEditHistory(
-                    seller_id=seller_id,
-                    operation_type='supplier_enrichment',
-                    operation_params={
-                        'fields': fields,
-                        'photo_strategy': photo_strategy,
-                    },
-                    description=(
-                        'Массовое обновление фото карточек от поставщика'
-                        if fields == ['photos']
-                        else 'Обновление карточек данными поставщика'
-                    ),
-                    status='in_progress',
-                    total_products=len(product_ids),
-                    success_count=0,
-                    error_count=0,
-                    errors_details=[],
+                bulk_history = (
+                    db.session.get(BulkEditHistory, job.bulk_edit_id)
+                    if job.bulk_edit_id else None
                 )
-                db.session.add(bulk_history)
-                db.session.flush()
+                if bulk_history is not None and (
+                    bulk_history.seller_id != seller_id
+                    or bulk_history.operation_type != 'supplier_enrichment'
+                ):
+                    raise RuntimeError('invalid_durable_job_payload')
+                if bulk_history is None:
+                    bulk_history = BulkEditHistory(
+                        seller_id=seller_id,
+                        operation_type='supplier_enrichment',
+                        operation_params={
+                            'job_id': job_id,
+                            'fields': fields,
+                            'photo_strategy': photo_strategy,
+                        },
+                        description='Дообогащение карточек данными поставщика',
+                        status='in_progress',
+                        total_products=len(product_ids),
+                        success_count=0,
+                        error_count=0,
+                        errors_details=[],
+                        wb_synced=False,
+                    )
+                    db.session.add(bulk_history)
+                    db.session.flush()
+                    job.bulk_edit_id = bulk_history.id
+                    db.session.commit()
                 bulk_edit_id = bulk_history.id
-                db.session.commit()
+
+                try:
+                    results = json.loads(job.results or '[]')
+                except (TypeError, ValueError):
+                    results = []
+                counters = (
+                    job.processed, job.succeeded, job.failed, job.skipped,
+                )
+                if (
+                    not isinstance(results, list)
+                    or any(
+                        not isinstance(value, int)
+                        or isinstance(value, bool)
+                        or value < 0
+                        for value in counters
+                    )
+                    or job.processed > len(product_ids)
+                    or len(results) != job.processed
+                    or job.succeeded + job.failed + job.skipped
+                    != job.processed
+                ):
+                    raise RuntimeError('invalid_durable_job_progress')
+                succeeded = int(job.succeeded or 0)
+                failed = int(job.failed or 0)
+                skipped = int(job.skipped or 0)
 
                 validation_cache = {}
-                wb_written_ids = []
-                for index, product_id in enumerate(product_ids, start=1):
+                handled = 0
+                deadline = (
+                    time.monotonic() + time_budget_seconds
+                    if time_budget_seconds else None
+                )
+                start_index = int(job.processed or 0)
+                for zero_index in range(start_index, len(product_ids)):
+                    if item_limit is not None and handled >= item_limit:
+                        break
+                    if deadline is not None and time.monotonic() >= deadline:
+                        break
+                    product_id = product_ids[zero_index]
+                    requested_item_fields = (
+                        list(item_fields_by_product[product_id])
+                        if item_fields_by_product is not None
+                        else list(fields)
+                    )
+                    resumed_inflight = bool(
+                        job.current_product_id == product_id
+                        and job.current_item_started_at is not None
+                    )
+                    if not resumed_inflight:
+                        job.current_product_id = product_id
+                        job.current_item_started_at = datetime.utcnow()
+                    job.heartbeat_at = datetime.utcnow()
+                    job.claim_expires_at = datetime.utcnow() + timedelta(
+                        seconds=enrichment_lease_seconds()
+                    )
+                    db.session.commit()
+
+                    remaining_fields = list(requested_item_fields)
+                    recovered_receipts = []
+                    blocked_followup = False
+                    recovered_photo_sent = False
+                    recovered_terminal_failure = None
+                    if resumed_inflight:
+                        histories = CardEditHistory.query.filter(
+                            CardEditHistory.seller_id == seller_id,
+                            CardEditHistory.product_id == product_id,
+                            CardEditHistory.bulk_edit_id == bulk_edit_id,
+                            CardEditHistory.created_at
+                            >= job.current_item_started_at,
+                        ).order_by(CardEditHistory.id.asc()).all()
+                        for history in histories:
+                            decisions = history.merge_decisions or {}
+                            is_photo = isinstance(decisions, dict) and isinstance(
+                                decisions.get('photos'), dict
+                            )
+                            potentially_sent = history.wb_sync_status in {
+                                'pending', 'submitted', 'uncertain',
+                                'partial', 'success',
+                            }
+                            if is_photo and potentially_sent:
+                                recovered_photo_sent = True
+                                remaining_fields = [
+                                    value for value in remaining_fields
+                                    if value != 'photos'
+                                ]
+                                recovered_receipts.append(history)
+                            elif not is_photo and potentially_sent:
+                                remaining_fields = [
+                                    value for value in remaining_fields
+                                    if value == 'photos'
+                                ]
+                                recovered_receipts.append(history)
+                                if history.wb_reconcile_due_at is not None:
+                                    # Do not begin a new media side effect while
+                                    # the content side of a crashed item is unknown.
+                                    remaining_fields = [
+                                        value for value in remaining_fields
+                                        if value != 'photos'
+                                    ]
+                                    blocked_followup = True
+                            elif history.wb_sync_status in {
+                                'failed', 'conflict',
+                            }:
+                                remaining_fields = []
+                                recovered_receipts.append(history)
+                                blocked_followup = True
+                                recovered_terminal_failure = history
+                            elif history.wb_sync_status == 'skipped':
+                                # A durable no-op receipt is still proof that
+                                # this phase was fully planned before a crash.
+                                # Keep it in recovery accounting; otherwise an
+                                # empty remaining_fields list would be passed
+                                # back into apply_enrichment and turn a safe
+                                # no-op into a false failure.
+                                recovered_receipts.append(history)
+                                if is_photo:
+                                    remaining_fields = [
+                                        value for value in remaining_fields
+                                        if value != 'photos'
+                                    ]
+                                else:
+                                    remaining_fields = [
+                                        value for value in remaining_fields
+                                        if value == 'photos'
+                                    ]
+
+                    # If content may have reached WB but the photo phase had
+                    # not started before a crash, keep the cursor on this item
+                    # until read-only reconciliation reaches a terminal state.
+                    # Advancing here would silently drop the selected photos;
+                    # replaying content would risk a second full replacement.
+                    if (
+                        blocked_followup
+                        and recovered_terminal_failure is None
+                        and 'photos' in requested_item_fields
+                        and not recovered_photo_sent
+                    ):
+                        break
+
                     product = Product.query.filter_by(
                         id=product_id,
                         seller_id=seller_id,
@@ -1655,23 +3176,139 @@ class EnrichmentService:
                                 status='skipped',
                                 reason='no_supplier_data',
                             )
+                        elif recovered_terminal_failure is not None:
+                            failed += 1
+                            row.update(
+                                status='failed',
+                                error=(
+                                    recovered_terminal_failure.wb_error_message
+                                    or 'Предыдущая отправка завершилась '
+                                    'конфликтом; автоматический replay запрещён'
+                                )[:500],
+                            )
+                        elif not remaining_fields and recovered_receipts:
+                            recovered_applied = sorted({
+                                field
+                                for receipt in recovered_receipts
+                                for field in (receipt.changed_fields or [])
+                            })
+                            if recovered_applied:
+                                succeeded += 1
+                                row.update(
+                                    status='submitted',
+                                    fields_applied=recovered_applied,
+                                    reason=(
+                                        'recovered_inflight_followup_deferred'
+                                        if blocked_followup else
+                                        'recovered_inflight'
+                                    ),
+                                )
+                            else:
+                                skipped += 1
+                                row.update(
+                                    status='skipped',
+                                    reason='recovered_noop',
+                                )
                         else:
                             try:
                                 result = self.apply_enrichment(
-                                    product, imp, fields, photo_strategy,
+                                    product, imp, remaining_fields, photo_strategy,
                                     seller, wb_client,
                                     bulk_edit_id=bulk_edit_id,
                                     is_bulk=True,
                                     validation_cache=validation_cache,
                                 )
+                                if result.get('deferred'):
+                                    # Keep the cursor on this exact product.
+                                    # The scheduler will retry the *plan* only
+                                    # after the older provider receipt reaches
+                                    # a terminal reconciliation state.
+                                    db.session.expire_all()
+                                    owned_job = db.session.get(
+                                        EnrichmentJob, job_id,
+                                    )
+                                    if (
+                                        owned_job is None
+                                        or owned_job.claim_token != claim_token
+                                    ):
+                                        return
+                                    owned_job.heartbeat_at = datetime.utcnow()
+                                    owned_job.claim_expires_at = (
+                                        datetime.utcnow() + timedelta(
+                                            seconds=enrichment_lease_seconds()
+                                        )
+                                    )
+                                    owned_job.last_error = str(
+                                        result.get('error')
+                                        or 'Ожидание предыдущей отправки WB'
+                                    )[:500]
+                                    db.session.commit()
+                                    break
                                 applied = list(result.get('fields_applied') or [])
-                                if result.get('success') and applied:
+                                decisions = result.get('merge_decisions') or {}
+                                content_decisions = decisions.get('content') or {}
+                                characteristic_decisions = (
+                                    content_decisions.get('characteristics') or {}
+                                )
+                                field_decisions = (
+                                    content_decisions.get('fields') or {}
+                                )
+                                photo_decisions = decisions.get('photos') or {}
+                                merge_summary = {}
+                                if field_decisions:
+                                    merge_summary['fields'] = {
+                                        field: {
+                                            key: value.get(key)
+                                            for key in (
+                                                'decision',
+                                                'existing_length',
+                                                'candidate_length',
+                                            )
+                                            if value.get(key) is not None
+                                        }
+                                        for field, value in field_decisions.items()
+                                        if isinstance(value, dict)
+                                    }
+                                if characteristic_decisions.get('counts'):
+                                    merge_summary['characteristics'] = (
+                                        characteristic_decisions['counts'])
+                                if (
+                                    photo_decisions.get('counts')
+                                    or photo_decisions.get('live_count') is not None
+                                ):
+                                    merge_summary['photos'] = {
+                                        'counts': photo_decisions.get('counts', {}),
+                                        'live_count': photo_decisions.get('live_count'),
+                                        'matching_status': photo_decisions.get(
+                                            'matching_status'),
+                                    }
+                                if merge_summary:
+                                    row['merge_summary'] = merge_summary
+                                if applied and result.get(
+                                    'reconciliation_pending'
+                                ):
                                     succeeded += 1
-                                    if result.get('wb_sync'):
-                                        wb_written_ids.append(product.id)
                                     row.update(
-                                        status='success',
+                                        status='submitted',
                                         fields_applied=applied,
+                                        reconciliation_pending=True,
+                                    )
+                                    if result.get('error'):
+                                        row['warning'] = str(
+                                            result['error']
+                                        )[:500]
+                                elif result.get('success') and applied:
+                                    succeeded += 1
+                                    row.update(
+                                        status=(
+                                            'submitted'
+                                            if result.get('reconciliation_pending')
+                                            else 'success'
+                                        ),
+                                        fields_applied=applied,
+                                        reconciliation_pending=bool(
+                                            result.get('reconciliation_pending')
+                                        ),
                                     )
                                 elif result.get('success'):
                                     # A no-op is not an updated card. This is
@@ -1686,6 +3323,21 @@ class EnrichmentService:
                                             photos.get('reason')
                                             or 'nothing_to_update'
                                         ),
+                                    )
+                                elif result.get('reconciliation_pending'):
+                                    succeeded += 1
+                                    row.update(
+                                        status='uncertain',
+                                        fields_applied=list(
+                                            result.get('fields_applied')
+                                            or result.get('fields_pending')
+                                            or []
+                                        ),
+                                        reconciliation_pending=True,
+                                        warning=str(
+                                            result.get('error')
+                                            or 'Исход отправки уточняется по live WB'
+                                        )[:500],
                                     )
                                 else:
                                     failed += 1
@@ -1708,7 +3360,21 @@ class EnrichmentService:
                                     error='Не удалось обработать карточку',
                                 )
 
+                    # A long photo download/provider call can outlive its DB
+                    # lease. Never let a stale worker advance the cursor after
+                    # another worker has taken ownership; its pre-send receipt
+                    # remains available for restart-safe recovery.
+                    db.session.expire_all()
+                    owned_job = db.session.get(EnrichmentJob, job_id)
+                    if (
+                        owned_job is None
+                        or owned_job.claim_token != claim_token
+                    ):
+                        return
+                    job = owned_job
+
                     results.append(row)
+                    handled += 1
 
                     # Re-query after a per-card rollback and commit every row.
                     # This makes progress durable and lets one bad card never
@@ -1716,82 +3382,127 @@ class EnrichmentService:
                     job = db.session.get(EnrichmentJob, job_id)
                     if not job:
                         raise RuntimeError('job_disappeared')
-                    job.processed = index
+                    job.processed = zero_index + 1
                     job.succeeded = succeeded
                     job.failed = failed
                     job.skipped = skipped
                     job.results = json.dumps(results, ensure_ascii=False)
+                    job.current_product_id = None
+                    job.current_item_started_at = None
+                    job.heartbeat_at = datetime.utcnow()
+                    job.claim_expires_at = datetime.utcnow() + timedelta(
+                        seconds=enrichment_lease_seconds()
+                    )
+                    job.last_error = None
                     job.updated_at = datetime.utcnow()
                     db.session.commit()
 
+                db.session.expire_all()
                 job = db.session.get(EnrichmentJob, job_id)
-                job.status = 'done'
-                job.processed = len(product_ids)
+                if job is None or job.claim_token != claim_token:
+                    return
+                completed = int(job.processed or 0) >= len(product_ids)
+                job.status = 'done' if completed else 'pending'
                 job.succeeded = succeeded
                 job.failed = failed
                 job.skipped = skipped
                 job.results = json.dumps(results, ensure_ascii=False)
+                job.claim_token = None
+                job.claim_expires_at = None
+                if completed:
+                    job.last_error = None
                 job.updated_at = datetime.utcnow()
 
                 bulk_history = db.session.get(BulkEditHistory, bulk_edit_id)
-                bulk_history.status = 'completed'
+                bulk_history.status = 'completed' if completed else 'in_progress'
                 bulk_history.success_count = succeeded
                 bulk_history.error_count = failed + skipped
                 bulk_history.errors_details = [
                     item for item in results
-                    if item.get('status') != 'success'
+                    if item.get('status') in {'failed', 'skipped'}
                 ]
-                bulk_history.wb_synced = succeeded > 0
-                bulk_history.completed_at = datetime.utcnow()
+                bulk_history.wb_synced = False
+                bulk_history.completed_at = datetime.utcnow() if completed else None
                 db.session.commit()
 
                 logger.info(
-                    '[Enrich] Job %s done: %s succeeded, %s failed, '
+                    '[Enrich] Job %s %s: %s submitted, %s failed, '
                     '%s skipped',
-                    job_id, succeeded, failed, skipped,
+                    job_id, job.status, succeeded, failed, skipped,
                 )
-
-                # WB-ревизия после батча: один bounded read-after-write
-                # проход по реально записанным карточкам. Ошибка сверки не
-                # меняет исход уже завершённого job.
-                if wb_written_ids:
-                    try:
-                        from services.wb_card_audit import audit_cards
-                        audit_cards(seller, wb_written_ids)
-                    except Exception:
-                        db.session.rollback()
-                        logger.exception(
-                            '[Enrich] Post-batch WB audit failed for job %s',
-                            job_id,
-                        )
-            except Exception:
+            except Exception as exc:
                 db.session.rollback()
                 logger.exception('[Enrich] Bulk job %s failed', job_id)
 
                 job = db.session.get(EnrichmentJob, job_id)
-                if job:
-                    job.status = 'failed'
-                    job.processed = len(results)
-                    job.succeeded = succeeded
-                    job.failed = failed
-                    job.skipped = skipped
-                    job.results = json.dumps(results, ensure_ascii=False)
-                    job.updated_at = datetime.utcnow()
-
-                if bulk_edit_id is not None:
-                    bulk_history = db.session.get(
-                        BulkEditHistory, bulk_edit_id
+                fatal = str(exc) in {
+                        'seller_not_found',
+                        'invalid_durable_job_payload',
+                        'invalid_durable_job_progress',
+                }
+                if job and (
+                    job.claim_token == claim_token
+                    or (fatal and job.claim_token is None)
+                ):
+                    job.status = 'failed' if fatal else 'pending'
+                    job.last_error = (
+                        str(exc)[:500] if fatal else
+                        'Временная ошибка worker; задача будет продолжена'
                     )
-                    if bulk_history:
-                        bulk_history.status = 'failed'
-                        bulk_history.success_count = succeeded
-                        bulk_history.error_count = failed + skipped
-                        bulk_history.errors_details = [
-                            item for item in results
-                            if item.get('status') != 'success'
-                        ]
-                        bulk_history.completed_at = datetime.utcnow()
+                    job.claim_token = None
+                    job.claim_expires_at = None
+                    job.updated_at = datetime.utcnow()
+                    if fatal and job.bulk_edit_id:
+                        bulk_history = db.session.get(
+                            BulkEditHistory, job.bulk_edit_id
+                        )
+                        if (
+                            bulk_history
+                            and bulk_history.seller_id == job.seller_id
+                            and bulk_history.operation_type
+                            == 'supplier_enrichment'
+                        ):
+                            bulk_history.status = 'failed'
+                            bulk_history.completed_at = datetime.utcnow()
                 db.session.commit()
+            finally:
+                close = getattr(wb_client, 'close', None)
+                if callable(close):
+                    close()
+
+
+def process_due_enrichment_jobs(flask_app, *, max_jobs: int = 1) -> int:
+    """Let the singleton scheduler resume a bounded number of durable jobs."""
+    from models import db, EnrichmentJob
+
+    with flask_app.app_context():
+        now = datetime.utcnow()
+        rows = EnrichmentJob.query.filter(
+            EnrichmentJob.status.in_(('pending', 'running')),
+            db.or_(
+                EnrichmentJob.claim_token.is_(None),
+                EnrichmentJob.claim_expires_at.is_(None),
+                EnrichmentJob.claim_expires_at <= now,
+            ),
+        ).order_by(
+            EnrichmentJob.created_at.asc(), EnrichmentJob.id.asc(),
+        ).limit(max(1, min(3, int(max_jobs)))).all()
+        targets = [(row.id, row.seller_id) for row in rows]
+        db.session.remove()
+
+    service = get_enrichment_service()
+    for job_id, seller_id in targets:
+        service._run_bulk_job(
+            job_id,
+            [],
+            [],
+            'smart_merge',
+            seller_id,
+            flask_app,
+            item_limit=enrichment_items_per_tick(),
+            time_budget_seconds=enrichment_tick_seconds(),
+        )
+    return len(targets)
 
 
 # =========================================================================
@@ -1810,6 +3521,10 @@ def _create_product_snapshot(product) -> Dict:
     if not isinstance(dimensions, dict):
         dimensions = {}
 
+    photos = EnrichmentService._safe_json_loads(product.photos_json, [])
+    if not isinstance(photos, list):
+        photos = []
+
     return {
         'nm_id': product.nm_id,
         'vendor_code': product.vendor_code,
@@ -1822,6 +3537,7 @@ def _create_product_snapshot(product) -> Dict:
         'quantity': product.quantity,
         'characteristics': characteristics,
         'dimensions': dimensions,
+        'photos': photos,
         'photos_json': product.photos_json,
         'is_active': product.is_active,
     }

@@ -45,9 +45,18 @@
           </span>
           <span class="sh-badge sh-badge--red sh-badge--sm" x-show="settings.last_sync_status === 'failed'" x-cloak>ошибка последней синхронизации</span>
           <span class="sh-badge sh-badge--yellow sh-badge--sm" x-show="settings.last_sync_status === 'partial'" x-cloak>синхронизация прошла частично</span>
+          <span class="sh-badge sh-badge--yellow sh-badge--sm" x-show="settings.last_sync_status === 'waiting_wb'" x-cloak>WB временно занят · заявка сохранена</span>
         </div>
       </div>
       <div class="sh-page-actions">
+        <a href="{{ url_for('competitors_comparison') }}" class="sh-btn sh-btn--white-outline sh-btn--sm">
+          <span class="sh-btn-icon">{{ icon('chart', size=16) }}</span>
+          Сводное сравнение
+        </a>
+        <a href="{{ url_for('competitors_groups') }}" class="sh-btn sh-btn--white sh-btn--sm">
+          <span class="sh-btn-icon">{{ icon('plus', size=16) }}</span>
+          Добавить конкурента
+        </a>
         <a href="{{ url_for('competitors_settings') }}" class="sh-btn sh-btn--white-outline sh-btn--sm">
           <span class="sh-btn-icon">{{ icon('settings', size=16) }}</span>
           Настройки

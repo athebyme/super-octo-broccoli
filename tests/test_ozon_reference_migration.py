@@ -4,6 +4,9 @@
 import sqlite3
 
 from migrations.migrate_add_ozon_references import apply_migration
+from migrations.migrate_add_marketplace_accounts import (
+    apply_migration as apply_accounts_migration,
+)
 
 
 def test_ozon_reference_migration_is_idempotent_and_pair_scoped():
@@ -98,9 +101,12 @@ def test_ozon_reference_migration_is_idempotent_and_pair_scoped():
     }.issubset(tables)
     assert "categories_snapshot_hash" in marketplace_columns
     assert "total_product_types" in marketplace_columns
-    assert {"category_id", "external_type_id", "attributes_schema_hash"}.issubset(
-        type_columns
-    )
+    assert {
+        "category_id",
+        "external_type_id",
+        "attributes_schema_hash",
+        "is_seller_selectable",
+    }.issubset(type_columns)
     assert {
         "external_attribute_id",
         "attribute_complex_id",
@@ -109,3 +115,68 @@ def test_ozon_reference_migration_is_idempotent_and_pair_scoped():
         "restriction_value_ids_json",
     }.issubset(attribute_columns)
     assert pair_count == 2
+
+
+def test_reference_migration_repairs_legacy_type_visibility_before_index():
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE sellers (id INTEGER PRIMARY KEY)")
+        apply_accounts_migration(connection, verbose=False)
+        connection.executescript(
+            """
+            CREATE TABLE marketplace_taxonomy_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                marketplace_id INTEGER NOT NULL REFERENCES marketplaces(id),
+                external_category_id VARCHAR(100) NOT NULL,
+                parent_id INTEGER REFERENCES marketplace_taxonomy_categories(id),
+                name VARCHAR(500) NOT NULL,
+                full_path VARCHAR(2000) NOT NULL,
+                depth INTEGER NOT NULL DEFAULT 0,
+                is_disabled_upstream BOOLEAN NOT NULL DEFAULT 0,
+                is_available BOOLEAN NOT NULL DEFAULT 1,
+                last_seen_at DATETIME,
+                created_at DATETIME,
+                updated_at DATETIME
+            );
+            CREATE TABLE marketplace_product_types (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                marketplace_id INTEGER NOT NULL REFERENCES marketplaces(id),
+                category_id INTEGER NOT NULL
+                    REFERENCES marketplace_taxonomy_categories(id),
+                external_type_id VARCHAR(100) NOT NULL,
+                name VARCHAR(500) NOT NULL,
+                is_disabled_upstream BOOLEAN NOT NULL DEFAULT 0,
+                is_available BOOLEAN NOT NULL DEFAULT 1,
+                is_enabled BOOLEAN NOT NULL DEFAULT 0,
+                last_seen_at DATETIME,
+                attributes_synced_at DATETIME,
+                attributes_sync_status VARCHAR(30),
+                attributes_sync_error VARCHAR(1000),
+                attributes_schema_hash VARCHAR(64),
+                attributes_version INTEGER NOT NULL DEFAULT 0,
+                attributes_count INTEGER NOT NULL DEFAULT 0,
+                required_attributes_count INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME,
+                updated_at DATETIME
+            );
+            """
+        )
+
+        apply_migration(connection, verbose=False)
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(marketplace_product_types)"
+            ).fetchall()
+        }
+        indexes = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA index_list(marketplace_product_types)"
+            ).fetchall()
+        }
+    finally:
+        connection.close()
+
+    assert "is_seller_selectable" in columns
+    assert "idx_marketplace_product_type_selectable" in indexes

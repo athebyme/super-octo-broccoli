@@ -232,8 +232,7 @@ function supplierSearchApp(suggestedId, productId) {
           <select x-model="photoStrategy"
                   class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
             <option value="selective">Выборочно</option>
-            <option value="replace">Заменить все</option>
-            <option value="append">Добавить к текущим</option>
+            <option value="smart_merge">Умно дополнить</option>
             <option value="only_if_empty">Только если нет фото</option>
           </select>
         </div>
@@ -247,14 +246,9 @@ function supplierSearchApp(suggestedId, productId) {
               <span class="font-semibold">Выборочный режим:</span> Отметьте галочками фото поставщика, которые хотите добавить к карточке WB. Текущие фото на WB не будут удалены.
             </p>
           </div>
-          <div x-show="photoStrategy === 'replace'" class="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-            <p class="text-xs text-amber-700">
-              <span class="font-semibold">Замена:</span> Все текущие фото на WB будут заменены фотографиями поставщика. Будьте осторожны, если загружали фото вручную!
-            </p>
-          </div>
-          <div x-show="photoStrategy === 'append'" class="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          <div x-show="photoStrategy === 'smart_merge'" class="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
             <p class="text-xs text-green-700">
-              <span class="font-semibold">Добавление:</span> Фото поставщика будут добавлены после текущих фото карточки.
+              <span class="font-semibold">Умное дополнение:</span> текущая live-галерея WB сохраняется. Фото поставщика сопоставляются по изображению, и только отсутствующие добавляются в свободные слоты.
             </p>
           </div>
           <div x-show="photoStrategy === 'only_if_empty'" class="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
@@ -491,6 +485,10 @@ function supplierSearchApp(suggestedId, productId) {
         Значения поставщика не пройдут обязательную проверку по словарям WB из админки:
         {{ preview.characteristics.validation.error }}
       </div>
+      {% else %}
+      <div class="mx-4 mt-4 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
+        Перед записью будет повторно прочитана live-карточка WB: добавятся новые характеристики и только строго более полные значения. Более полные ручные значения сохранятся.
+      </div>
       {% endif %}
       <div class="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100 text-sm">
         <div class="p-4">
@@ -722,7 +720,7 @@ function enrichApp() {
             try {
                 const body = {
                     fields,
-                    photo_strategy: this.photoStrategy === 'selective' ? 'append' : this.photoStrategy,
+                    photo_strategy: this.photoStrategy === 'selective' ? 'smart_merge' : this.photoStrategy,
                     supplier_id: {{ imported_product.id }}
                 };
                 if (photoIndices !== null) {
@@ -737,14 +735,29 @@ function enrichApp() {
 
                 const data = await resp.json();
 
-                if (resp.ok && data.success) {
-                    const applied = (data.fields_applied || []).join(', ');
-                    let msg = `Обогащение применено: ${applied || 'без изменений'}`;
+                if (resp.ok && (data.success || data.reconciliation_pending)) {
+                    const applied = (
+                        (data.fields_applied || []).length
+                            ? data.fields_applied
+                            : (data.fields_pending || [])
+                    ).join(', ');
+                    let msg = data.deferred
+                        ? 'Отправка отложена: предыдущая операция WB ещё завершается, новая запись не выполнялась'
+                        : (data.reconciliation_pending
+                            ? `Изменения отправлены и сверяются с WB: ${applied || 'без изменений'}`
+                            : `Live-данные WB сохранены: ${applied || 'без изменений'}`);
                     if (data.photos && data.photos.uploaded) {
                         msg += ` (фото: ${data.photos.uploaded} загружено)`;
                     }
+                    if (data.photos && data.photos.definitely_not_sent) {
+                        msg += ' Выбранные фото не отправлялись; после завершения сверки повторите их применение.';
+                    }
                     this.showToast(true, msg);
-                    this.lastResult = `Обогащено: ${applied}`;
+                    this.lastResult = data.deferred
+                        ? 'Ожидает безопасного повторного планирования'
+                        : (data.reconciliation_pending
+                            ? `Отправлено на WB: ${applied}`
+                            : `Безопасный merge завершён: ${applied || 'без изменений'}`);
 
                     setTimeout(() => {
                         window.location.href = '/products/{{ product.id }}';

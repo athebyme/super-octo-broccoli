@@ -344,8 +344,6 @@ class CardRollbackTestCase(unittest.TestCase):
         self.assertEqual(prepared['dimensions'], {
             'length': 10,
             'width': 5,
-            'height': 5,
-            'weightBrutto': 0.1,
         })
 
         # A retry fetches the normalized full WB object. It must be accepted as
@@ -361,6 +359,64 @@ class CardRollbackTestCase(unittest.TestCase):
         )
         self.assertEqual(retry_fields, {'dimensions'})
         self.assertEqual(retried['dimensions'], prepared['dimensions'])
+
+    def test_absent_dimension_is_not_equal_to_legacy_default(self):
+        from services.card_rollback import classify_wb_card_history_state
+
+        before = {'dimensions': {}}
+        after = {'dimensions': {
+            'length': 10,
+            'width': 10,
+            'height': 5,
+            'weightBrutto': 0.1,
+        }}
+
+        self.assertEqual(
+            classify_wb_card_history_state(
+                {'dimensions': {}}, before, after, ['dimensions'],
+            ),
+            'before',
+        )
+        self.assertEqual(
+            classify_wb_card_history_state(
+                {'dimensions': after['dimensions']},
+                before,
+                after,
+                ['dimensions'],
+            ),
+            'after',
+        )
+
+    def test_characteristic_and_dimension_rollback_keeps_partial_dimensions(self):
+        from services.card_rollback import prepare_wb_card_history_rollback
+
+        current = self._card([
+            {'id': self.MATERIAL_ID, 'value': ['Пластик']},
+        ])
+        current['dimensions'] = {'length': 20, 'width': 5}
+        prepared, fields = prepare_wb_card_history_rollback(
+            current,
+            {
+                'characteristics': [
+                    {'id': self.MATERIAL_ID, 'value': ['Силикон']},
+                ],
+                'dimensions': {'length': 10},
+            },
+            {
+                'characteristics': [
+                    {'id': self.MATERIAL_ID, 'value': ['Пластик']},
+                ],
+                'dimensions': {'length': 20, 'width': 5},
+            },
+            ['characteristics', 'dimensions'],
+            self.SUBJECT_ID,
+        )
+
+        self.assertEqual(fields, {'characteristics', 'dimensions'})
+        self.assertEqual(prepared['dimensions'], {'length': 10})
+        self.assertEqual(
+            self._by_id(prepared)[self.MATERIAL_ID], ['Силикон'],
+        )
 
     def test_retry_is_idempotent_when_wb_is_already_at_before_state(self):
         from services.card_rollback import prepare_wb_card_history_rollback

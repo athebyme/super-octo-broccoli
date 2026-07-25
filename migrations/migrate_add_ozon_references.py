@@ -96,6 +96,7 @@ def apply_migration(
             is_disabled_upstream BOOLEAN NOT NULL DEFAULT 0,
             is_available BOOLEAN NOT NULL DEFAULT 1,
             is_enabled BOOLEAN NOT NULL DEFAULT 0,
+            is_seller_selectable BOOLEAN NOT NULL DEFAULT 1,
             last_seen_at DATETIME,
             attributes_synced_at DATETIME,
             attributes_sync_status VARCHAR(30),
@@ -180,6 +181,20 @@ def apply_migration(
             "ALTER TABLE marketplace_attribute_definitions "
             "ADD COLUMN restriction_value_ids_json TEXT"
         )
+    # ``migrate_add_ozon_references`` runs before the dedicated visibility
+    # migration in both entrypoint and the comprehensive runner.  A legacy
+    # product-types table therefore needs the additive column repair before
+    # this migration creates the selectable index.
+    product_type_columns = _columns(
+        connection,
+        "marketplace_product_types",
+    )
+    if "is_seller_selectable" not in product_type_columns:
+        connection.execute(
+            "ALTER TABLE marketplace_product_types "
+            "ADD COLUMN is_seller_selectable "
+            "BOOLEAN NOT NULL DEFAULT 1"
+        )
 
     statements = (
         "CREATE INDEX IF NOT EXISTS ix_marketplace_reference_accounts_marketplace_id "
@@ -196,6 +211,9 @@ def apply_migration(
         "ON marketplace_product_types(category_id)",
         "CREATE INDEX IF NOT EXISTS idx_marketplace_product_type_enabled "
         "ON marketplace_product_types(marketplace_id, is_enabled, is_available)",
+        "CREATE INDEX IF NOT EXISTS idx_marketplace_product_type_selectable "
+        "ON marketplace_product_types("
+        "marketplace_id, is_seller_selectable, is_available)",
         "CREATE INDEX IF NOT EXISTS ix_marketplace_attribute_definitions_marketplace_id "
         "ON marketplace_attribute_definitions(marketplace_id)",
         "CREATE INDEX IF NOT EXISTS ix_marketplace_attribute_definitions_product_type_id "

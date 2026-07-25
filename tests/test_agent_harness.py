@@ -505,6 +505,27 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
                 for field in expected_fields:
                     self.assertIn(field, plan.steps[0]['params']['fields'])
 
+    def test_card_quality_text_handoff_routes_to_typed_content_writer(self):
+        text = (
+            'Улучши карточки (1 шт.): артикулы 105153536. '
+            'Основные проблемы: Слабый заголовок. '
+            'Исправь наименование и описание. Для наименования убери значение '
+            'отдельного поля производителя, повторы и синонимы, рекламные и '
+            'лишние подробности; подтверждённые детали перенеси в описание. '
+            'Подготовь исправление контента.'
+        )
+
+        plan = build_plan(text, [9741], entity_kind='product')
+
+        self.assertIsNotNone(plan)
+        self.assertEqual(plan.risk, 'write')
+        self.assertEqual(len(plan.steps), 1)
+        self.assertEqual(plan.steps[0]['agent'], 'content-writer')
+        self.assertEqual(
+            plan.steps[0]['params']['fields'],
+            ['title', 'description'],
+        )
+
     def test_named_supplier_content_request_never_becomes_unscoped_seo_plan(self):
         plan = build_plan('улучши описание и название карточек Андрея')
         self.assertIsNone(plan)
@@ -855,6 +876,48 @@ class UnifiedHarnessPlanningTests(unittest.TestCase):
         })])
         changes = result['artifacts'][0]['changes']
         self.assertEqual(set(changes), {'title', 'description'})
+
+    def test_content_writer_rejects_brand_in_generated_wb_title(self):
+        class BrandContentPlatform(_ContentPlatform):
+            def get_products_content_brief(
+                self, seller_id, entity_kind, product_ids,
+            ):
+                brief = super().get_products_content_brief(
+                    seller_id, entity_kind, product_ids,
+                )
+                brief['products'][0]['brand'] = 'Lolitta'
+                return brief
+
+        platform = BrandContentPlatform()
+        skill = object.__new__(DescriptionWriterSkill)
+        skill.llm = _ContentLLM(
+            title='Комплект белья Lolitta из экокожи',
+        )
+        skill.platform = platform
+
+        result = skill.execute_task({
+            'seller_id': 7,
+            'input_data': json.dumps({
+                'product_ids': [9741],
+                'entity_scope': {'kind': 'product', 'ids': [9741]},
+                'params': {
+                    'entity_kind': 'product',
+                    'fields': ['title', 'description'],
+                },
+            }),
+        })
+
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['saved'], 0)
+        self.assertEqual(
+            result['failure_details'][0]['code'],
+            'wb_title_quality_failed',
+        )
+        self.assertIn(
+            'поле «Бренд»', result['failure_details'][0]['error'],
+        )
+        self.assertEqual(platform.checked_items, [])
+        self.assertEqual(platform.saved, [])
 
     def test_content_writer_rejects_incomplete_requested_field_set(self):
         platform = _ContentPlatform()

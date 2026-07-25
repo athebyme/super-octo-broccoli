@@ -39,7 +39,7 @@
         <div>
             <h1 class="ozon-title">Категории и типы Ozon</h1>
             <p class="ozon-meta">
-                {{ total }} типов в выборке · <span x-text="enabledCount">{{ enabled_count }}</span> включено ·
+                {{ total }} типов в выборке · <span x-text="enabledCount">{{ enabled_count }}</span> прогревается заранее ·
                 версия справочника {{ marketplace.categories_version or 0 }} ·
                 {{ sync_labels.get(marketplace.categories_sync_status, 'не синхронизировано') }}
             </p>
@@ -56,8 +56,8 @@
 
     <div class="sh-alert sh-alert--info mb-4" role="note">
         <div class="sh-alert-content">
-            <strong>Категория 18+ называется «Товары для взрослых».</strong>
-            Ozon включает точный тип товара, а не всю ветку: например, «Вибратор», «Аксессуар БДСМ» или «Крем интимный». При первом включении загружается схема атрибутов, это может занять несколько секунд.
+            <strong>Все официально доступные типы уже видны продавцам.</strong>
+            Переключатель ниже нужен только для упреждающего обновления схемы администратором. Без него схема и справочники безопасно загрузятся по требованию после точной привязки типа; весь каталог из тысяч схем одновременно не обходится.
         </div>
     </div>
 
@@ -77,7 +77,7 @@
         <table class="sh-table" style="min-width:980px">
             <thead>
                 <tr>
-                    <th style="width:210px">Использовать</th>
+                    <th style="width:210px">Прогревать заранее</th>
                     <th>Категория</th>
                     <th style="width:27%">Тип товара</th>
                     <th style="width:190px">Схема</th>
@@ -94,9 +94,9 @@
                                        :checked="enabled[{{ item.id }}]"
                                        @change="toggle({{ item.id }}, $event)"
                                        :disabled="busy[{{ item.id }}] || !available[{{ item.id }}]"
-                                       aria-label="Включить тип {{ item.name }}">
+                                       aria-label="Прогревать схему типа {{ item.name }}">
                                 <span class="sh-toggle-track"><span class="sh-toggle-thumb"></span></span>
-                                <span class="sh-toggle-label" x-text="enabled[{{ item.id }}] ? 'Включён' : 'Выключен'"></span>
+                                <span class="sh-toggle-label" x-text="enabled[{{ item.id }}] ? 'Прогревается' : 'По требованию'"></span>
                             </label>
                             <span class="ozon-toggle-state" x-show="busy[{{ item.id }}]" x-cloak>Загружаем схему…</span>
                             <span class="ozon-toggle-error" x-show="errors[{{ item.id }}]" x-text="errors[{{ item.id }}]" x-cloak></span>
@@ -184,7 +184,7 @@ function ozonTypesManager() {
                 this.enabled[id] = saved;
                 event.target.checked = saved;
                 if (previous !== saved) this.enabledCount += saved ? 1 : -1;
-                this.toast('success', data.synced ? `Тип включён, схема обновлена: ${data.attributes_count} атрибутов` : 'Настройка типа сохранена');
+                this.toast('success', data.synced ? `Прогрев включён, схема обновлена: ${data.attributes_count} атрибутов` : 'Режим прогрева сохранён');
             } catch (error) {
                 this.enabled[id] = previous;
                 event.target.checked = previous;

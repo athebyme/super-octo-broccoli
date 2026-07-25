@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+
+{% block title %}Карточка товара · Каталог маркетплейсов — Seller Hub{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css') }}">
+
+<script type="application/json" id="mdet-bootstrap">{{ {
+    'listingId': listing_id,
+    'members': members,
+    'ozonEnabled': ozon_enabled,
+    'urls': {
+        'base': url_for('marketplace_listings.index'),
+        'catalog': url_for('marketplace_listings.beta'),
+        'myProducts': url_for('seller_my_products'),
+    },
+} | tojson }}</script>
+
+<div id="marketplace-detail-app" v-cloak>
+{% raw %}
+    <div class="mdet-top">
+        <a class="mdet-back" :href="urls.catalog">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+            Каталог
+        </a>
+        <nav class="sh-channel-bar" v-if="members.length > 1" aria-label="Каналы товара">
+            <button v-for="m in members" :key="m.id" type="button" class="sh-channel-tab"
+                    :class="{'sh-channel-tab--active': m.id === listingId}"
+                    @click="switchMember(m)">
+                <span class="sh-mp-dot" :class="'sh-mp-dot--' + (m.marketplace_code || 'wb')"></span>
+                {{ memberLabel(m) }}
+            </button>
+        </nav>
+        <a class="sh-btn sh-btn--secondary mdet-classic" :href="urls.base + listingId">Классическая версия</a>
+    </div>
+
+    <div v-if="error" class="mcat-error" role="alert">
+        <span>{{ error }}</span>
+        <button type="button" class="sh-btn sh-btn--secondary" @click="load">Повторить</button>
+    </div>
+
+    <div v-else-if="loading && !listing" class="mdet-grid" aria-hidden="true">
+        <div class="mdet-gallery"><div class="mdet-hero sh-skeleton"></div></div>
+        <div class="mdet-info">
+            <div class="sh-skeleton sh-skeleton--title"></div>
+            <div class="sh-skeleton sh-skeleton--line-70"></div>
+            <div class="sh-skeleton sh-skeleton--line-50"></div>
+        </div>
+    </div>
+
+    <template v-else-if="listing">
+        <div class="mdet-grid">
+            <div class="mdet-gallery">
+                <div class="mdet-hero">
+                    <img v-if="heroSrc" :src="heroSrc" alt="" @error="imageFailed(heroSrc)">
+                    <div v-else class="mcat-fallback" :class="'mcat-fallback--' + (listing.marketplace_code || 'wb')">
+                        <span>{{ letterOf(listing) }}</span>
+                    </div>
+                    <span v-if="discount" class="mcat-disc mdet-disc">−{{ discount }}%</span>
+                </div>
+                <div class="mcat-gallery" v-if="gallery.length > 1">
+                    <button v-for="(url, gi) in gallery" :key="gi" type="button"
+                            class="mcat-gal-thumb" :class="{'is-active': heroSrc === url}"
+                            @click="heroOverride = url" :aria-label="'Фото ' + (gi + 1)">
+                        <img :src="url" loading="lazy" alt="" @error="imageFailed(url)">
+                    </button>
+                </div>
+            </div>
+
+            <div class="mdet-info">
+                <p class="mdet-mp-line">
+                    <i class="mcat-dot" :class="'mcat-dot--' + (listing.marketplace_code || 'wb')" aria-hidden="true"></i>
+                    <span>{{ channelFull(listing) }}</span>
+                    <span class="mcat-mono mdet-offer">{{ listing.offer_id }}</span>
+                </p>
+                <h1 class="mdet-title">{{ listing.title || 'Без названия' }}</h1>
+                <div class="mdet-badges">
+                    <span class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + statusMeta(listing).tone">{{ statusMeta(listing).label }}</span>
+                    <span v-if="!listing.is_available" class="mcat-badge mcat-badge--flat mcat-badge--warn">не найден при последней синхронизации</span>
+                    <span v-if="visibilityBadge" class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + visibilityBadge.tone"
+                          :title="visibilityBadge.hint || listing.visibility">{{ visibilityBadge.label }}</span>
+                    <span v-if="providerBadge" class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + providerBadge.tone"
+                          :title="listing.provider_status">{{ providerBadge.label }}</span>
+                </div>
+
+                <div class="mdet-price-card">
+                    <div class="mdet-price-main">
+                        <span class="mdet-price">{{ priceOf(listing) }}</span>
+                        <s v-if="oldPrice" class="mdet-oldprice">{{ oldPrice }}</s>
+                    </div>
+                    <div class="mdet-price-sub">
+                        <span v-if="minPrice">мин. цена {{ minPrice }}</span>
+                        <span :class="{'mcat-td-zero': stockN === 0}">
+                            {{ stockLabel }}
+                        </span>
+                        <span v-for="row in stockRows" :key="row.label" class="mdet-stock-type">{{ row.label }} {{ row.value }}</span>
+                    </div>
+                </div>
+
+                <div class="mdet-actions">
+                    <a v-if="wbPublicUrl" class="sh-btn sh-btn--primary" :href="wbPublicUrl" target="_blank" rel="noopener">
+                        Открыть на Wildberries
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="mdet-ext"><path d="M7 17 17 7M9 7h8v8"/></svg>
+                    </a>
+                    <button v-if="listing.link_status !== 'linked'" type="button"
+                            class="sh-btn sh-btn--secondary" :disabled="acting"
+                            @click="reconcileLink"
+                            title="Поискать точное совпадение с общей внутренней карточкой">
+                        Найти совпадение
+                    </button>
+                    <button v-if="listing.link_status === 'linked'" type="button"
+                            class="sh-btn sh-btn--secondary" :disabled="acting"
+                            @click="unlink"
+                            title="Убрать связь с общей внутренней карточкой">
+                        Отвязать связь
+                    </button>
+                    <a class="sh-btn sh-btn--secondary" :href="urls.base + listingId + '#canonical-product-title'"
+                       title="Ручной выбор внутренней карточки — в классической версии">Выбрать вручную</a>
+                </div>
+                <p v-if="actionMessage" class="mdet-actionmsg" :class="{'is-error': actionError}">{{ actionMessage }}</p>
+            </div>
+        </div>
+
+        <section class="mdet-sect mdet-sect--danger" v-if="moderationErrors.length">
+            <h3>Ошибки модерации площадки</h3>
+            <ul class="mcat-errlist">
+                <li v-for="(err, idx) in moderationErrors" :key="idx">{{ err }}</li>
+            </ul>
+        </section>
+
+        <div class="mdet-cols" :class="{'mdet-cols--single': !hasContentColumn}">
+            <div v-if="hasContentColumn">
+                <section class="mdet-sect" v-if="listing.description || barcodes.length || listing.external_category_id">
+                    <h3>Контент</h3>
+                    <p v-if="listing.description" class="mdet-desc" :class="{'is-open': descOpen}">{{ listing.description }}</p>
+                    <button v-if="listing.description && listing.description.length > 220" type="button"
+                            class="mdet-desc-toggle" @click="descOpen = !descOpen">
+                        {{ descOpen ? 'Свернуть' : 'Показать полностью' }}
+                    </button>
+                    <div class="mcat-kv mdet-kv">
+                        <div v-if="barcodes.length"><dt>Штрихкоды</dt><dd class="mcat-mono">{{ barcodes.join(', ') }}</dd></div>
+                        <div v-if="listing.primary_sku"><dt>SKU</dt><dd class="mcat-mono">{{ listing.primary_sku }}</dd></div>
+                        <div><dt>ID товара площадки</dt><dd class="mcat-mono">{{ listing.external_product_id }}</dd></div>
+                        <div v-if="listing.external_category_id"><dt>Категория площадки</dt><dd class="mcat-mono">{{ listing.external_category_id }}</dd></div>
+                    </div>
+                </section>
+
+                <section class="mdet-sect" v-if="characteristics.length || dimensionsText">
+                    <h3>Характеристики</h3>
+                    <div class="mdet-char-list">
+                        <div v-if="dimensionsText" class="mdet-char">
+                            <dt>Габариты упаковки</dt>
+                            <dd>{{ dimensionsText }}</dd>
+                        </div>
+                        <div v-for="row in visibleCharacteristics" :key="row.id" class="mdet-char">
+                            <dt :class="{'mcat-mono': !row.named}" :title="'Атрибут ' + row.id">{{ row.name }}</dt>
+                            <dd>{{ row.value }}</dd>
+                        </div>
+                    </div>
+                    <button v-if="characteristics.length > 10" type="button"
+                            class="mdet-desc-toggle" @click="charsOpen = !charsOpen">
+                        {{ charsOpen ? 'Свернуть' : 'Все характеристики (' + characteristics.length + ')' }}
+                    </button>
+
+                    <template v-if="complexCharacteristics.length">
+                        <h4>Комплектация и наборы</h4>
+                        <div v-for="group in complexCharacteristics" :key="group.key" class="mdet-complex">
+                            <div v-for="row in group.rows" :key="row.id" class="mdet-char">
+                                <dt :class="{'mcat-mono': !row.named}">{{ row.name }}</dt>
+                                <dd>{{ row.value }}</dd>
+                            </div>
+                        </div>
+                    </template>
+                </section>
+            </div>
+
+            <div>
+                <section class="mdet-sect">
+                    <h3>Связь с общей карточкой</h3>
+                    <p class="mcat-linkline">
+                        <span class="mcat-link" :class="'mcat-link--' + listing.link_status">{{ linkLabel(listing) }}</span>
+                        <span v-if="listing.link_source" class="mcat-muted"> · {{ linkSourceLabel(listing.link_source) }}</span>
+                    </p>
+                    <a v-if="canonical" class="mlink-card"
+                       :href="urls.myProducts + '/' + canonical.id + '/wb-preview'"
+                       title="Открыть внутреннюю карточку в «Моих товарах»">
+                        <span class="mlink-thumb">
+                            <img v-if="heroSrc" :src="heroSrc" alt="" @error="imageFailed(heroSrc)">
+                            <span v-else class="mlink-letter">{{ letterOf(listing) }}</span>
+                        </span>
+                        <span class="mlink-body">
+                            <span class="mlink-kind">Внутренняя карточка · #{{ canonical.id }}</span>
+                            <span class="mlink-title">{{ canonical.title || listing.title || 'Без названия' }}</span>
+                            <span v-if="canonical.external_vendor_code" class="mlink-sub mcat-mono">{{ canonical.external_vendor_code }}</span>
+                        </span>
+                        <svg class="mlink-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                    </a>
+                    <p v-else-if="listing.link_status !== 'linked'" class="mcat-muted mdet-linkhint">
+                        Внутренняя карточка не привязана. «Найти совпадение» ищет точное совпадение
+                        автоматически, ручной выбор — в классической версии.
+                    </p>
+                    <template v-if="otherMembers.length">
+                        <h4>Этот товар на других каналах</h4>
+                        <a v-for="m in otherMembers" :key="m.id" class="mlink-card"
+                           :href="urls.base + 'beta/' + m.id">
+                            <span class="mlink-thumb">
+                                <img v-if="m.primary_image && !imgFailed[m.primary_image]"
+                                     :src="m.primary_image" loading="lazy" alt=""
+                                     @error="imageFailed(m.primary_image)">
+                                <span v-else class="mlink-letter">{{ (m.title || '·')[0].toUpperCase() }}</span>
+                            </span>
+                            <span class="mlink-body">
+                                <span class="mlink-kind">
+                                    <i class="mcat-dot" :class="'mcat-dot--' + (m.marketplace_code || 'wb')" aria-hidden="true"></i>
+                                    {{ memberLabel(m) }}
+                                </span>
+                                <span class="mlink-title">{{ m.title || 'Без названия' }}</span>
+                                <span class="mlink-sub">
+                                    <span class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + statusMeta(m).tone">{{ statusMeta(m).label }}</span>
+                                </span>
+                            </span>
+                            <svg class="mlink-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+                        </a>
+                    </template>
+                </section>
+
+                <section class="mdet-sect">
+                    <h3>Состояние площадки и синхронизация</h3>
+                    <div class="mcat-kv mdet-kv">
+                        <div v-if="providerMeta"><dt>Обработка площадкой</dt>
+                            <dd :title="listing.provider_status"><span class="mcat-link" :class="'mcat-tone--' + providerMeta.tone">{{ providerMeta.label }}</span></dd></div>
+                        <div v-if="visibilityMeta"><dt>Витрина</dt>
+                            <dd :title="visibilityMeta.hint || listing.visibility"><span class="mcat-link" :class="'mcat-tone--' + visibilityMeta.tone">{{ visibilityMeta.label }}</span></dd></div>
+                        <div><dt>Виден в каталоге</dt><dd>{{ relTime(listing.last_seen_at) }}</dd></div>
+                        <div><dt>Контент</dt><dd>{{ relTime(listing.info_synced_at) }}</dd></div>
+                        <div><dt>Цены</dt><dd>{{ relTime(listing.prices_synced_at) }}</dd></div>
+                        <div><dt>Остатки</dt><dd>{{ relTime(listing.stocks_synced_at) }}</dd></div>
+                    </div>
+                    <div v-if="warehouseStocks.length" class="mdet-wh">
+                        <h4>Остатки по складам (FBS)</h4>
+                        <div class="mdet-wh-row" v-for="row in warehouseStocks" :key="row.id || row.warehouse_id">
+                            <span class="mdet-wh-name">{{ row.warehouse_name || ('Склад ' + row.warehouse_id) }}</span>
+                            <span class="mdet-wh-num">{{ row.free_stock }} шт</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </template>
+{% endraw %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+<script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}"></script>
+<script src="{{ url_for('static', filename='marketplace-detail-beta.js') }}"></script>
+{% endblock %}

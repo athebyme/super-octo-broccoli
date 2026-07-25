@@ -3,21 +3,23 @@
 import json
 import logging
 import threading
-from datetime import datetime as _dt
 
 from flask import render_template, request, redirect, url_for, flash, jsonify, current_app
 from flask_login import login_required, current_user
 
 from models import (db, Product, ImportedProduct, Supplier, CardRatingHistory,
-                    BulkEditHistory, CardEditHistory)
+                    CardEditHistory)
 from models import get_standard_media, get_min_photos
 from services.card_quality_scorer import (card_quality_detail, compute_quality_summary,
                                           score_status, ATTENTION_REASONS)
 from services.wb_api_client import WildberriesAPIClient
-from services.card_improver import (ALLOWED_FIELDS, apply_card_updates,
-                                     apply_card_updates_bulk,
-                                     collect_weak_dimensions, build_proposal_from_tasks)
-from services.supplier_enrichment import get_enrichment_service
+from services.card_improver import (collect_weak_dimensions,
+                                     build_proposal_from_tasks)
+from services.supplier_enrichment import (
+    ALLOWED_ENRICHMENT_FIELDS,
+    EnrichmentJobAlreadyActive,
+    get_enrichment_service,
+)
 from services.standard_photos import compose_card_photo_urls
 
 logger = logging.getLogger('card_quality')
@@ -114,6 +116,13 @@ def _list_item(product) -> dict:
         'wb_product_rating': product.nm_rating,
         'wb_feedback_rating': product.wb_feedback_rating,
         'first_photo_url': _first_photo_url(product),
+        # Коммерческий контекст: без него нельзя решить, стоит ли вкладываться
+        # в карточку — трафик есть, а заказов нет, или её вообще нет в наличии.
+        'price': float(product.discount_price or product.price or 0) or None,
+        'quantity': product.quantity,
+        'views_30d': product.wb_views_30d,
+        'orders_30d': product.wb_orders_30d,
+        'order_conv': product.wb_order_conv,
     }
 
 
@@ -218,6 +227,17 @@ def _collect_bulk_candidates(seller_id: int, limit: int = BULK_IMPROVE_LIMIT,
 def register_card_quality_routes(app):
     """Регистрация роутов качества карточек."""
 
+    @app.route('/card-quality/beta')
+    @login_required
+    def card_quality_beta_page():
+        """Пересобранная очередь качества: приоритет по трафику и деньгам."""
+        if not current_user.seller:
+            return render_template('card_quality_beta.html', wb_connected=False)
+        return render_template(
+            'card_quality_beta.html',
+            wb_connected=bool(current_user.seller.has_valid_api_key()),
+        )
+
     @app.route('/card-quality')
     @login_required
     def card_quality_page():
@@ -279,6 +299,8 @@ def register_card_quality_routes(app):
                 Product.id, Product.nm_id, Product.vendor_code, Product.title,
                 Product.quality_score, Product.attention_reasons, Product.quality_impact,
                 Product.nm_rating, Product.wb_feedback_rating, Product.photos_json,
+                Product.price, Product.discount_price, Product.quantity,
+                Product.wb_views_30d, Product.wb_orders_30d, Product.wb_order_conv,
             )).order_by(ordered, Product.id.asc())
             pagination = q.paginate(page=page, per_page=per_page, error_out=False)
             items = [_list_item(p) for p in pagination.items]
@@ -396,6 +418,17 @@ def register_card_quality_routes(app):
         try:
             task_results = []
             proposal = build_proposal_from_tasks(product, task_results)
+            es = get_enrichment_service()
+            imp = es.find_supplier_data(product, current_user.seller.id)
+            if imp is None:
+                return jsonify({
+                    'success': False,
+                    'code': 'supplier_source_unavailable',
+                    'error': (
+                        'Для карточки нет однозначных seller-scoped данных '
+                        'поставщика'
+                    ),
+                }), 409
 
             # Предложение стандартных фото: compose собственных URL + глобальное медиа продавца
             try:
@@ -423,8 +456,6 @@ def register_card_quality_routes(app):
                 logger.warning('standard-photos proposal skipped: %s', _e)
 
             supplier_diff = None
-            es = get_enrichment_service()
-            imp = es.find_supplier_data(product, current_user.seller.id)
             if imp:
                 supplier_diff = es.build_preview(product, imp)
 
@@ -442,28 +473,74 @@ def register_card_quality_routes(app):
         if not product:
             return jsonify({'error': 'Карточка не найдена'}), 404
 
-        body = request.get_json(silent=True) or {}
-        raw_updates = body.get('updates') or {}
-        updates = {k: v for k, v in raw_updates.items() if k in ALLOWED_FIELDS}
-        if not updates:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({'error': 'JSON body must be an object'}), 400
+        raw_fields = body.get('fields')
+        raw_updates = body.get('updates')
+        if raw_fields is None:
+            if not isinstance(raw_updates, dict):
+                return jsonify({'error': 'updates must be an object'}), 400
+            raw_fields = list(raw_updates)
+        if (
+            not isinstance(raw_fields, list)
+            or not raw_fields
+            or len(raw_fields) > len(ALLOWED_ENRICHMENT_FIELDS)
+            or any(
+                not isinstance(field, str)
+                or field not in ALLOWED_ENRICHMENT_FIELDS
+                for field in raw_fields
+            )
+            or len(set(raw_fields)) != len(raw_fields)
+        ):
             return jsonify({'error': 'Нет допустимых полей для применения'}), 400
+        fields = list(raw_fields)
 
+        service = get_enrichment_service()
+        imported = service.find_supplier_data(
+            product, current_user.seller.id,
+        )
+        if imported is None:
+            return jsonify({
+                'error': 'Для карточки нет seller-scoped данных поставщика',
+            }), 409
+
+        wb_client = None
         try:
             wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
-            res = apply_card_updates(product, updates, current_user.seller, wb_client,
-                                     source='card-quality')
-            status = 200 if res.get('success') else 422
+            old_quality = product.quality_score
+            res = service.apply_enrichment(
+                product,
+                imported,
+                fields,
+                'smart_merge',
+                current_user.seller,
+                wb_client,
+            )
+            if res.get('reconciliation_pending') or res.get('deferred'):
+                status = 202
+            else:
+                status = 200 if res.get('success') else 422
             return jsonify({
                 'success': res.get('success', False),
                 'fields_applied': res.get('fields_applied', []),
-                'old_quality': res.get('old_quality'),
-                'new_quality': res.get('new_quality'),
+                'fields_pending': res.get('fields_pending', []),
+                'old_quality': old_quality,
+                'new_quality': product.quality_score,
                 'wb_sync': res.get('wb_sync', False),
+                'wb_confirmed': res.get('wb_confirmed', False),
+                'reconciliation_pending': res.get(
+                    'reconciliation_pending', False,
+                ),
                 'error': res.get('error'),
             }), status
         except Exception as e:
             logger.exception('Ошибка в api_card_quality_apply: %s', e)
             return jsonify({'error': 'Внутренняя ошибка'}), 500
+        finally:
+            close = getattr(wb_client, 'close', None)
+            if callable(close):
+                close()
 
     @app.route('/card-quality/bulk-improve', methods=['GET'])
     @login_required
@@ -489,83 +566,76 @@ def register_card_quality_routes(app):
         if action == 'reject':
             flash('Массовое улучшение отклонено', 'info')
             return redirect(url_for('card_quality_page'))
+        if action != 'confirm':
+            return jsonify({'error': 'Unsupported action'}), 400
 
         # Карта product_id -> список выбранных полей
         selections = {}
+        allowed_bulk_fields = ALLOWED_ENRICHMENT_FIELDS - {'photos'}
         for key in request.form:
             if key.startswith('apply_'):
                 # apply_<pid>_<field>
                 parts = key.split('_', 2)
                 if len(parts) == 3:
                     _, pid, field = parts
-                    try:
-                        selections.setdefault(int(pid), []).append(field)
-                    except ValueError:
-                        pass
+                    if (
+                        not pid.isdigit()
+                        or pid.startswith('0')
+                        or field not in allowed_bulk_fields
+                    ):
+                        return jsonify({'error': 'Invalid bulk selection'}), 400
+                    product_id = int(pid)
+                    item_fields = selections.setdefault(product_id, [])
+                    if field in item_fields:
+                        return jsonify({'error': 'Duplicate bulk selection'}), 400
+                    item_fields.append(field)
 
         if not selections:
             flash('Не выбрано ни одного изменения', 'warning')
             return redirect(url_for('card_quality_bulk_improve_page'))
+        if len(selections) > BULK_IMPROVE_LIMIT:
+            return jsonify({'error': 'Too many selected products'}), 400
 
-        bulk = BulkEditHistory(
-            seller_id=current_user.seller.id,
-            operation_type='card_quality_bulk_improve',
-            operation_params={'product_ids': list(selections.keys())},
-            description=f'Массовое улучшение {len(selections)} карточек',
-            total_products=len(selections),
-            status='in_progress',
+        product_ids = list(selections)
+        owned_ids = {
+            row.id for row in Product.query.filter(
+                Product.seller_id == current_user.seller.id,
+                Product.id.in_(product_ids),
+            ).all()
+        }
+        if owned_ids != set(product_ids):
+            return jsonify({
+                'error': 'Some selected products are unavailable',
+            }), 409
+
+        ordered_fields = [
+            field for field in (
+                'title', 'brand', 'description',
+                'characteristics', 'dimensions',
+            )
+            if any(
+                field in item_fields
+                for item_fields in selections.values()
+            )
+        ]
+        service = get_enrichment_service()
+        try:
+            job_id = service.start_bulk_enrichment(
+                product_ids,
+                ordered_fields,
+                'smart_merge',
+                current_user.seller,
+                fields_by_product=selections,
+            )
+        except EnrichmentJobAlreadyActive as exc:
+            flash(str(exc), 'warning')
+            return redirect(url_for('card_quality_page'))
+
+        flash(
+            f'Безопасное улучшение {len(product_ids)} карточек поставлено '
+            f'в очередь (задача {job_id[:8]})',
+            'success',
         )
-        db.session.add(bulk)
-        db.session.commit()
-
-        wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
-        es = get_enrichment_service()
-        success, errors = 0, 0
-        # Собираем обновления по карточкам, применяем ОДНИМ батчем cards/update
-        # (лимит WB — 10 запросов/мин, до 3000 карточек в запросе)
-        items = []
-        for pid, fields in selections.items():
-            product = Product.query.filter_by(id=pid, seller_id=current_user.seller.id).first()
-            if not product:
-                errors += 1
-                continue
-            updates = {}
-            imp = es.find_supplier_data(product, current_user.seller.id)
-            if imp:
-                preview = es.build_preview(product, imp)
-                if 'title' in fields and preview.get('title', {}).get('supplier'):
-                    updates['title'] = preview['title']['supplier']
-                if 'brand' in fields and preview.get('brand', {}).get('supplier'):
-                    updates['brand'] = preview['brand']['supplier']
-                if 'description' in fields and preview.get('description', {}).get('supplier'):
-                    updates['description'] = preview['description']['supplier']
-                if 'dimensions' in fields and preview.get('dimensions', {}).get('supplier'):
-                    updates['dimensions'] = preview['dimensions']['supplier']
-            if not updates:
-                continue
-            items.append((product, updates))
-
-        if items:
-            try:
-                results = apply_card_updates_bulk(items, current_user.seller, wb_client,
-                                                  source='card-quality-bulk')
-                for res in results.values():
-                    if res.get('success'):
-                        success += 1
-                    else:
-                        errors += 1
-            except Exception as e:
-                logger.exception('bulk improve batch: %s', e)
-                errors += len(items)
-
-        bulk.success_count = success
-        bulk.error_count = errors
-        bulk.status = 'completed'
-        bulk.wb_synced = success > 0
-        bulk.completed_at = _dt.utcnow()
-        db.session.commit()
-
-        flash(f'Улучшено карточек: {success}, ошибок: {errors}', 'success' if success else 'warning')
         return redirect(url_for('card_quality_page'))
 
     @app.route('/card-quality/standard-photos-bulk', methods=['GET'])
@@ -615,82 +685,57 @@ def register_card_quality_routes(app):
         if action == 'reject':
             flash('Дополнение фото отклонено', 'info')
             return redirect(url_for('card_quality_page'))
+        if action != 'confirm':
+            return jsonify({'error': 'Unsupported action'}), 400
 
         # Получаем выбранные product_id из чекбоксов
         selected_ids = []
         for key in request.form:
             if key.startswith('product_'):
                 try:
-                    pid = int(key[len('product_'):])
+                    raw_id = key[len('product_'):]
+                    if not raw_id.isdigit() or raw_id.startswith('0'):
+                        raise ValueError
+                    pid = int(raw_id)
+                    if pid in selected_ids:
+                        raise ValueError
                     selected_ids.append(pid)
                 except ValueError:
-                    pass
+                    return jsonify({'error': 'Invalid product selection'}), 400
 
         if not selected_ids:
             flash('Не выбрано ни одной карточки', 'warning')
             return redirect(url_for('card_quality_standard_photos_bulk_page'))
 
-        # Полное число sparse-карточек (M) приходит из формы; падаем на N, если нет
+        if len(selected_ids) > STANDARD_PHOTOS_BULK_LIMIT:
+            return jsonify({'error': 'Too many selected products'}), 400
+        owned_ids = {
+            row.id for row in Product.query.filter(
+                Product.seller_id == current_user.seller.id,
+                Product.id.in_(selected_ids),
+            ).all()
+        }
+        if owned_ids != set(selected_ids):
+            return jsonify({
+                'error': 'Some selected products are unavailable',
+            }), 409
+
+        service = get_enrichment_service()
         try:
-            total_m = int(request.form.get('total_m', len(selected_ids)))
-        except (ValueError, TypeError):
-            total_m = len(selected_ids)
-
-        bulk = BulkEditHistory(
-            seller_id=current_user.seller.id,
-            operation_type='standard_photos_bulk',
-            operation_params={'product_ids': selected_ids},
-            description=f'Дополнение стандартных фото: {len(selected_ids)} карточек',
-            total_products=len(selected_ids),
-            status='in_progress',
-        )
-        db.session.add(bulk)
-        db.session.commit()
-
-        wb_client = WildberriesAPIClient(current_user.seller.wb_api_key)
-        min_photos = get_min_photos(current_user.seller.id)
-        success, errors = 0, 0
-
-        for pid in selected_ids:
-            product = Product.query.filter_by(id=pid, seller_id=current_user.seller.id).first()
-            if not product:
-                errors += 1
-                continue
-            try:
-                own = json.loads(product.photos_json) if product.photos_json else []
-            except (ValueError, TypeError):
-                own = []
-            from services.wb_media import normalize_photo_urls
-            own = normalize_photo_urls(product.nm_id, own)
-            media = get_standard_media(current_user.seller.id, product.subject_id)
-            composed = compose_card_photo_urls(own, media, current_user.seller.id, min_photos)
-            if not composed:
-                errors += 1
-                continue
-            try:
-                res = apply_card_updates(
-                    product, {'photos': composed}, current_user.seller, wb_client,
-                    source='standard-photos-bulk'
-                )
-                if res.get('success'):
-                    success += 1
-                else:
-                    errors += 1
-            except Exception as e:
-                logger.exception('standard-photos-bulk pid=%s: %s', pid, e)
-                errors += 1
-
-        bulk.success_count = success
-        bulk.error_count = errors
-        bulk.status = 'completed'
-        bulk.wb_synced = success > 0
-        bulk.completed_at = _dt.utcnow()
-        db.session.commit()
+            job_id = service.start_bulk_enrichment(
+                selected_ids,
+                ['photos'],
+                'smart_merge',
+                current_user.seller,
+            )
+        except EnrichmentJobAlreadyActive as exc:
+            flash(str(exc), 'warning')
+            return redirect(url_for('card_quality_page'))
 
         flash(
-            f'Дополнено фото: {success}, ошибок: {errors} '
-            f'(выбрано {len(selected_ids)} из {total_m} слабых)',
-            'success' if success else 'warning'
+            f'Безопасное дополнение фото для {len(selected_ids)} карточек '
+            f'поставлено в очередь (задача {job_id[:8]})',
+            'success',
         )
         return redirect(url_for('card_quality_page'))
 
@@ -714,7 +759,18 @@ def register_card_quality_routes(app):
                     'changed_fields': row.changed_fields or [],
                     'wb_synced': row.wb_synced,
                     'wb_sync_status': row.wb_sync_status,
+                    'wb_reconcile_attempts': row.wb_reconcile_attempts or 0,
+                    'wb_reconcile_code': row.wb_reconcile_code,
+                    'wb_reconcile_due_at': (
+                        row.wb_reconcile_due_at.isoformat()
+                        if row.wb_reconcile_due_at else None
+                    ),
+                    'wb_reconciled_at': (
+                        row.wb_reconciled_at.isoformat()
+                        if row.wb_reconciled_at else None
+                    ),
                     'user_comment': row.user_comment,
+                    'merge_decisions': row.merge_decisions or {},
                     'changes': {
                         field: {k: v for k, v in fld.items() if k not in ('before_raw', 'after_raw')}
                         for field, fld in (row.get_changes_summary() or {}).items()

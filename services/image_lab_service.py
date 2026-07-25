@@ -2059,6 +2059,7 @@ def download_public_image(
     url: str,
     max_bytes: int = 20 * 1024 * 1024,
     timeout: Tuple[float, float] = (8.0, 30.0),
+    deadline: Optional[float] = None,
 ) -> bytes:
     """Download a bounded public image, preserving domain-scoped redirect cookies."""
     current_url = url
@@ -2066,11 +2067,22 @@ def download_public_image(
     session = requests.Session()
     try:
         for _ in range(6):
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ImageLabError("Истекло время подготовки исходного фото")
             _assert_public_http_url(current_url)
+            request_timeout = timeout
+            if remaining is not None:
+                request_timeout = (
+                    max(0.25, min(timeout[0], remaining)),
+                    max(0.25, min(timeout[1], remaining)),
+                )
             response = session.get(
                 current_url,
                 headers={"User-Agent": "SellerHub-ImageLab/1.0", "Accept": "image/*"},
-                timeout=timeout,
+                timeout=request_timeout,
                 allow_redirects=False,
                 stream=True,
             )
@@ -2089,6 +2101,10 @@ def download_public_image(
                 html_size = 0
                 try:
                     for chunk in response.iter_content(4096):
+                        if deadline is not None and time.monotonic() >= deadline:
+                            raise ImageLabError(
+                                "Истекло время подготовки исходного фото"
+                            )
                         html_size += len(chunk)
                         if html_size > 64 * 1024:
                             raise ImageLabError("HTML redirect исходного фото слишком большой")
@@ -2116,6 +2132,10 @@ def download_public_image(
         size = 0
         try:
             for chunk in response.iter_content(64 * 1024):
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise ImageLabError(
+                        "Истекло время подготовки исходного фото"
+                    )
                 size += len(chunk)
                 if size > max_bytes:
                     raise ImageLabError("Исходное фото больше 20 МБ")

@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+
+{% block title %}Итог синхронизации Ozon — Seller Hub{% endblock %}
+
+{% block extra_head %}
+{% if run.status == 'running' %}<meta http-equiv="refresh" content="15">{% endif %}
+{% endblock %}
+
+{% block content %}
+{% set summary = run.summary %}
+{% set status_labels = {
+    'preparing': 'Подготавливаем',
+    'preparing_media': 'Проверяем фото',
+    'waiting_reference': 'Загружаем справочник',
+    'queued': 'В очереди',
+    'submitting': 'Отправляем', 'submitted': 'Ozon принял задачу',
+    'checking': 'Проверяем результат', 'uncertain': 'Нужна сверка',
+    'already_current': 'Уже актуальна',
+    'already_published': 'Уже на Ozon',
+    'needs_input': 'Нужно заполнить',
+    'ready_to_retry': 'Готова к повтору',
+    'excluded': 'Исключена из повтора',
+    'failed': 'Ozon не принял', 'cancelled': 'Остановлено'
+} %}
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
+        <div>
+            <h1 class="sh-page-title">
+                {% if summary.outcome == 'running' %}Синхронизация карточек выполняется
+                {% elif summary.outcome == 'success' %}Карточки синхронизированы
+                {% elif summary.outcome == 'partial' %}Синхронизация завершена частично
+                {% else %}Карточки требуют внимания{% endif %}
+            </h1>
+            <p class="sh-page-subtitle">{{ run.account_label or ('Кабинет #' ~ run.account_id) }} · результат сохранён и обновляется автоматически.</p>
+        </div>
+        <div class="sh-page-actions">
+            {% if summary.ready_to_retry or summary.needs_input or summary.failed %}
+            <form method="post" action="{{ url_for('ozon_bulk_uploads.retry', job_uid=run.job_uid) }}"
+                  onsubmit="return confirm('Создать новый запуск только для готовых и явно исправляемых карточек? Перед отправкой они ещё раз пройдут полную локальную проверку. Неопределённые и исключённые операции не повторяются.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="confirm_write" value="1">
+                <button class="sh-btn sh-btn--white-outline sh-btn--md" type="submit">
+                    {{ 'Повторить готовые' if summary.ready_to_retry else 'Повторить проблемные' }}
+                </button>
+            </form>
+            {% endif %}
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index') }}">Все загрузки</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('seller_my_products') }}">Мои товары</a>
+        </div>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    <section class="sh-card p-5">
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-10">
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Всего</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--text)">{{ summary.total or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Создано</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--ok)">{{ summary.created or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Обновлено</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--ok)">{{ summary.updated or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Уже актуальны</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--ok)">{{ (summary.already_current or 0) + (summary.already_published or 0) }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">В работе</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--info)">{{ (summary.active or 0) - (summary.uncertain_active or 0) }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Нужно заполнить</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--warn)">{{ summary.needs_input or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Готово к повтору</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--ok)">{{ summary.ready_to_retry or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Исключено</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--text-muted)">{{ summary.excluded or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Ошибки</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--danger)">{{ summary.failed or 0 }}</div>
+            </div>
+            <div>
+                <div class="text-xs" style="color:var(--text-muted)">Неясный итог</div>
+                <div class="mt-1 text-2xl font-semibold" style="color:var(--warn)">{{ summary.uncertain or 0 }}</div>
+                {% if summary.uncertain_stopped %}<div class="text-xs" style="color:var(--text-muted)">сверка остановлена: {{ summary.uncertain_stopped }}</div>{% endif %}
+            </div>
+        </div>
+        {% set progress = ((summary.processed or 0) * 100 / (summary.total or 1)) | round(0, 'floor') %}
+        <div class="mt-5 h-2 overflow-hidden rounded-full" style="background:var(--bg-hover)">
+            <div class="h-full rounded-full" style="width:{{ progress }}%;background:var(--accent)"></div>
+        </div>
+        <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs" style="color:var(--text-muted)">
+            <span>Обработано {{ summary.processed or 0 }} из {{ summary.total or 0 }}</span>
+            {% if run.status == 'running' %}<span>Страница обновится через 15 секунд</span>{% endif %}
+        </div>
+    </section>
+
+    {% set mapping_preflight = run.category_mapping_preflight %}
+    {% if mapping_preflight and ((mapping_preflight.created or 0) + (mapping_preflight.refreshed or 0)) %}
+    <div class="sh-alert sh-alert--success mt-5" role="status">
+        <div class="sh-alert-content">
+            <strong>Категории повторно выбирать не пришлось.</strong>
+            Seller Hub применил {{ (mapping_preflight.created or 0) + (mapping_preflight.refreshed or 0) }}
+            точных соответствий, подтверждённых минимум двумя уже связанными карточками Ozon и свежей официальной схемой.
+            Группы с конфликтом или неполными данными не применялись автоматически.
+        </div>
+    </div>
+    {% endif %}
+
+    {% if summary.waiting_reference %}
+    <div class="sh-alert sh-alert--info mt-5" role="status">
+        <div class="sh-alert-content">
+            <strong>Справочник Ozon загружается для {{ summary.waiting_reference }} карточек.</strong>
+            Ничего нажимать не нужно: Seller Hub подставит безопасные подтверждённые данные, повторно проверит карточки и сам поставит готовые в очередь.
+        </div>
+    </div>
+    {% endif %}
+
+    {% if summary.preparing_media %}
+    <div class="sh-alert sh-alert--info mt-5" role="status">
+        <div class="sh-alert-content">
+            <strong>Подготавливаем публичные фото для {{ summary.preparing_media }} карточек.</strong>
+            Seller Hub скачивает исходные изображения, проверяет реальные JPEG-байты и сохраняет неизменяемые подписанные копии. До готовности всей галереи запрос в Ozon не отправляется.
+        </div>
+    </div>
+    {% endif %}
+
+    {% if summary.needs_input or summary.failed or summary.ready_to_retry %}
+    <div class="sh-alert sh-alert--warning mt-5" role="status">
+        <div class="sh-alert-content">
+            <strong>Есть карточки, которые можно исправить.</strong>
+            Для всей партии откройте массовый редактор Seller Hub: недостающие поля, точные справочники Ozon и массовое заполнение выбранных строк доступны прямо на платформе. Для единичной карточки можно открыть черновик ниже.
+            Кнопка повтора создаст отдельный подтверждённый запуск; успешно созданные, обновлённые, неопределённые и исключённые карточки не повторяются.
+            Если не выбрана категория, достаточно подтвердить точный тип в одной карточке и сохранить сопоставление: повтор автоматически применит его к остальным карточкам с той же точной исходной категорией или предметом WB.
+        </div>
+    </div>
+    {% endif %}
+
+    {% if (summary.needs_input or 0) + (summary.failed or 0) + (summary.ready_to_retry or 0) + (summary.excluded or 0) > 0 and run.status != 'running' %}
+    <section class="sh-card p-5 mt-5" aria-labelledby="ozon-repair-heading">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="max-w-3xl">
+                <h2 id="ozon-repair-heading" class="font-semibold" style="color:var(--text)">Исправить карточки прямо в Seller Hub</h2>
+                <p class="mt-1 text-sm" style="color:var(--text-secondary)">
+                    Выберите строки, заполните одно значение сразу для группы или откройте поля конкретной карточки. Тип Ozon можно назначить всей точной исходной категории, а значения справочников ищутся локально по официальному кэшу.
+                </p>
+                <p class="mt-2 text-xs" style="color:var(--text-muted)">
+                    Для ТН ВЭД платформа может показать варианты из точного
+                    официального справочника по категории и наблюдённым фактам,
+                    но не подтверждает код за продавца. Маркировка, цена и
+                    параметры упаковки также не угадываются. Версия каждой
+                    строки проверяется при сохранении, поэтому устаревшая
+                    страница не перезапишет новый черновик.
+                </p>
+            </div>
+            <div class="flex shrink-0 flex-col items-stretch gap-3">
+                <a class="sh-btn sh-btn--primary sh-btn--md"
+                   href="{{ url_for('ozon_bulk_uploads.repair_editor', job_uid=run.job_uid) }}">
+                    Открыть массовый редактор
+                </a>
+                <details class="text-xs" style="color:var(--text-muted)">
+                    <summary class="cursor-pointer">Дополнительный XLSX</summary>
+                    <div class="mt-2 flex flex-col gap-2">
+                        <a class="sh-btn sh-btn--secondary sh-btn--sm"
+                           href="{{ url_for('ozon_bulk_uploads.export_repair', job_uid=run.job_uid) }}">
+                            Скачать XLSX
+                        </a>
+                        <form method="post"
+                              action="{{ url_for('ozon_bulk_uploads.import_repair', job_uid=run.job_uid) }}"
+                              enctype="multipart/form-data"
+                              class="flex flex-col gap-2"
+                              onsubmit="return confirm('Применить таблицу только к локальным черновикам? В Ozon данные сейчас не отправляются.')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="file" name="repair_file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                   required class="block max-w-xs text-xs" style="color:var(--text-secondary)">
+                            <button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">Применить XLSX локально</button>
+                        </form>
+                    </div>
+                </details>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if summary.uncertain_active %}
+    <div class="sh-alert sh-alert--warning mt-5" role="status">
+        <div class="sh-alert-content">
+            <strong>Карточек на безопасной сверке: {{ summary.uncertain_active }}.</strong>
+            Seller Hub продолжает только безопасную read-only сверку. Не запускайте их повторно; откройте операцию Ozon ниже, если нужна детализация.
+        </div>
+    </div>
+    {% endif %}
+
+    {% if summary.uncertain_stopped %}
+    <div class="sh-alert sh-alert--warning mt-5" role="status">
+        <div class="sh-alert-content">
+            <strong>Сверка вручную остановлена для карточек: {{ summary.uncertain_stopped }}.</strong>
+            Результат Ozon по-прежнему неизвестен, и Seller Hub не отправит эти карточки повторно. Проверьте их в кабинете Ozon по ссылке на операцию.
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="mt-5 space-y-3">
+        {% for item in run['items'] %}
+        {% set is_ok = item.status in ['succeeded', 'already_current', 'already_published'] %}
+        {% set is_local_ready = item.status == 'ready_to_retry' %}
+        {% set is_active = item.status in ['preparing', 'preparing_media', 'waiting_reference', 'queued', 'submitting', 'submitted', 'checking'] %}
+        <article class="sh-card p-4">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="sh-badge sh-badge--sm {% if is_ok or is_local_ready %}sh-badge--green{% elif item.status == 'excluded' %}sh-badge--gray{% elif is_active %}sh-badge--blue{% elif item.status in ['needs_input', 'uncertain'] %}sh-badge--yellow{% else %}sh-badge--red{% endif %}">
+                            {% if item.status == 'uncertain' and item.reconciliation_stopped %}Сверка остановлена
+                            {% elif item.status == 'succeeded' %}{{ 'Обновлено' if item.action == 'update' else 'Создано' }}
+                            {% else %}{{ status_labels.get(item.status, item.status) }}{% endif %}
+                        </span>
+                        <span class="sh-badge sh-badge--sm sh-badge--gray">{{ 'Обновление' if item.action == 'update' else 'Создание' }}</span>
+                        {% if item.offer_id %}<span class="text-xs break-all" style="color:var(--text-muted)">артикул {{ item.offer_id }}</span>{% endif %}
+                    </div>
+                    <h2 class="mt-2 font-semibold" style="color:var(--text)">{{ item.title }}</h2>
+                    {% if item.completeness %}
+                    {% set complete = item.completeness %}
+                    <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" style="color:var(--text-secondary)">
+                        <span>Обязательные: {{ complete.required_supplied }}/{{ complete.required_total }}</span>
+                        <span>Характеристики Ozon: {{ complete.supplied_known }} заполнено</span>
+                        <span title="Полная схема типа включает необязательные и технические поля: PDF, видео, Rich Content, оптовые настройки и другие неприменимые к части товаров">
+                            В схеме типа: {{ complete.schema_total }},
+                            необязательных: {{ complete.optional_total }}
+                        </span>
+                        <span>Фото в источнике: {{ complete.image_count }}</span>
+                        {% if item.media_delivery %}
+                        <span>Доставка фото: {% if item.media_delivery.state == 'ready' %}проверена{% else %}{{ item.media_delivery.prepared }}/{{ item.media_delivery.total }}{% endif %}</span>
+                        {% endif %}
+                        <span>Название и описание: {{ 'есть' if complete.content_complete else 'неполные' }}</span>
+                        <span>Габариты и вес: {{ 'есть' if complete.physical_complete else 'неполные' }}</span>
+                        <span>Цена и НДС: {{ 'есть' if complete.commercial_complete else 'неполные' }}</span>
+                        <span>Штрихкод: {{ 'есть' if complete.has_barcode else 'нет' }}</span>
+                        {% if 'brand_allowed' in complete %}
+                        <span{% if complete.brand_allowed is sameas false %} style="color:var(--danger)"{% endif %}>Бренд: {{ 'разрешён' if complete.brand_allowed else ('запрещён — ' ~ complete.forbidden_brand) }}</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% if item.message %}
+                    <p class="mt-2 text-sm" style="color:{% if is_ok or is_local_ready or is_active or item.status == 'excluded' %}var(--text-secondary){% else %}var(--danger){% endif %}">{{ item.message }}</p>
+                    {% endif %}
+                    {% if item.validation_errors %}
+                    <ul class="mt-2 space-y-1 text-xs" style="color:var(--text-secondary)">
+                        {% for error in item.validation_errors %}
+                        <li><strong>{{ error.field }}:</strong> {{ error.message }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+                <div class="flex shrink-0 flex-wrap gap-2">
+                    {% if item.draft_id and item.status in ['needs_input', 'failed', 'cancelled'] %}
+                    <a class="sh-btn sh-btn--primary sh-btn--sm" href="{{ url_for('marketplace_drafts.detail', draft_id=item.draft_id) }}">Исправить карточку</a>
+                    {% elif item.draft_id %}
+                    <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('marketplace_drafts.detail', draft_id=item.draft_id) }}">Черновик</a>
+                    {% endif %}
+                    {% if item.operation_id %}
+                    <a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('marketplace_operations.detail', operation_id=item.operation_id) }}">Операция Ozon</a>
+                    {% endif %}
+                </div>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

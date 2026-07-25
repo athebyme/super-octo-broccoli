@@ -11,8 +11,11 @@ from models import (
     Marketplace,
     MarketplaceAttributeDefinition,
     MarketplaceAttributeValue,
+    MarketplaceCategoryMapping,
     MarketplaceProductType,
     MarketplaceTaxonomyCategory,
+    Seller,
+    User,
     db,
 )
 from services.marketplace_adapters import MarketplaceCredentials
@@ -654,6 +657,120 @@ class OzonReferenceServiceTest(unittest.TestCase):
         self.assertEqual(result["dictionaries_synced"], 1)
         self.assertEqual(len(adapter.attribute_payloads), 1)
         self.assertEqual(len(adapter.value_payloads), 1)
+
+    def test_demand_refresh_ignores_preload_toggle_and_skips_unused_types(self):
+        product_type = self._create_type_with_schema()
+        self.assertFalse(product_type.is_enabled)
+        self.assertTrue(product_type.is_seller_selectable)
+        user = User(
+            username="ozon-demand",
+            email="ozon-demand@test.local",
+            is_active=True,
+        )
+        user.set_password("synthetic-password")
+        seller = Seller(user=user, company_name="Demand seller")
+        db.session.add(seller)
+        db.session.flush()
+        db.session.add(MarketplaceCategoryMapping(
+            seller_id=seller.id,
+            marketplace_id=self.marketplace_id,
+            product_type_id=product_type.id,
+            scope_key="source:synthetic",
+            source_type="synthetic",
+            source_category="Категория A",
+            source_category_normalized="категория a",
+            external_category_id=product_type.category.external_category_id,
+            external_type_id=product_type.external_type_id,
+            mapping_source="manual",
+            mapping_status="active",
+            confidence=1.0,
+        ))
+        db.session.commit()
+        unused = MarketplaceProductType.query.filter(
+            MarketplaceProductType.id != product_type.id,
+            MarketplaceProductType.is_available.is_(True),
+        ).first()
+        self.assertIsNotNone(unused)
+
+        adapter = SyntheticOzonAdapter(
+            attributes={
+                "result": [
+                    _attribute(
+                        31,
+                        "Бренд",
+                        required=True,
+                        dictionary_id=900,
+                    ),
+                    _attribute(4191, "Аннотация"),
+                ]
+            },
+            value_pages=[{
+                "result": [{"id": 1, "value": "Бренд А"}],
+                "has_next": False,
+            }],
+        )
+        with patch.object(
+            OzonReferenceService,
+            "_adapter_credentials",
+            return_value=(adapter, SYNTHETIC_CREDENTIALS),
+        ):
+            result = OzonReferenceService.sync_demanded_types(
+                self.marketplace_id,
+                limit=3,
+                dictionary_limit=3,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["selected"], 1)
+        self.assertEqual(result["synced"], 1)
+        self.assertEqual(result["dictionaries_synced"], 1)
+        db.session.refresh(product_type)
+        db.session.refresh(unused)
+        self.assertEqual(product_type.attributes_count, 2)
+        self.assertIsNone(unused.attributes_synced_at)
+        self.assertFalse(product_type.is_enabled)
+
+    def test_demand_refresh_cools_down_failed_schema_without_provider_call(self):
+        product_type = self._create_type_with_schema()
+        user = User(
+            username="ozon-demand-cooldown",
+            email="ozon-demand-cooldown@test.local",
+            is_active=True,
+        )
+        user.set_password("synthetic-password")
+        seller = Seller(user=user, company_name="Demand cooldown")
+        db.session.add(seller)
+        db.session.flush()
+        db.session.add(MarketplaceCategoryMapping(
+            seller_id=seller.id,
+            marketplace_id=self.marketplace_id,
+            product_type_id=product_type.id,
+            scope_key="source:cooldown",
+            source_type="synthetic",
+            source_category="Категория A",
+            source_category_normalized="категория a",
+            external_category_id=product_type.category.external_category_id,
+            external_type_id=product_type.external_type_id,
+            mapping_source="manual",
+            mapping_status="active",
+            confidence=1.0,
+        ))
+        product_type.attributes_sync_status = "failed"
+        product_type.attributes_sync_error = "safe synthetic error"
+        product_type.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        with patch.object(
+            OzonReferenceService,
+            "_adapter_credentials",
+        ) as credentials:
+            result = OzonReferenceService.sync_demanded_types(
+                self.marketplace_id,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["selected"], 0)
+        credentials.assert_not_called()
 
     def test_reference_freshness_has_hard_48_hour_ttl(self):
         product_type = self._create_type_with_schema()

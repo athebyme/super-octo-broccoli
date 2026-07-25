@@ -5,7 +5,8 @@ ORM-free fetch-слой мониторинга конкурентов (публ�
 Источники:
 - basket CDN (wbbasket.ru card.json/sellers.json) — метаданные; без жёсткого
   IP-лимита, но всё равно проходит общий rate limiter;
-- catalog.wb.ru/sellers/catalog — цены каталога продавца (основной);
+- card.wb.ru/cards/v4/detail — exact-nmID витринные цены наших карточек;
+- catalog.wb.ru/sellers/v4/catalog — цены каталога продавца (основной);
 - search.wb.ru exactmatch v18 — цены через поиск по бренду (fallback) и
   интерактивный поиск.
 
@@ -33,12 +34,26 @@ from services.wb_api_client import RateLimiter
 logger = logging.getLogger(__name__)
 
 SOURCE_BASKET = 'basket'
+SOURCE_CARD = 'card'
 SOURCE_CATALOG = 'catalog'
 SOURCE_SEARCH = 'search'
 
+CARD_URL = 'https://card.wb.ru/cards/v4/detail'
 SEARCH_URL = 'https://search.wb.ru/exactmatch/ru/common/v18/search'
-CATALOG_URL = 'https://catalog.wb.ru/sellers/catalog'
+CATALOG_URL = 'https://catalog.wb.ru/sellers/v4/catalog'
 DEFAULT_PARAMS = {'appType': '1', 'curr': 'rub', 'dest': '-1257786', 'lang': 'ru'}
+CARD_PARAMS = {
+    **DEFAULT_PARAMS,
+    'hide_dtype': '13',
+    'spp': '30',
+}
+CATALOG_PARAMS = {
+    **DEFAULT_PARAMS,
+    'ab_testing': 'false',
+    'hide_dtype': '13',
+    'sort': 'popular',
+    'spp': '30',
+}
 HTTP_TIMEOUT = 10
 
 CACHE_TTL_SECONDS = 300
@@ -48,6 +63,8 @@ HEALTH_FAILURES_TO_COOLDOWN = 3
 HEALTH_COOLDOWN_SECONDS = 600
 
 DEFAULT_PUBLIC_RPM = 20
+INTERACTIVE_CATALOG_LIMIT = 100
+EXACT_CARD_BATCH_LIMIT = 100
 
 
 class WBRateLimitedError(RuntimeError):
@@ -166,24 +183,50 @@ def _image_url(nm_id):
     return wb_photo_url(nm_id, 1, 'big')
 
 
+def _rubles(value):
+    """Positive WB kopecks -> integer rubles; invalid/zero is not observed."""
+    if isinstance(value, bool):
+        return None
+    try:
+        amount = int(value)
+    except (TypeError, ValueError):
+        return None
+    return amount // 100 if amount > 0 else None
+
+
 def parse_price_observation(raw):
-    """Наблюдение цены/остатка/рейтинга из элемента search/catalog. Рубли."""
+    """Coherent public price pair from one WB size, in integer rubles.
+
+    ``basic`` is the crossed-out price before discounts. ``total`` is the
+    most final storefront value on response variants that expose it;
+    current v4 responses normally expose that value as ``product``.  The two
+    fields are never assembled from different sizes.
+    """
     sizes = raw.get('sizes') or []
     price = None
     sale_price = None
     total_stock = raw.get('totalQuantity', 0) or 0
 
-    if sizes:
-        price_obj = sizes[0].get('price') or {}
-        if price_obj.get('basic'):
-            price = price_obj['basic'] // 100
-        if price_obj.get('product'):
-            sale_price = price_obj['product'] // 100
+    for size in sizes:
+        if not isinstance(size, dict):
+            continue
+        price_obj = size.get('price') or {}
+        if not isinstance(price_obj, dict):
+            continue
+        observed_base = _rubles(price_obj.get('basic'))
+        observed_final = (
+            _rubles(price_obj.get('total'))
+            or _rubles(price_obj.get('product'))
+        )
+        if observed_base is not None or observed_final is not None:
+            price = observed_base
+            sale_price = observed_final
+            break
 
-    if price is None and raw.get('priceU'):
-        price = raw['priceU'] // 100
-    if sale_price is None and raw.get('salePriceU'):
-        sale_price = raw['salePriceU'] // 100
+    if price is None:
+        price = _rubles(raw.get('priceU'))
+    if sale_price is None:
+        sale_price = _rubles(raw.get('salePriceU'))
 
     if total_stock == 0 and sizes:
         for s in sizes:
@@ -202,6 +245,13 @@ def parse_price_observation(raw):
 def parse_full_product(raw):
     """Полная карточка из search/catalog: метаданные + наблюдение."""
     nm_id = raw.get('id', 0)
+    subject_id = raw.get('subjectId')
+    if isinstance(subject_id, bool) or not isinstance(subject_id, int):
+        subject_id = None
+    photo_count = raw.get('pics')
+    if (isinstance(photo_count, bool) or not isinstance(photo_count, int)
+            or photo_count < 0):
+        photo_count = None
     result = {
         'nm_id': nm_id,
         'title': raw.get('name', ''),
@@ -209,9 +259,59 @@ def parse_full_product(raw):
         'supplier_name': raw.get('supplier', ''),
         'wb_supplier_id': raw.get('supplierId'),
         'image_url': _image_url(nm_id) if nm_id else None,
+        'subject_id': subject_id,
+        'subject_name': (
+            raw.get('entity') or raw.get('subjectName') or ''),
+        'photo_count': photo_count,
+        'characteristics': [],
     }
     result.update(parse_price_observation(raw))
     return result
+
+
+def _bounded_card_characteristics(card, limit=60):
+    """Whitelist public card options into a small name/value fact list."""
+    rows = []
+    seen = set()
+
+    def add_option(option):
+        if not isinstance(option, dict) or len(rows) >= limit:
+            return
+        name = option.get('name')
+        value = option.get('value')
+        if not isinstance(name, str):
+            return
+        name = ' '.join(name.split())[:120]
+        if not name:
+            return
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            value = ' '.join(str(value).split())[:240]
+        elif isinstance(value, list):
+            safe = [
+                ' '.join(str(item).split())[:80]
+                for item in value[:10]
+                if isinstance(item, (str, int, float))
+                and not isinstance(item, bool)
+            ]
+            value = ', '.join(item for item in safe if item)[:240]
+        else:
+            return
+        if not value:
+            return
+        key = name.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append({'name': name, 'value': value})
+
+    for option in card.get('options') or []:
+        add_option(option)
+    for group in card.get('grouped_options') or []:
+        if not isinstance(group, dict):
+            continue
+        for option in group.get('options') or []:
+            add_option(option)
+    return rows
 
 
 class CompetitorFetchService:
@@ -273,6 +373,15 @@ class CompetitorFetchService:
             pass
 
         selling = card.get('selling') or {}
+        media = card.get('media') or {}
+        card_data = card.get('data') or {}
+        subject_id = card_data.get('subject_id')
+        if isinstance(subject_id, bool) or not isinstance(subject_id, int):
+            subject_id = None
+        photo_count = media.get('photo_count')
+        if (isinstance(photo_count, bool) or not isinstance(photo_count, int)
+                or photo_count < 0):
+            photo_count = None
         return {
             'nm_id': nm_id,
             'title': card.get('imt_name', ''),
@@ -286,6 +395,9 @@ class CompetitorFetchService:
             'image_url': _image_url(nm_id),
             'is_adult': bool(selling.get('is_adult', False)),
             'subject_name': card.get('subj_name', ''),
+            'subject_id': subject_id,
+            'photo_count': photo_count,
+            'characteristics': _bounded_card_characteristics(card),
         }
 
     # ---------- цены ----------
@@ -325,6 +437,45 @@ class CompetitorFetchService:
             products = (data.get('data') or {}).get('products')
         return products or []
 
+    def fetch_exact_prices(self, nm_ids):
+        """One bounded card-v4 read for exact nmIDs.
+
+        This is used for our own storefront prices so both comparison lanes
+        come from the same public contract as competitor observations.
+        """
+        values = []
+        seen = set()
+        for nm_id in nm_ids:
+            if (
+                isinstance(nm_id, bool)
+                or not isinstance(nm_id, int)
+                or nm_id <= 0
+            ):
+                raise ValueError('nm_ids must contain positive integers')
+            if nm_id not in seen:
+                seen.add(nm_id)
+                values.append(nm_id)
+        if len(values) > EXACT_CARD_BATCH_LIMIT:
+            raise ValueError(
+                f'exact card batch exceeds {EXACT_CARD_BATCH_LIMIT}',
+            )
+        if not values:
+            return {}
+        data = self._bounded_get(
+            SOURCE_CARD,
+            CARD_URL,
+            {**CARD_PARAMS, 'nm': ';'.join(str(value) for value in values)},
+        )
+        if data is None:
+            return {}
+        allowed = set(values)
+        found = {}
+        for product in self._extract_products(data)[:EXACT_CARD_BATCH_LIMIT]:
+            product_id = product.get('id') if isinstance(product, dict) else None
+            if product_id in allowed:
+                found[product_id] = parse_price_observation(product)
+        return found
+
     def fetch_supplier_prices(self, supplier_id, target_nm_ids, max_pages=5):
         """Цены товаров из каталога продавца. Молча останавливается на 429."""
         found = {}
@@ -333,9 +484,8 @@ class CompetitorFetchService:
             if not remaining:
                 break
             params = {
-                'appType': '1', 'curr': 'rub', 'dest': '-1257786',
-                'supplier': str(supplier_id), 'sort': 'popular',
-                'page': str(page), 'limit': '100',
+                **CATALOG_PARAMS,
+                'supplier': str(supplier_id), 'page': str(page),
             }
             try:
                 data = self._bounded_get(SOURCE_CATALOG, CATALOG_URL, params)
@@ -397,11 +547,11 @@ class CompetitorFetchService:
     def fetch_seller_catalog_page(self, supplier_id, page=1):
         """Одна страница каталога продавца. WBRateLimitedError при 429."""
         params = {
-            'appType': '1', 'curr': 'rub', 'dest': '-1257786',
-            'supplier': str(supplier_id), 'sort': 'popular',
-            'page': str(page), 'limit': '100',
+            **CATALOG_PARAMS,
+            'supplier': str(supplier_id), 'page': str(page),
         }
         data = self._bounded_get(SOURCE_CATALOG, CATALOG_URL, params)
         if data is None:
             return []
-        return [parse_full_product(p) for p in self._extract_products(data)]
+        return [parse_full_product(p) for p in
+                self._extract_products(data)[:INTERACTIVE_CATALOG_LIMIT]]

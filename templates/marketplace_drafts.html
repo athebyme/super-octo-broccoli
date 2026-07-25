@@ -13,6 +13,7 @@
             <p class="sh-page-subtitle">Черновик карточки для Ozon: точная категория и тип, происхождение фактов о товаре и проверка заполненности перед публикацией.</p>
         </div>
         <div class="sh-page-actions">
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index') }}">Загрузки</a>
             <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index') }}">Каталог</a>
             <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
         </div>
@@ -98,42 +99,39 @@
         <span>Страница {{ pagination.page }} из {{ pagination.pages or 1 }}</span>
     </div>
     {% if drafts %}
-    <div class="space-y-3" x-data="{ selectedDrafts: [] }">
+    <div class="space-y-3" x-data="{ selectedDrafts: [], selectedAccountId: null }">
         {% if ozon_enabled and publication_enabled %}
         <div class="sh-card p-3 flex flex-wrap items-center gap-3" x-show="selectedDrafts.length" x-cloak>
             <span class="text-sm" style="color:var(--text)" x-text="'Выбрано готовых черновиков: ' + selectedDrafts.length"></span>
-            <form method="POST" action="{{ url_for('marketplace_drafts.bulk_publish') }}"
+            <form method="POST" action="{{ url_for('ozon_bulk_uploads.create_from_drafts') }}"
                   class="flex flex-wrap items-center gap-2"
-                  onsubmit="return confirm('Поставить выбранные черновики в очередь публикации Ozon? Отправку выполняет фоновая очередь по одному с live-проверкой; прогресс — в разделе «Операции Ozon».')">
+                  onsubmit="return confirm('Синхронизировать выбранные карточки с Ozon? Новые будут созданы, существующие — полностью обновлены после live-проверки.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <select name="account_id" class="rounded-md border px-2 py-1.5 text-sm bg-transparent"
-                        style="border-color:var(--border);color:var(--text)" aria-label="Кабинет Ozon">
-                    {% for account in accounts %}
-                    <option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>
-                    {% endfor %}
-                </select>
+                <input type="hidden" name="confirm_write" value="1">
+                <input type="hidden" name="account_id" :value="selectedAccountId">
                 <template x-for="id in selectedDrafts" :key="'pub-' + id">
                     <input type="hidden" name="draft_ids" :value="id">
                 </template>
                 <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit"
-                        :disabled="selectedDrafts.length === 0 || selectedDrafts.length > 50">
-                    Опубликовать выбранные (<span x-text="selectedDrafts.length"></span>)
+                        :disabled="selectedAccountId === null || selectedDrafts.length === 0 || selectedDrafts.length > 200">
+                    Синхронизировать Ozon (<span x-text="selectedDrafts.length"></span>)
                 </button>
-                <span class="text-xs" style="color:var(--warn)" x-show="selectedDrafts.length > 50">не больше 50 за раз</span>
+                <span class="text-xs" style="color:var(--warn)" x-show="selectedDrafts.length > 200">не больше 200 за запуск</span>
+                <span class="text-xs" style="color:var(--text-muted)">один кабинет на запуск</span>
             </form>
         </div>
         {% endif %}
         {% for draft in drafts %}
         {% set summary = draft.to_public_dict().validation_summary %}
-        {% set can_bulk_publish = ozon_enabled and publication_enabled and draft.status == 'ready' and summary.publishable and not draft.published_listing_id %}
-        <a class="sh-card block p-4" href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}">
+        {% set can_bulk_publish = ozon_enabled and publication_enabled and draft.account_id in upload_ready_account_ids and draft.status in ['ready', 'published'] and summary.publishable %}
+        <article class="sh-card block p-4">
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 {% if can_bulk_publish %}
-                <label class="flex items-start pt-1" @click.stop title="Выбрать для массовой публикации">
+                <label class="flex items-start pt-1" title="Выбрать для массового создания или обновления">
                     <input type="checkbox" class="rounded"
                            :checked="selectedDrafts.includes({{ draft.id }})"
-                           @click.stop
-                           @change="selectedDrafts = $event.target.checked ? [...selectedDrafts, {{ draft.id }}] : selectedDrafts.filter(id => id !== {{ draft.id }})">
+                           :disabled="selectedAccountId !== null && selectedAccountId !== {{ draft.account_id }}"
+                           @change="if ($event.target.checked) { selectedAccountId = selectedAccountId === null ? {{ draft.account_id }} : selectedAccountId; selectedDrafts = [...selectedDrafts, {{ draft.id }}] } else { selectedDrafts = selectedDrafts.filter(id => id !== {{ draft.id }}); if (selectedDrafts.length === 0) selectedAccountId = null }">
                 </label>
                 {% endif %}
                 <div class="min-w-0 flex-1">
@@ -143,7 +141,11 @@
                         <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ status_labels.get(draft.status, draft.status) }}</span>
                         <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ validation_status_labels.get(draft.validation_status, draft.validation_status) }}</span>
                     </div>
-                    <h2 class="mt-2 font-semibold truncate" style="color:var(--text)">{{ draft.imported_product.title or draft.offer_id }}</h2>
+                    <h2 class="mt-2 font-semibold truncate">
+                        <a href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}" style="color:var(--text)">
+                            {{ draft.imported_product.title or draft.offer_id }}
+                        </a>
+                    </h2>
                     <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">артикул: {{ draft.offer_id }} · товар-источник #{{ draft.imported_product_id }}</p>
                     <p class="mt-1 text-xs" style="color:var(--text-muted)">{{ draft.product_type.category.full_path ~ ' / ' ~ draft.product_type.name if draft.product_type else 'Категория не выбрана' }}</p>
                 </div>
@@ -151,9 +153,11 @@
                 <div class="text-xs md:text-right" style="color:var(--text-muted)">
                     <div>Ошибок: {{ summary.error_count }} · предупреждений: {{ summary.warning_count }}</div>
                     <div class="mt-1">Версия {{ draft.version }}</div>
+                    <a class="inline-block mt-2 font-medium" style="color:var(--accent)"
+                       href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}">Открыть →</a>
                 </div>
             </div>
-        </a>
+        </article>
         {% endfor %}
     </div>
     {% else %}

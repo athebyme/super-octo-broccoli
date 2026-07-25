@@ -271,7 +271,7 @@ def register_photo_routes(app):
                 logger.debug(f"[PhotoProxy] Failed {current_url[:60]}: {e}")
                 continue
 
-        # Возвращаем placeholder вместо 404
+        # Authenticated UI preview may use a visible placeholder.
         return _generate_placeholder_image()
 
     # ==========================================================================
@@ -291,13 +291,28 @@ def register_photo_routes(app):
 
         product = ImportedProduct.query.get_or_404(product_id)
 
-        # Если есть связь с SupplierProduct — делегируем
+        # Делегируем в каталог поставщика только если там реально есть фото:
+        # иначе карточка со своими фото отдавала бы 404 просто потому, что
+        # связь с поставщиком существует.
         if product.supplier_product_id:
-            return redirect(
-                _url_for('serve_supplier_product_photo',
-                         supplier_product_id=product.supplier_product_id,
-                         photo_idx=photo_idx)
-            )
+            from models import SupplierProduct, db
+
+            supplier_photos = db.session.query(
+                SupplierProduct.photo_urls_json
+            ).filter_by(id=product.supplier_product_id).scalar()
+            has_supplier_photos = False
+            if supplier_photos:
+                try:
+                    parsed = json.loads(supplier_photos)
+                    has_supplier_photos = isinstance(parsed, list) and bool(parsed)
+                except (json.JSONDecodeError, TypeError):
+                    has_supplier_photos = False
+            if has_supplier_photos:
+                return redirect(
+                    _url_for('serve_supplier_product_photo',
+                             supplier_product_id=product.supplier_product_id,
+                             photo_idx=photo_idx)
+                )
 
         # Иначе пробуем photo_urls самого ImportedProduct
         if not product.photo_urls:
@@ -539,7 +554,8 @@ def register_photo_routes(app):
                 logger.debug(f"[PublicPhoto] Failed {current_url[:60]}: {e}")
                 continue
 
-        return _generate_placeholder_image()
+        # Do not let WB/Ozon persist the UI placeholder as a product photo.
+        abort(502)
 
     # ==========================================================================
     # Публичный маршрут для фото ImportedProduct (без SupplierProduct)
@@ -647,7 +663,9 @@ def register_photo_routes(app):
                 logger.debug(f"[ImportedPublicPhoto] Failed {current_url[:60]}: {e}")
                 continue
 
-        return _generate_placeholder_image()
+        # Public marketplace URLs must never disguise a failed source fetch as
+        # a valid product image.
+        abort(502)
 
 
 def _get_supplier_auth_cookies(supplier) -> dict:

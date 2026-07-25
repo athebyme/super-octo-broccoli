@@ -144,6 +144,21 @@ class Seller(db.Model):
         """Проверить наличие валидного API ключа"""
         return self.wb_api_key is not None and len(self.wb_api_key) > 0
 
+    def has_any_channel(self) -> bool:
+        """Подключён ли хотя бы один канал продаж: WB-ключ либо кабинет Ozon.
+
+        Нужно там, где интерфейс не должен утверждать «ничего не подключено»
+        продавцу, который работает только на Ozon.
+        """
+        if self.has_valid_api_key():
+            return True
+        return db.session.query(
+            SellerMarketplaceAccount.query.filter_by(
+                seller_id=self.id,
+                is_active=True,
+            ).exists()
+        ).scalar() is True
+
     def __repr__(self) -> str:
         return f'<Seller {self.company_name}>'
 
@@ -198,6 +213,15 @@ class Product(db.Model):
     wb_discount = db.Column(db.Integer, nullable=True)  # Скидка на WB (%)
     wb_discounted_price = db.Column(db.Numeric(10, 2), nullable=True)  # Цена после скидки на WB
     wb_price_synced_at = db.Column(db.DateTime, nullable=True)  # Последняя синхронизация цен с WB
+    # Публичная витрина WB может дополнительно применять скидку площадки,
+    # поэтому seller API ``discountedPrice`` нельзя выдавать за цену
+    # покупателя. Эти поля наблюдаются тем же публичным price-контрактом,
+    # что и цены конкурентов, и используются только в сравнении рынка.
+    wb_public_base_price = db.Column(db.Numeric(10, 2), nullable=True)
+    wb_public_final_price = db.Column(db.Numeric(10, 2), nullable=True)
+    wb_public_price_synced_at = db.Column(db.DateTime, nullable=True)
+    wb_public_price_miss_count = db.Column(
+        db.Integer, nullable=False, default=0)
 
     # Медиа
     photos_json = db.Column(db.Text)  # JSON с URL фотографий
@@ -506,10 +530,21 @@ class CardEditHistory(db.Model):
     # Снимок данных ПОСЛЕ изменения
     snapshot_after = db.Column(db.JSON)  # Полное состояние карточки после изменения
 
+    # Bounded per-field receipt of conservative enrichment decisions.  Exact
+    # values remain in before/after snapshots; this JSON explains why a field
+    # was applied, preserved, matched or skipped.
+    merge_decisions = db.Column(db.JSON)
+
     # Результат синхронизации с WB
     wb_synced = db.Column(db.Boolean, default=False)  # Синхронизировано ли с WB
-    wb_sync_status = db.Column(db.String(50))  # success|failed|pending|uncertain|partial|conflict
+    wb_sync_status = db.Column(db.String(50))  # submitted|success|failed|pending|uncertain|partial|conflict
     wb_error_message = db.Column(db.Text)  # Сообщение об ошибке от WB
+    # WB applies Content/Media writes asynchronously.  These fields make the
+    # read-after-write confirmation durable and restart-safe.
+    wb_reconcile_due_at = db.Column(db.DateTime, index=True)
+    wb_reconcile_attempts = db.Column(db.Integer, default=0, nullable=False)
+    wb_reconciled_at = db.Column(db.DateTime)
+    wb_reconcile_code = db.Column(db.String(64))
 
     # Откат
     reverted = db.Column(db.Boolean, default=False)  # Было ли отменено
@@ -541,7 +576,7 @@ class CardEditHistory(db.Model):
         # fetches live WB and accepts only exact before/after states.
         uncertain_cutoff = datetime.utcnow() - timedelta(minutes=5)
         uncertain = bool(
-            self.wb_sync_status in {'pending', 'uncertain'}
+            self.wb_sync_status in {'pending', 'submitted', 'uncertain'}
             and self.created_at is not None
             and self.created_at <= uncertain_cutoff
         )
@@ -1102,6 +1137,9 @@ def invalidate_product_defaults_cache(seller_id: int):
     from services.ttl_cache import cache
     cache.invalidate(f'std_media:{seller_id}:')
     cache.invalidate(f'min_photos:{seller_id}')
+    # Заявленные габариты упаковки участвуют в том, что уходит в WB, поэтому
+    # правка правила обязана быть видна сразу, а не через TTL.
+    cache.invalidate(f'pkg_dims:{seller_id}:')
 
 
 class ImportedProduct(db.Model):
@@ -3656,9 +3694,23 @@ class EnrichmentJob(db.Model):
     succeeded     = db.Column(db.Integer, default=0)
     failed        = db.Column(db.Integer, default=0)
     skipped       = db.Column(db.Integer, default=0)
-    fields_config  = db.Column(db.Text)    # JSON список полей: ['title','photos',...]
-    photo_strategy = db.Column(db.String(20), default='replace')  # replace/append/only_if_empty
+    confirmed     = db.Column(db.Integer, default=0)
+    conflicted    = db.Column(db.Integer, default=0)
+    fields_config  = db.Column(db.Text)    # JSON list or v1 {version, default, by_product}
+    # replace/append remain readable legacy aliases; runtime treats both as the
+    # same preserve-live smart merge and never clears a seller gallery.
+    photo_strategy = db.Column(db.String(20), default='smart_merge')
     results       = db.Column(db.Text)    # JSON [{product_id, nm_id, status, error}]
+    product_ids_json = db.Column(db.Text, default='[]', nullable=False)
+    bulk_edit_id = db.Column(
+        db.Integer, db.ForeignKey('bulk_edit_history.id'), index=True,
+    )
+    claim_token = db.Column(db.String(64))
+    claim_expires_at = db.Column(db.DateTime, index=True)
+    heartbeat_at = db.Column(db.DateTime)
+    current_product_id = db.Column(db.Integer)
+    current_item_started_at = db.Column(db.DateTime)
+    last_error = db.Column(db.Text)
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at    = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -4164,6 +4216,22 @@ class SellerMarketplaceAccount(db.Model):
     def roles(self) -> list:
         return self._string_list(self.roles_json)
 
+    @property
+    def public_settings(self) -> dict:
+        """Return only allowlisted, non-secret marketplace preferences."""
+        try:
+            value = json.loads(self.settings_json or '{}')
+        except (TypeError, json.JSONDecodeError):
+            value = {}
+        if not isinstance(value, dict):
+            value = {}
+        default_vat = value.get('default_vat')
+        if default_vat not in {
+            '0', '0.05', '0.07', '0.1', '0.10', '0.2', '0.20', '0.22',
+        }:
+            default_vat = None
+        return {'default_vat': default_vat}
+
     def to_public_dict(self) -> dict:
         return {
             'id': self.id,
@@ -4177,6 +4245,7 @@ class SellerMarketplaceAccount(db.Model):
             'connection_status': self.connection_status,
             'capabilities': self.capabilities,
             'roles': self.roles,
+            'settings': self.public_settings,
             'credential_expires_at': (
                 self.credential_expires_at.isoformat()
                 if self.credential_expires_at else None
@@ -4402,7 +4471,15 @@ class MarketplaceProductType(db.Model):
     name = db.Column(db.String(500), nullable=False)
     is_disabled_upstream = db.Column(db.Boolean, default=False, nullable=False)
     is_available = db.Column(db.Boolean, default=True, nullable=False)
+    # ``is_enabled`` is the admin-owned proactive refresh toggle.  It must not
+    # double as seller visibility: doing so would require preloading schemas
+    # for the entire (8k+) Ozon taxonomy before any seller could select a type.
     is_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    is_seller_selectable = db.Column(
+        db.Boolean,
+        default=True,
+        nullable=False,
+    )
     last_seen_at = db.Column(db.DateTime)
 
     attributes_synced_at = db.Column(db.DateTime)
@@ -4448,6 +4525,12 @@ class MarketplaceProductType(db.Model):
             'idx_marketplace_product_type_enabled',
             'marketplace_id',
             'is_enabled',
+            'is_available',
+        ),
+        db.Index(
+            'idx_marketplace_product_type_selectable',
+            'marketplace_id',
+            'is_seller_selectable',
             'is_available',
         ),
     )
@@ -4829,6 +4912,15 @@ class MarketplaceProductDraft(db.Model):
     content_json = db.Column(db.Text, nullable=False, default='{}')
     attributes_json = db.Column(db.Text, nullable=False, default='[]')
     complex_attributes_json = db.Column(db.Text, nullable=False, default='[]')
+    # Explicit seller-reviewed removals from an existing Ozon full-state
+    # baseline.  A normal draft overlay may add/replace attributes but must
+    # never silently delete live values; this separate exact-identity list is
+    # therefore required for schema-cleanup updates.
+    attribute_removals_json = db.Column(
+        db.Text,
+        nullable=False,
+        default='[]',
+    )
     media_json = db.Column(db.Text, nullable=False, default='{}')
     dimensions_json = db.Column(db.Text, nullable=False, default='{}')
     barcodes_json = db.Column(db.Text, nullable=False, default='[]')
@@ -4955,6 +5047,10 @@ class MarketplaceProductDraft(db.Model):
                 'attributes': self._json_value(self.attributes_json, []),
                 'complex_attributes': self._json_value(
                     self.complex_attributes_json,
+                    [],
+                ),
+                'attribute_removals': self._json_value(
+                    self.attribute_removals_json,
                     [],
                 ),
                 'media': self._json_value(self.media_json, {}),
@@ -5660,9 +5756,57 @@ class MarketplaceListing(db.Model):
             return 'linked'
         return self.link_status if self.link_status == 'ambiguous' else 'unlinked'
 
+    def preview_image_urls(self, limit: int = 2) -> list:
+        """Bounded preview URLs: наблюдённый media snapshot; для WB-проекции
+        без media слоты `Product.photos_json` разворачиваются в CDN URL
+        (read-only, как в Фотостудии)."""
+        media = self._json_value(self.media_json, {})
+        urls: list = []
+        primary = media.get('primary_image')
+        if isinstance(primary, str) and primary:
+            urls.append(primary)
+        images = media.get('images')
+        if isinstance(images, list):
+            for item in images:
+                if len(urls) >= limit:
+                    break
+                if isinstance(item, str) and item and item not in urls:
+                    urls.append(item)
+        if not urls and self.legacy_product_id is not None:
+            product = self.legacy_product
+            nm_id = getattr(product, 'nm_id', None) if product else None
+            # WB-проекция хранит слоты галереи как media.photos ([1, 2, 3]);
+            # если их нет — берём тот же список из самой карточки.
+            photos = media.get('photos')
+            if not isinstance(photos, list) or not photos:
+                photos = self._json_value(
+                    getattr(product, 'photos_json', None) if product else None,
+                    [],
+                )
+            if photos and nm_id:
+                from services.wb_media import normalize_photo_urls
+                for value in normalize_photo_urls(nm_id, photos[:limit], 'big'):
+                    if (
+                        isinstance(value, str)
+                        and value.startswith('http')
+                        and value not in urls
+                    ):
+                        urls.append(value)
+        return urls[:limit]
+
+    def primary_image_url(self) -> Optional[str]:
+        """First bounded image URL from the already-normalized media snapshot."""
+        urls = self.preview_image_urls(limit=1)
+        return urls[0] if urls else None
+
     def to_public_dict(self, *, detail: bool = False) -> dict:
+        preview_images = self.preview_image_urls()
         data = {
             'id': self.id,
+            'primary_image': preview_images[0] if preview_images else None,
+            'hover_image': (
+                preview_images[1] if len(preview_images) > 1 else None
+            ),
             'marketplace_code': (
                 self.marketplace.code if self.marketplace else None
             ),
@@ -10693,6 +10837,12 @@ class CompetitorProduct(db.Model):
     supplier_name = db.Column(db.String(200), nullable=True)
     wb_supplier_id = db.Column(db.BigInteger, nullable=True)
     image_url = db.Column(db.String(500), nullable=True)
+    subject_id = db.Column(db.Integer, nullable=True)
+    subject_name = db.Column(db.String(200), nullable=True)
+    photo_count = db.Column(db.Integer, nullable=True)
+    # Bounded observed WB options from basket card.json.  This is source data,
+    # not an LLM reconstruction, and is used only as matching evidence.
+    characteristics_json = db.Column(db.Text, nullable=True)
 
     # Текущие значения (обновляются при успешном наблюдении; fetch-miss их не трогает)
     current_price = db.Column(db.Integer, nullable=True)  # цена в рублях (integer)
@@ -10719,7 +10869,6 @@ class CompetitorProduct(db.Model):
     seller = db.relationship('Seller', backref=db.backref('competitor_products', lazy='dynamic'))
     snapshots = db.relationship('CompetitorPriceSnapshot', backref='product', lazy='dynamic',
                                 cascade='all, delete-orphan', order_by='CompetitorPriceSnapshot.created_at.desc()')
-
     @property
     def current_discount_percent(self):
         """Рассчитать текущий % скидки"""
@@ -10738,6 +10887,9 @@ class CompetitorProduct(db.Model):
             'supplier_name': self.supplier_name,
             'wb_supplier_id': self.wb_supplier_id,
             'image_url': self.image_url,
+            'subject_id': self.subject_id,
+            'subject_name': self.subject_name,
+            'photo_count': self.photo_count,
             'current_price': self.current_price,
             'current_sale_price': self.current_sale_price,
             'current_discount_percent': self.current_discount_percent,
@@ -10757,6 +10909,178 @@ class CompetitorProduct(db.Model):
         return f'<CompetitorProduct nm_id={self.nm_id} group={self.group_id}>'
 
 
+class CompetitorProductMatch(db.Model):
+    """Shared WB nmID -> canonical SupplierProduct match computation.
+
+    Identity evidence is deliberately global and supplier-source-only.  A
+    seller's edited ``Product``/``ImportedProduct`` content is never copied
+    here.  Seller decisions live in ``SellerCompetitorMatchReview`` so one
+    tenant cannot change the shared suggestion for another tenant.
+    """
+    __tablename__ = 'competitor_product_matches'
+    __table_args__ = (
+        db.UniqueConstraint('nm_id', name='uq_competitor_product_match_nm'),
+        db.CheckConstraint(
+            "processing_status IN ('queued','processing','completed','failed')",
+            name='ck_competitor_match_processing_status'),
+        db.CheckConstraint(
+            "llm_status IN ('pending','completed','cached','unavailable','failed','skipped')",
+            name='ck_competitor_match_llm_status'),
+        db.CheckConstraint(
+            "predicted_match_type IS NULL OR predicted_match_type IN "
+            "('same','analog','different','uncertain')",
+            name='ck_competitor_match_predicted_type'),
+        db.CheckConstraint(
+            'text_score >= 0 AND text_score <= 100 '
+            'AND (image_score IS NULL OR (image_score >= 0 AND image_score <= 100)) '
+            'AND deterministic_score >= 0 AND deterministic_score <= 100 '
+            'AND final_score >= 0 AND final_score <= 100',
+            name='ck_competitor_match_scores'),
+        db.Index('idx_competitor_match_state', 'processing_status', 'updated_at'),
+        db.Index('idx_competitor_match_suggested', 'suggested_supplier_product_id'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    nm_id = db.Column(db.BigInteger, nullable=False, unique=True, index=True)
+    suggested_supplier_product_id = db.Column(
+        db.Integer, db.ForeignKey('supplier_products.id', ondelete='SET NULL'),
+        nullable=True, index=True)
+    processing_status = db.Column(
+        db.String(20), nullable=False, default='queued')
+    predicted_match_type = db.Column(db.String(20), nullable=True)
+
+    # Bounded whitelist snapshots of observed marketplace facts and source
+    # fingerprints.  No raw provider response or seller-edited content.
+    marketplace_facts_json = db.Column(db.Text, nullable=False, default='{}')
+    source_fingerprint = db.Column(db.String(64), nullable=True, index=True)
+
+    text_score = db.Column(db.Integer, nullable=False, default=0)
+    image_score = db.Column(db.Integer, nullable=True)
+    deterministic_score = db.Column(db.Integer, nullable=False, default=0)
+    final_score = db.Column(db.Integer, nullable=False, default=0)
+    candidates_json = db.Column(db.Text, nullable=False, default='[]')
+    evidence_json = db.Column(db.Text, nullable=False, default='{}')
+
+    algorithm_version = db.Column(db.String(40), nullable=False)
+    evaluation_fingerprint = db.Column(db.String(64), nullable=True, index=True)
+    evaluated_at = db.Column(db.DateTime, nullable=True)
+
+    claim_token = db.Column(db.String(64), nullable=True, index=True)
+    claim_expires_at = db.Column(db.DateTime, nullable=True, index=True)
+
+    llm_status = db.Column(db.String(20), nullable=False, default='pending')
+    llm_verdict = db.Column(db.String(20), nullable=True)
+    llm_reason = db.Column(db.String(500), nullable=True)
+    llm_model = db.Column(db.String(160), nullable=True)
+    llm_usage_json = db.Column(db.Text, nullable=False, default='{}')
+    llm_error_code = db.Column(db.String(64), nullable=True)
+    llm_evaluated_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(
+        db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False)
+
+    suggested_supplier_product = db.relationship('SupplierProduct')
+    seller_reviews = db.relationship(
+        'SellerCompetitorMatchReview', back_populates='match',
+        cascade='all, delete-orphan', passive_deletes=True)
+    events = db.relationship(
+        'CompetitorMatchEvent', back_populates='match',
+        cascade='all, delete-orphan', passive_deletes=True)
+
+    def __repr__(self):
+        return (f'<CompetitorProductMatch nm_id={self.nm_id} '
+                f'supplier={self.suggested_supplier_product_id} '
+                f'score={self.final_score}>')
+
+
+class SellerCompetitorMatchReview(db.Model):
+    """A tenant-owned override of a shared match suggestion."""
+    __tablename__ = 'seller_competitor_match_reviews'
+    __table_args__ = (
+        db.UniqueConstraint(
+            'seller_id', 'match_id', name='uq_seller_competitor_match_review'),
+        db.CheckConstraint(
+            "status IN ('confirmed','rejected')",
+            name='ck_seller_competitor_match_review_status'),
+        db.CheckConstraint(
+            "match_type IS NULL OR match_type IN ('same','analog')",
+            name='ck_seller_competitor_match_review_type'),
+        db.Index('idx_seller_competitor_review_scope', 'seller_id', 'match_id'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    match_id = db.Column(
+        db.Integer,
+        db.ForeignKey('competitor_product_matches.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    supplier_product_id = db.Column(
+        db.Integer, db.ForeignKey('supplier_products.id', ondelete='SET NULL'),
+        nullable=True, index=True)
+    status = db.Column(db.String(20), nullable=False)
+    match_type = db.Column(db.String(20), nullable=True)
+    actor_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True, index=True)
+    reviewed_at = db.Column(
+        db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(
+        db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False)
+
+    match = db.relationship(
+        'CompetitorProductMatch', back_populates='seller_reviews')
+    supplier_product = db.relationship('SupplierProduct')
+
+
+class CompetitorMatchEvent(db.Model):
+    """Append-only audit for seller review decisions."""
+    __tablename__ = 'competitor_match_events'
+    __table_args__ = (
+        db.CheckConstraint(
+            "action IN ('confirm','reject','reset')",
+            name='ck_competitor_match_event_action'),
+        db.CheckConstraint(
+            "match_type IS NULL OR match_type IN ('same','analog')",
+            name='ck_competitor_match_event_type'),
+        db.Index(
+            'idx_competitor_match_event_scope', 'seller_id',
+            'match_id', 'created_at'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    match_id = db.Column(
+        db.Integer,
+        db.ForeignKey('competitor_product_matches.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    previous_supplier_product_id = db.Column(
+        db.Integer, db.ForeignKey('supplier_products.id', ondelete='SET NULL'),
+        nullable=True)
+    supplier_product_id = db.Column(
+        db.Integer, db.ForeignKey('supplier_products.id', ondelete='SET NULL'),
+        nullable=True)
+    action = db.Column(db.String(20), nullable=False)
+    match_type = db.Column(db.String(20), nullable=True)
+    actor_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+        nullable=True, index=True)
+    evidence_json = db.Column(db.Text, nullable=False, default='{}')
+    created_at = db.Column(
+        db.DateTime, default=datetime.utcnow, nullable=False)
+
+    match = db.relationship('CompetitorProductMatch', back_populates='events')
+
+
 class CompetitorPriceSnapshot(db.Model):
     """Снимок цены конкурента (создаётся только при изменении — delta storage)"""
     __tablename__ = 'competitor_price_snapshots'
@@ -10769,8 +11093,8 @@ class CompetitorPriceSnapshot(db.Model):
     product_id = db.Column(db.Integer, db.ForeignKey('competitor_products.id', ondelete='CASCADE'), nullable=False)
     seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id'), nullable=False)
 
-    price = db.Column(db.Integer, nullable=True)  # цена в копейках
-    sale_price = db.Column(db.Integer, nullable=True)  # цена со скидкой в копейках
+    price = db.Column(db.Integer, nullable=True)  # цена в рублях
+    sale_price = db.Column(db.Integer, nullable=True)  # цена со скидкой в рублях
     rating = db.Column(db.Float, nullable=True)
     feedbacks_count = db.Column(db.Integer, nullable=True)
     total_stock = db.Column(db.Integer, nullable=True)

@@ -47,6 +47,12 @@
                     <span class="ml-3 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-indigo-100 text-indigo-800">
                         Применяется...
                     </span>
+                    {% elif batch.status == 'submitted' %}
+                    <span class="ml-3 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium"
+                          style="background: var(--info-bg); color: var(--info)"
+                          title="Wildberries принял цены в обработку. Показываем «применено» только после того, как цена реально встала на витрине">
+                        Отправлено, ждём подтверждения
+                    </span>
                     {% elif batch.status == 'partially_applied' %}
                     <span class="ml-3 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-orange-100 text-orange-800">
                         Частично применено
@@ -110,7 +116,25 @@
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <span x-text="applying ? 'Применяется...' : 'Применить к WB'"></span>
+                    <span x-text="applying ? 'Отправляем…' : 'Отправить цены в WB'"></span>
+                </button>
+                {% endif %}
+
+                {% if batch.status in ['submitted', 'applying'] %}
+                <button @click="reconcileBatch" :disabled="reconciling"
+                        class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white"
+                        style="background: var(--accent)"
+                        title="Проверить, какие цены уже встали на Wildberries">
+                    <span x-text="reconciling ? 'Проверяем…' : 'Проверить на Wildberries'"></span>
+                </button>
+                {% endif %}
+
+                {% if batch.failed_count and batch.status in ['applied', 'partially_applied', 'failed'] %}
+                <button @click="retryFailed" :disabled="retrying"
+                        class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white"
+                        style="background: var(--accent)"
+                        title="Собрать новый запуск только из позиций, которые Wildberries отклонил">
+                    <span x-text="retrying ? 'Собираем…' : 'Повторить неудачные ({{ batch.failed_count }})'"></span>
                 </button>
                 {% endif %}
 
@@ -250,6 +274,10 @@
                                   title="{{ item.error_message }}">
                                 Ошибка
                             </span>
+                            {% elif item.status == 'submitted' %}
+                            <span class="inline-flex px-2 py-0.5 rounded text-xs"
+                                  style="background: var(--info-bg); color: var(--info)"
+                                  title="Цена отправлена, но Wildberries ещё не подтвердил её на витрине">Отправлено</span>
                             {% elif item.status == 'reverted' %}
                             <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
                                 Откачено
@@ -269,9 +297,11 @@ function batchDetailApp() {
     return {
         applying: false,
         reverting: false,
+        retrying: false,
+        reconciling: false,
 
         async applyBatch() {
-            if (!confirm('Применить изменения цен к Wildberries?\n\nЭто действие изменит цены товаров в вашем кабинете WB.')) {
+            if (!confirm('Отправить новые цены в Wildberries?\n\nWildberries обрабатывает цены не мгновенно: мы отметим позиции как применённые только после того, как увидим новую цену на витрине.')) {
                 return;
             }
 
@@ -284,7 +314,8 @@ function batchDetailApp() {
                 const data = await response.json();
 
                 if (data.success) {
-                    alert(`Успешно применено: ${data.applied} товаров.\nОшибок: ${data.failed}`);
+                    // Отправка ≠ применение: WB обрабатывает цены асинхронно
+                    alert(data.message || `Отправлено: ${data.submitted}.`);
                     location.reload();
                 } else {
                     alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
@@ -296,8 +327,52 @@ function batchDetailApp() {
             }
         },
 
+        async reconcileBatch() {
+            this.reconciling = true;
+            try {
+                const response = await fetch('{{ url_for("prices.batch_reconcile", batch_id=batch.id) }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message);
+                    location.reload();
+                } else {
+                    alert('Не получилось: ' + (data.error || 'неизвестная ошибка'));
+                }
+            } catch (error) {
+                alert('Ошибка сети: ' + error.message);
+            } finally {
+                this.reconciling = false;
+            }
+        },
+
+        async retryFailed() {
+            if (!confirm('Собрать новый запуск из позиций, которые Wildberries отклонил?\n\nЦены пересчитаются от текущих значений — перед отправкой их можно будет проверить.')) {
+                return;
+            }
+            this.retrying = true;
+            try {
+                const response = await fetch('{{ url_for("prices.batch_retry_failed", batch_id=batch.id) }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                if (data.success) {
+                    window.location.href = '{{ url_for("prices.batch_detail", batch_id=0) }}'.replace(/0$/, data.batch_id);
+                } else {
+                    alert('Не получилось: ' + (data.error || 'неизвестная ошибка'));
+                }
+            } catch (error) {
+                alert('Ошибка сети: ' + error.message);
+            } finally {
+                this.retrying = false;
+            }
+        },
+
         async revertBatch() {
-            if (!confirm('Откатить изменения цен?\n\nЦены товаров будут возвращены к прежним значениям.')) {
+            if (!confirm('Откатить изменения цен?\n\nВернём прежние цены только тем товарам, для которых Wildberries подтвердит откат. Отклонённые останутся с текущей ценой.')) {
                 return;
             }
 
@@ -310,7 +385,10 @@ function batchDetailApp() {
                 const data = await response.json();
 
                 if (data.success) {
-                    alert('Изменения успешно откачены');
+                    const rejected = data.rejected || 0;
+                    alert(rejected
+                        ? `Откат выполнен частично: вернули ${data.reverted}, Wildberries отклонил ${rejected}. Отклонённые позиции остались с текущей ценой.`
+                        : `Цены возвращены: ${data.reverted}.`);
                     location.reload();
                 } else {
                     alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));

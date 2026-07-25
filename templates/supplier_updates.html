@@ -348,24 +348,13 @@ function supplierUpdates() {
         if (data.status === 'completed') {
           if (!this._completedToastShown) {
             this._completedToastShown = true;
-            window.showToast && showToast('success', 'Дозагрузка фото',
-              'Готово: ' + data.succeeded + ' обновлено' + (data.failed ? ', ошибок: ' + data.failed : '')
-              + (data.succeeded ? '. Запущена проверка обработки на WB…' : ''));
+            window.showToast && showToast('info', 'Дозагрузка фото',
+              'Отправлено: ' + data.succeeded + (data.failed ? ', ошибок до отправки: ' + data.failed : '')
+              + (data.succeeded ? '. Live-галерея WB сверяется автоматически.' : ''));
           }
-          // После дозагрузки джоба сама сверяет карточки с WB —
-          // продолжаем поллинг, пока в result не появится verify (макс ~3 мин)
-          const verifyReport = data.result && data.result.verify;
-          if (verifyReport) {
-            this.verify = verifyReport;
-            clearInterval(this.pollTimer);
-            this.pollTimer = null;
-            return;
-          }
-          if (!data.succeeded || ++this._verifyWaitTicks > 90) {
-            clearInterval(this.pollTimer);
-            this.pollTimer = null;
-            if (data.succeeded) setTimeout(() => window.location.reload(), 1000);
-          }
+          clearInterval(this.pollTimer);
+          this.pollTimer = null;
+          if (data.succeeded) setTimeout(() => window.location.reload(), 1000);
         }
       } catch (e) { /* сеть мигнула — продолжаем поллинг */ }
     },

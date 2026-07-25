@@ -5,9 +5,18 @@ import unittest
 
 from services.marketplace_operation_locks import (
     release_account_operation_lock,
+    release_marketplace_category_mapping_lock,
+    release_marketplace_source_link_lock,
     release_wb_seller_media_lock,
+    release_wb_seller_content_lock,
+    release_wb_seller_supplier_job_lock,
     try_account_operation_lock,
+    try_marketplace_category_mapping_lock,
+    try_marketplace_source_link_lock,
     try_wb_seller_media_lock,
+    try_wb_seller_content_lock,
+    try_wb_seller_supplier_photo_job_lock,
+    try_wb_seller_supplier_verify_job_lock,
 )
 
 
@@ -50,6 +59,58 @@ class MarketplaceOperationLockTest(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     try_wb_seller_media_lock(value)
+
+    def test_wb_content_is_seller_exclusive_and_separate_from_media(self):
+        content = try_wb_seller_content_lock(987654322)
+        self.assertIsNotNone(content)
+        try:
+            self.assertIsNone(try_wb_seller_content_lock(987654322))
+            media = try_wb_seller_media_lock(987654322)
+            self.assertIsNotNone(media)
+            release_wb_seller_media_lock(media)
+        finally:
+            release_wb_seller_content_lock(content)
+
+    def test_supplier_job_creation_is_exclusive_per_type(self):
+        photo = try_wb_seller_supplier_photo_job_lock(987654323)
+        self.assertIsNotNone(photo)
+        try:
+            self.assertIsNone(
+                try_wb_seller_supplier_photo_job_lock(987654323)
+            )
+            verify = try_wb_seller_supplier_verify_job_lock(987654323)
+            self.assertIsNotNone(verify)
+            release_wb_seller_supplier_job_lock(verify)
+        finally:
+            release_wb_seller_supplier_job_lock(photo)
+
+    def test_source_link_materialization_is_seller_exclusive(self):
+        first = try_marketplace_source_link_lock(987654324)
+        self.assertIsNotNone(first)
+        try:
+            self.assertIsNone(
+                try_marketplace_source_link_lock(987654324)
+            )
+        finally:
+            release_marketplace_source_link_lock(first)
+
+        repeated = try_marketplace_source_link_lock(987654324)
+        self.assertIsNotNone(repeated)
+        release_marketplace_source_link_lock(repeated)
+
+    def test_observed_category_mapping_is_seller_exclusive(self):
+        first = try_marketplace_category_mapping_lock(987654325)
+        self.assertIsNotNone(first)
+        try:
+            self.assertIsNone(
+                try_marketplace_category_mapping_lock(987654325)
+            )
+        finally:
+            release_marketplace_category_mapping_lock(first)
+
+        repeated = try_marketplace_category_mapping_lock(987654325)
+        self.assertIsNotNone(repeated)
+        release_marketplace_category_mapping_lock(repeated)
 
 
 if __name__ == "__main__":

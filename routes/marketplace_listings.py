@@ -180,6 +180,147 @@ def index():
     )
 
 
+@marketplace_listings_bp.route("/beta")
+@login_required
+def beta():
+    """Тестовая клиентская витрина каталога (Vue, только read + существующий синк)."""
+    seller_id = _seller_id()
+    if seller_id is None:
+        return "Seller account required", 403
+    accounts = MarketplaceAccountService.list_accounts(seller_id=seller_id)
+    latest_syncs = MarketplaceListingService.latest_syncs(seller_id=seller_id)
+    accounts_payload = []
+    for account in accounts:
+        marketplace_code = (
+            account.marketplace.code if account.marketplace else None
+        )
+        if marketplace_code != "ozon":
+            continue
+        last_sync = latest_syncs.get(account.id)
+        accounts_payload.append({
+            "id": account.id,
+            "label": account.label,
+            "marketplace_code": marketplace_code,
+            "is_default": bool(account.is_default),
+            "is_active": bool(account.is_active),
+            "connection_status": account.connection_status,
+            "last_sync": last_sync.to_public_dict() if last_sync else None,
+        })
+    return render_template(
+        "marketplace_listings_beta.html",
+        accounts_payload=accounts_payload,
+        ozon_enabled=bool(
+            current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+        ),
+    )
+
+
+@marketplace_listings_bp.route("/beta/<int:listing_id>")
+@login_required
+def beta_detail(listing_id: int):
+    """Тестовая деталь товара: каналы одной общей карточки, read-only + существующие link-действия.
+
+    С ``Accept: application/json`` тот же роут отдаёт полный bootstrap страницы,
+    поэтому после действий со связью каналы обновляются без перезагрузки.
+    """
+    seller_id = _seller_id()
+    if seller_id is None:
+        if _wants_json():
+            return jsonify({
+                "success": False,
+                "error": "Seller account required",
+            }), 403
+        return "Seller account required", 403
+    try:
+        listing = MarketplaceListingService.get_listing(
+            seller_id=seller_id,
+            listing_id=listing_id,
+        )
+        members = MarketplaceListingService.group_members(
+            seller_id=seller_id,
+            listing=listing,
+        )
+    except MarketplaceListingError as exc:
+        return _error_response(exc)
+    if _wants_json():
+        return jsonify({
+            "success": True,
+            **_beta_detail_payload(seller_id=seller_id, listing=listing),
+            "members": members,
+        })
+    return render_template(
+        "marketplace_listing_beta_detail.html",
+        listing_id=listing.id,
+        members=members,
+        ozon_enabled=bool(
+            current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+        ),
+    )
+
+
+def _beta_detail_payload(*, seller_id: int, listing) -> Dict[str, Any]:
+    """Общий read-only снимок карточки для beta-страницы."""
+    warehouse_stocks = []
+    if listing.marketplace and listing.marketplace.code == "ozon":
+        warehouse_stocks = MarketplaceWarehouseService.list_listing_stocks(
+            seller_id=seller_id,
+            listing_id=listing.id,
+        )
+    try:
+        product_link = MarketplaceProductLinkService.context(
+            seller_id=seller_id,
+            listing_id=listing.id,
+            listing=listing,
+        )
+    except MarketplaceProductLinkError:
+        product_link = None
+    return {
+        "listing": listing.to_public_dict(detail=True),
+        "gallery": MarketplaceListingService.gallery_urls(listing=listing),
+        "attribute_names": MarketplaceListingService.attribute_names(
+            listing=listing,
+        ),
+        "warehouse_stocks": [row.to_public_dict() for row in warehouse_stocks],
+        "product_link": product_link,
+    }
+
+
+@marketplace_listings_bp.route("/api/facets")
+@login_required
+def facets_api():
+    """Счётчики статусов и каналов одним агрегатом вместо 5+N запросов."""
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        filters = _listing_filters()
+        filters.pop("page", None)
+        filters.pop("per_page", None)
+        facets = MarketplaceListingService.catalog_facets(
+            seller_id=seller_id,
+            **filters,
+        )
+    except (MarketplaceListingError, ValueError) as exc:
+        return _error_response(exc)
+    return jsonify({"success": True, **facets})
+
+
+@marketplace_listings_bp.route("/api/groups")
+@login_required
+def groups_api():
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        payload = MarketplaceListingService.list_catalog_groups(
+            seller_id=seller_id,
+            **_listing_filters(),
+        )
+    except (MarketplaceListingError, ValueError) as exc:
+        return _error_response(exc)
+    return jsonify({"success": True, **payload})
+
+
 @marketplace_listings_bp.route("/api")
 @login_required
 def list_api():
@@ -288,6 +429,9 @@ def detail(listing_id: int):
         return jsonify({
             "success": True,
             "listing": listing.to_public_dict(detail=True),
+            "attribute_names": MarketplaceListingService.attribute_names(
+                listing=listing,
+            ),
             "warehouse_stocks": [row.to_public_dict() for row in warehouse_stocks],
             "product_link": product_link,
             "canonical_content": canonical_content,
@@ -456,18 +600,32 @@ def reconcile_product_link(listing_id: int):
     data = _payload()
     try:
         _link_write_payload(data, set())
-        listing = MarketplaceProductLinkService.reconcile_listing(
-            seller_id=seller_id,
-            listing_id=listing_id,
+        listing, outcome = (
+            MarketplaceProductLinkService.reconcile_listing_with_outcome(
+                seller_id=seller_id,
+                listing_id=listing_id,
+            )
         )
     except (MarketplaceProductLinkError, ValueError) as exc:
         db.session.rollback()
         return _error_response(exc)
+    # Занятый seller-lock значит «идёт фоновая сверка», а не «совпадений нет».
+    busy = bool(outcome.get("busy")) and not listing.imported_product_id
     if _wants_json():
         return jsonify({
             "success": True,
+            "busy": busy,
             "listing": listing.to_public_dict(detail=True),
         })
+    if busy:
+        flash(
+            "Сейчас идёт фоновая сверка каталога — повторите через минуту",
+            "info",
+        )
+        return redirect(url_for(
+            "marketplace_listings.detail",
+            listing_id=listing.id,
+        ))
     if listing.imported_product_id:
         flash("Найдена одна точная внутренняя карточка; связь создана", "success")
     elif listing.canonical_link_status == "ambiguous":

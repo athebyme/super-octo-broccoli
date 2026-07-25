@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Encrypted seller marketplace accounts and tenant-scoped routes."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import json
@@ -30,6 +30,7 @@ from services.marketplace_accounts import (
     MarketplaceAccountConfigurationError,
     MarketplaceAccountNotFound,
     MarketplaceAccountService,
+    MarketplaceAccountValidationError,
 )
 from services.marketplace_adapters.types import ConnectionCheck
 
@@ -164,6 +165,39 @@ class MarketplaceAccountsTest(unittest.TestCase):
             self.assertNotIn("synthetic-ozon-key", repr(account))
             self.assertEqual(account.get_credentials()["api_key"], "synthetic-ozon-key")
             self.assertTrue(account.is_default)
+
+    def test_default_vat_is_validated_and_exposed_without_other_settings(self):
+        with self.app.app_context():
+            account = self._save(default_vat="0.22")
+            account.settings_json = json.dumps({
+                "default_vat": "0.22",
+                "internal_note": "must-not-leak",
+            })
+            db.session.commit()
+
+            public = account.to_public_dict()
+            self.assertEqual(public["settings"], {"default_vat": "0.22"})
+            self.assertNotIn("must-not-leak", json.dumps(public))
+
+            updated = MarketplaceAccountService.save_ozon_account(
+                seller_id=self.seller1_id,
+                account_id=account.id,
+                external_account_id=account.external_account_id,
+                label=account.label,
+                api_key=None,
+                default_vat="0.1",
+            )
+            self.assertEqual(updated.public_settings["default_vat"], "0.1")
+
+            with self.assertRaises(MarketplaceAccountValidationError):
+                MarketplaceAccountService.save_ozon_account(
+                    seller_id=self.seller1_id,
+                    account_id=account.id,
+                    external_account_id=account.external_account_id,
+                    label=account.label,
+                    api_key=None,
+                    default_vat="18%",
+                )
 
     def test_new_credentials_fail_closed_without_encryption_key(self):
         with self.app.app_context():
@@ -422,6 +456,7 @@ class MarketplaceAccountsTest(unittest.TestCase):
                     "label": "Кабинет 777",
                     "api_key": "route-secret-key",
                     "is_default": True,
+                    "default_vat": "0.22",
                 },
             )
             listed = self.client.get(
@@ -433,6 +468,41 @@ class MarketplaceAccountsTest(unittest.TestCase):
         self.assertNotIn("route-secret-key", response.get_data(as_text=True))
         self.assertNotIn("route-secret-key", listed.get_data(as_text=True))
         self.assertEqual(len(listed.get_json()["accounts"]), 1)
+        self.assertEqual(
+            listed.get_json()["accounts"][0]["settings"]["default_vat"],
+            "0.22",
+        )
+
+    def test_html_index_marks_only_nonexpired_connected_vat_account_ready(self):
+        with self.app.app_context():
+            ready = self._save(default_vat="0.22")
+            ready.connection_status = "connected"
+            ready.credential_expires_at = datetime.utcnow() + timedelta(days=1)
+            expired = self._save(
+                external_account_id="expired-client",
+                label="Истёкший ключ",
+                default_vat="0.22",
+            )
+            expired.connection_status = "connected"
+            expired.credential_expires_at = datetime.utcnow() - timedelta(
+                seconds=1,
+            )
+            db.session.commit()
+            ready_id = ready.id
+            expired_id = expired.id
+
+        self.app.config["MARKETPLACE_OZON_PUBLICATION_ENABLED"] = True
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch, patch(
+            "routes.marketplace_accounts.render_template",
+            return_value="accounts",
+        ) as render:
+            response = self.client.get("/marketplaces/accounts/")
+
+        self.assertEqual(response.status_code, 200)
+        ready_ids = render.call_args.kwargs["upload_ready_account_ids"]
+        self.assertIn(ready_id, ready_ids)
+        self.assertNotIn(expired_id, ready_ids)
 
     def test_html_create_can_return_to_shared_api_settings(self):
         user_patch, login_patch = self._login_patches(self.seller1_id)

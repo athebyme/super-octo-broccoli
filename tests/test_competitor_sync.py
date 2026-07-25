@@ -143,6 +143,24 @@ class ObservationPolicyTest(SyncTestBase):
         self.assertTrue(p.is_adult)
         self.assertIsNotNone(p.metadata_synced_at)
 
+    def test_successful_empty_characteristics_clears_stale_facts(self):
+        p = self._product(
+            metadata_synced_at=datetime.utcnow() - timedelta(days=8),
+            characteristics_json='[{"name":"Старое","value":"значение"}]',
+        )
+        meta = {
+            'nm_id': 111, 'title': 'Товар', 'brand': 'B',
+            'supplier_name': 'S', 'wb_supplier_id': 500,
+            'image_url': 'http://x', 'is_adult': False,
+            'subject_name': 'Категория', 'characteristics': [],
+        }
+        svc = self._fetch_mock(
+            metadata={111: meta}, supplier_prices={111: self._obs()})
+        cm.sync_seller_competitors(
+            self.seller.id, self.app, fetch_service=svc)
+        db.session.refresh(p)
+        self.assertEqual(p.characteristics_json, '[]')
+
     def test_settings_updated_and_next_due_scheduled(self):
         self._product()
         svc = self._fetch_mock(supplier_prices={111: self._obs()})
@@ -255,6 +273,74 @@ class NotificationTest(SyncTestBase):
 
 
 class SellerImportTest(SyncTestBase):
+    def test_retry_continues_from_next_hundred(self):
+        self.group.import_requested = True
+        self.group.auto_source = 'seller'
+        self.group.auto_source_value = '332183'
+        db.session.add_all([
+            CompetitorProduct(
+                seller_id=self.seller.id, group_id=self.group.id,
+                nm_id=20_000 + index, is_active=True)
+            for index in range(100)
+        ])
+        db.session.commit()
+        page_two = [{
+            'nm_id': 30_001, 'title': 'T', 'brand': 'B',
+            'supplier_name': 'S', 'wb_supplier_id': 332183,
+            'image_url': None, 'price': 100, 'sale_price': 90,
+            'rating': None, 'feedbacks_count': 0, 'total_stock': 1,
+        }]
+        svc = self._fetch_mock()
+        svc.fetch_seller_catalog_page.return_value = page_two
+
+        cm.sync_seller_competitors(
+            self.seller.id, self.app, fetch_service=svc)
+
+        svc.fetch_seller_catalog_page.assert_called_once_with(332183, page=2)
+        db.session.refresh(self.group)
+        self.assertFalse(self.group.import_requested)
+        self.assertEqual(
+            CompetitorProduct.query.filter_by(group_id=self.group.id).count(),
+            101)
+
+    def test_empty_first_page_keeps_import_queued(self):
+        self.group.import_requested = True
+        self.group.auto_source = 'seller'
+        self.group.auto_source_value = '332183'
+        db.session.commit()
+        svc = self._fetch_mock()
+
+        cm.sync_seller_competitors(
+            self.seller.id, self.app, fetch_service=svc)
+
+        db.session.refresh(self.group)
+        db.session.refresh(self.settings)
+        self.assertTrue(self.group.import_requested)
+        self.assertEqual(self.settings.last_sync_status, 'waiting_wb')
+        self.assertLessEqual(
+            self.settings.next_sync_due_at,
+            datetime.utcnow() + timedelta(minutes=11))
+        self.assertEqual(
+            CompetitorProduct.query.filter_by(group_id=self.group.id).count(),
+            0)
+
+    def test_rate_limit_keeps_import_queued(self):
+        self.group.import_requested = True
+        self.group.auto_source = 'seller'
+        self.group.auto_source_value = '332183'
+        db.session.commit()
+        svc = self._fetch_mock()
+        svc.fetch_seller_catalog_page.side_effect = cf.WBRateLimitedError('429')
+
+        cm.sync_seller_competitors(
+            self.seller.id, self.app, fetch_service=svc)
+
+        db.session.refresh(self.group)
+        db.session.refresh(self.settings)
+        self.assertTrue(self.group.import_requested)
+        self.assertEqual(self.settings.last_sync_status, 'waiting_wb')
+        self.assertIsNone(self.settings.last_sync_error)
+
     def test_import_creates_products_and_clears_flag(self):
         self.group.import_requested = True
         self.group.auto_source = 'seller'

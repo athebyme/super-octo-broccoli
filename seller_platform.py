@@ -88,14 +88,15 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('DISABLE_SECURE_COOKIE', '').lower() not in ('1', 'true')
 app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 час
 
-# Marketplace capabilities are rolled out independently. Ozon starts dark and
-# must be enabled explicitly after its migration is applied.
+# Manual Ozon workflows are production-default. Operators may still disable
+# them explicitly; autonomous publication and commercial writes remain
+# independently dark.
 app.config['MARKETPLACE_OZON_ENABLED'] = (
-    os.environ.get('MARKETPLACE_OZON_ENABLED', '').strip().lower()
+    os.environ.get('MARKETPLACE_OZON_ENABLED', '1').strip().lower()
     in ('1', 'true', 'yes', 'on')
 )
 app.config['MARKETPLACE_OZON_PUBLICATION_ENABLED'] = (
-    os.environ.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', '').strip().lower()
+    os.environ.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', '1').strip().lower()
     in ('1', 'true', 'yes', 'on')
 )
 app.config['MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED'] = (
@@ -126,6 +127,21 @@ app.config['MARKETPLACE_WB_COMMON_READ_ENABLED'] = (
 # Пример: http://176.123.45.230:5000  или  https://myshop.example.com
 # Если не задан — url_for(_external=True) генерит localhost, и WB не сможет забрать фото
 app.config['PUBLIC_BASE_URL'] = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
+# Product-import media never points Ozon directly at a supplier URL.  The
+# scheduler first freezes verified JPEG bytes in the persistent /app/data
+# volume and gives Ozon an immutable HMAC-signed URL served by this app.
+app.config['MARKETPLACE_IMAGE_ASSET_DIR'] = os.environ.get(
+    'MARKETPLACE_IMAGE_ASSET_DIR',
+    str(BASE_DIR / 'data' / 'marketplace_image_assets'),
+)
+app.config['OZON_MEDIA_ASSET_URLS_PER_ATTEMPT'] = os.environ.get(
+    'OZON_MEDIA_ASSET_URLS_PER_ATTEMPT',
+    '3',
+)
+app.config['OZON_MEDIA_ASSET_ATTEMPT_SECONDS'] = os.environ.get(
+    'OZON_MEDIA_ASSET_ATTEMPT_SECONDS',
+    '40',
+)
 
 # SQLite конфигурация для лучшей поддержки конкурентного доступа
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -215,6 +231,33 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Пожалуйста, войдите в систему'
 login_manager.login_message_category = 'info'
 
+
+@login_manager.unauthorized_handler
+def _unauthorized():
+    """JSON-клиенту отдаём честный 401, а не HTML страницы логина.
+
+    Иначе fetch() получает 200 с HTML, парсинг JSON падает, и интерфейс
+    показывает «данных нет» вместо «сессия истекла».
+    """
+    from flask import jsonify as _jsonify, redirect as _redirect, request as _request, url_for as _url_for
+
+    # JSON-клиентом считаем только того, кто попросил JSON явно: у обычной
+    # браузерной навигации и у клиентов с «Accept: */*» должен остаться редирект.
+    accept_header = _request.headers.get('Accept', '')
+    wants_json = (
+        _request.is_json
+        or 'application/json' in accept_header
+        or _request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    )
+    if wants_json:
+        return _jsonify({
+            'success': False,
+            'error': 'Сессия истекла, войдите заново',
+            'code': 'auth_required',
+        }), 401
+    flash(login_manager.login_message, login_manager.login_message_category)
+    return _redirect(_url_for(login_manager.login_view, next=_request.full_path))
+
 # CSRF защита
 from flask_wtf.csrf import CSRFProtect
 csrf = CSRFProtect(app)
@@ -253,10 +296,24 @@ def after_request(response):
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
 
-    # Запрещаем кэширование для аутентифицированных страниц
-    if hasattr(response, 'cache_control'):
+    # Все обычные UI/API-ответы остаются no-store. Исключение — только явно
+    # public policy уже выставленная двумя подписанными asset endpoints.
+    # Проверка endpoint без заголовка недостаточна: его abort(403/404) не
+    # должен стать cacheable.
+    explicit_public_asset = (
+        request.endpoint in {
+            'marketplace_image_asset',
+            'marketplace_media_public_asset',
+        }
+        and response.headers.get('Cache-Control', '').lower().startswith(
+            'public,'
+        )
+    )
+    if hasattr(response, 'cache_control') and not explicit_public_asset:
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
+    elif explicit_public_asset:
+        response.headers.pop('Pragma', None)
 
     return response
 
@@ -426,6 +483,35 @@ def logout():
 
 
 # ============= ДАШБОРД ПРОДАВЦА =============
+
+
+@app.route('/dashboard/beta')
+@login_required
+def dashboard_beta():
+    """Главная, отвечающая на вопрос «чем заняться сегодня»."""
+    if not current_user.seller:
+        return redirect(url_for('dashboard'))
+    return render_template(
+        'dashboard_beta.html',
+        wb_connected=bool(current_user.seller.has_valid_api_key()),
+        has_any_channel=bool(current_user.seller.has_any_channel()),
+    )
+
+
+@app.route('/api/dashboard/attention')
+@login_required
+def api_dashboard_attention():
+    """Сигналы «что требует внимания» одним запросом."""
+    if not current_user.seller:
+        return jsonify({'success': False, 'error': 'Нет профиля продавца'}), 403
+    from services.seller_attention import SellerAttentionService
+
+    return jsonify({
+        'success': True,
+        **SellerAttentionService.summary(seller_id=current_user.seller.id),
+    })
+
+
 
 @app.route('/')
 @app.route('/dashboard')
@@ -1324,14 +1410,37 @@ def api_tasks_tray():
 
     # 1. BackgroundJob — импорт/публикация, обновление фото
     try:
-        _labels = {'bulk_wb_import': 'Публикация в WB'}
+        _labels = {
+            'bulk_wb_import': 'Публикация в WB',
+            'competitor_matching': 'Сопоставление товаров конкурентов',
+            'ozon_bulk_upload': 'Загрузка карточек Ozon',
+            'marketplace_source_link_reconcile': (
+                'Связь карточек Ozon и WB'
+            ),
+        }
         for j in (BackgroundJob.query
                   .filter(BackgroundJob.seller_id == sid,
                           BackgroundJob.status.in_(['pending', 'running']))
                   .order_by(BackgroundJob.created_at.desc()).limit(10).all()):
             items.append({'kind': 'import', 'title': _labels.get(j.job_type, 'Фоновая задача'),
                           'status': j.status, 'progress': pct(j.processed, j.total),
-                          'started_at': iso(j.created_at), 'link': '/supplier-updates'})
+                          'started_at': iso(j.created_at),
+                          'link': (
+                              '/competitors/groups/'
+                              + str(j.get_progress().get('group_id'))
+                              if j.job_type == 'competitor_matching'
+                              and j.get_progress().get('group_id')
+                              else (
+                                  f'/marketplaces/ozon/uploads/{j.job_uid}'
+                                  if j.job_type == 'ozon_bulk_upload'
+                                  else (
+                                      '/marketplaces/listings?link_status=unlinked'
+                                      if j.job_type
+                                      == 'marketplace_source_link_reconcile'
+                                      else '/supplier-updates'
+                                  )
+                              )
+                          )})
     except Exception:
         pass
 
@@ -6566,6 +6675,10 @@ from routes.marketplace_media_publications import (
     register_marketplace_media_publication_routes,
 )
 register_marketplace_media_publication_routes(app)
+from routes.marketplace_image_assets import (
+    register_marketplace_image_asset_routes,
+)
+register_marketplace_image_asset_routes(app)
 
 # ============= РОУТЫ ФОТОГРАФИЙ ПОСТАВЩИКОВ =============
 from routes.photos import register_photo_routes, register_content_photo_routes
@@ -6594,6 +6707,9 @@ register_marketplace_readiness_routes(app)
 
 from routes.marketplace_drafts import register_marketplace_draft_routes
 register_marketplace_draft_routes(app)
+
+from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
+register_ozon_bulk_upload_routes(app)
 
 from routes.marketplace_operations import register_marketplace_operation_routes
 register_marketplace_operation_routes(app)
@@ -6726,6 +6842,10 @@ def _run_startup_migrations():
                 migrate as migrate_marketplace_inbox,
             )
             migrate_marketplace_inbox(sqlite_path)
+            from migrations.migrate_add_ozon_product_type_visibility import (
+                migrate as migrate_ozon_product_type_visibility,
+            )
+            migrate_ozon_product_type_visibility(sqlite_path)
             from migrations.migrate_add_brand_category_external_id import (
                 migrate as migrate_brand_category_external_id,
             )
@@ -6813,6 +6933,12 @@ def _run_startup_migrations():
         ('products', 'wb_discount', 'INTEGER'),
         ('products', 'wb_discounted_price', 'NUMERIC(10, 2)'),
         ('products', 'wb_price_synced_at', 'DATETIME'),
+        # Public WB storefront pair for comparable competitor price lanes.
+        ('products', 'wb_public_base_price', 'NUMERIC(10, 2)'),
+        ('products', 'wb_public_final_price', 'NUMERIC(10, 2)'),
+        ('products', 'wb_public_price_synced_at', 'DATETIME'),
+        ('products', 'wb_public_price_miss_count',
+         'INTEGER DEFAULT 0 NOT NULL'),
         # Auto-publish atomic lock token
         ('auto_publish_settings', 'run_lock_token', 'VARCHAR(64)'),
         # Marketplace-neutral adapter metadata. The standalone account

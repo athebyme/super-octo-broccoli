@@ -39,7 +39,7 @@ class OzonProductStateUnavailable(OzonProductStateError):
 class OzonProductStateContract:
     """Read and canonicalize exactly one complete Ozon import item."""
 
-    CONTRACT_VERSION = "product-full-state@2026-07-10"
+    CONTRACT_VERSION = "product-full-state@2026-07-25"
     PICTURES_CONTRACT_VERSION = "product-pictures-info-v2@2026-07-10"
     MAX_URLS = 30
     MAX_COLOR_URLS = 1
@@ -67,6 +67,16 @@ class OzonProductStateContract:
         "POUND": "lb",
         "POUNDS": "lb",
     }
+    _DRAFT_DIMENSION_UNITS = {
+        "mm": "MILLIMETERS",
+        "cm": "CENTIMETERS",
+        "in": "INCHES",
+    }
+    _DRAFT_WEIGHT_UNITS = {
+        "g": "GRAMS",
+        "kg": "KILOGRAMS",
+        "lb": "POUNDS",
+    }
 
     @staticmethod
     def _text(
@@ -75,6 +85,7 @@ class OzonProductStateContract:
         *,
         maximum: int,
         allow_empty: bool = False,
+        allow_newlines: bool = False,
     ) -> str:
         if not isinstance(value, str):
             raise OzonProductStateProtocolError(
@@ -85,8 +96,13 @@ class OzonProductStateContract:
             raise OzonProductStateProtocolError(
                 f"Ozon {field_name} must be non-empty"
             )
+        allowed_controls = {9, 10, 13} if allow_newlines else set()
         if len(normalized) > maximum or any(
-            ord(character) < 32 or ord(character) == 127
+            (
+                ord(character) < 32
+                and ord(character) not in allowed_controls
+            )
+            or ord(character) == 127
             for character in normalized
         ):
             raise OzonProductStateProtocolError(
@@ -345,6 +361,175 @@ class OzonProductStateContract:
         )
 
     @classmethod
+    def provider_roundtrip_omissions(
+        cls,
+        submitted_payload: Any,
+        live_payload: Any,
+        *,
+        omittable_simple_attribute_ids: Iterable[Any],
+    ) -> Optional[tuple[str, ...]]:
+        """Prove exact provider equality modulo allowlisted missing attributes.
+
+        Some Ozon import-only simple attributes are accepted by
+        ``/v3/product/import`` but are not returned by the product attributes
+        read model.  Callers must independently prove which exact IDs are safe
+        to treat this way.  This contract then permits only a complete omission
+        from live state: a changed value, duplicate, complex occurrence, or any
+        other payload difference remains non-equivalent.
+
+        ``()`` means exact equality, a non-empty tuple lists the only omitted
+        IDs, and ``None`` means the states are different.
+        """
+        adjustments = cls.provider_roundtrip_adjustments(
+            submitted_payload,
+            live_payload,
+            omittable_simple_attribute_ids=(
+                omittable_simple_attribute_ids
+            ),
+            offer_id_canonicalized_simple_attribute_ids=(),
+        )
+        if adjustments is None:
+            return None
+        return adjustments["omitted_attribute_ids"]
+
+    @classmethod
+    def provider_roundtrip_adjustments(
+        cls,
+        submitted_payload: Any,
+        live_payload: Any,
+        *,
+        omittable_simple_attribute_ids: Iterable[Any],
+        offer_id_canonicalized_simple_attribute_ids: Iterable[Any],
+    ) -> Optional[dict]:
+        """Prove exact equality modulo two narrow provider transformations.
+
+        In addition to an allowlisted complete omission, current Ozon may
+        canonicalize a provider-owned simple attribute to the item's exact
+        ``offer_id``.  That transformation is accepted only when both payloads
+        contain one plain-string occurrence of the allowlisted attribute, the
+        live value equals the unchanged top-level ``offer_id``, and every
+        other byte of canonical state compares exactly.
+        """
+        submitted = cls.canonical_payload(submitted_payload)
+        live = cls.canonical_payload(live_payload)
+        empty = {
+            "omitted_attribute_ids": (),
+            "offer_id_canonicalized_attribute_ids": (),
+        }
+        if submitted == live:
+            return empty
+
+        omitted_allowed: set[int] = set()
+        for index, value in enumerate(omittable_simple_attribute_ids):
+            omitted_allowed.add(cls._api_id(
+                value,
+                f"omittable_simple_attribute_ids[{index}]",
+            ))
+        canonicalized_allowed: set[int] = set()
+        for index, value in enumerate(
+            offer_id_canonicalized_simple_attribute_ids
+        ):
+            canonicalized_allowed.add(cls._api_id(
+                value,
+                (
+                    "offer_id_canonicalized_simple_attribute_ids"
+                    f"[{index}]"
+                ),
+            ))
+        if not omitted_allowed and not canonicalized_allowed:
+            return None
+
+        submitted_item = submitted["items"][0]
+        live_item = live["items"][0]
+        submitted_attributes = submitted_item["attributes"]
+        live_attributes = live_item["attributes"]
+        canonicalized: list[int] = []
+
+        if submitted_item.get("offer_id") == live_item.get("offer_id"):
+            for attribute_id in sorted(canonicalized_allowed):
+                submitted_matches = [
+                    attribute
+                    for attribute in submitted_attributes
+                    if (
+                        isinstance(attribute, dict)
+                        and attribute.get("id") == attribute_id
+                    )
+                ]
+                live_matches = [
+                    attribute
+                    for attribute in live_attributes
+                    if (
+                        isinstance(attribute, dict)
+                        and attribute.get("id") == attribute_id
+                    )
+                ]
+                if len(submitted_matches) != 1 or len(live_matches) != 1:
+                    continue
+                submitted_attribute = submitted_matches[0]
+                live_attribute = live_matches[0]
+                submitted_values = submitted_attribute.get("values")
+                live_values = live_attribute.get("values")
+                if (
+                    submitted_attribute.get("complex_id") != 0
+                    or live_attribute.get("complex_id") != 0
+                    or not isinstance(submitted_values, list)
+                    or not isinstance(live_values, list)
+                    or len(submitted_values) != 1
+                    or len(live_values) != 1
+                    or not isinstance(submitted_values[0], dict)
+                    or not isinstance(live_values[0], dict)
+                    or set(submitted_values[0]) != {"value"}
+                    or set(live_values[0]) != {"value"}
+                    or live_values[0]["value"]
+                    != live_item.get("offer_id")
+                    or submitted_values == live_values
+                ):
+                    continue
+                submitted_attribute["values"] = deepcopy(live_values)
+                canonicalized.append(attribute_id)
+
+        omitted: list[int] = []
+        for attribute_id in sorted(omitted_allowed):
+            submitted_matches = [
+                attribute
+                for attribute in submitted_attributes
+                if (
+                    isinstance(attribute, dict)
+                    and attribute.get("id") == attribute_id
+                )
+            ]
+            live_matches = [
+                attribute
+                for attribute in live_attributes
+                if (
+                    isinstance(attribute, dict)
+                    and attribute.get("id") == attribute_id
+                )
+            ]
+            if live_matches:
+                # A returned value must compare exactly; it may never be
+                # discarded merely because its ID is on the omission allowlist.
+                continue
+            if (
+                len(submitted_matches) != 1
+                or submitted_matches[0].get("complex_id") != 0
+            ):
+                continue
+            submitted_attributes.remove(submitted_matches[0])
+            omitted.append(attribute_id)
+
+        if (not omitted and not canonicalized) or submitted != live:
+            return None
+        return {
+            "omitted_attribute_ids": tuple(
+                str(attribute_id) for attribute_id in omitted
+            ),
+            "offer_id_canonicalized_attribute_ids": tuple(
+                str(attribute_id) for attribute_id in canonicalized
+            ),
+        }
+
+    @classmethod
     def archive_payload(cls, product_id: Any) -> dict:
         return {"product_id": [cls._api_id(product_id, "product_id")]}
 
@@ -357,7 +542,11 @@ class OzonProductStateContract:
         return response["result"]
 
     @classmethod
-    def _attribute(cls, raw: Mapping[str, Any], field_name: str) -> dict:
+    def _attribute(
+        cls,
+        raw: Mapping[str, Any],
+        field_name: str,
+    ) -> Optional[dict]:
         if not isinstance(raw, dict):
             raise OzonProductStateProtocolError(
                 f"Ozon {field_name} must be an object"
@@ -371,10 +560,14 @@ class OzonProductStateContract:
             ),
         }
         raw_values = raw.get("values")
-        if not isinstance(raw_values, list) or not raw_values or len(raw_values) > 500:
+        if not isinstance(raw_values, list) or len(raw_values) > 500:
             raise OzonProductStateUnavailable(
-                f"Ozon {field_name} has no reconstructable values"
+                f"Ozon {field_name} has malformed values"
             )
+        # Ozon attributes v4 may expose optional empty placeholders.  They have
+        # no import semantics and are safely equivalent to an absent attribute.
+        if not raw_values:
+            return None
         values = []
         for index, raw_value in enumerate(raw_values):
             if not isinstance(raw_value, dict):
@@ -385,6 +578,7 @@ class OzonProductStateContract:
                 raw_value.get("value"),
                 f"{field_name}.values[{index}].value",
                 maximum=100_000,
+                allow_newlines=True,
             )
             normalized_value = {"value": value}
             if raw_value.get("dictionary_value_id") not in (None, "", "0", 0):
@@ -452,6 +646,336 @@ class OzonProductStateContract:
         return result
 
     @classmethod
+    def _projection_media(cls, value: Any) -> dict:
+        """Normalize the catalog projection to pictures-info wire semantics.
+
+        Product info/attributes can repeat ``primary_image`` inside ``images``;
+        pictures-info reports the same gallery as a separate primary slot.
+        Removing that exact duplicate is therefore a representation
+        normalization, not a lossy media edit.
+        """
+        if not isinstance(value, Mapping):
+            raise OzonProductStateUnavailable(
+                "Current Ozon media projection is unavailable"
+            )
+        images = cls._urls(
+            value.get("images"),
+            "listing.media.images",
+            maximum=cls.MAX_URLS,
+        )
+        primary = value.get("primary_image")
+        if primary not in (None, ""):
+            primary = cls._text(
+                primary,
+                "listing.media.primary_image",
+                maximum=2_000,
+            )
+            images = [url for url in images if url != primary]
+        elif images:
+            primary, images = images[0], images[1:]
+        else:
+            raise OzonProductStateUnavailable(
+                "Current Ozon listing has no reconstructable main image set"
+            )
+        result = {"primary_image": primary, "images": images}
+        color = value.get("color_image")
+        if color not in (None, ""):
+            color = cls._text(
+                color,
+                "listing.media.color_image",
+                maximum=2_000,
+            )
+            if color == primary or color in images:
+                raise OzonProductStateUnavailable(
+                    "Current Ozon color image duplicates the main image set"
+                )
+            result["color_image"] = color
+        if value.get("images360") not in (None, []):
+            raise OzonProductStateUnavailable(
+                "Existing images360 cannot be preserved by the current Ozon write contract"
+            )
+        return result
+
+    @classmethod
+    def _projection_attributes(
+        cls,
+        value: Any,
+        field_name: str,
+        *,
+        complex_groups: bool = False,
+    ) -> list:
+        if not isinstance(value, list):
+            raise OzonProductStateUnavailable(
+                f"Current Ozon {field_name} projection is unavailable"
+            )
+        if not complex_groups:
+            result = []
+            for index, raw in enumerate(value):
+                if not isinstance(raw, Mapping):
+                    raise OzonProductStateProtocolError(
+                        f"Ozon {field_name}[{index}] must be an object"
+                    )
+                normalized = dict(raw)
+                # Publication-created rows before this contract stored the
+                # draft spelling.  Accept that exact local legacy shape until
+                # the next catalog sweep rewrites it to provider projection.
+                if "id" not in normalized and "attribute_id" in normalized:
+                    normalized["id"] = normalized.pop("attribute_id")
+                parsed = cls._attribute(
+                    normalized,
+                    f"{field_name}[{index}]",
+                )
+                if parsed is not None:
+                    result.append(parsed)
+            return result
+        result = []
+        for group_index, raw_group in enumerate(value):
+            if (
+                not isinstance(raw_group, Mapping)
+                or set(raw_group) != {"attributes"}
+                or not isinstance(raw_group.get("attributes"), list)
+            ):
+                raise OzonProductStateProtocolError(
+                    "Ozon complex attribute projection is malformed"
+                )
+            # Attributes v4 may return an empty ``{}`` complex block after
+            # normalization.  It carries no write semantics and is equivalent
+            # to an absent group.
+            if not raw_group["attributes"]:
+                continue
+            parsed_attributes = []
+            for index, raw in enumerate(raw_group["attributes"]):
+                normalized = raw
+                if (
+                    isinstance(raw, Mapping)
+                    and "id" not in raw
+                    and "attribute_id" in raw
+                ):
+                    normalized = {
+                        **raw,
+                        "id": raw.get("attribute_id"),
+                    }
+                parsed = cls._attribute(
+                    normalized,
+                    f"{field_name}[{group_index}].attributes[{index}]",
+                )
+                if parsed is not None:
+                    parsed_attributes.append(parsed)
+            if parsed_attributes:
+                result.append({"attributes": parsed_attributes})
+        return result
+
+    @classmethod
+    def from_listing_projection(cls, projection: Mapping[str, Any]) -> dict:
+        """Rebuild a full import item from one exact normalized catalog row.
+
+        This method is deliberately ORM-free.  The caller proves tenant scope
+        and freshness, then passes only the whitelist-normalized fields stored
+        by ``MarketplaceListingService``.  The returned fingerprint is used as
+        an optimistic before-state gate; the publication worker still performs
+        an independent exact live read immediately before any write.
+        """
+        if not isinstance(projection, Mapping):
+            raise OzonProductStateProtocolError(
+                "Ozon listing projection must be an object"
+            )
+        product_id = cls._id(
+            projection.get("product_id"),
+            "listing.product_id",
+        )
+        offer_id = cls._text(
+            projection.get("offer_id"),
+            "listing.offer_id",
+            maximum=200,
+        )
+        attributes = cls._projection_attributes(
+            projection.get("attributes"),
+            "listing.attributes",
+        )
+        complex_attributes = cls._projection_attributes(
+            projection.get("complex_attributes"),
+            "listing.complex_attributes",
+            complex_groups=True,
+        )
+        dimensions = projection.get("dimensions")
+        if not isinstance(dimensions, Mapping):
+            raise OzonProductStateUnavailable(
+                "Current Ozon physical dimensions are unavailable"
+            )
+        media = cls._projection_media(projection.get("media"))
+        barcodes = projection.get("barcodes")
+        if not isinstance(barcodes, list) or len(barcodes) > 1:
+            raise OzonProductStateUnavailable(
+                "Current Ozon barcode set cannot be restored through /v3/product/import"
+            )
+
+        item = {
+            "attributes": attributes,
+            "complex_attributes": complex_attributes,
+            "currency_code": "RUB",
+            "depth": cls._positive_integer(
+                dimensions.get("depth"),
+                "listing.dimensions.depth",
+            ),
+            "description_category_id": cls._api_id(
+                projection.get("category_id"),
+                "listing.description_category_id",
+            ),
+            "dimension_unit": cls._unit(
+                dimensions.get("dimension_unit"),
+                "listing.dimensions.dimension_unit",
+                cls._DIMENSION_UNITS,
+            ),
+            "height": cls._positive_integer(
+                dimensions.get("height"),
+                "listing.dimensions.height",
+            ),
+            "images": list(media["images"]),
+            "name": cls._text(
+                projection.get("title"),
+                "listing.name",
+                maximum=500,
+            ),
+            "offer_id": offer_id,
+            "primary_image": media["primary_image"],
+            "type_id": cls._api_id(
+                projection.get("type_id"),
+                "listing.type_id",
+            ),
+            "weight": cls._positive_integer(
+                dimensions.get("weight"),
+                "listing.dimensions.weight",
+            ),
+            "weight_unit": cls._unit(
+                dimensions.get("weight_unit"),
+                "listing.dimensions.weight_unit",
+                cls._WEIGHT_UNITS,
+            ),
+            "width": cls._positive_integer(
+                dimensions.get("width"),
+                "listing.dimensions.width",
+            ),
+        }
+        price_summary = projection.get("price") or {}
+        if (
+            isinstance(price_summary, Mapping)
+            and not isinstance(price_summary.get("values"), Mapping)
+            and price_summary.get("price") not in (None, "")
+        ):
+            price_summary = {
+                "currency": price_summary.get("currency_code"),
+                "values": dict(price_summary),
+            }
+        item.update(cls._commercial_item(price_summary))
+        if media.get("color_image"):
+            item["color_image"] = media["color_image"]
+        if barcodes:
+            item["barcode"] = cls._text(
+                barcodes[0],
+                "listing.barcode",
+                maximum=100,
+            )
+        payload = {"items": [item]}
+        canonical_payload = cls.canonical_payload(payload)
+        return {
+            "identity": {
+                "product_id": product_id,
+                "offer_id": offer_id,
+            },
+            "payload": payload,
+            "canonical_payload": canonical_payload,
+            "fingerprint": OzonProductImportContract.fingerprint(
+                canonical_payload
+            ),
+            "media": media,
+        }
+
+    @classmethod
+    def draft_documents(cls, payload: Mapping[str, Any]) -> dict:
+        """Convert one validated full import payload to normalized draft blocks."""
+        canonical = cls.canonical_payload(payload)
+        item = canonical["items"][0]
+
+        def draft_attribute(raw: Mapping[str, Any]) -> dict:
+            return {
+                "attribute_id": str(raw["id"]),
+                "complex_id": str(raw.get("complex_id") or 0),
+                "values": [
+                    {
+                        key: (
+                            str(value)
+                            if key == "dictionary_value_id"
+                            else value
+                        )
+                        for key, value in raw_value.items()
+                    }
+                    for raw_value in raw["values"]
+                ],
+            }
+
+        attributes = [
+            draft_attribute(raw)
+            for raw in item["attributes"]
+        ]
+        description = None
+        for attribute in attributes:
+            if (
+                attribute["attribute_id"]
+                == OzonProductImportContract.DESCRIPTION_ATTRIBUTE_ID
+                and attribute["complex_id"] == "0"
+                and len(attribute["values"]) == 1
+                and set(attribute["values"][0]) == {"value"}
+            ):
+                description = attribute["values"][0]["value"]
+                break
+        complex_attributes = [{
+            "attributes": [
+                draft_attribute(raw)
+                for raw in group["attributes"]
+            ]
+        } for group in item["complex_attributes"]]
+        media = {
+            "primary_image": item["primary_image"],
+            "images": list(item["images"]),
+        }
+        if item.get("color_image"):
+            media["color_image"] = item["color_image"]
+        commercial = {
+            "price": item["price"],
+            "vat": item["vat"],
+            "currency_code": item["currency_code"],
+        }
+        if item.get("old_price"):
+            commercial["old_price"] = item["old_price"]
+        return {
+            "content": {
+                "name": item["name"],
+                "description": description or "",
+            },
+            "attributes": attributes,
+            "complex_attributes": complex_attributes,
+            "media": media,
+            "dimensions": {
+                "width": str(item["width"]),
+                "height": str(item["height"]),
+                "depth": str(item["depth"]),
+                "weight": str(item["weight"]),
+                "dimension_unit": cls._DRAFT_DIMENSION_UNITS[
+                    item["dimension_unit"]
+                ],
+                "weight_unit": cls._DRAFT_WEIGHT_UNITS[
+                    item["weight_unit"]
+                ],
+            },
+            "barcodes": (
+                [item["barcode"]]
+                if item.get("barcode")
+                else []
+            ),
+            "commercial": commercial,
+        }
+
+    @classmethod
     def _exact_page_item(
         cls,
         page: Mapping[str, Any],
@@ -459,7 +983,11 @@ class OzonProductStateContract:
         product_id: str,
         endpoint: str,
     ) -> dict:
-        if page.get("total") != 1 or page.get("cursor") not in (None, ""):
+        # Ozon may return an opaque next cursor even when an exact product
+        # filter already returned its declared total on this one-item page.
+        # Exact identity + total=1 proves completeness; cursor emptiness does
+        # not, and requiring it breaks current /v5/product/info/prices reads.
+        if page.get("total") != 1:
             raise OzonProductStateProtocolError(
                 f"Ozon {endpoint} did not return one complete exact-set page"
             )
@@ -555,10 +1083,11 @@ class OzonProductStateContract:
             raise OzonProductStateProtocolError(
                 "Ozon product attributes are incomplete"
             )
-        normalized_attributes = [
-            cls._attribute(raw, f"attributes[{index}]")
-            for index, raw in enumerate(raw_attributes)
-        ]
+        normalized_attributes = []
+        for index, raw in enumerate(raw_attributes):
+            parsed = cls._attribute(raw, f"attributes[{index}]")
+            if parsed is not None:
+                normalized_attributes.append(parsed)
         normalized_complex = []
         for group_index, raw_group in enumerate(raw_complex):
             if not isinstance(raw_group, dict) or set(raw_group) != {"attributes"}:
@@ -566,19 +1095,26 @@ class OzonProductStateContract:
                     "Ozon complex attribute group is malformed"
                 )
             group_attributes = raw_group.get("attributes")
-            if not isinstance(group_attributes, list) or not group_attributes:
-                raise OzonProductStateUnavailable(
-                    "Ozon complex attribute group is empty"
+            if not isinstance(group_attributes, list):
+                raise OzonProductStateProtocolError(
+                    "Ozon complex attribute group attributes are malformed"
                 )
-            normalized_complex.append({
-                "attributes": [
-                    cls._attribute(
-                        raw,
-                        f"complex_attributes[{group_index}].attributes[{index}]",
-                    )
-                    for index, raw in enumerate(group_attributes)
-                ]
-            })
+            if not group_attributes:
+                # Current attributes v4 may emit an empty complex placeholder.
+                # It has no import semantics and is equivalent to no group.
+                continue
+            parsed_attributes = []
+            for index, raw in enumerate(group_attributes):
+                parsed = cls._attribute(
+                    raw,
+                    f"complex_attributes[{group_index}].attributes[{index}]",
+                )
+                if parsed is not None:
+                    parsed_attributes.append(parsed)
+            if parsed_attributes:
+                normalized_complex.append(
+                    {"attributes": parsed_attributes}
+                )
 
         dimensions = attributes.get("dimensions")
         if not isinstance(dimensions, dict):

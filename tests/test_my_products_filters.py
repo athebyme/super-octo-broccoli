@@ -19,6 +19,8 @@ class TestMyProductsFilters(unittest.TestCase):
         cls.app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {}
         cls.app.config['WTF_CSRF_ENABLED'] = False
         cls.app.config['TESTING'] = True
+        cls.app.config['MARKETPLACE_OZON_ENABLED'] = True
+        cls.app.config['MARKETPLACE_OZON_PUBLICATION_ENABLED'] = True
         # StaticPool ensures all sessions/connections (including request contexts)
         # share one in-memory DB. Don't keep app context alive between requests —
         # that would cause g._login_user to bleed across requests.
@@ -35,7 +37,15 @@ class TestMyProductsFilters(unittest.TestCase):
 
     @classmethod
     def _seed(cls):
-        from models import User, Seller, Supplier, ImportedProduct
+        from models import (
+            ImportedProduct,
+            Marketplace,
+            MarketplaceListing,
+            Seller,
+            SellerMarketplaceAccount,
+            Supplier,
+            User,
+        )
         user = User(username='seller1', email='seller1@example.com', password_hash='x')
         cls.db.session.add(user)
         cls.db.session.flush()
@@ -59,13 +69,14 @@ class TestMyProductsFilters(unittest.TestCase):
         cls.sup_a_id = sup_a.id
         cls.sup_b_id = sup_b.id
 
-        cls.db.session.add_all([
-            ImportedProduct(
+        linked_product = ImportedProduct(
                 seller_id=seller.id, supplier_id=sup_a.id, title='PROD-ALPHA-STOCK',
                 brand='BrandX', photo_urls='["http://x/1.jpg"]',
                 supplier_quantity=5, supplier_price=100.0,
                 mapped_wb_category='Игрушки', import_status='pending',
-            ),
+            )
+        cls.db.session.add_all([
+            linked_product,
             ImportedProduct(
                 seller_id=seller.id, supplier_id=sup_b.id, title='PROD-BETA-NOPHOTO',
                 brand='BrandY', photo_urls='[]',
@@ -83,6 +94,39 @@ class TestMyProductsFilters(unittest.TestCase):
                 brand='BrandX', import_status='pending',
             ),
         ])
+        ozon = Marketplace(
+            name='Ozon',
+            code='ozon',
+            adapter_code='ozon',
+            is_active=True,
+        )
+        cls.db.session.add(ozon)
+        cls.db.session.flush()
+        account = SellerMarketplaceAccount(
+            seller_id=seller.id,
+            marketplace_id=ozon.id,
+            external_account_id='my-products-ozon',
+            label='Основной Ozon',
+            is_active=True,
+            is_default=True,
+            connection_status='connected',
+            _credentials_encrypted='synthetic-encrypted',
+            settings_json='{"default_vat":"0.22"}',
+        )
+        cls.db.session.add(account)
+        cls.db.session.flush()
+        cls.db.session.add(MarketplaceListing(
+            seller_id=seller.id,
+            marketplace_id=ozon.id,
+            account_id=account.id,
+            imported_product_id=linked_product.id,
+            offer_id='id-7725-1364',
+            external_product_id='7725001',
+            normalized_status='active',
+            link_status='linked',
+            link_source='exact_source_identity',
+            sync_fingerprint='a' * 64,
+        ))
         cls.db.session.commit()
 
     @classmethod
@@ -110,6 +154,12 @@ class TestMyProductsFilters(unittest.TestCase):
         self.assertIn('PROD-BETA-NOPHOTO', html)
         self.assertIn('PROD-NOSUP', html)
         self.assertNotIn('PROD-OTHER-SELLER', html)
+
+    def test_linked_ozon_listing_is_visible_and_uses_update_action(self):
+        html = self._get()
+        self.assertIn('На Ozon', html)
+        self.assertIn('Обновить Ozon', html)
+        self.assertIn('Полностью обновить эту карточку', html)
 
     def test_supplier_filter(self):
         html = self._get(f'?supplier={self.sup_a_id}')

@@ -1646,12 +1646,46 @@ class WBProductImporter:
             db.session.commit()
             logger.info(f"Создана Product запись для nmID={existing_nm_id}")
 
-        # Загружаем фото
+        # The exact existing WB card is now the channel target for this
+        # seller-owned import. Persist the relationship before media planning
+        # so the shared enrichment journal has a stable local target.
+        imported_product.product_id = product.id
+        db.session.commit()
+
+        # Existing cards may contain seller-curated slots. Never call the
+        # legacy post-create uploader here: it starts at slot 1 and can fall
+        # back to full media/save replacement. Use the same live-aware,
+        # perceptual append-only receipt/reconciliation as all enrichment UI.
         try:
-            self._upload_photos_for_card(existing_nm_id, imported_product)
-            logger.info(f"Фото загружены в существующую карточку nmID={existing_nm_id}")
+            from services.supplier_enrichment import get_enrichment_service
+            photo_result = get_enrichment_service().apply_enrichment(
+                product,
+                imported_product,
+                ['photos'],
+                'smart_merge',
+                self.seller,
+                self.api_client,
+            )
+            if photo_result.get('deferred'):
+                logger.info(
+                    'Фото существующей карточки nmID=%s отложены до '
+                    'reconciliation предыдущей операции',
+                    existing_nm_id,
+                )
+            elif not photo_result.get('success'):
+                logger.warning(
+                    'Безопасная дозагрузка фото nmID=%s не выполнена: %s',
+                    existing_nm_id,
+                    photo_result.get('error') or 'unknown_error',
+                )
+            else:
+                logger.info(
+                    'Фото существующей карточки nmID=%s обработаны '
+                    'append-only merge',
+                    existing_nm_id,
+                )
         except Exception as photo_err:
-            logger.warning(f"Не удалось загрузить фото: {photo_err}")
+            logger.warning(f"Не удалось безопасно дозагрузить фото: {photo_err}")
 
         return (
             True,

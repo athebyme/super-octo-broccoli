@@ -216,8 +216,12 @@
                 {% if item.imported_count > 0 %}
                 <form method="POST" action="{{ url_for('supplier_catalog_update') }}">
                     <input type="hidden" name="supplier_id" value="{{ s.id }}">
-                    <button type="submit" onclick="return confirm('Обновить все импортированные товары из базы поставщика?')"
-                            class="sc-update-btn">Обновить</button>
+                    <input type="hidden" name="update_all_for_supplier" value="1">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit"
+                            onclick="return confirm('Подтянуть свежие данные поставщика в {{ item.imported_count }} ваших карточек? Карточки на маркетплейсах не изменятся.')"
+                            class="sc-update-btn"
+                            title="Обновит названия, характеристики и фото в ваших карточках из каталога поставщика">Обновить данные</button>
                 </form>
                 {% endif %}
             </div>

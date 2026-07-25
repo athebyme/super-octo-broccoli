@@ -71,7 +71,8 @@ class StandardPhotosProposalTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=std_composed) as mock_compose:
 
             MockProduct.query.filter_by.return_value.first.return_value = product
-            mock_es.return_value.find_supplier_data.return_value = None
+            mock_es.return_value.find_supplier_data.return_value = MagicMock()
+            mock_es.return_value.build_preview.return_value = {}
 
             resp = self.client.post('/api/card-quality/101/proposal',
                                     json={'task_ids': {}})
@@ -125,7 +126,8 @@ class StandardPhotosProposalTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=[]):
 
             MockProduct.query.filter_by.return_value.first.return_value = product
-            mock_es.return_value.find_supplier_data.return_value = None
+            mock_es.return_value.find_supplier_data.return_value = MagicMock()
+            mock_es.return_value.build_preview.return_value = {}
 
             resp = self.client.post('/api/card-quality/101/proposal',
                                     json={'task_ids': {}})
@@ -165,7 +167,8 @@ class StandardPhotosProposalTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=std_composed):
 
             MockProduct.query.filter_by.return_value.first.return_value = product
-            mock_es.return_value.find_supplier_data.return_value = None
+            mock_es.return_value.find_supplier_data.return_value = MagicMock()
+            mock_es.return_value.build_preview.return_value = {}
 
             resp = self.client.post('/api/card-quality/101/proposal',
                                     json={'task_ids': {}})
@@ -203,7 +206,8 @@ class StandardPhotosProposalTest(unittest.TestCase):
              patch('routes.card_quality.compose_card_photo_urls', return_value=[std_url]):
 
             MockProduct.query.filter_by.return_value.first.return_value = product
-            mock_es.return_value.find_supplier_data.return_value = None
+            mock_es.return_value.find_supplier_data.return_value = MagicMock()
+            mock_es.return_value.build_preview.return_value = {}
 
             resp = self.client.post('/api/card-quality/101/proposal',
                                     json={'task_ids': {}})

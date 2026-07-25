@@ -3,6 +3,11 @@
 {% block title %}Кабинеты маркетплейсов — Seller Hub{% endblock %}
 
 {% block content %}
+{% set vat_labels = {
+    '0': 'Без НДС', '0.05': '5%', '0.07': '7%',
+    '0.1': '10%', '0.10': '10%', '0.2': '20%',
+    '0.20': '20%', '0.22': '22%'
+} %}
 <div class="sh-page-header">
     <div class="sh-page-header-content">
         <div>
@@ -11,7 +16,12 @@
         </div>
         <div class="sh-page-actions">
             {% if ozon_enabled %}<a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index') }}">Каталог</a>{% endif %}
-            <span class="sh-badge sh-badge--sm sh-badge--gray">Ozon · каталог только для чтения</span>
+            {% if publication_enabled %}
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index') }}">Загрузки карточек</a>
+            <span class="sh-badge sh-badge--sm sh-badge--green">Ozon · загрузка включена</span>
+            {% else %}
+            <span class="sh-badge sh-badge--sm sh-badge--gray">Ozon · запись выключена</span>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -54,6 +64,21 @@
                 <input type="password" name="api_key" required maxlength="2000" autocomplete="new-password"
                        class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                        style="border-color:var(--border);color:var(--text)">
+            </label>
+            <label class="block md:col-span-2">
+                <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">НДС для новых карточек</span>
+                <select name="default_vat" required
+                        class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                        style="border-color:var(--border);color:var(--text)">
+                    <option value="">Выберите один раз для кабинета</option>
+                    <option value="0">Без НДС</option>
+                    <option value="0.05">5%</option>
+                    <option value="0.07">7%</option>
+                    <option value="0.1">10%</option>
+                    <option value="0.2">20%</option>
+                    <option value="0.22">22%</option>
+                </select>
+                <span class="block mt-1 text-xs" style="color:var(--text-muted)">Подставим автоматически, но не перезапишем НДС, заданный в отдельной карточке.</span>
             </label>
             <div class="md:col-span-2 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <label class="inline-flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
@@ -98,6 +123,15 @@
                             <span>Проверен: {{ account.connection_checked_at.strftime('%d.%m.%Y %H:%M') }}</span>
                             {% endif %}
                             <span>{{ 'Ключ сохранён' if account.has_credentials else 'Ключ удалён' }}</span>
+                            {% if account.credential_expires_at %}
+                            <span style="color:{% if account.credential_expires_at <= now %}var(--danger){% else %}inherit{% endif %}">
+                                Ключ действует до {{ account.credential_expires_at.strftime('%d.%m.%Y') }}{% if account.credential_expires_at <= now %} — истёк{% endif %}
+                            </span>
+                            {% endif %}
+                            <span>
+                                НДС новых карточек:
+                                <strong>{{ vat_labels.get(account.public_settings.default_vat, 'не выбран') }}</strong>
+                            </span>
                         </div>
                         {% if account.last_error_message %}
                         <p class="mt-2 text-xs" style="color:var(--danger)">{{ account.last_error_message }}</p>
@@ -106,6 +140,9 @@
                     <div class="flex flex-wrap gap-2 sm:justify-end">
                         {% if ozon_enabled and account.marketplace.code == 'ozon' and account.has_credentials and account.connection_status == 'connected' %}
                         <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', account_id=account.id) }}">Каталог</a>
+                        {% if publication_enabled and account.id in upload_ready_account_ids %}
+                        <a class="sh-btn sh-btn--primary" href="{{ url_for('seller_my_products') }}">Загрузить товары</a>
+                        {% endif %}
                         {% endif %}
                         {% if ozon_enabled and account.marketplace.code == 'ozon' and account.has_credentials %}
                         <form method="post" action="{{ url_for('marketplace_accounts.check', account_id=account.id) }}">
@@ -152,6 +189,21 @@
                             <input type="password" name="api_key" maxlength="2000" autocomplete="new-password"
                                    class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
                                    style="border-color:var(--border);color:var(--text)">
+                        </label>
+                        <label class="block md:col-span-2">
+                            <span class="block text-xs mb-1" style="color:var(--text-muted)">НДС для новых карточек</span>
+                            {% set current_vat = account.public_settings.default_vat %}
+                            <select name="default_vat" required
+                                    class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                                    style="border-color:var(--border);color:var(--text)">
+                                <option value="" {% if current_vat is none %}selected{% endif %}>Выберите ставку</option>
+                                <option value="0" {% if current_vat == '0' %}selected{% endif %}>Без НДС</option>
+                                <option value="0.05" {% if current_vat == '0.05' %}selected{% endif %}>5%</option>
+                                <option value="0.07" {% if current_vat == '0.07' %}selected{% endif %}>7%</option>
+                                <option value="0.1" {% if current_vat in ['0.1', '0.10'] %}selected{% endif %}>10%</option>
+                                <option value="0.2" {% if current_vat in ['0.2', '0.20'] %}selected{% endif %}>20%</option>
+                                <option value="0.22" {% if current_vat == '0.22' %}selected{% endif %}>22%</option>
+                            </select>
                         </label>
                         <div class="md:col-span-2 flex justify-end">
                             <button type="submit" class="sh-btn sh-btn--primary">Сохранить изменения</button>

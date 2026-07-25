@@ -23,6 +23,7 @@ from services.product_sync_scheduler import (
     poll_ozon_marketplace_operations,
     sync_marketplace_characteristics,
     sync_marketplaces,
+    sync_ozon_demanded_references,
     sync_ozon_analytics_accounts,
     sync_ozon_finance_accounts,
     sync_ozon_fulfillment_accounts,
@@ -111,6 +112,31 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
             sync_marketplace_characteristics(self.app, limit=17)
         schemas.assert_called_once_with(self.marketplace_id, limit=17)
 
+        with patch(
+            "services.ozon_reference_service."
+            "OzonReferenceService.sync_demanded_types",
+            return_value={
+                "success": True,
+                "selected": 2,
+                "synced": 1,
+                "failed": 0,
+                "dictionaries_synced": 3,
+                "dictionaries_failed": 0,
+            },
+        ) as demanded:
+            result = sync_ozon_demanded_references(
+                self.app,
+                limit=2,
+                dictionary_limit=4,
+            )
+        demanded.assert_called_once_with(
+            self.marketplace_id,
+            limit=2,
+            dictionary_limit=4,
+        )
+        self.assertEqual(result["selected"], 2)
+        self.assertEqual(result["dictionaries_synced"], 3)
+
     def test_dark_launch_flag_blocks_scheduled_ozon_calls(self):
         self.app.config["MARKETPLACE_OZON_ENABLED"] = False
         with patch(
@@ -118,11 +144,16 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
         ) as tree, patch(
             "services.ozon_reference_service."
             "OzonReferenceService.sync_stale_enabled_types"
-        ) as schemas:
+        ) as schemas, patch(
+            "services.ozon_reference_service."
+            "OzonReferenceService.sync_demanded_types"
+        ) as demanded:
             sync_marketplaces(self.app)
             sync_marketplace_characteristics(self.app)
+            sync_ozon_demanded_references(self.app)
         tree.assert_not_called()
         schemas.assert_not_called()
+        demanded.assert_not_called()
 
     def test_operation_reconciliation_survives_flag_disable_without_queued_write(self):
         self.app.config["MARKETPLACE_OZON_ENABLED"] = False
@@ -136,10 +167,16 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
                 "busy": 0,
                 "failed": 0,
             },
-        ) as poll:
+        ) as poll, patch(
+            "services.ozon_bulk_upload."
+            "OzonBulkUploadService.reconcile_active_runs",
+            return_value={"selected": 1, "reconciled": 1, "failed": 0},
+        ) as upload_runs:
             result = poll_ozon_marketplace_operations(self.app, limit=7)
         self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["upload_runs"]["reconciled"], 1)
         poll.assert_called_once_with(limit=7, allow_submission=False)
+        upload_runs.assert_called_once_with(limit=20)
 
         self.app.config["MARKETPLACE_OZON_ENABLED"] = True
         self.app.config["MARKETPLACE_OZON_PUBLICATION_ENABLED"] = True
@@ -152,9 +189,30 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
                 "busy": 0,
                 "failed": 0,
             },
-        ) as poll:
+        ) as poll, patch(
+            "services.ozon_bulk_upload."
+            "OzonBulkUploadService.reconcile_active_runs",
+            return_value={"selected": 0, "reconciled": 0, "failed": 0},
+        ) as upload_runs:
             poll_ozon_marketplace_operations(self.app)
         poll.assert_called_once_with(limit=20, allow_submission=True)
+        upload_runs.assert_called_once_with(limit=20)
+
+    def test_bulk_run_recovery_still_runs_when_operation_poll_crashes(self):
+        with patch(
+            "services.marketplace_publications."
+            "MarketplacePublicationService.poll_due_operations",
+            side_effect=RuntimeError("synthetic poll failure"),
+        ), patch(
+            "services.ozon_bulk_upload."
+            "OzonBulkUploadService.reconcile_active_runs",
+            return_value={"selected": 1, "reconciled": 1, "failed": 0},
+        ) as upload_runs:
+            result = poll_ozon_marketplace_operations(self.app)
+
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(result["upload_runs"]["reconciled"], 1)
+        upload_runs.assert_called_once_with(limit=20)
 
     def test_commercial_reconciliation_has_independent_dark_write_flag(self):
         self.app.config["MARKETPLACE_OZON_ENABLED"] = False
