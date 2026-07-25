@@ -278,14 +278,16 @@ class TnvedCodeParsingTestCase(unittest.TestCase):
         self.assertEqual(dictionary_code(None), '')
 
 
-def _definition(*, fresh=True, available=True):
+def _definition(*, fresh=True, available=True, restriction=None):
     defn = MagicMock()
     defn.id = 678
     defn.external_attribute_id = '22232'
     defn.is_available = available
     defn.dictionary_id = '124412395'
     defn.values_version = 3
-    defn.restriction_value_ids = []
+    defn.restriction_value_ids = (
+        list(restriction) if restriction is not None else []
+    )
     return defn
 
 
@@ -356,6 +358,47 @@ class ResolveTnvedTestCase(unittest.TestCase):
                 _value_row('2', '3307900008 - Y'),
             ],
         ))
+
+    def test_empty_allowlist_does_not_restrict(self):
+        result = self._run(
+            default=self._default(),
+            definition=_definition(restriction=[]),
+            rows=[
+                _value_row('971397774', '3403990000 - Прочие смазочные'),
+                _value_row('971397758', '3307900008 - Косметические средства'),
+            ],
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['external_value_id'], '971397758')
+
+    def test_allowlist_permits_matching_value_id(self):
+        result = self._run(
+            default=self._default(),
+            definition=_definition(restriction=['971397758']),
+            rows=[_value_row('971397758', '3307900008 - Косметические средства')],
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['external_value_id'], '971397758')
+
+    def test_allowlist_blocks_non_allowed_value_id(self):
+        result = self._run(
+            default=self._default(),
+            definition=_definition(restriction=['999999999']),
+            rows=[_value_row('971397758', '3307900008 - Косметические средства')],
+        )
+        self.assertIsNone(result)
+
+    def test_allowlist_narrows_duplicate_matches_to_single_allowed(self):
+        result = self._run(
+            default=self._default(),
+            definition=_definition(restriction=['971397758']),
+            rows=[
+                _value_row('971397758', '3307900008 - Косметические A'),
+                _value_row('971397759', '3307900008 - Косметические B'),
+            ],
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['external_value_id'], '971397758')
 
 
 if __name__ == '__main__':
