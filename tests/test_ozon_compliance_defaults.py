@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Контракт админских compliance-дефолтов Ozon."""
 import unittest
+from datetime import datetime
 
 
 class ComplianceModelsTestCase(unittest.TestCase):
@@ -42,6 +43,164 @@ class ComplianceModelsTestCase(unittest.TestCase):
         )
 
 
+class ComplianceORMConstraintTestCase(unittest.TestCase):
+    """`db.create_all()` запускается раньше миграций (docker-entrypoint.sh),
+    поэтому реальную схему в проде создаёт ORM. `CREATE TABLE IF NOT EXISTS`
+    в миграции после этого — no-op, а CHECK нельзя добавить `ALTER TABLE`.
+    Значит CHECK/partial-unique обязаны быть объявлены в самих моделях
+    (`__table_args__`), а не только в тексте миграции — эти тесты создают
+    таблицы буквально через `db.metadata.create_all()` (не через миграцию) и
+    доказывают, что constraints реально работают на такой схеме.
+    """
+
+    def _create_via_orm_metadata(self, *tables):
+        import sqlalchemy as sa
+        from models import db
+
+        engine = sa.create_engine('sqlite:///:memory:')
+        db.metadata.create_all(bind=engine, tables=list(tables))
+        return engine
+
+    def _default_row(self, **overrides):
+        row = {
+            'marketplace_id': 1,
+            'product_type_id': 1,
+            'tnved_code': '1234567890',
+            'decided_by_user_id': 1,
+            'decided_at': datetime.utcnow(),
+            'rationale': 'test rationale',
+            'version': 1,
+        }
+        row.update(overrides)
+        return row
+
+    def _registry_row(self, **overrides):
+        row = {
+            'label': 'v1',
+            'declared_by_user_id': 1,
+            'declared_at': datetime.utcnow(),
+            'rule_count': 0,
+        }
+        row.update(overrides)
+        return row
+
+    def _row_count(self, engine, table):
+        import sqlalchemy as sa
+
+        with engine.connect() as conn:
+            return conn.execute(
+                sa.select(sa.func.count()).select_from(table)
+            ).scalar()
+
+    def test_orm_created_table_rejects_invalid_compliance_default_status(self):
+        import sqlalchemy as sa
+        from models import OzonComplianceDefault
+
+        engine = self._create_via_orm_metadata(OzonComplianceDefault.__table__)
+        with engine.connect() as conn:
+            with self.assertRaises(sa.exc.IntegrityError):
+                conn.execute(
+                    OzonComplianceDefault.__table__.insert(),
+                    self._default_row(status='inactive'),
+                )
+                conn.commit()
+
+    def test_orm_created_table_rejects_invalid_registry_version_status(self):
+        import sqlalchemy as sa
+        from models import OzonMarkingRegistryVersion
+
+        engine = self._create_via_orm_metadata(
+            OzonMarkingRegistryVersion.__table__
+        )
+        with engine.connect() as conn:
+            with self.assertRaises(sa.exc.IntegrityError):
+                conn.execute(
+                    OzonMarkingRegistryVersion.__table__.insert(),
+                    self._registry_row(status='draft'),
+                )
+                conn.commit()
+
+    def test_orm_created_table_enforces_one_active_default_per_scope(self):
+        import sqlalchemy as sa
+        from models import OzonComplianceDefault
+
+        engine = self._create_via_orm_metadata(OzonComplianceDefault.__table__)
+        with engine.connect() as conn:
+            conn.execute(
+                OzonComplianceDefault.__table__.insert(),
+                self._default_row(status='active'),
+            )
+            conn.commit()
+            with self.assertRaises(sa.exc.IntegrityError):
+                conn.execute(
+                    OzonComplianceDefault.__table__.insert(),
+                    self._default_row(status='active', tnved_code='9999999999'),
+                )
+                conn.commit()
+
+    def test_orm_created_table_allows_active_and_retired_same_scope(self):
+        from models import OzonComplianceDefault
+
+        engine = self._create_via_orm_metadata(OzonComplianceDefault.__table__)
+        with engine.connect() as conn:
+            conn.execute(
+                OzonComplianceDefault.__table__.insert(),
+                self._default_row(status='active'),
+            )
+            conn.execute(
+                OzonComplianceDefault.__table__.insert(),
+                self._default_row(status='retired', tnved_code='9999999999'),
+            )
+            conn.commit()
+
+        self.assertEqual(
+            self._row_count(engine, OzonComplianceDefault.__table__), 2,
+        )
+
+    def test_orm_created_table_enforces_single_active_registry_version(self):
+        import sqlalchemy as sa
+        from models import OzonMarkingRegistryVersion
+
+        engine = self._create_via_orm_metadata(
+            OzonMarkingRegistryVersion.__table__
+        )
+        with engine.connect() as conn:
+            conn.execute(
+                OzonMarkingRegistryVersion.__table__.insert(),
+                self._registry_row(status='active', label='v1'),
+            )
+            conn.commit()
+            with self.assertRaises(sa.exc.IntegrityError):
+                conn.execute(
+                    OzonMarkingRegistryVersion.__table__.insert(),
+                    self._registry_row(status='active', label='v2'),
+                )
+                conn.commit()
+
+    def test_orm_created_table_allows_active_and_superseded_registry_versions(
+        self,
+    ):
+        from models import OzonMarkingRegistryVersion
+
+        engine = self._create_via_orm_metadata(
+            OzonMarkingRegistryVersion.__table__
+        )
+        with engine.connect() as conn:
+            conn.execute(
+                OzonMarkingRegistryVersion.__table__.insert(),
+                self._registry_row(status='active', label='v1'),
+            )
+            conn.execute(
+                OzonMarkingRegistryVersion.__table__.insert(),
+                self._registry_row(status='superseded', label='v0'),
+            )
+            conn.commit()
+
+        self.assertEqual(
+            self._row_count(engine, OzonMarkingRegistryVersion.__table__), 2,
+        )
+
+
 class ComplianceMigrationTestCase(unittest.TestCase):
     def test_migration_is_idempotent(self):
         import sqlite3
@@ -75,6 +234,28 @@ class ComplianceMigrationTestCase(unittest.TestCase):
             self.assertIn('ozon_compliance_defaults', tables)
             self.assertIn('ozon_marking_registry_versions', tables)
             self.assertIn('ozon_marking_rules', tables)
+
+
+class ComplianceMigrationMainTestCase(unittest.TestCase):
+    def test_main_reports_missing_db_without_creating_it(self):
+        import os
+        import sys
+        import tempfile
+        from unittest.mock import patch
+        from migrations import migrate_add_ozon_compliance_defaults as mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_path = os.path.join(tmp, 'does-not-exist.db')
+            with patch.object(
+                sys, 'argv',
+                ['migrate_add_ozon_compliance_defaults.py', missing_path],
+            ):
+                exit_code = mod.main()
+            self.assertEqual(exit_code, 1)
+            self.assertFalse(
+                os.path.exists(missing_path),
+                'sqlite3.connect() must not silently create the DB file',
+            )
 
 
 if __name__ == '__main__':

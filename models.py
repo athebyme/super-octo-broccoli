@@ -4749,6 +4749,20 @@ class OzonComplianceDefault(db.Model):
 
     product_type = db.relationship('MarketplaceProductType')
 
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('active', 'retired')",
+            name='ck_ozon_compliance_default_status',
+        ),
+        db.Index(
+            'uq_ozon_compliance_default_active',
+            'marketplace_id',
+            'product_type_id',
+            unique=True,
+            sqlite_where=db.text("status = 'active'"),
+            postgresql_where=db.text("status = 'active'"),
+        ),
+    )
     __mapper_args__ = {'version_id_col': version}
 
     def __repr__(self):
@@ -4781,6 +4795,20 @@ class OzonMarkingRegistryVersion(db.Model):
 
     rules = db.relationship(
         'OzonMarkingRule', backref='registry_version', lazy='dynamic',
+    )
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('active', 'superseded')",
+            name='ck_ozon_marking_registry_version_status',
+        ),
+        db.Index(
+            'uq_ozon_marking_registry_active',
+            'status',
+            unique=True,
+            sqlite_where=db.text("status = 'active'"),
+            postgresql_where=db.text("status = 'active'"),
+        ),
     )
 
     def __repr__(self):

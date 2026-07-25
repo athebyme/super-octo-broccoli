@@ -101,32 +101,62 @@ MANAGED_TABLES = {
 }
 
 
+def _existing_tables(connection: sqlite3.Connection, names: set) -> set:
+    existing = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    return existing & names
+
+
+def _foreign_key_violations(
+    connection: sqlite3.Connection, tables: set,
+) -> set:
+    # Scope the check to this migration's own managed tables instead of a
+    # bare ``PRAGMA foreign_key_check``, which would scan the entire
+    # multi-gigabyte production database twice during startup without adding
+    # safety for tables this migration never touches (same rationale as
+    # migrate_add_ozon_product_type_visibility.py). Querying a table that
+    # does not exist yet raises ``OperationalError``, so callers must only
+    # pass tables known to exist at that point.
+    violations: set = set()
+    for table in sorted(tables):
+        violations.update(
+            tuple(row)
+            for row in connection.execute(
+                f"PRAGMA foreign_key_check({table})"
+            ).fetchall()
+        )
+    return violations
+
+
 def apply_migration(db_path) -> None:
     connection = sqlite3.connect(str(db_path))
     try:
         connection.execute("PRAGMA foreign_keys = ON")
-        baseline = {
-            tuple(row)
-            for row in connection.execute("PRAGMA foreign_key_check").fetchall()
-        }
+        # Before creation, only check whichever managed tables already
+        # exist (an idempotent re-run); on a first run none of them do yet,
+        # so the baseline is empty rather than an error.
+        baseline = _foreign_key_violations(
+            connection, _existing_tables(connection, MANAGED_TABLES)
+        )
         for statement in CREATE_STATEMENTS:
             connection.execute(statement)
         for statement in INDEX_STATEMENTS:
             connection.execute(statement)
 
-        violations = {
-            tuple(row)
-            for row in connection.execute("PRAGMA foreign_key_check").fetchall()
-        }
-        new_violations = violations - baseline
-        relevant = [
-            row for row in new_violations
-            if str(row[0]) in MANAGED_TABLES or str(row[2]) in MANAGED_TABLES
-        ]
-        if relevant:
+        # All three managed tables are guaranteed to exist now, whether this
+        # was the first run or an idempotent re-run.
+        new_violations = (
+            _foreign_key_violations(connection, MANAGED_TABLES) - baseline
+        )
+        if new_violations:
             connection.rollback()
             raise RuntimeError(
-                f"Миграция создала нарушения внешних ключей: {relevant}"
+                f"Миграция создала нарушения внешних ключей: "
+                f"{sorted(new_violations)}"
             )
         connection.commit()
         logger.info("Compliance-таблицы Ozon готовы")
@@ -135,7 +165,10 @@ def apply_migration(db_path) -> None:
 
 
 def main() -> int:
-    db_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DB_PATH
+    db_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_DB_PATH
+    if not db_path.exists():
+        logger.error("DB not found: %s", db_path)
+        return 1
     apply_migration(db_path)
     return 0
 
