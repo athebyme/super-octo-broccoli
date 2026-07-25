@@ -270,5 +270,27 @@ class OzonComplianceSuggestionServiceTest(unittest.TestCase):
         ))
 
 
+class MaterialSignalTestCase(unittest.TestCase):
+    def _signals(self, material):
+        from services.ozon_compliance_suggestions import (
+            OzonComplianceSuggestionService as S,
+        )
+        return S._material_flags(material)
+
+    def test_cyrillic_tpe_abbreviation_is_rubber_like(self):
+        flags = self._signals('ТПЭ')
+        self.assertTrue(flags['rubber_like'])
+
+    def test_cyrillic_tpr_abbreviation_is_rubber_like(self):
+        flags = self._signals('ТПР')
+        self.assertTrue(flags['rubber_like'])
+
+    def test_latin_tpe_still_recognized(self):
+        self.assertTrue(self._signals('TPE')['rubber_like'])
+
+    def test_unrelated_material_is_not_rubber_like(self):
+        self.assertFalse(self._signals('Стекло')['rubber_like'])
+
+
 if __name__ == "__main__":
     unittest.main()

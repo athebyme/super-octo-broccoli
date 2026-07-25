@@ -81,6 +81,27 @@ class OzonComplianceSuggestionService:
         }
 
     @classmethod
+    def _material_flags(cls, material_signal: Any) -> dict:
+        """Флаги материала. Кириллические ТПЭ/ТПР — та же аббревиатура, что
+        латинские TPE/TPR: поставщики пишут её обоими алфавитами."""
+        normalized = cls._normalize(material_signal)
+        rubber_like = bool(
+            re.search(
+                r"\b(?:tpr|tpe|тпэ|тпр|тпу|резин\w*|эластомер\w*|"
+                r"термоэластопласт\w*)\b",
+                normalized,
+            )
+        )
+        plastic_like = bool(
+            re.search(
+                r"\b(?:пластик\w*|пластмасс\w*|полимер\w*|"
+                r"термопласт\w*|tpr|tpe|тпэ|тпр)\b",
+                normalized,
+            )
+        )
+        return {"rubber_like": rubber_like, "plastic_like": plastic_like}
+
+    @classmethod
     def _observed_signals(cls, draft: MarketplaceProductDraft) -> dict:
         document = cls._object(draft.source_facts_json)
         facts = document.get("facts")
@@ -144,20 +165,9 @@ class OzonComplianceSuggestionService:
             )
             or "насадки и кольца" in category_signal
         )
-        rubber_like = bool(
-            re.search(
-                r"\b(?:tpr|tpe|резин\w*|эластомер\w*|"
-                r"термоэластопласт\w*)\b",
-                material_signal,
-            )
-        )
-        plastic_like = bool(
-            re.search(
-                r"\b(?:пластик\w*|пластмасс\w*|полимер\w*|"
-                r"термопласт\w*|tpr|tpe)\b",
-                material_signal,
-            )
-        )
+        material_flags = cls._material_flags(material_signal)
+        rubber_like = material_flags["rubber_like"]
+        plastic_like = material_flags["plastic_like"]
         lexical = " | ".join(
             value
             for value in (
