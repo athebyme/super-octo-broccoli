@@ -119,3 +119,78 @@ def resolve_tnved(product_type_id: Any) -> Optional[dict]:
         "default_id": default.id,
         "dictionary_version": getattr(definition, "values_version", None),
     }
+
+
+def _active_registry_version():
+    from models import OzonMarkingRegistryVersion
+    return OzonMarkingRegistryVersion.query.filter_by(status="active").first()
+
+
+def _registry_rules(version) -> list:
+    from models import OzonMarkingRule
+    return OzonMarkingRule.query.filter_by(
+        registry_version_id=version.id,
+    ).all()
+
+
+def resolve_marking(tnved_code: Any) -> Optional[bool]:
+    """Вывести признак маркировки из кода по активной версии перечня.
+
+    ``True``  — код попал в перечень маркируемых групп (longest-prefix).
+    ``False`` — не попал, но перечень объявлен исчерпывающим.
+    ``None``  — ответа нет: перечень отсутствует либо не объявлен полным.
+    """
+    code = normalize_code(tnved_code)
+    if not code:
+        return None
+
+    version = _active_registry_version()
+    if version is None:
+        return None
+
+    best = ""
+    for rule in _registry_rules(version):
+        prefix = normalize_code(rule.code_prefix)
+        if not prefix or not code.startswith(prefix):
+            continue
+        if len(prefix) > len(best):
+            best = prefix
+
+    if best:
+        return True
+    return False if bool(version.is_complete) else None
+
+
+def resolve_type_defaults(product_type_id: Any) -> dict:
+    """Свести оба compliance-значения для одного Ozon product type."""
+    unresolved: list = []
+    evidence: dict = {}
+
+    tnved = resolve_tnved(product_type_id)
+    if tnved is None:
+        unresolved.append(TNVED_ATTRIBUTE_ID)
+        return {
+            "tnved": None,
+            "marking": None,
+            "unresolved": unresolved + [MARKING_ATTRIBUTE_ID],
+            "evidence": evidence,
+        }
+
+    evidence["tnved_default_id"] = tnved["default_id"]
+    evidence["dictionary_version"] = tnved["dictionary_version"]
+
+    marking = resolve_marking(tnved["code"])
+    if marking is None:
+        unresolved.append(MARKING_ATTRIBUTE_ID)
+    else:
+        version = _active_registry_version()
+        evidence["registry_version_id"] = (
+            version.id if version is not None else None
+        )
+
+    return {
+        "tnved": tnved,
+        "marking": marking,
+        "unresolved": unresolved,
+        "evidence": evidence,
+    }

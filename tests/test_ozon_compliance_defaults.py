@@ -401,5 +401,63 @@ class ResolveTnvedTestCase(unittest.TestCase):
         self.assertEqual(result['external_value_id'], '971397758')
 
 
+class ResolveMarkingTestCase(unittest.TestCase):
+    def _rules(self, prefixes):
+        rows = []
+        for prefix in prefixes:
+            row = MagicMock()
+            row.code_prefix = prefix
+            rows.append(row)
+        return rows
+
+    def _run(self, code, *, prefixes, is_complete, has_version=True):
+        module = 'services.ozon_compliance_defaults'
+        version = None
+        if has_version:
+            version = MagicMock()
+            version.id = 1
+            version.is_complete = is_complete
+        with patch(f'{module}._active_registry_version', return_value=version), \
+             patch(f'{module}._registry_rules',
+                   return_value=self._rules(prefixes)):
+            from services.ozon_compliance_defaults import resolve_marking
+            return resolve_marking(code)
+
+    def test_prefix_match_requires_marking(self):
+        self.assertIs(
+            self._run('6402990000', prefixes=['6402'], is_complete=True),
+            True,
+        )
+
+    def test_longest_prefix_wins(self):
+        self.assertIs(
+            self._run('6402990000', prefixes=['64', '6402990000'],
+                      is_complete=False),
+            True,
+        )
+
+    def test_complete_registry_without_match_means_false(self):
+        self.assertIs(
+            self._run('3307900008', prefixes=['6402'], is_complete=True),
+            False,
+        )
+
+    def test_incomplete_registry_without_match_is_unresolved(self):
+        self.assertIsNone(
+            self._run('3307900008', prefixes=['6402'], is_complete=False)
+        )
+
+    def test_no_active_version_is_unresolved(self):
+        self.assertIsNone(
+            self._run('3307900008', prefixes=[], is_complete=True,
+                      has_version=False)
+        )
+
+    def test_empty_code_is_unresolved(self):
+        self.assertIsNone(
+            self._run('', prefixes=['6402'], is_complete=True)
+        )
+
+
 if __name__ == '__main__':
     unittest.main()
