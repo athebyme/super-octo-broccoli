@@ -4713,6 +4713,109 @@ class MarketplaceAttributeValue(db.Model):
     )
 
 
+class OzonComplianceDefault(db.Model):
+    """Подписанное админом решение по ТН ВЭД для одного Ozon product type.
+
+    Хранится строка кода, а не ``external_value_id``: ID принадлежит scope
+    конкретного attribute/type и может смениться при пересинхронизации
+    словаря.  Код переживает ресинк и является тем, что решил человек.
+    """
+    __tablename__ = 'ozon_compliance_defaults'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace_id = db.Column(
+        db.Integer, db.ForeignKey('marketplaces.id'),
+        nullable=False, index=True,
+    )
+    product_type_id = db.Column(
+        db.Integer, db.ForeignKey('marketplace_product_types.id'),
+        nullable=False, index=True,
+    )
+    tnved_code = db.Column(db.String(20), nullable=False)
+    tnved_display = db.Column(db.String(500))
+    status = db.Column(db.String(20), default='active', nullable=False)
+    decided_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id'), nullable=False,
+    )
+    decided_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    rationale = db.Column(db.Text, nullable=False)
+    dictionary_version = db.Column(db.Integer)
+    dictionary_hash = db.Column(db.String(64))
+    version = db.Column(db.Integer, default=1, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+    )
+
+    product_type = db.relationship('MarketplaceProductType')
+
+    __mapper_args__ = {'version_id_col': version}
+
+    def __repr__(self):
+        return (
+            f'<OzonComplianceDefault type={self.product_type_id} '
+            f'code={self.tnved_code} status={self.status}>'
+        )
+
+
+class OzonMarkingRegistryVersion(db.Model):
+    """Версия нормативного перечня маркируемых групп кодов ТН ВЭД."""
+    __tablename__ = 'ozon_marking_registry_versions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    label = db.Column(db.String(200), nullable=False)
+    is_complete = db.Column(db.Boolean, default=False, nullable=False)
+    declared_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id'), nullable=False,
+    )
+    declared_at = db.Column(
+        db.DateTime, default=datetime.utcnow, nullable=False,
+    )
+    rule_count = db.Column(db.Integer, default=0, nullable=False)
+    checksum = db.Column(db.String(64))
+    status = db.Column(db.String(20), default='superseded', nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(
+        db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+    )
+
+    rules = db.relationship(
+        'OzonMarkingRule', backref='registry_version', lazy='dynamic',
+    )
+
+    def __repr__(self):
+        return (
+            f'<OzonMarkingRegistryVersion {self.label} '
+            f'status={self.status} complete={self.is_complete}>'
+        )
+
+
+class OzonMarkingRule(db.Model):
+    """Одна строка перечня: префикс кода ТН ВЭД, подлежащий маркировке."""
+    __tablename__ = 'ozon_marking_rules'
+
+    id = db.Column(db.Integer, primary_key=True)
+    registry_version_id = db.Column(
+        db.Integer, db.ForeignKey('ozon_marking_registry_versions.id'),
+        nullable=False, index=True,
+    )
+    code_prefix = db.Column(db.String(20), nullable=False)
+    normative_ref = db.Column(db.String(300))
+    valid_from = db.Column(db.Date)
+    note = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'registry_version_id', 'code_prefix',
+            name='uq_ozon_marking_rule_scope',
+        ),
+    )
+
+    def __repr__(self):
+        return f'<OzonMarkingRule {self.code_prefix}>'
+
+
 class MarketplaceCategoryMapping(db.Model):
     """Seller-scoped source category binding to one exact product type.
 
