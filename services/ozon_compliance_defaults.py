@@ -133,10 +133,38 @@ def _registry_rules(version) -> list:
     ).all()
 
 
+def _marking_for_version(code: str, version) -> Optional[bool]:
+    """Определить признак маркировки по уже полученной версии перечня.
+
+    Перечень содержит только положительные правила без признака
+    исключения, поэтому для ``True`` достаточно факта совпадения хотя бы
+    одного непустого нормализованного префикса — самый длинный совпавший
+    префикс ни на что не влияет и отдельно не выбирается. Поддержка
+    правил-исключений потребовала бы отдельного поля в ``OzonMarkingRule``
+    и отдельного решения.
+
+    Версия передаётся параметром, а не запрашивается заново, чтобы вызывающий
+    код (``resolve_marking`` и ``resolve_type_defaults``) считал маркировку и
+    ссылался на неё в evidence по одному и тому же снимку активной версии.
+    """
+    if version is None:
+        return None
+
+    matched = any(
+        prefix and code.startswith(prefix)
+        for prefix in (
+            normalize_code(rule.code_prefix) for rule in _registry_rules(version)
+        )
+    )
+    if matched:
+        return True
+    return False if bool(version.is_complete) else None
+
+
 def resolve_marking(tnved_code: Any) -> Optional[bool]:
     """Вывести признак маркировки из кода по активной версии перечня.
 
-    ``True``  — код попал в перечень маркируемых групп (longest-prefix).
+    ``True``  — код попал в перечень маркируемых групп (см. ``_marking_for_version``).
     ``False`` — не попал, но перечень объявлен исчерпывающим.
     ``None``  — ответа нет: перечень отсутствует либо не объявлен полным.
     """
@@ -145,20 +173,7 @@ def resolve_marking(tnved_code: Any) -> Optional[bool]:
         return None
 
     version = _active_registry_version()
-    if version is None:
-        return None
-
-    best = ""
-    for rule in _registry_rules(version):
-        prefix = normalize_code(rule.code_prefix)
-        if not prefix or not code.startswith(prefix):
-            continue
-        if len(prefix) > len(best):
-            best = prefix
-
-    if best:
-        return True
-    return False if bool(version.is_complete) else None
+    return _marking_for_version(code, version)
 
 
 def resolve_type_defaults(product_type_id: Any) -> dict:
@@ -179,14 +194,16 @@ def resolve_type_defaults(product_type_id: Any) -> dict:
     evidence["tnved_default_id"] = tnved["default_id"]
     evidence["dictionary_version"] = tnved["dictionary_version"]
 
-    marking = resolve_marking(tnved["code"])
+    # Версия берётся ровно один раз: и marking, и evidence обязаны
+    # ссылаться на один и тот же снимок активной версии перечня, иначе
+    # переключение версии между двумя SELECT рассинхронизирует результат
+    # с его собственным evidence.
+    version = _active_registry_version()
+    marking = _marking_for_version(tnved["code"], version)
     if marking is None:
         unresolved.append(MARKING_ATTRIBUTE_ID)
     else:
-        version = _active_registry_version()
-        evidence["registry_version_id"] = (
-            version.id if version is not None else None
-        )
+        evidence["registry_version_id"] = version.id
 
     return {
         "tnved": tnved,

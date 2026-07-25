@@ -429,7 +429,7 @@ class ResolveMarkingTestCase(unittest.TestCase):
             True,
         )
 
-    def test_longest_prefix_wins(self):
+    def test_any_matching_prefix_requires_marking(self):
         self.assertIs(
             self._run('6402990000', prefixes=['64', '6402990000'],
                       is_complete=False),
