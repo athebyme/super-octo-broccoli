@@ -2864,6 +2864,129 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         self.assertEqual(rebased.validation_status, "stale")
 
+    def test_source_rebase_never_reclassifies_compliance_attributes(self):
+        """22232/23536 не являются source-derived дефолтами.
+
+        `apply_to_attributes` внутри `_auto_map_attributes` не смотрит на
+        `facts_document` вовсе -- только на живое админское решение. Поэтому
+        previous_auto и current_auto внутри `rebase_source_defaults` всегда
+        несут ОДНО И ТО ЖЕ (самое свежее) значение независимо от того, какой
+        снимок фактов им передали, и naive three-way merge не должен решать
+        за эти два атрибута "правка продавца или нет".
+        """
+        product, draft = self._ready_draft(external_id="compliance-rebase")
+
+        module = 'services.ozon_compliance_defaults'
+        stale_defaults = {
+            'tnved': {
+                'code': '1111111111',
+                'value': '1111111111 - Значение A',
+                'external_value_id': 'value-a',
+                'default_id': 1,
+                'dictionary_version': 1,
+            },
+            'marking': True,
+            'unresolved': [],
+            'evidence': {},
+        }
+        with patch(f'{module}.resolve_type_defaults', return_value=stale_defaults):
+            from services.ozon_compliance_defaults import apply_to_attributes
+            attributes, _ = apply_to_attributes(
+                json.loads(draft.attributes_json), self.product_type.id,
+            )
+        draft.attributes_json = json.dumps(attributes, ensure_ascii=False)
+        db.session.commit()
+
+        stored_tnved = next(
+            item for item in json.loads(draft.attributes_json)
+            if item['attribute_id'] == '22232'
+        )
+        self.assertEqual(
+            stored_tnved['values'][0]['value'], '1111111111 - Значение A',
+        )
+
+        original = json.loads(product.original_data)
+        original['description'] = 'Описание источника изменилось для rebase'
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.description = 'Описание источника изменилось для rebase'
+        db.session.commit()
+
+        fresh_defaults = dict(stale_defaults)
+        fresh_defaults['tnved'] = {
+            'code': '2222222222',
+            'value': '2222222222 - Значение B',
+            'external_value_id': 'value-b',
+            'default_id': 2,
+            'dictionary_version': 2,
+        }
+        with patch(f'{module}.resolve_type_defaults', return_value=fresh_defaults):
+            rebased = MarketplaceDraftService.rebase_source_defaults(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+            )
+
+        rebased_attributes = json.loads(rebased.attributes_json)
+        rebased_tnved = next(
+            (item for item in rebased_attributes if item['attribute_id'] == '22232'),
+            None,
+        )
+        self.assertIsNotNone(
+            rebased_tnved,
+            'Сохранённая compliance-запись не должна пропадать при rebase',
+        )
+        self.assertEqual(
+            rebased_tnved['values'][0]['value'],
+            '1111111111 - Значение A',
+            'Rebase не имеет права переклассифицировать/заменять сохранённое '
+            'compliance-значение по сравнению previous/current auto-defaults',
+        )
+
+    def test_source_rebase_does_not_invent_missing_compliance_attribute(self):
+        """A draft without a stored 22232/23536 record must stay that way
+        across `rebase_source_defaults`, even when an active admin decision
+        exists and an unrelated source fact (description) changes and
+        triggers the rebase. Before the fix this silently created the
+        compliance attribute via the current_auto tail-loop despite no
+        seller/admin action targeting this specific draft in this call.
+        """
+        product, draft = self._ready_draft(external_id="compliance-rebase-missing")
+        self.assertNotIn(
+            '22232',
+            {item['attribute_id'] for item in json.loads(draft.attributes_json)},
+        )
+
+        original = json.loads(product.original_data)
+        original['description'] = 'Описание источника изменилось для rebase 2'
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.description = 'Описание источника изменилось для rebase 2'
+        db.session.commit()
+
+        module = 'services.ozon_compliance_defaults'
+        fresh_defaults = {
+            'tnved': {
+                'code': '3333333333',
+                'value': '3333333333 - Значение C',
+                'external_value_id': 'value-c',
+                'default_id': 3,
+                'dictionary_version': 1,
+            },
+            'marking': True,
+            'unresolved': [],
+            'evidence': {},
+        }
+        with patch(f'{module}.resolve_type_defaults', return_value=fresh_defaults):
+            rebased = MarketplaceDraftService.rebase_source_defaults(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+            )
+        rebased_ids = {
+            item['attribute_id'] for item in json.loads(rebased.attributes_json)
+        }
+        self.assertNotIn('22232', rebased_ids)
+        self.assertNotIn('23536', rebased_ids)
+
     def test_seller_can_select_official_type_without_admin_preload(self):
         self.product_type.is_enabled = False
         db.session.commit()

@@ -4974,6 +4974,40 @@ class MarketplaceDraftService:
                 category_mapping=draft.category_mapping,
             )
 
+            # Compliance attributes (ТН ВЭД / признак маркировки) are not
+            # source-fact-derived: `apply_to_attributes` inside
+            # `_auto_map_attributes` ignores `facts_document` entirely and
+            # only reads the live admin decision, so `previous_auto` and
+            # `current_auto` always carry the SAME (most recent) value for
+            # these two IDs regardless of which facts snapshot was passed
+            # in. Feeding them into the three-way "still equals previous
+            # default -> follow current" comparison below is meaningless for
+            # them and, when a stored record is absent, would let an
+            # unrelated facts-triggered rebase silently invent a compliance
+            # attribute that no admin/seller action asked for in this call.
+            # These two IDs are excluded from the rebase decision entirely:
+            # a stored record passes through untouched below (it simply
+            # never matches `previous_by_identity`), and a missing one is
+            # not created here.
+            from services.ozon_compliance_defaults import (
+                MARKING_ATTRIBUTE_ID,
+                TNVED_ATTRIBUTE_ID,
+            )
+            compliance_ids = {TNVED_ATTRIBUTE_ID, MARKING_ATTRIBUTE_ID}
+
+            def _not_compliance(item: Any) -> bool:
+                return not (
+                    isinstance(item, dict)
+                    and str(item.get("attribute_id")) in compliance_ids
+                )
+
+            previous_auto = [
+                item for item in previous_auto if _not_compliance(item)
+            ]
+            current_auto = [
+                item for item in current_auto if _not_compliance(item)
+            ]
+
             def identity(item: dict) -> Tuple[Any, Any]:
                 return (
                     item.get("attribute_id"),

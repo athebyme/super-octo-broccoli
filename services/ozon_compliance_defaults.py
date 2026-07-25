@@ -225,6 +225,40 @@ def _has_value(attributes: list, attribute_id: str) -> bool:
     return False
 
 
+def _set_value(
+    attributes: list, attribute_id: str, complex_id: str, values: list,
+) -> None:
+    """Fill ``attribute_id`` in place, never adding a second entry for it.
+
+    A seller may legitimately save a draft with an explicitly cleared
+    attribute (``values: []``); ``_has_value`` correctly treats that as
+    empty, but appending a second object with the same ``attribute_id``
+    would produce a payload with two entries for one Ozon attribute, which
+    is undefined behaviour on the provider side.  If an entry with this
+    identity already exists (empty or not — callers only reach this helper
+    after confirming it is empty), its slot is replaced in place, preserving
+    position in the list; a brand new dict is built rather than mutating the
+    existing one, and the ``attribute_id`` is written in its canonical
+    string form regardless of how the existing entry represented it.
+    """
+    for index, item in enumerate(attributes):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("attribute_id")) != attribute_id:
+            continue
+        attributes[index] = {
+            "attribute_id": attribute_id,
+            "complex_id": complex_id,
+            "values": values,
+        }
+        return
+    attributes.append({
+        "attribute_id": attribute_id,
+        "complex_id": complex_id,
+        "values": values,
+    })
+
+
 def apply_to_attributes(attributes: Any, product_type_id: Any) -> tuple:
     """Дозаполнить compliance-атрибуты из админского решения.
 
@@ -241,23 +275,17 @@ def apply_to_attributes(attributes: Any, product_type_id: Any) -> tuple:
 
     tnved = defaults.get("tnved")
     if tnved and not _has_value(result, TNVED_ATTRIBUTE_ID):
-        result.append({
-            "attribute_id": TNVED_ATTRIBUTE_ID,
-            "complex_id": "0",
-            "values": [{
-                "dictionary_value_id": tnved["external_value_id"],
-                "value": tnved["value"],
-            }],
-        })
+        _set_value(result, TNVED_ATTRIBUTE_ID, "0", [{
+            "dictionary_value_id": tnved["external_value_id"],
+            "value": tnved["value"],
+        }])
         report["applied"].append(TNVED_ATTRIBUTE_ID)
 
     marking = defaults.get("marking")
     if marking is not None and not _has_value(result, MARKING_ATTRIBUTE_ID):
-        result.append({
-            "attribute_id": MARKING_ATTRIBUTE_ID,
-            "complex_id": "0",
-            "values": [{"value": "true" if marking else "false"}],
-        })
+        _set_value(result, MARKING_ATTRIBUTE_ID, "0", [
+            {"value": "true" if marking else "false"},
+        ])
         report["applied"].append(MARKING_ATTRIBUTE_ID)
 
     return result, report

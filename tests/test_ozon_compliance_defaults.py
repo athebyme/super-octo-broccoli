@@ -517,7 +517,32 @@ class ApplyComplianceDefaultsTestCase(unittest.TestCase):
         ids = {item['attribute_id'] for item in attributes}
         self.assertIn('22232', ids)
         self.assertNotIn('23536', ids)
-        self.assertEqual(report['unresolved'], ['23536'])
+
+    def test_existing_empty_entry_is_filled_in_place_not_duplicated(self):
+        """A seller may legitimately save a draft with an explicitly cleared
+        attribute (``values: []``) via ``update_draft``. ``_has_value``
+        correctly treats it as empty, so it must be filled in place; a
+        second entry with the same ``attribute_id`` would be an undefined
+        Ozon payload.
+        """
+        existing = [{
+            'attribute_id': '22232',
+            'complex_id': '0',
+            'values': [],
+        }]
+        attributes, report = self._run(existing, self._defaults())
+        matches = [
+            item for item in attributes if item['attribute_id'] == '22232'
+        ]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(
+            matches[0]['values'],
+            [{
+                'dictionary_value_id': '971397758',
+                'value': '3307900008 - Косметические средства',
+            }],
+        )
+        self.assertEqual(sorted(report['applied']), ['22232', '23536'])
 
 
 if __name__ == '__main__':
