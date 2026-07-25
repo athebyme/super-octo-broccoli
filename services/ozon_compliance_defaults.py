@@ -211,3 +211,53 @@ def resolve_type_defaults(product_type_id: Any) -> dict:
         "unresolved": unresolved,
         "evidence": evidence,
     }
+
+
+def _has_value(attributes: list, attribute_id: str) -> bool:
+    for item in attributes:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("attribute_id")) != attribute_id:
+            continue
+        values = item.get("values")
+        if isinstance(values, list) and values:
+            return True
+    return False
+
+
+def apply_to_attributes(attributes: Any, product_type_id: Any) -> tuple:
+    """Дозаполнить compliance-атрибуты из админского решения.
+
+    Заполняются только ПУСТЫЕ атрибуты; значение, уже присутствующее в
+    черновике, не перезаписывается никогда.  При нерешённом источнике не
+    записывается ничего — черновик остаётся невалидным с явной причиной.
+    """
+    result = list(attributes) if isinstance(attributes, list) else []
+    report = {"applied": [], "unresolved": [], "evidence": {}}
+
+    defaults = resolve_type_defaults(product_type_id)
+    report["unresolved"] = list(defaults.get("unresolved") or [])
+    report["evidence"] = dict(defaults.get("evidence") or {})
+
+    tnved = defaults.get("tnved")
+    if tnved and not _has_value(result, TNVED_ATTRIBUTE_ID):
+        result.append({
+            "attribute_id": TNVED_ATTRIBUTE_ID,
+            "complex_id": "0",
+            "values": [{
+                "dictionary_value_id": tnved["external_value_id"],
+                "value": tnved["value"],
+            }],
+        })
+        report["applied"].append(TNVED_ATTRIBUTE_ID)
+
+    marking = defaults.get("marking")
+    if marking is not None and not _has_value(result, MARKING_ATTRIBUTE_ID):
+        result.append({
+            "attribute_id": MARKING_ATTRIBUTE_ID,
+            "complex_id": "0",
+            "values": [{"value": "true" if marking else "false"}],
+        })
+        report["applied"].append(MARKING_ATTRIBUTE_ID)
+
+    return result, report

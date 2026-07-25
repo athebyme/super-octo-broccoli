@@ -459,5 +459,66 @@ class ResolveMarkingTestCase(unittest.TestCase):
         )
 
 
+class ApplyComplianceDefaultsTestCase(unittest.TestCase):
+    def _run(self, attributes, defaults):
+        module = 'services.ozon_compliance_defaults'
+        with patch(f'{module}.resolve_type_defaults', return_value=defaults):
+            from services.ozon_compliance_defaults import apply_to_attributes
+            return apply_to_attributes(attributes, 1609)
+
+    def _defaults(self, marking=True):
+        return {
+            'tnved': {
+                'code': '3307900008',
+                'value': '3307900008 - Косметические средства',
+                'external_value_id': '971397758',
+                'default_id': 7,
+                'dictionary_version': 3,
+            },
+            'marking': marking,
+            'unresolved': [],
+            'evidence': {'tnved_default_id': 7, 'registry_version_id': 1},
+        }
+
+    def test_fills_both_empty_attributes(self):
+        attributes, report = self._run([], self._defaults())
+        by_id = {item['attribute_id']: item for item in attributes}
+        self.assertEqual(
+            by_id['22232']['values'],
+            [{
+                'dictionary_value_id': '971397758',
+                'value': '3307900008 - Косметические средства',
+            }],
+        )
+        self.assertEqual(by_id['23536']['values'], [{'value': 'true'}])
+        self.assertEqual(sorted(report['applied']), ['22232', '23536'])
+
+    def test_false_marking_is_written_as_literal_false(self):
+        attributes, _ = self._run([], self._defaults(marking=False))
+        by_id = {item['attribute_id']: item for item in attributes}
+        self.assertEqual(by_id['23536']['values'], [{'value': 'false'}])
+
+    def test_existing_seller_value_is_never_overwritten(self):
+        existing = [{
+            'attribute_id': '22232',
+            'complex_id': '0',
+            'values': [{'dictionary_value_id': '1', 'value': 'Ручной код'}],
+        }]
+        attributes, report = self._run(existing, self._defaults())
+        by_id = {item['attribute_id']: item for item in attributes}
+        self.assertEqual(by_id['22232']['values'][0]['value'], 'Ручной код')
+        self.assertEqual(report['applied'], ['23536'])
+
+    def test_unresolved_marking_writes_nothing_for_that_attribute(self):
+        defaults = self._defaults()
+        defaults['marking'] = None
+        defaults['unresolved'] = ['23536']
+        attributes, report = self._run([], defaults)
+        ids = {item['attribute_id'] for item in attributes}
+        self.assertIn('22232', ids)
+        self.assertNotIn('23536', ids)
+        self.assertEqual(report['unresolved'], ['23536'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -3477,6 +3477,16 @@ class MarketplaceDraftService:
                 "complex_id": attribute.attribute_complex_id or "0",
                 "values": canonical_values,
             })
+
+        # Compliance-атрибуты не выводятся из фактов товара — это остаётся
+        # запрещённым.  Здесь применяется отдельный слой: подписанное админом
+        # решение по ТН ВЭД и выведенный из него по нормативному перечню
+        # признак маркировки.  Слой заполняет только пустые поля и никогда не
+        # трогает уже заданное значение.
+        from services.ozon_compliance_defaults import apply_to_attributes
+        result, _compliance_report = apply_to_attributes(
+            result, product_type.id,
+        )
         return result
 
     @classmethod
