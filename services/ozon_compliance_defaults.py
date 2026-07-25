@@ -1,0 +1,121 @@
+# -*- coding: utf-8 -*-
+"""Админские compliance-дефолты Ozon: ТН ВЭД и признак маркировки.
+
+Ozon требует два обязательных атрибута, которые платформа принципиально не
+имеет права выводить из фактов товара: `22232` («ТН ВЭД коды ЕАЭС») и `23536`
+(«Нужен код маркировки»).  Единственный допустимый источник ТН ВЭД —
+подписанное админом решение, привязанное к Ozon product type; единственный
+допустимый источник признака маркировки — активная версия нормативного
+перечня, применённая к этому коду.
+
+Модуль чистый: только SQL и строки.  Ни provider-вызовов, ни LLM.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+TNVED_ATTRIBUTE_ID = "22232"
+MARKING_ATTRIBUTE_ID = "23536"
+
+_DIGITS = re.compile(r"\d+")
+_LEADING_DIGITS = re.compile(r"^\s*(\d+)")
+
+
+def normalize_code(value: Any) -> str:
+    """Свести код ТН ВЭД к последовательности цифр."""
+    if value is None:
+        return ""
+    return "".join(_DIGITS.findall(str(value)))
+
+
+def dictionary_code(value: Any) -> str:
+    """Извлечь код из значения официального словаря.
+
+    Наблюдённая форма — ``"3307900008 - Косметические средства ..."``.
+    Кодом считается ведущая непрерывная последовательность цифр; всё, что
+    после неё, игнорируется.  Значение без ведущих цифр кандидатом не является.
+    """
+    if value is None:
+        return ""
+    match = _LEADING_DIGITS.match(str(value))
+    return match.group(1) if match else ""
+
+
+def _active_default(product_type_id: int):
+    from models import OzonComplianceDefault
+    return OzonComplianceDefault.query.filter_by(
+        product_type_id=product_type_id, status="active",
+    ).first()
+
+
+def _tnved_definition(product_type_id: int):
+    from models import MarketplaceAttributeDefinition
+    return MarketplaceAttributeDefinition.query.filter_by(
+        product_type_id=product_type_id,
+        external_attribute_id=TNVED_ATTRIBUTE_ID,
+    ).first()
+
+
+def _dictionary_rows(definition) -> list:
+    from models import MarketplaceAttributeValue
+    return MarketplaceAttributeValue.query.filter_by(
+        attribute_id=definition.id, is_available=True,
+    ).all()
+
+
+def _dictionary_is_fresh(definition) -> bool:
+    from services.ozon_reference_service import OzonReferenceService
+    return bool(OzonReferenceService.dictionary_is_fresh(definition))
+
+
+def resolve_tnved(product_type_id: Any) -> Optional[dict]:
+    """Разрешить админский код ТН ВЭД в значение свежего словаря типа.
+
+    Возвращает ``None`` при отсутствии решения, несвежем словаре, отсутствии
+    кода в словаре и при более чем одном совпадении.  Вызывающий код обязан
+    трактовать ``None`` как fail-closed и ничего не записывать.
+    """
+    try:
+        type_key = int(product_type_id)
+    except (TypeError, ValueError):
+        return None
+
+    default = _active_default(type_key)
+    if default is None:
+        return None
+    code = normalize_code(default.tnved_code)
+    if not code:
+        return None
+
+    definition = _tnved_definition(type_key)
+    if definition is None or not definition.is_available:
+        return None
+    if not _dictionary_is_fresh(definition):
+        return None
+
+    restriction = set(getattr(definition, "restriction_value_ids", None) or [])
+    matches = [
+        row for row in _dictionary_rows(definition)
+        if dictionary_code(row.value) == code
+        and (not restriction or row.external_value_id in restriction)
+    ]
+    if len(matches) != 1:
+        if matches:
+            logger.warning(
+                "Код ТН ВЭД %s неоднозначен в словаре типа %s (%s совпадений)",
+                code, type_key, len(matches),
+            )
+        return None
+
+    row = matches[0]
+    return {
+        "code": code,
+        "value": row.value,
+        "external_value_id": row.external_value_id,
+        "default_id": default.id,
+        "dictionary_version": getattr(definition, "values_version", None),
+    }

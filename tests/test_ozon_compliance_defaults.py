@@ -2,6 +2,7 @@
 """Контракт админских compliance-дефолтов Ozon."""
 import unittest
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 
 class ComplianceModelsTestCase(unittest.TestCase):
@@ -256,6 +257,105 @@ class ComplianceMigrationMainTestCase(unittest.TestCase):
                 os.path.exists(missing_path),
                 'sqlite3.connect() must not silently create the DB file',
             )
+
+
+class TnvedCodeParsingTestCase(unittest.TestCase):
+    def test_normalize_keeps_digits_only(self):
+        from services.ozon_compliance_defaults import normalize_code
+        self.assertEqual(normalize_code(' 3307 90 000 8 '), '3307900008')
+        self.assertEqual(normalize_code('6402-99'), '640299')
+        self.assertEqual(normalize_code(''), '')
+        self.assertEqual(normalize_code(None), '')
+
+    def test_dictionary_code_takes_leading_digits(self):
+        from services.ozon_compliance_defaults import dictionary_code
+        self.assertEqual(
+            dictionary_code('3307900008 - Косметические средства'),
+            '3307900008',
+        )
+        self.assertEqual(dictionary_code('6402990000'), '6402990000')
+        self.assertEqual(dictionary_code('Без кода'), '')
+        self.assertEqual(dictionary_code(None), '')
+
+
+def _definition(*, fresh=True, available=True):
+    defn = MagicMock()
+    defn.id = 678
+    defn.external_attribute_id = '22232'
+    defn.is_available = available
+    defn.dictionary_id = '124412395'
+    defn.values_version = 3
+    defn.restriction_value_ids = []
+    return defn
+
+
+def _value_row(external_value_id, value):
+    row = MagicMock()
+    row.external_value_id = external_value_id
+    row.value = value
+    return row
+
+
+class ResolveTnvedTestCase(unittest.TestCase):
+    def _run(self, *, default, definition, rows, fresh=True):
+        module = 'services.ozon_compliance_defaults'
+        with patch(f'{module}._active_default', return_value=default), \
+             patch(f'{module}._tnved_definition', return_value=definition), \
+             patch(f'{module}._dictionary_rows', return_value=rows), \
+             patch(f'{module}._dictionary_is_fresh', return_value=fresh):
+            from services.ozon_compliance_defaults import resolve_tnved
+            return resolve_tnved(1609)
+
+    def _default(self, code='3307900008'):
+        obj = MagicMock()
+        obj.id = 7
+        obj.tnved_code = code
+        obj.dictionary_version = 3
+        return obj
+
+    def test_exact_single_match_resolves_value_id(self):
+        result = self._run(
+            default=self._default(),
+            definition=_definition(),
+            rows=[
+                _value_row('971397774', '3403990000 - Прочие смазочные'),
+                _value_row('971397758', '3307900008 - Косметические средства'),
+            ],
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['code'], '3307900008')
+        self.assertEqual(result['external_value_id'], '971397758')
+        self.assertEqual(result['value'], '3307900008 - Косметические средства')
+
+    def test_missing_decision_returns_none(self):
+        self.assertIsNone(
+            self._run(default=None, definition=_definition(), rows=[])
+        )
+
+    def test_stale_dictionary_returns_none(self):
+        self.assertIsNone(self._run(
+            default=self._default(),
+            definition=_definition(),
+            rows=[_value_row('1', '3307900008 - X')],
+            fresh=False,
+        ))
+
+    def test_code_absent_from_dictionary_returns_none(self):
+        self.assertIsNone(self._run(
+            default=self._default(code='9999999999'),
+            definition=_definition(),
+            rows=[_value_row('1', '3307900008 - X')],
+        ))
+
+    def test_duplicate_code_in_dictionary_returns_none(self):
+        self.assertIsNone(self._run(
+            default=self._default(),
+            definition=_definition(),
+            rows=[
+                _value_row('1', '3307900008 - X'),
+                _value_row('2', '3307900008 - Y'),
+            ],
+        ))
 
 
 if __name__ == '__main__':
