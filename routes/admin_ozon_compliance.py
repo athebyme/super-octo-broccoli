@@ -124,20 +124,36 @@ def apply_existing(product_type_id):
 
     Только SQL внутри ``apply_to_existing_drafts`` — ни одна
     ``MarketplaceOperation`` здесь не создаётся, Ozon не вызывается.
+
+    ``refresh`` — необязательный чекбокс формы, включающий обновление уже
+    заполненных значений (см. ``apply_to_existing_drafts`` docstring).
+    Приводится к строгому boolean по точному значению ``"1"``: снятый
+    чекбокс (поле отсутствует в форме) и любое иное значение трактуются как
+    ``False``, а не пропускаются через loose ``bool(...)``.
     """
+    refresh = request.form.get("refresh") == "1"
     try:
-        counters = apply_to_existing_drafts(product_type_id=product_type_id)
+        counters = apply_to_existing_drafts(
+            product_type_id=product_type_id, refresh=refresh,
+        )
     except OzonComplianceAdminError as exc:
         flash(str(exc), "danger")
         return redirect(url_for("admin_ozon_compliance.index"))
 
-    flash(
-        "Обновлено черновиков: {updated}. Занятых активной операцией: "
+    message = (
+        "Дозаполнено пустых: {updated}. Занятых активной операцией: "
         "{skipped_active_operation}. Архивных пропущено: "
-        "{skipped_archived}. Уже было заполнено: "
-        "{skipped_already_filled}. Ошибок: {failed}.".format(**counters),
-        "success" if not counters["failed"] else "warning",
-    )
+        "{skipped_archived}. Не изменилось: {skipped_already_filled}. "
+        "Ошибок: {failed}."
+    ).format(**counters)
+    if refresh:
+        message += (
+            " Режим обновления: обновлено устаревших (проставленных ранее "
+            "этим же слоем) — {refreshed}, уже актуально — "
+            "{already_current}, пропущено как правка продавца — "
+            "{skipped_seller_owned}."
+        ).format(**counters)
+    flash(message, "success" if not counters["failed"] else "warning")
     return redirect(url_for("admin_ozon_compliance.index"))
 
 

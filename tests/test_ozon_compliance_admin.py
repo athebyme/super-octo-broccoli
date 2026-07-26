@@ -1481,6 +1481,61 @@ class RefreshExistingDraftsIntegrationTestCase(_AdminServiceDbTestCase):
         self.assertEqual(counters["updated"], 0)
         self.assertEqual(counters["skipped_already_filled"], 1)
 
+    def test_refresh_mode_does_not_add_queries_per_draft(self):
+        """(Ревью Task 8b, Minor) Симметрично уже существующему
+        ``test_active_operation_check_does_not_grow_per_draft``, но для
+        ``refresh=True``: сравнение хранимого значения с провенансом — это
+        чистая работа с уже загруженным JSON, без дополнительных SELECT.
+        Drafts прогреваются обычным (``refresh=False``) вызовом заранее,
+        чтобы измеряемый вызов реально прогонял полную ветку сравнения
+        (``compliance_value_is_ours`` + ``already_current``) на каждой
+        строке, а не короткое замыкание "атрибут ещё пуст".
+        """
+        from models import db
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+
+        def _count_queries(fn):
+            counter = {"n": 0}
+
+            def _before_cursor_execute(*args, **kwargs):
+                counter["n"] += 1
+
+            event.listen(db.engine, "before_cursor_execute", _before_cursor_execute)
+            try:
+                fn()
+            finally:
+                event.remove(
+                    db.engine, "before_cursor_execute", _before_cursor_execute,
+                )
+            return counter["n"]
+
+        small_type = self._resolved_type_with_decision(
+            "1613", ["3307900008"], "3307900008",
+        )
+        for i in range(3):
+            self._make_draft(small_type.id, f"refresh-small-{i}")
+        apply_to_existing_drafts(product_type_id=small_type.id)
+        small_count = _count_queries(
+            lambda: apply_to_existing_drafts(
+                product_type_id=small_type.id, refresh=True,
+            )
+        )
+
+        big_type = self._resolved_type_with_decision(
+            "1614", ["3307900008"], "3307900008",
+        )
+        for i in range(15):
+            self._make_draft(big_type.id, f"refresh-big-{i}")
+        apply_to_existing_drafts(product_type_id=big_type.id)
+        big_count = _count_queries(
+            lambda: apply_to_existing_drafts(
+                product_type_id=big_type.id, refresh=True,
+            )
+        )
+
+        marginal_per_draft = (big_count - small_count) / (15 - 3)
+        self.assertLessEqual(marginal_per_draft, 3)
+
 
 if __name__ == '__main__':
     unittest.main()

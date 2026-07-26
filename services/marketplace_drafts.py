@@ -5232,7 +5232,7 @@ class MarketplaceDraftService:
             for item in current
             if isinstance(item, dict)
         }
-        generated, _ = cls._auto_map_attributes(
+        generated, compliance_report = cls._auto_map_attributes(
             product_type=draft.product_type,
             facts_document=cls._stored_json(
                 draft.source_facts_json,
@@ -5250,12 +5250,46 @@ class MarketplaceDraftService:
         ]
         if not additions:
             return draft
-        return cls.update_draft(
+
+        # `_auto_map_attributes` recomputes the compliance layer from
+        # scratch on every call, independent of what `current` already
+        # holds -- its `compliance_report["applied"]` therefore always lists
+        # a resolvable TNVED/marking ID even when that identity is already
+        # present in `current` (and thus excluded from `additions` above,
+        # left untouched here). Attributing provenance for an ID that was
+        # NOT actually just written would falsely claim a fresh write over
+        # an untouched, possibly-stale stored value and point provenance at
+        # the wrong (current, not stored) resolved value. Only IDs that
+        # genuinely ended up in `additions` in THIS call may be recorded.
+        added_compliance_ids = {
+            item.get("attribute_id")
+            for item in additions
+            if isinstance(item, dict)
+        }
+        filtered_report = dict(compliance_report or {})
+        filtered_report["applied"] = [
+            attribute_id
+            for attribute_id in (compliance_report or {}).get("applied") or []
+            if attribute_id in added_compliance_ids
+        ]
+
+        updated = cls.update_draft(
             seller_id=seller_id,
             draft_id=draft.id,
             expected_version=expected_version,
             patch={"attributes": [*current, *additions]},
         )
+        if filtered_report["applied"]:
+            cls._merge_compliance_provenance(updated, filtered_report)
+            try:
+                db.session.commit()
+            except StaleDataError:
+                db.session.rollback()
+                raise MarketplaceDraftConflict(
+                    "Черновик изменился параллельно; повторите после обновления"
+                ) from None
+            return cls.get_draft(seller_id=seller_id, draft_id=updated.id)
+        return updated
 
     @staticmethod
     def _validation_item(code: str, field: str, message: str) -> dict:

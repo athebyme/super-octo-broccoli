@@ -318,6 +318,194 @@ class AdminOzonComplianceRoutesTestCase(unittest.TestCase):
         messages = [message for _category, message in flashes]
         self.assertTrue(any("version_id" in message for message in messages))
 
+    # ── apply_existing() ───────────────────────────────────────────
+
+    @staticmethod
+    def _counters(**overrides):
+        base = {
+            "updated": 0,
+            "refreshed": 0,
+            "already_current": 0,
+            "skipped_active_operation": 0,
+            "skipped_archived": 0,
+            "skipped_already_filled": 0,
+            "skipped_seller_owned": 0,
+            "failed": 0,
+            "unresolved": [],
+        }
+        base.update(overrides)
+        return base
+
+    def test_non_admin_is_denied_on_apply_existing(self):
+        user_patch, login_patch = self._auth(admin=False)
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.apply_to_existing_drafts"
+        ) as apply_existing:
+            response = self.client.post(
+                "/admin/ozon/compliance/1609/apply-existing", data={},
+            )
+        self.assertEqual(response.status_code, 403)
+        apply_existing.assert_not_called()
+
+    def test_apply_existing_without_checkbox_passes_refresh_false(self):
+        """(Ревью Task 8b, Important 1) Без отмеченного чекбокса режим
+        обновления не должен включаться -- строгое сравнение с `"1"`, а не
+        loose truthy coercion.
+        """
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.apply_to_existing_drafts",
+            return_value=self._counters(),
+        ) as apply_existing:
+            response = self.client.post(
+                "/admin/ozon/compliance/1609/apply-existing", data={},
+            )
+        self.assertEqual(response.status_code, 302)
+        apply_existing.assert_called_once_with(
+            product_type_id=1609, refresh=False,
+        )
+
+    def test_apply_existing_with_checkbox_passes_refresh_true(self):
+        """(Ревью Task 8b, Important 1) Это единственный интерфейс, через
+        который `refresh=True` вообще достижим в проде -- без этого теста
+        протестированный сервисный код был бы навсегда недостижим ни для
+        одного черновика.
+        """
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.apply_to_existing_drafts",
+            return_value=self._counters(),
+        ) as apply_existing:
+            response = self.client.post(
+                "/admin/ozon/compliance/1609/apply-existing",
+                data={"refresh": "1"},
+            )
+        self.assertEqual(response.status_code, 302)
+        apply_existing.assert_called_once_with(
+            product_type_id=1609, refresh=True,
+        )
+
+    def test_apply_existing_rejects_any_non_canonical_refresh_value(self):
+        """`refresh` формы приводится к boolean строгим сравнением с точным
+        `"1"` -- любое другое значение (например браузер прислал бы `"true"`
+        для нестандартного чекбокса) обязано остаться `False`, а не пройти
+        через loose truthy-приведение.
+        """
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.apply_to_existing_drafts",
+            return_value=self._counters(),
+        ) as apply_existing:
+            self.client.post(
+                "/admin/ozon/compliance/1609/apply-existing",
+                data={"refresh": "true"},
+            )
+        apply_existing.assert_called_once_with(
+            product_type_id=1609, refresh=False,
+        )
+
+    def test_apply_existing_error_is_flashed_not_raised(self):
+        from services.ozon_compliance_admin import OzonComplianceAdminError
+
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.apply_to_existing_drafts",
+            side_effect=OzonComplianceAdminError(
+                "product_type_id должен быть числом"
+            ),
+        ):
+            response = self.client.post(
+                "/admin/ozon/compliance/1609/apply-existing", data={},
+            )
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session:
+            flashes = session.get("_flashes", [])
+        messages = [message for _category, message in flashes]
+        self.assertTrue(
+            any("product_type_id" in message for message in messages)
+        )
+
+    def test_apply_existing_flash_includes_refresh_counters_only_when_enabled(
+        self,
+    ):
+        """(Ревью Task 8b, Important 1) Админ должен видеть, ПОЧЕМУ из 200
+        черновиков обновилось только три -- refreshed/already_current/
+        skipped_seller_owned обязаны попасть в flash, а не остаться только
+        в возвращаемом словаре счётчиков.
+        """
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.apply_to_existing_drafts",
+            return_value=self._counters(
+                refreshed=3, already_current=5, skipped_seller_owned=2,
+            ),
+        ):
+            response = self.client.post(
+                "/admin/ozon/compliance/1609/apply-existing",
+                data={"refresh": "1"},
+            )
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session:
+            flashes = session.get("_flashes", [])
+        messages = [message for _category, message in flashes]
+        joined = " ".join(messages)
+        self.assertIn("Режим обновления", joined)
+        self.assertIn("3", joined)
+        self.assertIn("5", joined)
+        self.assertIn("2", joined)
+
+    def test_apply_existing_flash_omits_refresh_counters_when_disabled(self):
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.apply_to_existing_drafts",
+            return_value=self._counters(),
+        ):
+            response = self.client.post(
+                "/admin/ozon/compliance/1609/apply-existing", data={},
+            )
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session:
+            flashes = session.get("_flashes", [])
+        messages = [message for _category, message in flashes]
+        joined = " ".join(messages)
+        self.assertNotIn("Режим обновления", joined)
+
+    def test_apply_existing_form_keeps_csrf_token_and_refresh_checkbox(self):
+        """Source-level guard, не полноценный рендер шаблона: этот шаблон
+        расширяет ``base.html`` и требует полного контекста приложения
+        (сессия, `mp_nav()`, статика), которого у этого лёгкого тестового
+        Flask-приложения нет -- поэтому, как и остальные тесты этого класса,
+        рендер `render_template` здесь не используется. Проверяется, что
+        форма «Применить к существующим» после добавления чекбокса
+        `refresh` не потеряла скрытое CSRF-поле: Flask-WTF защищает ВСЕ
+        POST-роуты этого blueprint одним общим middleware, поэтому
+        единственный способ реально сломать защиту здесь -- случайно
+        убрать `csrf_token()` из формы при её редактировании.
+        """
+        import re
+        from pathlib import Path
+
+        template_path = (
+            Path(__file__).resolve().parent.parent
+            / "templates" / "admin_ozon_compliance.html"
+        )
+        source = template_path.read_text(encoding="utf-8")
+        match = re.search(
+            r"<form[^>]*apply_existing[^>]*>.*?</form>",
+            source,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(
+            match, "форма apply-existing не найдена в шаблоне",
+        )
+        form_html = match.group(0)
+        self.assertIn('name="csrf_token"', form_html)
+        self.assertIn("csrf_token()", form_html)
+        # The checkbox is emitted by the shared `toggle(...)` macro (which
+        # renders `name="refresh"` only after Jinja expansion), so the
+        # source-level check looks for the macro call itself.
+        self.assertIn("toggle('refresh'", form_html)
+
     # ── registry_preview() ─────────────────────────────────────────
 
     def test_registry_preview_returns_service_result_as_json(self):

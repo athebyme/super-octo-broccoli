@@ -1444,6 +1444,127 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             }],
         )
 
+    def test_reference_defaults_does_not_falsely_attribute_provenance_to_untouched_compliance_value(
+        self,
+    ):
+        """(Ревью Task 8b, Important 2) `_auto_map_attributes` recomputes
+        the compliance layer from scratch on every call regardless of what
+        the draft already stores, so its own `compliance_report["applied"]`
+        always lists a resolvable ID even when that identity is already
+        present in the draft and therefore excluded from `additions`.
+        `apply_reference_defaults` must only record provenance for IDs that
+        genuinely ended up in `additions` in THIS call -- otherwise a later
+        admin decision change would make provenance claim a fresh write of
+        the NEW value while the value actually stored on disk stayed the
+        OLD one, breaking `compliance_value_is_ours` silently.
+        """
+        product = self._product(external_id="reference-defaults-compliance")
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        # No active compliance decision exists yet at create time (the
+        # fixture's product_type has none), so the draft starts without a
+        # 22232 record -- exactly the "type bound before the decision
+        # existed" scenario `apply_reference_defaults` targets.
+        self.assertNotIn(
+            "22232",
+            {item["attribute_id"] for item in json.loads(draft.attributes_json)},
+        )
+
+        old_defaults = {
+            "tnved": {
+                "code": "1111111111", "value": "1111111111 - A",
+                "external_value_id": "111111111", "default_id": 1,
+                "dictionary_version": 1,
+            },
+            "marking": None,
+        }
+        with patch.object(
+            MarketplaceDraftService,
+            "_auto_map_attributes",
+            return_value=([{
+                "attribute_id": "22232",
+                "complex_id": "0",
+                "values": [{
+                    "dictionary_value_id": "111111111",
+                    "value": "1111111111 - A",
+                }],
+            }], {
+                "applied": ["22232"], "unresolved": [], "evidence": {},
+                "defaults": old_defaults,
+            }),
+        ):
+            first = MarketplaceDraftService.apply_reference_defaults(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+            )
+
+        provenance = json.loads(first.provenance_json)
+        self.assertEqual(
+            provenance["compliance.22232"]["external_value_id"], "111111111",
+        )
+
+        # Admin fixes the decision; a NEW attribute also becomes newly
+        # addable in this call (so `additions` is non-empty and the
+        # function does not short-circuit before reaching the compliance
+        # filter). TNVED already exists by identity, so it must stay
+        # excluded from `additions` -- and from provenance.
+        new_defaults = dict(old_defaults)
+        new_defaults["tnved"] = {
+            "code": "2222222222", "value": "2222222222 - B",
+            "external_value_id": "222222222", "default_id": 2,
+            "dictionary_version": 2,
+        }
+        with patch.object(
+            MarketplaceDraftService,
+            "_auto_map_attributes",
+            return_value=([
+                {
+                    "attribute_id": "22232",
+                    "complex_id": "0",
+                    "values": [{
+                        "dictionary_value_id": "222222222",
+                        "value": "2222222222 - B",
+                    }],
+                },
+                {
+                    "attribute_id": "999",
+                    "complex_id": "0",
+                    "values": [{"value": "Новое значение"}],
+                },
+            ], {
+                "applied": ["22232"], "unresolved": [], "evidence": {},
+                "defaults": new_defaults,
+            }),
+        ):
+            second = MarketplaceDraftService.apply_reference_defaults(
+                seller_id=self.seller1_id,
+                draft_id=first.id,
+                expected_version=first.version,
+            )
+
+        attrs = {
+            item["attribute_id"]: item
+            for item in json.loads(second.attributes_json)
+        }
+        self.assertEqual(
+            attrs["22232"]["values"][0]["dictionary_value_id"], "111111111",
+            "Уже присутствующее значение не должно перезаписываться этим путём",
+        )
+        self.assertIn("999", attrs)
+
+        final_provenance = json.loads(second.provenance_json)
+        self.assertEqual(
+            final_provenance["compliance.22232"]["external_value_id"],
+            "111111111",
+            "Провенанс не должен заявлять новое значение, которое "
+            "фактически не было записано в этом вызове",
+        )
+
     def test_exact_mapping_auto_attributes_and_full_validation(self):
         product, draft = self._ready_draft()
         detail = draft.to_public_dict(detail=True)
