@@ -121,6 +121,159 @@ def resolve_tnved(product_type_id: Any) -> Optional[dict]:
     }
 
 
+def type_tnved_dictionary_status(product_type_id: Any) -> dict:
+    """Полный статус официального словаря ТН ВЭД одного Ozon product type.
+
+    Единая точка правды: и ``get_type_tnved_dictionary`` (UI datalist), и
+    ``is_type_tnved_code_available`` (проверка кода перед сохранением решения
+    в ``save_decision``) читают ОДИН и тот же набор строк, отфильтрованный
+    тем же admin restriction, что и ``resolve_tnved`` — иначе код мог бы
+    пройти UI-подсказку, но не пройти фактическое разрешение (или наоборот).
+
+    ``is_fresh=False`` означает, что словарь недоступен/устарел: вызывающий
+    код обязан считать `entries` пустым списком, а не молчаливым «кодов нет».
+    """
+    try:
+        type_key = int(product_type_id)
+    except (TypeError, ValueError):
+        return {"is_fresh": False, "entries": []}
+
+    definition = _tnved_definition(type_key)
+    if definition is None or not definition.is_available:
+        return {"is_fresh": False, "entries": []}
+    if not _dictionary_is_fresh(definition):
+        return {"is_fresh": False, "entries": []}
+
+    restriction = set(getattr(definition, "restriction_value_ids", None) or [])
+    entries = []
+    for row in _dictionary_rows(definition):
+        if restriction and row.external_value_id not in restriction:
+            continue
+        code = dictionary_code(row.value)
+        if not code:
+            continue
+        entries.append({
+            "code": code,
+            "value": row.value,
+            "external_value_id": row.external_value_id,
+        })
+    return {"is_fresh": True, "entries": entries}
+
+
+def get_type_tnved_dictionary(product_type_id: Any, *, limit: int = 1000) -> dict:
+    """Официальный словарь ТН ВЭД одного типа — для UI datalist экрана.
+
+    Отдаёт значения ТОЛЬКО когда словарь свежий; иначе — пустой список и
+    явный ``is_fresh=False``, чтобы UI не выдавал устаревшие/отсутствующие
+    подсказки за актуальные. ``values`` ограничен ``limit`` (защита от
+    отправки в браузер десятков тысяч `<option>` для крупных категорий);
+    ``total_count`` — точное число доступных значений НЕЗАВИСИМО от лимита
+    отображения, чтобы UI мог честно сказать «показаны не все».
+    """
+    status = type_tnved_dictionary_status(product_type_id)
+    entries = status["entries"]
+    bounded_limit = max(0, int(limit))
+    return {
+        "is_fresh": status["is_fresh"],
+        "values": entries[:bounded_limit],
+        "total_count": len(entries),
+    }
+
+
+def is_type_tnved_code_available(product_type_id: Any, code: Any) -> Optional[bool]:
+    """Проверить код по свежему словарю типа ДО сохранения решения.
+
+    ``None``  — словарь несвежий/отсутствует: решение нельзя ни подтвердить,
+                ни отклонить по словарю, вызывающий код обязан фейлиться
+                closed (не сохранять).
+    ``True``  — код найден среди официальных значений этого типа.
+    ``False`` — словарь свежий, но код среди значений не найден (опечатка
+                или чужой код).
+    """
+    status = type_tnved_dictionary_status(product_type_id)
+    if not status["is_fresh"]:
+        return None
+    target = normalize_code(code)
+    if not target:
+        return False
+    return any(entry["code"] == target for entry in status["entries"])
+
+
+def type_tnved_dictionary_summary_batch(product_type_ids: Any) -> dict:
+    """Готовность и размер словаря ТН ВЭД для набора типов ОДНИМ проходом.
+
+    ``type_tnved_dictionary_status`` на один тип делает: SELECT определения,
+    переход по `product_type -> category`/`marketplace` для расчёта
+    свежести (``dictionary_is_fresh``) и SELECT всех строк словаря. В цикле
+    по N задействованным типам ``list_type_rows`` это было бы N+1 —
+    здесь определения грузятся batched с ``joinedload`` нужных связей, а
+    число строк — одним GROUP BY. Admin restriction (редкий кейс: не у
+    каждого типа) уточняется отдельным bounded запросом только для тех
+    типов, у которых он реально задан — не по всем N типам разом.
+
+    Возвращает ``{product_type_id: {"ready": bool, "count": int}}`` для
+    каждого запрошенного id (даже если словаря/определения нет вовсе).
+    """
+    from sqlalchemy.orm import joinedload
+    from models import (
+        db, MarketplaceAttributeDefinition, MarketplaceAttributeValue,
+        MarketplaceProductType,
+    )
+    from services.ozon_reference_service import OzonReferenceService
+
+    try:
+        ids = sorted({int(pid) for pid in product_type_ids})
+    except (TypeError, ValueError):
+        return {}
+
+    result = {pid: {"ready": False, "count": 0} for pid in ids}
+    if not ids:
+        return result
+
+    definitions = MarketplaceAttributeDefinition.query.filter(
+        MarketplaceAttributeDefinition.product_type_id.in_(ids),
+        MarketplaceAttributeDefinition.external_attribute_id == TNVED_ATTRIBUTE_ID,
+    ).options(
+        joinedload(MarketplaceAttributeDefinition.product_type)
+        .joinedload(MarketplaceProductType.category),
+        joinedload(MarketplaceAttributeDefinition.product_type)
+        .joinedload(MarketplaceProductType.marketplace),
+    ).all()
+
+    fresh_by_type = {
+        definition.product_type_id: definition
+        for definition in definitions
+        if definition.is_available
+        and OzonReferenceService.dictionary_is_fresh(definition)
+    }
+    if not fresh_by_type:
+        return result
+
+    attribute_ids = [definition.id for definition in fresh_by_type.values()]
+    counts_by_attribute = dict(
+        db.session.query(
+            MarketplaceAttributeValue.attribute_id,
+            db.func.count(MarketplaceAttributeValue.id),
+        ).filter(
+            MarketplaceAttributeValue.attribute_id.in_(attribute_ids),
+            MarketplaceAttributeValue.is_available.is_(True),
+        ).group_by(MarketplaceAttributeValue.attribute_id).all()
+    )
+
+    for type_id, definition in fresh_by_type.items():
+        restriction = set(getattr(definition, "restriction_value_ids", None) or [])
+        if restriction:
+            count = MarketplaceAttributeValue.query.filter(
+                MarketplaceAttributeValue.attribute_id == definition.id,
+                MarketplaceAttributeValue.is_available.is_(True),
+                MarketplaceAttributeValue.external_value_id.in_(restriction),
+            ).count()
+        else:
+            count = counts_by_attribute.get(definition.id, 0)
+        result[type_id] = {"ready": True, "count": count}
+    return result
+
+
 def _active_registry_version():
     from models import OzonMarkingRegistryVersion
     return OzonMarkingRegistryVersion.query.filter_by(status="active").first()

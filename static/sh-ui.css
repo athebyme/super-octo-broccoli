@@ -247,6 +247,11 @@ a.sh-chip:hover, button.sh-chip:hover, .sh-chip--clickable:hover {
     color: var(--accent-strong);
 }
 [data-theme="dark"] .sh-chip--active { color: var(--accent); }
+/* Статусные тона поверх нейтрального .sh-chip — общие семантические токены,
+   а не одноразовые page-local копии (см. templates/admin_ozon_compliance.html). */
+.sh-chip--warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
+.sh-chip--ok { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok); }
+.sh-chip--info { background: var(--info-bg); border-color: var(--info-border); color: var(--info); }
 .sh-chip-remove {
     display: inline-flex;
     margin-right: -3px;

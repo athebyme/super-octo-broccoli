@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Админский сервис compliance-дефолтов Ozon."""
+from datetime import date, datetime
 import unittest
 
 from flask import Flask
@@ -62,8 +63,15 @@ class _AdminServiceDbTestCase(unittest.TestCase):
         self.context.push()
         db.create_all()
 
+        # ``categories_synced_at``/``categories_snapshot_hash`` — часть
+        # ``OzonReferenceService.reference_is_fresh``, которую
+        # ``dictionary_is_fresh`` проверяет через ``product_type.marketplace``.
+        # Задано один раз здесь для всех типов этого маркетплейса, а не в
+        # каждом тесте по отдельности.
         marketplace = Marketplace(
             name="Ozon", code="ozon", adapter_code="ozon", is_active=True,
+            categories_synced_at=datetime.utcnow(),
+            categories_snapshot_hash="fresh-categories-hash",
         )
         db.session.add(marketplace)
         user = User(
@@ -83,17 +91,85 @@ class _AdminServiceDbTestCase(unittest.TestCase):
         self.context.pop()
 
     def _make_product_type(self, external_type_id, name="Тип"):
-        from models import db, MarketplaceProductType
+        """Тип с уже свежим ``reference_is_fresh``: реальная категория и
+        собственные ``attributes_synced_at``/``attributes_schema_hash``.
+
+        Это НЕ делает свежим словарь конкретного атрибута ТН ВЭД — для этого
+        нужен отдельный ``_make_tnved_dictionary``, который создаёт
+        ``MarketplaceAttributeDefinition`` со своим ``values_synced_at``.
+        Без свежей категории/типа ``dictionary_is_fresh`` был бы false
+        независимо от словаря, и все тесты `save_decision` ловили бы новый
+        fail-closed отказ «словарь недоступен» вместо своего сценария.
+        """
+        from models import db, MarketplaceProductType, MarketplaceTaxonomyCategory
+
+        category = MarketplaceTaxonomyCategory(
+            marketplace_id=self.marketplace_id,
+            external_category_id=f"cat-{external_type_id}",
+            name="Категория",
+            full_path="Категория",
+            is_available=True,
+        )
+        db.session.add(category)
+        db.session.flush()
 
         product_type = MarketplaceProductType(
             marketplace_id=self.marketplace_id,
-            category_id=1,
+            category_id=category.id,
             external_type_id=external_type_id,
             name=name,
+            is_available=True,
+            attributes_synced_at=datetime.utcnow(),
+            attributes_schema_hash=f"fresh-schema-{external_type_id}",
         )
         db.session.add(product_type)
         db.session.commit()
         return product_type
+
+    def _make_tnved_dictionary(self, product_type, codes, *, restriction=None):
+        """Создать fresh официальный словарь ТН ВЭД типа с данными кодами.
+
+        ``codes`` — iterable нормализованных кодов (строки цифр); каждому
+        присваивается уникальный ``external_value_id`` и значение вида
+        ``"<код> - Описание"``, как в наблюдённой форме официального
+        словаря. ``restriction`` — опциональный iterable ``external_value_id``
+        для проверки admin-restriction сценария.
+        """
+        from models import db, MarketplaceAttributeDefinition, MarketplaceAttributeValue
+        from services.ozon_compliance_defaults import TNVED_ATTRIBUTE_ID
+        from services.ozon_reference_service import OzonReferenceService
+
+        definition = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace_id,
+            product_type_id=product_type.id,
+            external_attribute_id=TNVED_ATTRIBUTE_ID,
+            name="ТН ВЭД коды ЕАЭС",
+            data_type="String",
+            dictionary_id="22232",
+            is_available=True,
+            values_synced_at=datetime.utcnow(),
+            values_snapshot_hash=f"fresh-values-{product_type.id}",
+            values_version=1,
+        )
+        if restriction is not None:
+            import json
+            definition.restriction_value_ids_json = json.dumps(list(restriction))
+        db.session.add(definition)
+        db.session.flush()
+
+        for index, code in enumerate(codes, start=1):
+            value = f"{code} - Описание {code}"
+            db.session.add(MarketplaceAttributeValue(
+                marketplace_id=self.marketplace_id,
+                product_type_id=product_type.id,
+                attribute_id=definition.id,
+                external_value_id=str(1000 + index),
+                value=value,
+                value_normalized=OzonReferenceService.normalize_value(value),
+                is_available=True,
+            ))
+        db.session.commit()
+        return definition
 
     def _make_draft(self, product_type_id, offer_id):
         """Минимальная строка ``marketplace_product_drafts`` — нужна лишь для
@@ -186,6 +262,37 @@ class ActivateRegistryVersionTestCase(_AdminServiceDbTestCase):
         with self.assertRaises(OzonComplianceAdminError):
             activate_registry_version(version_id=999999, user_id=self.user_id)
 
+    def test_non_numeric_version_id_is_rejected_cleanly(self):
+        """Important (ревью Task 7): ``version_id`` приходит из тела формы
+        как произвольная строка, не через URL ``<int:...>`` converter.
+        ``int("abc")`` до правки ронял запрос необработанным ``ValueError``
+        в голый Flask 500 вместо ``OzonComplianceAdminError`` -> flash.
+        """
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            activate_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError):
+            activate_registry_version(version_id="abc", user_id=self.user_id)
+
+    def test_missing_version_id_is_rejected_cleanly(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            activate_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError):
+            activate_registry_version(version_id=None, user_id=self.user_id)
+
+    def test_non_positive_version_id_is_rejected_cleanly(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            activate_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError):
+            activate_registry_version(version_id=0, user_id=self.user_id)
+        with self.assertRaises(OzonComplianceAdminError):
+            activate_registry_version(version_id=-5, user_id=self.user_id)
+
 
 class SaveDecisionPersistenceTestCase(_AdminServiceDbTestCase):
     def test_replacing_active_decision_retires_old_and_activates_new(self):
@@ -194,6 +301,9 @@ class SaveDecisionPersistenceTestCase(_AdminServiceDbTestCase):
 
         product_type = self._make_product_type("1609")
         self._make_draft(product_type.id, "offer-1")
+        self._make_tnved_dictionary(
+            product_type, ["3307900008", "6402990000"],
+        )
 
         first = save_decision(
             product_type_id=product_type.id,
@@ -231,6 +341,84 @@ class SaveDecisionPersistenceTestCase(_AdminServiceDbTestCase):
                 user_id=self.user_id,
             )
 
+    def test_code_absent_from_fresh_dictionary_is_rejected_and_named(self):
+        """Critical (ревью Task 7): опечатка в коде раньше молча сохранялась
+        как «успех» — ``resolve_tnved`` потом навсегда возвращал ``None`` для
+        несуществующего кода, и карточки типа оставались заблокированы без
+        видимой причины. Теперь код обязан пройти по свежему словарю ДО
+        записи, а ошибка называет введённый код.
+        """
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            save_decision,
+        )
+
+        product_type = self._make_product_type("1609")
+        self._make_draft(product_type.id, "offer-1")
+        self._make_tnved_dictionary(product_type, ["3307900008"])
+
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            save_decision(
+                product_type_id=product_type.id,
+                tnved_code="9999999999",
+                rationale="опечатка",
+                user_id=self.user_id,
+            )
+        self.assertIn("9999999999", str(ctx.exception))
+
+        from models import OzonComplianceDefault
+        self.assertEqual(
+            OzonComplianceDefault.query.filter_by(
+                product_type_id=product_type.id,
+            ).count(),
+            0,
+        )
+
+    def test_stale_or_missing_dictionary_blocks_save_with_sync_message(self):
+        """Critical (ревью Task 7): без свежего словаря (или вовсе без
+        определения атрибута ТН ВЭД у типа) решение нельзя ни подтвердить,
+        ни отклонить по содержимому — сохранение обязано отказать явным
+        сообщением про синхронизацию справочника, а не тихо пройти.
+        """
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            save_decision,
+        )
+
+        product_type = self._make_product_type("1610")
+        self._make_draft(product_type.id, "offer-2")
+        # Ни одного _make_tnved_dictionary(...) для этого типа — определения
+        # атрибута ТН ВЭД нет вовсе, ``is_type_tnved_code_available`` обязан
+        # вернуть ``None``, а не ``False``.
+
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            save_decision(
+                product_type_id=product_type.id,
+                tnved_code="3307900008",
+                rationale="без словаря",
+                user_id=self.user_id,
+            )
+        message = str(ctx.exception)
+        self.assertIn("синхрон", message.lower())
+
+    def test_valid_code_in_fresh_dictionary_is_accepted(self):
+        from services.ozon_compliance_admin import save_decision
+
+        product_type = self._make_product_type("1611")
+        self._make_draft(product_type.id, "offer-3")
+        self._make_tnved_dictionary(
+            product_type, ["3307900008", "6402990000"],
+        )
+
+        decision = save_decision(
+            product_type_id=product_type.id,
+            tnved_code="3307900008",
+            rationale="код есть в словаре",
+            user_id=self.user_id,
+        )
+        self.assertEqual(decision.tnved_code, "3307900008")
+        self.assertEqual(decision.status, "active")
+
 
 class ListTypeRowsTestCase(_AdminServiceDbTestCase):
     def _seed_types_with_decisions(self, count, *, offset=0):
@@ -239,6 +427,7 @@ class ListTypeRowsTestCase(_AdminServiceDbTestCase):
         for index in range(offset, offset + count):
             product_type = self._make_product_type(f"type-{index}")
             self._make_draft(product_type.id, f"offer-{index}")
+            self._make_tnved_dictionary(product_type, [f"640299000{index}"])
             save_decision(
                 product_type_id=product_type.id,
                 tnved_code=f"640299000{index}",
@@ -302,6 +491,110 @@ class ListTypeRowsTestCase(_AdminServiceDbTestCase):
         # случайно при регрессии на маленьком N (2*7 + запас было бы > 10
         # при возврате к резолву маркировки per-row).
         self.assertLessEqual(big_count, 6)
+
+    def test_dictionary_readiness_and_count_reflect_fresh_type(self):
+        """Critical (ревью Task 7): без этих полей на свежем стенде даталист
+        типа пуст, а после первых решений показывал бы коды ЧУЖИХ типов —
+        экран обязан знать per-row готовность и размер словаря заранее.
+        """
+        product_type = self._make_product_type("1609")
+        self._make_draft(product_type.id, "offer-1")
+        self._make_tnved_dictionary(
+            product_type, ["3307900008", "6402990000", "3401199000"],
+        )
+
+        from services.ozon_compliance_admin import list_type_rows
+        rows = list_type_rows()
+        row = next(r for r in rows if r["product_type_id"] == product_type.id)
+        self.assertTrue(row["tnved_dictionary_ready"])
+        self.assertEqual(row["tnved_dictionary_count"], 3)
+
+    def test_dictionary_not_ready_for_type_without_definition(self):
+        product_type = self._make_product_type("1609")
+        self._make_draft(product_type.id, "offer-1")
+        # Ни одного _make_tnved_dictionary(...) — определения нет вовсе.
+
+        from services.ozon_compliance_admin import list_type_rows
+        rows = list_type_rows()
+        row = next(r for r in rows if r["product_type_id"] == product_type.id)
+        self.assertFalse(row["tnved_dictionary_ready"])
+        self.assertEqual(row["tnved_dictionary_count"], 0)
+
+
+class TypeTnvedDictionarySummaryBatchTestCase(_AdminServiceDbTestCase):
+    """``type_tnved_dictionary_summary_batch`` — прямые тесты batched-функции,
+    отдельно от того, как её использует ``list_type_rows``.
+    """
+
+    def test_ready_type_reports_exact_count(self):
+        from services.ozon_compliance_defaults import (
+            type_tnved_dictionary_summary_batch,
+        )
+
+        product_type = self._make_product_type("1609")
+        self._make_tnved_dictionary(
+            product_type, ["3307900008", "6402990000", "3401199000"],
+        )
+
+        summary = type_tnved_dictionary_summary_batch([product_type.id])
+        self.assertEqual(
+            summary[product_type.id], {"ready": True, "count": 3},
+        )
+
+    def test_type_without_definition_reports_not_ready(self):
+        from services.ozon_compliance_defaults import (
+            type_tnved_dictionary_summary_batch,
+        )
+
+        product_type = self._make_product_type("1609")
+
+        summary = type_tnved_dictionary_summary_batch([product_type.id])
+        self.assertEqual(
+            summary[product_type.id], {"ready": False, "count": 0},
+        )
+
+    def test_restriction_narrows_count_to_allowed_subset(self):
+        from services.ozon_compliance_defaults import (
+            type_tnved_dictionary_summary_batch,
+        )
+
+        product_type = self._make_product_type("1609")
+        definition = self._make_tnved_dictionary(
+            product_type,
+            ["3307900008", "6402990000", "3401199000"],
+            restriction=["1001", "1002"],
+        )
+        self.assertIsNotNone(definition)
+
+        summary = type_tnved_dictionary_summary_batch([product_type.id])
+        self.assertEqual(
+            summary[product_type.id], {"ready": True, "count": 2},
+        )
+
+    def test_multiple_types_are_reported_independently_in_one_call(self):
+        from services.ozon_compliance_defaults import (
+            type_tnved_dictionary_summary_batch,
+        )
+
+        ready_type = self._make_product_type("1609")
+        self._make_tnved_dictionary(ready_type, ["3307900008", "6402990000"])
+        not_ready_type = self._make_product_type("1610")
+
+        summary = type_tnved_dictionary_summary_batch(
+            [ready_type.id, not_ready_type.id],
+        )
+        self.assertEqual(
+            summary[ready_type.id], {"ready": True, "count": 2},
+        )
+        self.assertEqual(
+            summary[not_ready_type.id], {"ready": False, "count": 0},
+        )
+
+    def test_empty_ids_returns_empty_dict(self):
+        from services.ozon_compliance_defaults import (
+            type_tnved_dictionary_summary_batch,
+        )
+        self.assertEqual(type_tnved_dictionary_summary_batch([]), {})
 
 
 class CreateRegistryVersionTestCase(_AdminServiceDbTestCase):
@@ -433,6 +726,95 @@ class CreateRegistryVersionTestCase(_AdminServiceDbTestCase):
         )
         self.assertEqual(first.checksum, second.checksum)
 
+    def test_eleven_digit_prefix_is_rejected_with_line_number(self):
+        """Important (ревью Task 7): граница длины префикса не была
+        покрыта тестом на верхнем конце (только 1-цифровой снизу).
+        """
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            create_registry_version(
+                label="v1", is_complete=True,
+                rules_text="6402\n12345678901",
+                user_id=self.user_id,
+            )
+        self.assertIn("Строка 2", str(ctx.exception))
+
+    def test_ten_digit_prefix_is_accepted_at_the_boundary(self):
+        from services.ozon_compliance_admin import create_registry_version
+
+        version = create_registry_version(
+            label="v1", is_complete=True, rules_text="1234567890",
+            user_id=self.user_id,
+        )
+        self.assertEqual(version.rule_count, 1)
+
+    def test_invalid_valid_from_format_is_rejected_with_line_number(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            create_registry_version(
+                label="v1", is_complete=True,
+                rules_text="6402;акт;01.07.2020;прим",
+                user_id=self.user_id,
+            )
+        self.assertIn("Строка 1", str(ctx.exception))
+
+    def test_normative_ref_length_is_enforced(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        too_long_ref = "x" * 301
+        with self.assertRaises(OzonComplianceAdminError):
+            create_registry_version(
+                label="v1", is_complete=True,
+                rules_text=f"6402;{too_long_ref}",
+                user_id=self.user_id,
+            )
+
+    def test_note_length_is_enforced(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        too_long_note = "y" * 2001
+        with self.assertRaises(OzonComplianceAdminError):
+            create_registry_version(
+                label="v1", is_complete=True,
+                rules_text=f"6402;;;{too_long_note}",
+                user_id=self.user_id,
+            )
+
+    def test_label_length_is_enforced(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError):
+            create_registry_version(
+                label="z" * 201, is_complete=True, rules_text="6402",
+                user_id=self.user_id,
+            )
+
+    def test_exactly_5000_rules_succeeds(self):
+        """Important (ревью Task 7): было покрыто только «5001 отклоняется»,
+        не «5000 успешно проходит» — граница проверялась только с одной
+        стороны.
+        """
+        from services.ozon_compliance_admin import create_registry_version
+
+        rules_text = "\n".join(f"{100000 + i}" for i in range(5000))
+        version = create_registry_version(
+            label="max", is_complete=True, rules_text=rules_text,
+            user_id=self.user_id,
+        )
+        self.assertEqual(version.rule_count, 5000)
+
 
 class PreviewRegistrySwitchTestCase(_AdminServiceDbTestCase):
     def test_preview_counts_changes_without_persisting_anything(self):
@@ -450,6 +832,7 @@ class PreviewRegistrySwitchTestCase(_AdminServiceDbTestCase):
         )
         product_type = self._make_product_type("1609")
         self._make_draft(product_type.id, "offer-1")
+        self._make_tnved_dictionary(product_type, ["6402990000"])
         save_decision(
             product_type_id=product_type.id,
             tnved_code="6402990000",
@@ -486,6 +869,14 @@ class PreviewRegistrySwitchTestCase(_AdminServiceDbTestCase):
         )
         with self.assertRaises(OzonComplianceAdminError):
             preview_registry_switch(999999)
+
+    def test_non_numeric_version_id_is_rejected_cleanly(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            preview_registry_switch,
+        )
+        with self.assertRaises(OzonComplianceAdminError):
+            preview_registry_switch("abc")
 
 
 if __name__ == '__main__':

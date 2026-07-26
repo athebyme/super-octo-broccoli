@@ -28,6 +28,7 @@ from services.ozon_compliance_admin import (
     list_type_rows,
     preview_registry_switch,
     save_decision,
+    type_tnved_dictionary,
 )
 
 admin_ozon_compliance_bp = Blueprint(
@@ -122,3 +123,18 @@ def registry_preview(version_id):
         return preview_registry_switch(version_id)
     except OzonComplianceAdminError as exc:
         return {"error": str(exc)}, 400
+
+
+@admin_ozon_compliance_bp.get("/<int:product_type_id>/tnved-dictionary")
+@login_required
+@_admin_required
+def tnved_dictionary(product_type_id):
+    """Официальный словарь ТН ВЭД одного типа — для per-row datalist.
+
+    Читается по требованию (JS-fetch), когда админ раскрывает форму решения
+    конкретного типа — не встроен в ``index()`` целиком: страница со всеми
+    задействованными типами не должна тянуть в разметку словарь КАЖДОГО из
+    них (для крупных категорий это тысячи `<option>` на страницу, из которых
+    реально нужен один).
+    """
+    return type_tnved_dictionary(product_type_id)

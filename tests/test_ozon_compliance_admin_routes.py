@@ -288,6 +288,36 @@ class AdminOzonComplianceRoutesTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         activate.assert_called_once_with(version_id="5", user_id=13)
 
+    def test_registry_activate_with_non_numeric_version_id_flashes_not_500(self):
+        """Important (ревью Task 7): вызывает РЕАЛЬНУЮ (не замоканную)
+        ``activate_registry_version`` — до правки ``int("not-a-number")``
+        ронял запрос необработанным ``ValueError`` в голый Flask 500 вместо
+        единого контракта «ошибка -> flash -> redirect».
+        """
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch:
+            response = self.client.post(
+                "/admin/ozon/compliance/registry/activate",
+                data={"version_id": "not-a-number"},
+            )
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session:
+            flashes = session.get("_flashes", [])
+        messages = [message for _category, message in flashes]
+        self.assertTrue(any("version_id" in message for message in messages))
+
+    def test_registry_activate_with_missing_version_id_flashes_not_500(self):
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch:
+            response = self.client.post(
+                "/admin/ozon/compliance/registry/activate", data={},
+            )
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session:
+            flashes = session.get("_flashes", [])
+        messages = [message for _category, message in flashes]
+        self.assertTrue(any("version_id" in message for message in messages))
+
     # ── registry_preview() ─────────────────────────────────────────
 
     def test_registry_preview_returns_service_result_as_json(self):
@@ -318,6 +348,55 @@ class AdminOzonComplianceRoutesTestCase(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "версия не найдена")
+
+    # ── tnved_dictionary() ─────────────────────────────────────────
+
+    def test_non_admin_is_denied_on_tnved_dictionary(self):
+        user_patch, login_patch = self._auth(admin=False)
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.type_tnved_dictionary"
+        ) as dictionary:
+            response = self.client.get(
+                "/admin/ozon/compliance/1609/tnved-dictionary",
+            )
+        self.assertEqual(response.status_code, 403)
+        dictionary.assert_not_called()
+
+    def test_tnved_dictionary_returns_service_result_as_json(self):
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.type_tnved_dictionary",
+            return_value={
+                "is_fresh": True,
+                "values": [{
+                    "code": "6402", "value": "6402 - Обувь",
+                    "external_value_id": "1",
+                }],
+                "total_count": 1,
+            },
+        ) as dictionary:
+            response = self.client.get(
+                "/admin/ozon/compliance/1609/tnved-dictionary",
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["is_fresh"])
+        self.assertEqual(payload["total_count"], 1)
+        dictionary.assert_called_once_with(1609)
+
+    def test_tnved_dictionary_reports_not_fresh_without_dictionary(self):
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch(
+            "routes.admin_ozon_compliance.type_tnved_dictionary",
+            return_value={"is_fresh": False, "values": [], "total_count": 0},
+        ):
+            response = self.client.get(
+                "/admin/ozon/compliance/1609/tnved-dictionary",
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertFalse(payload["is_fresh"])
+        self.assertEqual(payload["values"], [])
 
 
 if __name__ == "__main__":

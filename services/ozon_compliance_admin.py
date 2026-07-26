@@ -32,6 +32,23 @@ class OzonComplianceAdminError(Exception):
     """Ошибка валидации или бизнес-правила админского compliance-сервиса."""
 
 
+def _parse_positive_int(value, field_name: str) -> int:
+    """Общая граница валидации числового ID из формы/аргумента.
+
+    Используется везде, где raw-значение может прийти прямо из тела POST
+    (``version_id`` формы, а не URL ``<int:...>`` converter): без этой
+    проверки ``int(None)``/``int("abc")`` роняет запрос необработанным
+    ``TypeError``/``ValueError`` в голый Flask 500 вместо понятного flash.
+    """
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise OzonComplianceAdminError(f"{field_name} должен быть числом")
+    if parsed <= 0:
+        raise OzonComplianceAdminError(f"{field_name} должен быть положительным")
+    return parsed
+
+
 TYPE_ROWS_SQL = """
 SELECT t.id, t.name, t.external_type_id,
   (SELECT COUNT(*) FROM marketplace_listings l
@@ -57,12 +74,7 @@ def validate_decision_input(*, product_type_id, tnved_code, rationale) -> dict:
     """
     from services.ozon_compliance_defaults import normalize_code
 
-    try:
-        type_key = int(product_type_id)
-    except (TypeError, ValueError):
-        raise OzonComplianceAdminError("product_type_id должен быть числом")
-    if type_key <= 0:
-        raise OzonComplianceAdminError("product_type_id должен быть положительным")
+    type_key = _parse_positive_int(product_type_id, "product_type_id")
 
     code = normalize_code(tnved_code)
     if not code:
@@ -88,6 +100,15 @@ def validate_decision_input(*, product_type_id, tnved_code, rationale) -> dict:
 def save_decision(*, product_type_id, tnved_code, rationale, user_id):
     """Заменить активное решение по типу новым, подписанным админом.
 
+    ДО любой записи код обязан пройти проверку по свежему официальному
+    словарю ТН ВЭД этого типа (``is_type_tnved_code_available``). Без этой
+    проверки опечатка в поле ввода тихо сохранялась бы как «успех»:
+    ``resolve_tnved`` позже молча вернул бы ``None`` для несуществующего в
+    словаре кода, и карточки типа остались бы заблокированы без единой
+    видимой причины — та же инертность, что уже чинили в Task 6, только
+    теперь она приходит от простой опечатки, а не от отсутствия версии
+    реестра.
+
     Старое активное решение переводится в ``retired``, новое создаётся со
     ``status='active'`` в той же транзакции: partial-unique индекс допускает
     только одну активную строку на ``(marketplace_id, product_type_id)``.
@@ -100,7 +121,9 @@ def save_decision(*, product_type_id, tnved_code, rationale, user_id):
         db, MarketplaceAttributeDefinition, MarketplaceProductType,
         OzonComplianceDefault,
     )
-    from services.ozon_compliance_defaults import TNVED_ATTRIBUTE_ID
+    from services.ozon_compliance_defaults import (
+        TNVED_ATTRIBUTE_ID, is_type_tnved_code_available,
+    )
 
     cleaned = validate_decision_input(
         product_type_id=product_type_id,
@@ -110,6 +133,20 @@ def save_decision(*, product_type_id, tnved_code, rationale, user_id):
     product_type = MarketplaceProductType.query.get(cleaned["product_type_id"])
     if product_type is None:
         raise OzonComplianceAdminError("Ozon product type не найден")
+
+    available = is_type_tnved_code_available(
+        product_type.id, cleaned["tnved_code"],
+    )
+    if available is None:
+        raise OzonComplianceAdminError(
+            "Официальный словарь ТН ВЭД этого типа недоступен или устарел — "
+            "решение нельзя сохранить до синхронизации справочника"
+        )
+    if not available:
+        raise OzonComplianceAdminError(
+            f"Код {cleaned['tnved_code']} не найден среди официальных "
+            "значений ТН ВЭД этого типа — выберите код из списка"
+        )
 
     definition = MarketplaceAttributeDefinition.query.filter_by(
         product_type_id=product_type.id,
@@ -169,10 +206,14 @@ def list_type_rows() -> list:
     Маркировка резолвится ОДНИМ batch-вызовом для всех кодов сразу
     (``resolve_marking_batch``), а не в цикле per-row: активная версия
     перечня и её правила не должны читаться заново на каждый из
-    задействованных типов (N+1).
+    задействованных типов (N+1). Готовность и размер официального словаря
+    ТН ВЭД считаются тем же способом — ``type_tnved_dictionary_summary_batch``
+    на ВСЕ задействованные типы разом, а не отдельным запросом на тип.
     """
     from models import db, OzonComplianceDefault
-    from services.ozon_compliance_defaults import normalize_code
+    from services.ozon_compliance_defaults import (
+        normalize_code, type_tnved_dictionary_summary_batch,
+    )
 
     rows = db.session.execute(db.text(TYPE_ROWS_SQL)).mappings().all()
     decisions = {
@@ -185,11 +226,17 @@ def list_type_rows() -> list:
         if decision.tnved_code
     ]
     marking_by_code = resolve_marking_batch(codes)
+    dictionary_by_type = type_tnved_dictionary_summary_batch(
+        [row["id"] for row in rows]
+    )
 
     result = []
     for row in rows:
         decision = decisions.get(row["id"])
         code = decision.tnved_code if decision is not None else None
+        dictionary_summary = dictionary_by_type.get(
+            row["id"], {"ready": False, "count": 0},
+        )
         result.append({
             "product_type_id": row["id"],
             "name": row["name"],
@@ -207,8 +254,23 @@ def list_type_rows() -> list:
                 decision.decided_by_user_id if decision is not None else None
             ),
             "decided_at": decision.decided_at if decision is not None else None,
+            "tnved_dictionary_ready": dictionary_summary["ready"],
+            "tnved_dictionary_count": dictionary_summary["count"],
         })
     return result
+
+
+def type_tnved_dictionary(product_type_id) -> dict:
+    """Официальный словарь ТН ВЭД одного типа — proxy для admin-экрана.
+
+    Тонкая обёртка над
+    ``services.ozon_compliance_defaults.get_type_tnved_dictionary``: экран
+    (роуты/шаблон) импортирует reference-функции только из этого модуля, как
+    и остальные (``save_decision``, ``list_type_rows`` и т.д.), а не тянет
+    ``ozon_compliance_defaults`` напрямую.
+    """
+    from services.ozon_compliance_defaults import get_type_tnved_dictionary
+    return get_type_tnved_dictionary(product_type_id)
 
 
 _MIN_REGISTRY_PREFIX_DIGITS = 2
@@ -391,10 +453,18 @@ def activate_registry_version(*, version_id, user_id):
     старая строка ещё активна — в таблице на мгновение две активные строки, и
     partial-unique индекс отклоняет всю транзакцию. Явный flush после снятия
     старого флага убирает зависимость от этого порядка.
+
+    ``version_id`` приходит сюда прямо из тела POST-формы (не через URL
+    ``<int:...>`` converter), поэтому обязан пройти ``_parse_positive_int``
+    ДО первого запроса: без этого отсутствующее или нечисловое значение
+    роняет запрос необработанным ``TypeError``/``ValueError`` в голый Flask
+    500 вместо единого контракта «ошибка -> flash».
     """
     from models import db, OzonMarkingRegistryVersion
 
-    candidate = OzonMarkingRegistryVersion.query.get(int(version_id))
+    version_key = _parse_positive_int(version_id, "version_id")
+
+    candidate = OzonMarkingRegistryVersion.query.get(version_key)
     if candidate is None:
         raise OzonComplianceAdminError("Версия перечня не найдена")
 
@@ -424,11 +494,18 @@ def preview_registry_switch(version_id) -> dict:
     активных решений резолвится ОДНИМ batch-вызовом до цикла, а не per-item
     вызовом ``resolve_marking`` — иначе активная версия перечня и её правила
     читались бы заново на каждое решение (N+1).
+
+    Роут даёт сюда ``version_id`` уже через URL ``<int:...>`` converter
+    (Flask сам вернёт 404 на нечисловой путь до входа в функцию), но
+    ``_parse_positive_int`` всё равно применяется для единообразия с
+    ``activate_registry_version`` и на случай прямого вызова из другого места.
     """
     from models import OzonComplianceDefault, OzonMarkingRegistryVersion
     from services.ozon_compliance_defaults import normalize_code
 
-    candidate = OzonMarkingRegistryVersion.query.get(int(version_id))
+    version_key = _parse_positive_int(version_id, "version_id")
+
+    candidate = OzonMarkingRegistryVersion.query.get(version_key)
     if candidate is None:
         raise OzonComplianceAdminError("Версия перечня не найдена")
 

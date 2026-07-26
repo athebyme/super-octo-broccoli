@@ -7,10 +7,6 @@
 {% block content %}
 <style>
   .oc-summary { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; font-size:12px; color:var(--text-secondary); }
-  .oc-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap; border:1px solid var(--border); background:var(--bg-hover); color:var(--text-secondary); }
-  .oc-chip--warn { border-color:var(--warn-border); background:var(--warn-bg); color:var(--warn); }
-  .oc-chip--ok { border-color:var(--ok-border); background:var(--ok-bg); color:var(--ok); }
-  .oc-chip--info { border-color:var(--info-border); background:var(--info-bg); color:var(--info); }
   .oc-table-name { font-weight:700; color:var(--text); }
   .oc-table-meta { margin-top:3px; font-size:11px; color:var(--text-muted); }
   .oc-table-code { font-variant-numeric:tabular-nums; font-weight:700; color:var(--text); }
@@ -18,8 +14,9 @@
   .oc-field { display:block; margin-bottom:12px; }
   .oc-field:last-child { margin-bottom:0; }
   .oc-field > span { display:block; margin-bottom:5px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); }
-  .oc-input, .oc-textarea { width:100%; border:1px solid var(--border); border-radius:7px; background:var(--bg-card); color:var(--text); padding:8px 10px; font-size:13px; font-family:inherit; }
+  .oc-input, .oc-textarea { width:100%; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg-card); color:var(--text); padding:8px 10px; font-size:13px; font-family:inherit; }
   .oc-input:focus-visible, .oc-textarea:focus-visible { outline:2px solid var(--focus-ring); outline-offset:1px; }
+  .oc-input:disabled { opacity:.6; }
   .oc-textarea { min-height:150px; resize:vertical; line-height:1.55; font-variant-numeric:tabular-nums; }
   .oc-hint { margin-top:6px; font-size:11px; line-height:1.55; color:var(--text-muted); }
   .oc-form-actions { display:flex; align-items:center; gap:10px; margin-top:4px; }
@@ -41,7 +38,6 @@
 {% set blocker_rows = type_rows | selectattr('tnved_code', 'equalto', none) | list %}
 {% set blocker_count = blocker_rows | length %}
 {% set active_version = registry_versions | selectattr('status', 'equalto', 'active') | first %}
-{% set known_codes = [] %}
 
 <div class="max-w-7xl mx-auto px-4 py-6"
      x-data="{
@@ -82,24 +78,15 @@
     <div class="oc-summary">
       <span>Задействовано типов: <strong>{{ type_rows|length }}</strong></span>
       {% if blocker_count %}
-      <span class="oc-chip oc-chip--warn">{{ icon('warning', size=13) }} без решения: {{ blocker_count }}</span>
+      <span class="sh-chip sh-chip--warn">{{ icon('warning', size=13) }} без решения: {{ blocker_count }}</span>
       {% else %}
-      <span class="oc-chip oc-chip--ok">{{ icon('check-circle', size=13) }} у всех типов есть решение</span>
+      <span class="sh-chip sh-chip--ok">{{ icon('check-circle', size=13) }} у всех типов есть решение</span>
       {% endif %}
     </div>
 
     {% if not type_rows %}
     {{ empty_state('Пока нет задействованных Ozon-типов', 'Тип появится здесь после первого листинга, черновика или маппинга категории.') }}
     {% else %}
-    <datalist id="oc-known-codes">
-      {% for opt in type_rows %}
-        {% if opt.tnved_code and opt.tnved_code not in known_codes %}
-          {% set _ = known_codes.append(opt.tnved_code) %}
-          <option value="{{ opt.tnved_code }}">{{ opt.tnved_display or opt.tnved_code }}</option>
-        {% endif %}
-      {% endfor %}
-    </datalist>
-
     <div class="sh-table-wrap">
       <table class="sh-table">
         <thead>
@@ -114,7 +101,25 @@
           </tr>
         </thead>
         {% for row in type_rows %}
-        <tbody x-data="{ open: false }">
+        <tbody x-data="{
+          open: false,
+          dictLoaded: false,
+          dictReady: null,
+          dictCount: 0,
+          dictOptions: [],
+          loadDict() {
+            if (this.dictLoaded) return;
+            this.dictLoaded = true;
+            fetch('{{ url_for('admin_ozon_compliance.tnved_dictionary', product_type_id=row.product_type_id) }}')
+              .then((r) => r.json())
+              .then((data) => {
+                this.dictReady = !!data.is_fresh;
+                this.dictOptions = data.values || [];
+                this.dictCount = data.total_count || 0;
+              })
+              .catch(() => { this.dictReady = false; this.dictOptions = []; });
+          }
+        }">
           <tr>
             <td>
               <div class="oc-table-name">{{ row.name }}</div>
@@ -127,18 +132,25 @@
               <div class="oc-table-code">{{ row.tnved_code }}</div>
               {% if row.tnved_display %}<div class="oc-table-meta">{{ row.tnved_display }}</div>{% endif %}
               {% else %}
-              <span class="oc-chip oc-chip--warn" title="Держит {{ row.listings + row.drafts }} карточек без решения по ТН ВЭД">
+              <span class="sh-chip sh-chip--warn" title="Держит {{ row.listings + row.drafts }} карточек без решения по ТН ВЭД">
                 {{ icon('warning', size=13) }} без решения — держит {{ row.listings + row.drafts }} карт.
               </span>
               {% endif %}
+              <div class="oc-table-meta mt-1">
+                {% if row.tnved_dictionary_ready %}
+                словарь: {{ row.tnved_dictionary_count }} знач.
+                {% else %}
+                <span style="color:var(--warn)">словарь не готов</span>
+                {% endif %}
+              </div>
             </td>
             <td>
               {% if row.marking is sameas true %}
-              <span class="oc-chip oc-chip--info">Нужна маркировка</span>
+              <span class="sh-chip sh-chip--info">Нужна маркировка</span>
               {% elif row.marking is sameas false %}
-              <span class="oc-chip oc-chip--ok">Не требуется</span>
+              <span class="sh-chip sh-chip--ok">Не требуется</span>
               {% else %}
-              <span class="oc-chip oc-chip--warn"
+              <span class="sh-chip sh-chip--warn"
                     title="Ответа нет: нет активного исчерпывающего перечня, либо код не подпадает ни под одно его правило. Это не «не требуется» — заполнить атрибут нельзя, пока это неизвестно.">
                 {{ icon('warning', size=13) }} неизвестно
               </span>
@@ -154,7 +166,7 @@
             </td>
             <td>
               <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm"
-                      @click="open = !open" :aria-expanded="open.toString()">
+                      @click="open = !open; loadDict()" :aria-expanded="open.toString()">
                 {{ icon('edit', size=13) }} {{ 'Изменить' if row.tnved_code else 'Указать код' }}
               </button>
             </td>
@@ -164,14 +176,30 @@
               <form method="post" action="{{ url_for('admin_ozon_compliance.save') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="product_type_id" value="{{ row.product_type_id }}">
-                <div class="grid gap-3" style="grid-template-columns:minmax(0,260px) minmax(0,1fr); align-items:start">
+                <div class="grid gap-3" style="grid-template-columns:minmax(0,320px) minmax(0,1fr); align-items:start">
                   <label class="oc-field">
                     <span>Код ТН ВЭД</span>
-                    <input type="text" name="tnved_code" class="oc-input" list="oc-known-codes"
+                    <input type="text" name="tnved_code" class="oc-input"
+                           :list="'oc-tnved-dict-' + {{ row.product_type_id }}"
                            value="{{ row.tnved_code or '' }}" maxlength="32" required
                            aria-label="Код ТН ВЭД для {{ row.name }}"
                            placeholder="например, 3307 90 000 8">
-                    <div class="oc-hint">Поиск по уже введённым в системе кодам — Ozon здесь не запрашивается.</div>
+                    <datalist :id="'oc-tnved-dict-' + {{ row.product_type_id }}">
+                      <template x-for="opt in dictOptions" :key="opt.external_value_id || opt.code">
+                        <option :value="opt.code" x-text="opt.value"></option>
+                      </template>
+                    </datalist>
+                    <template x-if="dictLoaded && dictReady === null">
+                      <div class="oc-hint">Проверяем официальный словарь этого типа…</div>
+                    </template>
+                    <template x-if="dictReady === true">
+                      <div class="oc-hint">Найдено <span x-text="dictCount"></span> официальных значений этого типа — поиск локальный, Ozon не запрашивается.</div>
+                    </template>
+                    <template x-if="dictReady === false">
+                      <div class="oc-hint" style="color:var(--warn)">
+                        Официальный словарь ТН ВЭД для этого типа сейчас недоступен или устарел — решение нельзя сохранить, пока не пройдёт синхронизация справочника. Попробуйте обновить страницу позже.
+                      </div>
+                    </template>
                   </label>
                   <label class="oc-field">
                     <span>Обоснование (обязательно)</span>
@@ -181,7 +209,7 @@
                   </label>
                 </div>
                 <div class="oc-form-actions">
-                  <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm">Сохранить решение</button>
+                  <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm" :disabled="dictReady !== true">Сохранить решение</button>
                   <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" @click="open = false">Отмена</button>
                 </div>
               </form>
@@ -205,9 +233,9 @@
           <dt>Исчерпывающий</dt>
           <dd>
             {% if active_version.is_complete %}
-            <span class="oc-chip oc-chip--ok">да</span>
+            <span class="sh-chip sh-chip--ok">да</span>
             {% else %}
-            <span class="oc-chip oc-chip--warn">нет</span>
+            <span class="sh-chip sh-chip--warn">нет</span>
             {% endif %}
           </dd>
           <dt>Правил</dt><dd>{{ active_version.rule_count }}</dd>
@@ -292,9 +320,9 @@
               <td class="oc-table-name">{{ version.label }}</td>
               <td>
                 {% if version.status == 'active' %}
-                <span class="oc-chip oc-chip--ok">{{ icon('check-circle', size=13) }} активна</span>
+                <span class="sh-chip sh-chip--ok">{{ icon('check-circle', size=13) }} активна</span>
                 {% else %}
-                <span class="oc-chip">архив</span>
+                <span class="sh-chip">архив</span>
                 {% endif %}
               </td>
               <td>{{ 'да' if version.is_complete else 'нет' }}</td>

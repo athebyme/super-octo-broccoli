@@ -401,6 +401,135 @@ class ResolveTnvedTestCase(unittest.TestCase):
         self.assertEqual(result['external_value_id'], '971397758')
 
 
+class TypeTnvedDictionaryTestCase(unittest.TestCase):
+    """Единая точка правды о валидных кодах типа: ``type_tnved_dictionary_status``
+    и обе публичные обёртки над ней (UI datalist, проверка перед сохранением).
+    """
+
+    def _run(self, func_name, *args, definition, rows, fresh=True, **kwargs):
+        module = 'services.ozon_compliance_defaults'
+        with patch(f'{module}._tnved_definition', return_value=definition), \
+             patch(f'{module}._dictionary_rows', return_value=rows), \
+             patch(f'{module}._dictionary_is_fresh', return_value=fresh):
+            import services.ozon_compliance_defaults as target
+            return getattr(target, func_name)(1609, *args, **kwargs)
+
+    def test_status_returns_entries_when_fresh(self):
+        result = self._run(
+            'type_tnved_dictionary_status',
+            definition=_definition(),
+            rows=[
+                _value_row('971397774', '3403990000 - Прочие смазочные'),
+                _value_row('971397758', '3307900008 - Косметические средства'),
+            ],
+        )
+        self.assertTrue(result['is_fresh'])
+        codes = {entry['code'] for entry in result['entries']}
+        self.assertEqual(codes, {'3403990000', '3307900008'})
+        by_code = {entry['code']: entry for entry in result['entries']}
+        self.assertEqual(
+            by_code['3307900008']['external_value_id'], '971397758',
+        )
+
+    def test_status_skips_rows_without_leading_digits(self):
+        result = self._run(
+            'type_tnved_dictionary_status',
+            definition=_definition(),
+            rows=[
+                _value_row('1', 'Без кода вовсе'),
+                _value_row('2', '6402990000 - Обувь'),
+            ],
+        )
+        self.assertTrue(result['is_fresh'])
+        self.assertEqual(len(result['entries']), 1)
+        self.assertEqual(result['entries'][0]['code'], '6402990000')
+
+    def test_status_applies_restriction(self):
+        result = self._run(
+            'type_tnved_dictionary_status',
+            definition=_definition(restriction=['971397758']),
+            rows=[
+                _value_row('971397774', '3403990000 - Прочие смазочные'),
+                _value_row('971397758', '3307900008 - Косметические средства'),
+            ],
+        )
+        self.assertEqual(len(result['entries']), 1)
+        self.assertEqual(result['entries'][0]['code'], '3307900008')
+
+    def test_status_not_fresh_returns_empty(self):
+        result = self._run(
+            'type_tnved_dictionary_status',
+            definition=_definition(),
+            rows=[_value_row('1', '3307900008 - X')],
+            fresh=False,
+        )
+        self.assertFalse(result['is_fresh'])
+        self.assertEqual(result['entries'], [])
+
+    def test_status_missing_definition_returns_not_fresh(self):
+        result = self._run(
+            'type_tnved_dictionary_status', definition=None, rows=[],
+        )
+        self.assertFalse(result['is_fresh'])
+        self.assertEqual(result['entries'], [])
+
+    def test_get_dictionary_bounds_values_but_reports_total_count(self):
+        rows = [
+            _value_row(str(i), f'{6400000000 + i} - Значение {i}')
+            for i in range(5)
+        ]
+        result = self._run(
+            'get_type_tnved_dictionary', definition=_definition(), rows=rows,
+            limit=2,
+        )
+        self.assertTrue(result['is_fresh'])
+        self.assertEqual(len(result['values']), 2)
+        self.assertEqual(result['total_count'], 5)
+
+    def test_get_dictionary_stale_gives_empty_values_and_zero_total(self):
+        result = self._run(
+            'get_type_tnved_dictionary',
+            definition=_definition(),
+            rows=[_value_row('1', '3307900008 - X')],
+            fresh=False,
+        )
+        self.assertFalse(result['is_fresh'])
+        self.assertEqual(result['values'], [])
+        self.assertEqual(result['total_count'], 0)
+
+    def test_is_code_available_true_when_found(self):
+        result = self._run(
+            'is_type_tnved_code_available', '3307900008',
+            definition=_definition(),
+            rows=[_value_row('1', '3307900008 - Косметические средства')],
+        )
+        self.assertIs(result, True)
+
+    def test_is_code_available_false_when_not_found(self):
+        result = self._run(
+            'is_type_tnved_code_available', '9999999999',
+            definition=_definition(),
+            rows=[_value_row('1', '3307900008 - Косметические средства')],
+        )
+        self.assertIs(result, False)
+
+    def test_is_code_available_none_when_dictionary_stale(self):
+        result = self._run(
+            'is_type_tnved_code_available', '3307900008',
+            definition=_definition(),
+            rows=[_value_row('1', '3307900008 - Косметические средства')],
+            fresh=False,
+        )
+        self.assertIsNone(result)
+
+    def test_is_code_available_none_when_definition_missing(self):
+        result = self._run(
+            'is_type_tnved_code_available', '3307900008',
+            definition=None, rows=[],
+        )
+        self.assertIsNone(result)
+
+
 class ResolveMarkingTestCase(unittest.TestCase):
     def _rules(self, prefixes):
         rows = []
