@@ -24,6 +24,7 @@ from flask_login import current_user, login_required
 from services.ozon_compliance_admin import (
     OzonComplianceAdminError,
     activate_registry_version,
+    apply_to_existing_drafts,
     create_registry_version,
     list_type_rows,
     preview_registry_switch,
@@ -113,6 +114,31 @@ def activate_registry():
     except OzonComplianceAdminError as exc:
         flash(str(exc), "danger")
     return redirect(url_for("admin_ozon_compliance.index", tab="registry"))
+
+
+@admin_ozon_compliance_bp.post("/<int:product_type_id>/apply-existing")
+@login_required
+@_admin_required
+def apply_existing(product_type_id):
+    """Локально разнести уже принятое решение по существующим черновикам типа.
+
+    Только SQL внутри ``apply_to_existing_drafts`` — ни одна
+    ``MarketplaceOperation`` здесь не создаётся, Ozon не вызывается.
+    """
+    try:
+        counters = apply_to_existing_drafts(product_type_id=product_type_id)
+    except OzonComplianceAdminError as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for("admin_ozon_compliance.index"))
+
+    flash(
+        "Обновлено черновиков: {updated}. Занятых активной операцией: "
+        "{skipped_active_operation}. Архивных пропущено: "
+        "{skipped_archived}. Уже было заполнено: "
+        "{skipped_already_filled}. Ошибок: {failed}.".format(**counters),
+        "success" if not counters["failed"] else "warning",
+    )
+    return redirect(url_for("admin_ozon_compliance.index"))
 
 
 @admin_ozon_compliance_bp.get("/registry/<int:version_id>/preview")

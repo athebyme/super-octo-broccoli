@@ -20,12 +20,16 @@ SQLAlchemy (unit of work сортирует "грязные" объекты по
 partial-unique constraint по обеим строкам сразу.
 """
 import hashlib
+import json
+import logging
 from datetime import date, datetime
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
 from services.ozon_compliance_defaults import normalize_code, resolve_marking_batch
+
+logger = logging.getLogger(__name__)
 
 
 class OzonComplianceAdminError(Exception):
@@ -534,4 +538,141 @@ def preview_registry_switch(version_id) -> dict:
             counters["to_false"] += 1
         else:
             counters["to_unresolved"] += 1
+    return counters
+
+
+# Единственные НЕтерминальные значения ``MarketplaceOperation.status`` по
+# ``ck_marketplace_operation_status`` в ``models.py``
+# (``queued|submitting|submitted|polling|succeeded|partial|failed|uncertain|
+# cancelled``): пока строка находится в одном из этих статусов, черновик,
+# на который она ссылается, уже отправляется/сверяется провайдером и не
+# должен получить локальную правку атрибутов параллельно с этим.
+ACTIVE_OPERATION_STATUSES = (
+    "queued", "submitting", "submitted", "polling", "uncertain",
+)
+
+
+def _draft_is_eligible(draft, *, has_active_operation: bool) -> bool:
+    """Чистый предикат приемлемости черновика для локального compliance-прогона.
+
+    ``has_active_operation`` вычисляется вызывающим кодом отдельным запросом
+    (см. ``apply_to_existing_drafts``) — здесь только сама логика, чтобы её
+    можно было проверить юнит-тестом без БД.
+    """
+    if has_active_operation:
+        return False
+    return getattr(draft, "status", None) != "archived"
+
+
+def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
+    """Разнести подписанное админом решение по уже существующим черновикам типа.
+
+    Прогон только локальный: ни одной ``MarketplaceOperation`` он не создаёт и
+    ни одного вызова Ozon не делает. Он лишь дозаполняет ПУСТОЙ compliance-
+    атрибут (``apply_to_attributes`` из Task 4 никогда не трогает уже
+    заполненное значение) и выставляет ``validation_status='stale'`` —
+    обычный seller-путь сам пересчитает валидацию и поднимет черновик до
+    ``ready``, если он теперь полон.
+
+    ``draft.status`` этот прогон НЕ трогает: ``ck_marketplace_product_draft_status``
+    допускает только ``needs_category|draft|blocked|ready|published|archived``,
+    а ``ready_to_retry`` — статус item'а массовой Ozon-загрузки, не черновика;
+    присваивание его сюда уронило бы commit на CHECK-констрейнте.
+
+    Черновик пропускается, если он архивный либо на него уже ссылается
+    активная (ещё не терминальная) ``MarketplaceOperation`` — черновик,
+    который прямо сейчас отправляется/сверяется с Ozon, не должен получить
+    параллельную локальную правку. Уже заполненный атрибут не трогается: это
+    единственная поддерживаемая здесь операция — ДОзаполнение пустого,
+    обновление уже заполненных значений остаётся отдельной задачей.
+
+    Ошибка одной строки (повреждённый ``attributes_json``, неожиданное
+    исключение при записи) изолируется через ``db.session.begin_nested()`` и
+    учитывается в ``failed``; она не откатывает уже применённые изменения
+    предыдущих черновиков этого же вызова — явный ``db.session.rollback()``
+    здесь НЕ вызывается: SQLAlchemy сама откатывает транзакцию только до
+    SAVEPOINT при выходе из ``with`` с исключением, а полный
+    ``session.rollback()`` откатил бы весь ещё не закоммиченный прогон
+    целиком (тот же паттерн, что в ``services/supplier_service.py`` и
+    ``services/brand_engine.py``).
+
+    Возвращает счётчики, честно различающие причину: ``updated``,
+    ``skipped_active_operation``, ``skipped_archived``,
+    ``skipped_already_filled``, ``failed`` и типовой (не per-черновик)
+    список ``unresolved`` — какие из двух compliance-атрибутов вообще не
+    резолвятся для этого типа прямо сейчас.
+    """
+    from models import db, MarketplaceOperation, MarketplaceProductDraft
+    from services.ozon_compliance_defaults import (
+        apply_to_attributes, resolve_type_defaults,
+    )
+
+    type_key = _parse_positive_int(product_type_id, "product_type_id")
+    bounded = max(1, min(int(limit), 200))
+
+    counters = {
+        "updated": 0,
+        "skipped_active_operation": 0,
+        "skipped_archived": 0,
+        "skipped_already_filled": 0,
+        "failed": 0,
+        "unresolved": [],
+    }
+
+    # Резолв не зависит от конкретного черновика — только от типа. Считаем
+    # его ОДИН раз: это и честный список ``unresolved`` для всего прогона
+    # (иначе он менялся бы бессмысленно на каждой итерации одним и тем же
+    # значением), и fail-fast короткое замыкание, когда для типа не
+    # резолвится вообще ничего — тогда ни один черновик не может быть
+    # изменён, и помечать их "уже заполнено" было бы неправдой.
+    defaults = resolve_type_defaults(type_key)
+    counters["unresolved"] = list(defaults.get("unresolved") or [])
+    if defaults.get("tnved") is None and defaults.get("marking") is None:
+        return counters
+
+    drafts = MarketplaceProductDraft.query.filter_by(
+        product_type_id=type_key,
+    ).order_by(MarketplaceProductDraft.id.asc()).limit(bounded).all()
+
+    for draft in drafts:
+        if getattr(draft, "status", None) == "archived":
+            counters["skipped_archived"] += 1
+            continue
+
+        has_active_operation = MarketplaceOperation.query.filter(
+            MarketplaceOperation.draft_id == draft.id,
+            MarketplaceOperation.status.in_(ACTIVE_OPERATION_STATUSES),
+        ).first() is not None
+        if not _draft_is_eligible(
+            draft, has_active_operation=has_active_operation,
+        ):
+            counters["skipped_active_operation"] += 1
+            continue
+
+        try:
+            current = json.loads(draft.attributes_json or "[]")
+            if not isinstance(current, list):
+                raise ValueError("attributes_json is not a JSON array")
+
+            updated, report = apply_to_attributes(current, type_key)
+            if not report.get("applied"):
+                counters["skipped_already_filled"] += 1
+                continue
+
+            with db.session.begin_nested():
+                draft.attributes_json = json.dumps(
+                    updated, ensure_ascii=False, sort_keys=True,
+                )
+                draft.validation_status = "stale"
+                draft.updated_at = datetime.utcnow()
+                db.session.flush()
+            counters["updated"] += 1
+        except Exception:
+            logger.exception(
+                "Не удалось применить compliance-дефолты к черновику %s",
+                draft.id,
+            )
+            counters["failed"] += 1
+
+    db.session.commit()
     return counters

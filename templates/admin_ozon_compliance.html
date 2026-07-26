@@ -169,6 +169,18 @@
                       @click="open = !open; loadDict()" :aria-expanded="open.toString()">
                 {{ icon('edit', size=13) }} {{ 'Изменить' if row.tnved_code else 'Указать код' }}
               </button>
+              {% if row.tnved_code %}
+              <form method="post" action="{{ url_for('admin_ozon_compliance.apply_existing', product_type_id=row.product_type_id) }}"
+                    class="mt-1"
+                    onsubmit="return confirm('Разнести текущее решение по уже существующим черновикам этого типа с пустым атрибутом? Уже заполненные значения не изменятся.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="sh-btn sh-btn--secondary sh-btn--sm"
+                        title="Дозаполнить ТН ВЭД/маркировку у уже существующих черновиков этого типа, где атрибут ещё пуст">
+                  {{ icon('refresh', size=13) }} Применить к существующим
+                </button>
+              </form>
+              <div class="oc-table-meta mt-1">только локально, без отправки в Ozon</div>
+              {% endif %}
             </td>
           </tr>
           <tr x-show="open" x-cloak class="oc-row-form">

@@ -2,6 +2,7 @@
 """Админский сервис compliance-дефолтов Ozon."""
 from datetime import date, datetime
 import unittest
+from unittest.mock import MagicMock
 
 from flask import Flask
 from sqlalchemy import event
@@ -216,6 +217,32 @@ class _AdminServiceDbTestCase(unittest.TestCase):
             ))
         db.session.commit()
         return version
+
+    def _make_operation(self, draft_id, status, *, operation_kind="product_update"):
+        """Минимальная строка ``marketplace_operations``, привязанная к черновику.
+
+        Используется только для проверки, что ``apply_to_existing_drafts``
+        пропускает черновик, пока по нему есть НЕтерминальная операция.
+        ``idempotency_key`` обязан быть уникальным в рамках
+        ``(account_id, operation_kind)`` — берём id черновика и статус, этого
+        достаточно для теста.
+        """
+        from models import db, MarketplaceOperation
+
+        operation = MarketplaceOperation(
+            seller_id=1,
+            marketplace_id=self.marketplace_id,
+            account_id=1,
+            draft_id=draft_id,
+            operation_kind=operation_kind,
+            status=status,
+            idempotency_key=f"test-{draft_id}-{status}",
+            request_fingerprint="fingerprint",
+            contract_version="v1",
+        )
+        db.session.add(operation)
+        db.session.commit()
+        return operation
 
 
 class ActivateRegistryVersionTestCase(_AdminServiceDbTestCase):
@@ -877,6 +904,285 @@ class PreviewRegistrySwitchTestCase(_AdminServiceDbTestCase):
         )
         with self.assertRaises(OzonComplianceAdminError):
             preview_registry_switch("abc")
+
+
+class ApplyToExistingDraftsTestCase(unittest.TestCase):
+    """Чистый предикат ``_draft_is_eligible`` — без БД и app context."""
+
+    def test_draft_with_active_operation_is_skipped(self):
+        from services.ozon_compliance_admin import _draft_is_eligible
+
+        draft = MagicMock()
+        draft.status = 'blocked'
+        self.assertFalse(_draft_is_eligible(draft, has_active_operation=True))
+
+    def test_archived_draft_is_skipped(self):
+        from services.ozon_compliance_admin import _draft_is_eligible
+
+        draft = MagicMock()
+        draft.status = 'archived'
+        self.assertFalse(_draft_is_eligible(draft, has_active_operation=False))
+
+    def test_blocked_draft_without_operation_is_eligible(self):
+        from services.ozon_compliance_admin import _draft_is_eligible
+
+        draft = MagicMock()
+        draft.status = 'blocked'
+        self.assertTrue(_draft_is_eligible(draft, has_active_operation=False))
+
+
+class ApplyToExistingDraftsIntegrationTestCase(_AdminServiceDbTestCase):
+    """``apply_to_existing_drafts`` на реальной БД — полный прогон."""
+
+    def _setup_resolved_type(self, external_type_id="1609", *, marking=True):
+        """Тип с активным решением по ТН ВЭД и, опционально, активной версией
+        перечня маркировки (``marking=True``) либо вовсе без неё
+        (``marking=False`` -> версия не создаётся, признак маркировки
+        остаётся неразрешённым для проверки частичного резолва).
+        """
+        from services.ozon_compliance_admin import save_decision
+
+        product_type = self._make_product_type(external_type_id)
+        self._make_tnved_dictionary(product_type, ["3307900008"])
+        if marking:
+            self._make_registry_version(
+                "actual", is_complete=True, prefixes=["3307"], status="active",
+            )
+        save_decision(
+            product_type_id=product_type.id,
+            tnved_code="3307900008",
+            rationale="test",
+            user_id=self.user_id,
+        )
+        return product_type
+
+    def test_updates_empty_attribute_and_marks_validation_stale(self):
+        import json as json_module
+
+        from models import MarketplaceProductDraft
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+        from services.ozon_compliance_defaults import (
+            MARKING_ATTRIBUTE_ID, TNVED_ATTRIBUTE_ID,
+        )
+
+        product_type = self._setup_resolved_type()
+        draft = self._make_draft(product_type.id, "offer-1")
+        original_status = draft.status
+
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+
+        self.assertEqual(counters["updated"], 1)
+        self.assertEqual(counters["failed"], 0)
+        self.assertEqual(counters["unresolved"], [])
+
+        refreshed = MarketplaceProductDraft.query.get(draft.id)
+        attributes = json_module.loads(refreshed.attributes_json)
+        by_id = {item["attribute_id"]: item for item in attributes}
+        self.assertIn(TNVED_ATTRIBUTE_ID, by_id)
+        self.assertIn(MARKING_ATTRIBUTE_ID, by_id)
+        self.assertEqual(refreshed.validation_status, "stale")
+        # `status` — не трогаем: CHECK-констрейнт не допускает
+        # `ready_to_retry`, а этот прогон вообще не write-ит status.
+        self.assertEqual(refreshed.status, original_status)
+
+    def test_active_operation_blocks_update(self):
+        from models import MarketplaceProductDraft
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+
+        product_type = self._setup_resolved_type()
+        draft = self._make_draft(product_type.id, "offer-1")
+        self._make_operation(draft.id, "polling")
+
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+
+        self.assertEqual(counters["updated"], 0)
+        self.assertEqual(counters["skipped_active_operation"], 1)
+        refreshed = MarketplaceProductDraft.query.get(draft.id)
+        self.assertEqual(refreshed.attributes_json, "[]")
+        self.assertEqual(refreshed.validation_status, "never_validated")
+
+    def test_terminal_operation_does_not_block_update(self):
+        """Терминальные статусы (``succeeded``/``failed``/``partial``/
+        ``cancelled``) не входят в ``ACTIVE_OPERATION_STATUSES`` — черновик с
+        только терминальной операцией остаётся приемлемым.
+        """
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+
+        product_type = self._setup_resolved_type()
+        draft = self._make_draft(product_type.id, "offer-1")
+        self._make_operation(draft.id, "succeeded")
+
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+
+        self.assertEqual(counters["updated"], 1)
+        self.assertEqual(counters["skipped_active_operation"], 0)
+
+    def test_archived_draft_is_skipped_in_full_run(self):
+        from models import db, MarketplaceProductDraft
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+
+        product_type = self._setup_resolved_type()
+        draft = self._make_draft(product_type.id, "offer-1")
+        draft.status = "archived"
+        db.session.commit()
+
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+
+        self.assertEqual(counters["updated"], 0)
+        self.assertEqual(counters["skipped_archived"], 1)
+        refreshed = MarketplaceProductDraft.query.get(draft.id)
+        self.assertEqual(refreshed.attributes_json, "[]")
+
+    def test_already_filled_attribute_is_not_touched(self):
+        import json as json_module
+
+        from models import db, MarketplaceProductDraft
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+        from services.ozon_compliance_defaults import (
+            MARKING_ATTRIBUTE_ID, TNVED_ATTRIBUTE_ID,
+        )
+
+        product_type = self._setup_resolved_type()
+        draft = self._make_draft(product_type.id, "offer-1")
+        seller_value = [
+            {
+                "attribute_id": TNVED_ATTRIBUTE_ID,
+                "complex_id": "0",
+                "values": [{"dictionary_value_id": "999", "value": "seller value"}],
+            },
+            {
+                "attribute_id": MARKING_ATTRIBUTE_ID,
+                "complex_id": "0",
+                "values": [{"value": "true"}],
+            },
+        ]
+        draft.attributes_json = json_module.dumps(seller_value)
+        db.session.commit()
+
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+
+        self.assertEqual(counters["updated"], 0)
+        self.assertEqual(counters["skipped_already_filled"], 1)
+        refreshed = MarketplaceProductDraft.query.get(draft.id)
+        self.assertEqual(
+            json_module.loads(refreshed.attributes_json), seller_value,
+        )
+        self.assertEqual(refreshed.validation_status, "never_validated")
+
+    def test_unresolved_type_short_circuits_without_touching_any_draft(self):
+        from models import MarketplaceProductDraft
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+        from services.ozon_compliance_defaults import (
+            MARKING_ATTRIBUTE_ID, TNVED_ATTRIBUTE_ID,
+        )
+
+        # Тип задействован (нужен драфт), но ни одного save_decision для
+        # него нет — резолв ТН ВЭД возвращает None, а значит и маркировка.
+        product_type = self._make_product_type("1610")
+        self._make_tnved_dictionary(product_type, ["3307900008"])
+        draft = self._make_draft(product_type.id, "offer-1")
+
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+
+        self.assertEqual(counters["updated"], 0)
+        self.assertEqual(counters["skipped_active_operation"], 0)
+        self.assertEqual(counters["skipped_archived"], 0)
+        self.assertEqual(counters["skipped_already_filled"], 0)
+        self.assertEqual(counters["failed"], 0)
+        self.assertEqual(
+            set(counters["unresolved"]),
+            {TNVED_ATTRIBUTE_ID, MARKING_ATTRIBUTE_ID},
+        )
+        refreshed = MarketplaceProductDraft.query.get(draft.id)
+        self.assertEqual(refreshed.attributes_json, "[]")
+        self.assertEqual(refreshed.validation_status, "never_validated")
+
+    def test_partial_resolution_still_updates_resolved_attribute(self):
+        """ТН ВЭД резолвится, маркировка — нет (нет активной версии перечня):
+        черновик всё равно получает ТН ВЭД, а маркировка остаётся честно
+        ``unresolved`` вместо того, чтобы блокировать всё дозаполнение целиком.
+        """
+        import json as json_module
+
+        from models import MarketplaceProductDraft
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+        from services.ozon_compliance_defaults import (
+            MARKING_ATTRIBUTE_ID, TNVED_ATTRIBUTE_ID,
+        )
+
+        product_type = self._setup_resolved_type(marking=False)
+        draft = self._make_draft(product_type.id, "offer-1")
+
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+
+        self.assertEqual(counters["updated"], 1)
+        self.assertEqual(counters["unresolved"], [MARKING_ATTRIBUTE_ID])
+        refreshed = MarketplaceProductDraft.query.get(draft.id)
+        attributes = json_module.loads(refreshed.attributes_json)
+        by_id = {item["attribute_id"]: item for item in attributes}
+        self.assertIn(TNVED_ATTRIBUTE_ID, by_id)
+        self.assertNotIn(MARKING_ATTRIBUTE_ID, by_id)
+
+    def test_error_in_one_draft_does_not_prevent_other_updates_from_persisting(self):
+        """Повреждённый ``attributes_json`` одного черновика считается
+        ``failed`` и не мешает уже применённому изменению более раннего (по
+        id) черновика того же вызова быть закоммиченным — здесь и проверяется
+        отсутствие полного ``db.session.rollback()`` в per-row except.
+        """
+        import json as json_module
+
+        from models import db, MarketplaceProductDraft
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+        from services.ozon_compliance_defaults import TNVED_ATTRIBUTE_ID
+
+        product_type = self._setup_resolved_type(marking=False)
+        draft_ok = self._make_draft(product_type.id, "offer-ok")
+        draft_broken = self._make_draft(product_type.id, "offer-broken")
+        self.assertLess(draft_ok.id, draft_broken.id)
+
+        draft_broken.attributes_json = "not-json"
+        db.session.commit()
+
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+
+        self.assertEqual(counters["updated"], 1)
+        self.assertEqual(counters["failed"], 1)
+
+        refreshed_ok = MarketplaceProductDraft.query.get(draft_ok.id)
+        attributes = json_module.loads(refreshed_ok.attributes_json)
+        by_id = {item["attribute_id"]: item for item in attributes}
+        self.assertIn(TNVED_ATTRIBUTE_ID, by_id)
+        self.assertEqual(refreshed_ok.validation_status, "stale")
+
+        refreshed_broken = MarketplaceProductDraft.query.get(draft_broken.id)
+        self.assertEqual(refreshed_broken.attributes_json, "not-json")
+
+    def test_limit_bounds_number_of_processed_drafts(self):
+        from models import MarketplaceProductDraft
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+
+        product_type = self._setup_resolved_type()
+        draft_first = self._make_draft(product_type.id, "offer-first")
+        draft_second = self._make_draft(product_type.id, "offer-second")
+        self.assertLess(draft_first.id, draft_second.id)
+
+        counters = apply_to_existing_drafts(
+            product_type_id=product_type.id, limit=1,
+        )
+
+        self.assertEqual(counters["updated"], 1)
+        refreshed_first = MarketplaceProductDraft.query.get(draft_first.id)
+        refreshed_second = MarketplaceProductDraft.query.get(draft_second.id)
+        self.assertEqual(refreshed_first.validation_status, "stale")
+        self.assertEqual(refreshed_second.validation_status, "never_validated")
+
+    def test_unknown_product_type_id_is_rejected_cleanly(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            apply_to_existing_drafts,
+        )
+        with self.assertRaises(OzonComplianceAdminError):
+            apply_to_existing_drafts(product_type_id="abc")
 
 
 if __name__ == '__main__':
