@@ -555,13 +555,22 @@ ACTIVE_OPERATION_STATUSES = (
 def _draft_is_eligible(draft, *, has_active_operation: bool) -> bool:
     """Чистый предикат приемлемости черновика для локального compliance-прогона.
 
-    ``has_active_operation`` вычисляется вызывающим кодом отдельным запросом
-    (см. ``apply_to_existing_drafts``) — здесь только сама логика, чтобы её
-    можно было проверить юнит-тестом без БД.
+    ``has_active_operation`` вычисляется вызывающим кодом одним batched
+    запросом на весь прогон (см. ``apply_to_existing_drafts``) — здесь
+    только сама логика, чтобы её можно было проверить юнит-тестом без БД.
     """
     if has_active_operation:
         return False
     return getattr(draft, "status", None) != "archived"
+
+
+def _bounded_limit(limit) -> int:
+    """Зажать произвольный ``limit`` в допустимый диапазон ``[1, 200]``.
+
+    Чистая функция без БД — вынесена отдельно, чтобы верхнюю границу можно
+    было проверить дешёвым юнит-тестом, не создавая 200+ строк в тестовой БД.
+    """
+    return max(1, min(int(limit), 200))
 
 
 def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
@@ -586,15 +595,34 @@ def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
     единственная поддерживаемая здесь операция — ДОзаполнение пустого,
     обновление уже заполненных значений остаётся отдельной задачей.
 
-    Ошибка одной строки (повреждённый ``attributes_json``, неожиданное
-    исключение при записи) изолируется через ``db.session.begin_nested()`` и
-    учитывается в ``failed``; она не откатывает уже применённые изменения
-    предыдущих черновиков этого же вызова — явный ``db.session.rollback()``
-    здесь НЕ вызывается: SQLAlchemy сама откатывает транзакцию только до
+    Запросы к БД bounded и НЕ растут с числом черновиков: черновики типа,
+    множество ``draft_id`` с активной операцией среди них и резолв
+    compliance-дефолтов типа считаются каждый ОДИН раз до цикла (не на
+    каждый черновик отдельно) — иначе прогон на 200 черновиках делал бы
+    200 лишних round-trip'ов только на проверку активной операции.
+    ``apply_to_attributes`` получает уже посчитанный резолв через
+    ``resolved_defaults=defaults``, поэтому и она не резолвит заново на
+    каждой карточке (см. её docstring в ``ozon_compliance_defaults.py``).
+
+    Работа по одной строке (проверка архивности/активной операции, парсинг
+    ``attributes_json``, вызов ``apply_to_attributes``, запись) целиком
+    находится под ОДНИМ per-draft ``try/except`` — требование «ошибка одной
+    строки не откатывает уже обработанные» не ограничивается только фазой
+    записи, поэтому ни одна часть построчной работы не должна оставаться
+    снаружи try. Внутри самой записи используется ``db.session.begin_nested()``;
+    ошибка там учитывается в ``failed``, но явный ``db.session.rollback()``
+    для НЕЁ не вызывается — SQLAlchemy сама откатывает транзакцию только до
     SAVEPOINT при выходе из ``with`` с исключением, а полный
     ``session.rollback()`` откатил бы весь ещё не закоммиченный прогон
     целиком (тот же паттерн, что в ``services/supplier_service.py`` и
     ``services/brand_engine.py``).
+
+    Отдельно вся функция обёрнута внешним ``try/except``: если исключение
+    всё же вышло за пределы per-draft try (prefetch, резолв, финальный
+    ``commit()`` — например транзиентная ошибка вида «database is locked»),
+    оно конвертируется в ``OzonComplianceAdminError`` после
+    ``db.session.rollback()``, а не всплывает наружу голым ``500`` — маршрут
+    ловит только ``OzonComplianceAdminError``.
 
     Возвращает счётчики, честно различающие причину: ``updated``,
     ``skipped_active_operation``, ``skipped_archived``,
@@ -608,7 +636,7 @@ def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
     )
 
     type_key = _parse_positive_int(product_type_id, "product_type_id")
-    bounded = max(1, min(int(limit), 200))
+    bounded = _bounded_limit(limit)
 
     counters = {
         "updated": 0,
@@ -619,60 +647,90 @@ def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
         "unresolved": [],
     }
 
-    # Резолв не зависит от конкретного черновика — только от типа. Считаем
-    # его ОДИН раз: это и честный список ``unresolved`` для всего прогона
-    # (иначе он менялся бы бессмысленно на каждой итерации одним и тем же
-    # значением), и fail-fast короткое замыкание, когда для типа не
-    # резолвится вообще ничего — тогда ни один черновик не может быть
-    # изменён, и помечать их "уже заполнено" было бы неправдой.
-    defaults = resolve_type_defaults(type_key)
-    counters["unresolved"] = list(defaults.get("unresolved") or [])
-    if defaults.get("tnved") is None and defaults.get("marking") is None:
-        return counters
+    try:
+        # Резолв не зависит от конкретного черновика — только от типа. Считаем
+        # его ОДИН раз: это и честный список ``unresolved`` для всего прогона
+        # (иначе он менялся бы бессмысленно на каждой итерации одним и тем же
+        # значением), и fail-fast короткое замыкание, когда для типа не
+        # резолвится вообще ничего — тогда ни один черновик не может быть
+        # изменён, и помечать их "уже заполнено" было бы неправдой.
+        defaults = resolve_type_defaults(type_key)
+        counters["unresolved"] = list(defaults.get("unresolved") or [])
+        if defaults.get("tnved") is None and defaults.get("marking") is None:
+            return counters
 
-    drafts = MarketplaceProductDraft.query.filter_by(
-        product_type_id=type_key,
-    ).order_by(MarketplaceProductDraft.id.asc()).limit(bounded).all()
+        drafts = MarketplaceProductDraft.query.filter_by(
+            product_type_id=type_key,
+        ).order_by(MarketplaceProductDraft.id.asc()).limit(bounded).all()
 
-    for draft in drafts:
-        if getattr(draft, "status", None) == "archived":
-            counters["skipped_archived"] += 1
-            continue
+        # Одним batched запросом на ВЕСЬ набор черновиков — не по одному на
+        # черновик. ``uq_marketplace_operation_active_draft`` в любом случае
+        # не допускает больше одной активной операции на ``draft_id``, но
+        # здесь нужен просто набор ID, а не количество.
+        draft_ids = [draft.id for draft in drafts]
+        active_operation_draft_ids = set()
+        if draft_ids:
+            active_operation_draft_ids = {
+                row[0] for row in db.session.query(
+                    MarketplaceOperation.draft_id,
+                ).filter(
+                    MarketplaceOperation.draft_id.in_(draft_ids),
+                    MarketplaceOperation.status.in_(ACTIVE_OPERATION_STATUSES),
+                ).distinct().all()
+            }
 
-        has_active_operation = MarketplaceOperation.query.filter(
-            MarketplaceOperation.draft_id == draft.id,
-            MarketplaceOperation.status.in_(ACTIVE_OPERATION_STATUSES),
-        ).first() is not None
-        if not _draft_is_eligible(
-            draft, has_active_operation=has_active_operation,
-        ):
-            counters["skipped_active_operation"] += 1
-            continue
+        for draft in drafts:
+            try:
+                if getattr(draft, "status", None) == "archived":
+                    counters["skipped_archived"] += 1
+                    continue
 
-        try:
-            current = json.loads(draft.attributes_json or "[]")
-            if not isinstance(current, list):
-                raise ValueError("attributes_json is not a JSON array")
+                has_active_operation = draft.id in active_operation_draft_ids
+                if not _draft_is_eligible(
+                    draft, has_active_operation=has_active_operation,
+                ):
+                    counters["skipped_active_operation"] += 1
+                    continue
 
-            updated, report = apply_to_attributes(current, type_key)
-            if not report.get("applied"):
-                counters["skipped_already_filled"] += 1
-                continue
+                current = json.loads(draft.attributes_json or "[]")
+                if not isinstance(current, list):
+                    raise ValueError("attributes_json is not a JSON array")
 
-            with db.session.begin_nested():
-                draft.attributes_json = json.dumps(
-                    updated, ensure_ascii=False, sort_keys=True,
+                updated, report = apply_to_attributes(
+                    current, type_key, resolved_defaults=defaults,
                 )
-                draft.validation_status = "stale"
-                draft.updated_at = datetime.utcnow()
-                db.session.flush()
-            counters["updated"] += 1
-        except Exception:
-            logger.exception(
-                "Не удалось применить compliance-дефолты к черновику %s",
-                draft.id,
-            )
-            counters["failed"] += 1
+                if not report.get("applied"):
+                    counters["skipped_already_filled"] += 1
+                    continue
 
-    db.session.commit()
+                with db.session.begin_nested():
+                    draft.attributes_json = json.dumps(
+                        updated, ensure_ascii=False, sort_keys=True,
+                    )
+                    draft.validation_status = "stale"
+                    draft.updated_at = datetime.utcnow()
+                    db.session.flush()
+                counters["updated"] += 1
+            except Exception:
+                logger.exception(
+                    "Не удалось применить compliance-дефолты к черновику %s",
+                    draft.id,
+                )
+                counters["failed"] += 1
+
+        db.session.commit()
+    except OzonComplianceAdminError:
+        db.session.rollback()
+        raise
+    except Exception:
+        logger.exception(
+            "apply_to_existing_drafts: неожиданная ошибка для "
+            "product_type_id=%s", type_key,
+        )
+        db.session.rollback()
+        raise OzonComplianceAdminError(
+            "Не удалось применить решение к существующим черновикам — "
+            "техническая ошибка, повторите попытку"
+        ) from None
+
     return counters

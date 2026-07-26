@@ -458,17 +458,35 @@ def _set_value(
     })
 
 
-def apply_to_attributes(attributes: Any, product_type_id: Any) -> tuple:
+def apply_to_attributes(
+    attributes: Any,
+    product_type_id: Any,
+    *,
+    resolved_defaults: Optional[dict] = None,
+) -> tuple:
     """Дозаполнить compliance-атрибуты из админского решения.
 
     Заполняются только ПУСТЫЕ атрибуты; значение, уже присутствующее в
     черновике, не перезаписывается никогда.  При нерешённом источнике не
     записывается ничего — черновик остаётся невалидным с явной причиной.
+
+    ``resolved_defaults`` — необязательный уже посчитанный результат
+    ``resolve_type_defaults(product_type_id)``.  По умолчанию ``None``:
+    поведение не меняется, функция резолвит сама на каждом вызове (именно
+    так её вызывает ``_auto_map_attributes`` в ``services/marketplace_drafts.py``
+    — на одну карточку). Явная передача нужна вызывающему коду, который уже
+    посчитал резолв ОДИН раз для набора карточек одного и того же
+    ``product_type_id`` (массовый локальный прогон
+    ``services.ozon_compliance_admin.apply_to_existing_drafts``) — тогда
+    здесь не выполняется повторный SELECT/резолв на каждую карточку.
     """
     result = list(attributes) if isinstance(attributes, list) else []
     report = {"applied": [], "unresolved": [], "evidence": {}}
 
-    defaults = resolve_type_defaults(product_type_id)
+    defaults = (
+        resolved_defaults if resolved_defaults is not None
+        else resolve_type_defaults(product_type_id)
+    )
     report["unresolved"] = list(defaults.get("unresolved") or [])
     report["evidence"] = dict(defaults.get("evidence") or {})
 

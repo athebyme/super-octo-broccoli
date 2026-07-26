@@ -931,6 +931,27 @@ class ApplyToExistingDraftsTestCase(unittest.TestCase):
         self.assertTrue(_draft_is_eligible(draft, has_active_operation=False))
 
 
+class BoundedLimitTestCase(unittest.TestCase):
+    """``_bounded_limit`` — чистая функция, без БД и app context.
+
+    (ревью Task 8, Minor): дешёвый тест верхней границы ``limit`` без
+    необходимости создавать 200+ строк в тестовой БД.
+    """
+
+    def test_limit_above_200_is_clamped_to_200(self):
+        from services.ozon_compliance_admin import _bounded_limit
+        self.assertEqual(_bounded_limit(500), 200)
+
+    def test_limit_below_1_is_clamped_to_1(self):
+        from services.ozon_compliance_admin import _bounded_limit
+        self.assertEqual(_bounded_limit(0), 1)
+        self.assertEqual(_bounded_limit(-5), 1)
+
+    def test_limit_within_range_is_unchanged(self):
+        from services.ozon_compliance_admin import _bounded_limit
+        self.assertEqual(_bounded_limit(50), 50)
+
+
 class ApplyToExistingDraftsIntegrationTestCase(_AdminServiceDbTestCase):
     """``apply_to_existing_drafts`` на реальной БД — полный прогон."""
 
@@ -1183,6 +1204,49 @@ class ApplyToExistingDraftsIntegrationTestCase(_AdminServiceDbTestCase):
         )
         with self.assertRaises(OzonComplianceAdminError):
             apply_to_existing_drafts(product_type_id="abc")
+
+    def test_active_operation_check_does_not_grow_per_draft(self):
+        """Important (ревью Task 8): раньше принадлежность черновика активной
+        операции проверялась отдельным SELECT на КАЖДЫЙ черновик — до 200
+        лишних round-trip'ов вместо одного batched запроса на весь набор.
+        Маргинальная стоимость ОДНОГО дополнительного черновика теперь —
+        только SAVEPOINT+UPDATE+RELEASE самой записи (3 запроса); если
+        N+1 вернётся, здесь появится ещё один SELECT сверху (4).
+        """
+        from models import db
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+
+        def _count_queries(fn):
+            counter = {"n": 0}
+
+            def _before_cursor_execute(*args, **kwargs):
+                counter["n"] += 1
+
+            event.listen(db.engine, "before_cursor_execute", _before_cursor_execute)
+            try:
+                fn()
+            finally:
+                event.remove(
+                    db.engine, "before_cursor_execute", _before_cursor_execute,
+                )
+            return counter["n"]
+
+        small_type = self._setup_resolved_type("1609", marking=False)
+        for i in range(3):
+            self._make_draft(small_type.id, f"small-{i}")
+        small_count = _count_queries(
+            lambda: apply_to_existing_drafts(product_type_id=small_type.id)
+        )
+
+        big_type = self._setup_resolved_type("1611", marking=False)
+        for i in range(15):
+            self._make_draft(big_type.id, f"big-{i}")
+        big_count = _count_queries(
+            lambda: apply_to_existing_drafts(product_type_id=big_type.id)
+        )
+
+        marginal_per_draft = (big_count - small_count) / (15 - 3)
+        self.assertLessEqual(marginal_per_draft, 3)
 
 
 if __name__ == '__main__':
