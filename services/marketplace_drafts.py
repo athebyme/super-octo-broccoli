@@ -3313,9 +3313,21 @@ class MarketplaceDraftService:
         product_type: MarketplaceProductType,
         facts_document: dict,
         category_mapping: Optional[MarketplaceCategoryMapping] = None,
-    ) -> list:
+    ) -> Tuple[list, dict]:
+        """Return ``(attributes, compliance_report)``.
+
+        ``compliance_report`` is the report dict from
+        ``ozon_compliance_defaults.apply_to_attributes`` (including its
+        ``defaults`` key) so a caller that just (re)built the draft's
+        ``attributes_json`` from this result can merge the written
+        compliance values into ``provenance_json`` via
+        ``_merge_compliance_provenance`` without resolving the type's
+        compliance defaults a second time. Callers that only need the
+        attribute list (rebase diffing, reference-defaults backfill) discard
+        the report.
+        """
         if not OzonReferenceService.reference_is_fresh(product_type):
-            return []
+            return [], {"applied": [], "unresolved": [], "evidence": {}, "defaults": {}}
         definitions = MarketplaceAttributeDefinition.query.filter_by(
             product_type_id=product_type.id,
             is_available=True,
@@ -3484,10 +3496,68 @@ class MarketplaceDraftService:
         # признак маркировки.  Слой заполняет только пустые поля и никогда не
         # трогает уже заданное значение.
         from services.ozon_compliance_defaults import apply_to_attributes
-        result, _compliance_report = apply_to_attributes(
+        result, compliance_report = apply_to_attributes(
             result, product_type.id,
         )
-        return result
+        return result, compliance_report
+
+    @classmethod
+    def _merge_compliance_provenance(
+        cls,
+        draft: MarketplaceProductDraft,
+        compliance_report: Optional[dict],
+    ) -> None:
+        """Merge freshly-written compliance provenance into the draft.
+
+        Called right after ``draft.attributes_json`` was (re)built from
+        ``_auto_map_attributes`` at a creation/type-binding point. Only the
+        exact value the layer just wrote is recorded (``compliance.<id>``
+        keys); pre-existing fact-provenance keys (``attributes.*``,
+        ``commercial.*`` etc.) are preserved untouched -- this never does a
+        blind overwrite of ``provenance_json``.
+        """
+        from services.ozon_compliance_defaults import build_provenance_entries
+
+        entries = build_provenance_entries(
+            compliance_report,
+            (compliance_report or {}).get("defaults"),
+        )
+        if not entries:
+            return
+        current_provenance = cls._stored_json(draft.provenance_json, dict)
+        current_provenance.update(entries)
+        draft.provenance_json = cls._canonical_json(current_provenance, dict)
+
+    @classmethod
+    def _provenance_with_preserved_compliance(
+        cls,
+        draft: MarketplaceProductDraft,
+        fresh_provenance: dict,
+    ) -> dict:
+        """Merge a freshly-snapshotted fact provenance without discarding
+        ``compliance.*`` markers recorded by a separate layer.
+
+        ``refresh_facts``/``rebase_source_defaults`` fully replace
+        ``provenance_json`` with a new fact-derived snapshot on every source
+        sync -- a normal, frequent draft lifecycle event unrelated to
+        compliance defaults. Neither of them recomputes the compliance
+        layer's own provenance, so a blind overwrite would silently erase it
+        even though the compliance attribute's *value* in ``attributes_json``
+        is left untouched by the same call (they already exclude compliance
+        attribute IDs from their diff). Without this, the very first routine
+        facts refresh after a type bind would make the admin-refresh path
+        (``ozon_compliance_admin.apply_to_existing_drafts(refresh=True)``)
+        treat the stored value as "not ours" and stop refreshing it, even
+        though nothing about it changed.
+        """
+        current_provenance = cls._stored_json(draft.provenance_json, dict)
+        preserved_compliance = {
+            key: value for key, value in current_provenance.items()
+            if isinstance(key, str) and key.startswith("compliance.")
+        }
+        merged = dict(fresh_provenance)
+        merged.update(preserved_compliance)
+        return merged
 
     @classmethod
     def _bind_type(
@@ -3538,7 +3608,7 @@ class MarketplaceDraftService:
 
         cls._assert_no_active_publication(draft)
         facts_document = cls._stored_json(draft.source_facts_json, dict)
-        auto_attributes = cls._auto_map_attributes(
+        auto_attributes, compliance_report = cls._auto_map_attributes(
             product_type=mapping.product_type,
             facts_document=facts_document,
             category_mapping=mapping,
@@ -3553,6 +3623,7 @@ class MarketplaceDraftService:
             auto_attributes,
             list,
         )
+        cls._merge_compliance_provenance(draft, compliance_report)
         draft.complex_attributes_json = '[]'
         draft.attribute_removals_json = '[]'
         draft.updated_at = datetime.utcnow()
@@ -4109,7 +4180,7 @@ class MarketplaceDraftService:
         draft.published_listing_id = listing.id
         if needs_type_alignment:
             facts_document = cls._stored_json(draft.source_facts_json, dict)
-            auto_attributes = cls._auto_map_attributes(
+            auto_attributes, compliance_report = cls._auto_map_attributes(
                 product_type=listing.product_type,
                 facts_document=facts_document,
             )
@@ -4119,6 +4190,7 @@ class MarketplaceDraftService:
                 auto_attributes,
                 list,
             )
+            cls._merge_compliance_provenance(draft, compliance_report)
             draft.complex_attributes_json = "[]"
             draft.attribute_removals_json = "[]"
         draft.updated_at = datetime.utcnow()
@@ -4333,14 +4405,13 @@ class MarketplaceDraftService:
         db.session.add(draft)
         if selected_type:
             cls._bind_type(draft, selected_type)
-            draft.attributes_json = cls._canonical_json(
-                cls._auto_map_attributes(
-                    product_type=selected_type,
-                    facts_document=facts_document,
-                    category_mapping=mapping,
-                ),
-                list,
+            auto_attributes, compliance_report = cls._auto_map_attributes(
+                product_type=selected_type,
+                facts_document=facts_document,
+                category_mapping=mapping,
             )
+            draft.attributes_json = cls._canonical_json(auto_attributes, list)
+            cls._merge_compliance_provenance(draft, compliance_report)
             if save_mapping:
                 mapping = cls._upsert_mapping(
                     seller_id=seller_id,
@@ -4705,13 +4776,14 @@ class MarketplaceDraftService:
                 if selected_type.id != draft.product_type_id:
                     cls._bind_type(draft, selected_type)
                     facts_document = cls._stored_json(draft.source_facts_json, dict)
-                    draft.attributes_json = cls._canonical_json(
-                        cls._auto_map_attributes(
-                            product_type=selected_type,
-                            facts_document=facts_document,
-                        ),
-                        list,
+                    auto_attributes, compliance_report = cls._auto_map_attributes(
+                        product_type=selected_type,
+                        facts_document=facts_document,
                     )
+                    draft.attributes_json = cls._canonical_json(
+                        auto_attributes, list,
+                    )
+                    cls._merge_compliance_provenance(draft, compliance_report)
                     draft.complex_attributes_json = '[]'
                     draft.attribute_removals_json = '[]'
                     draft.category_mapping_id = None
@@ -4818,7 +4890,9 @@ class MarketplaceDraftService:
             draft.imported_product
         )
         draft.source_facts_json = cls._canonical_json(facts_document, dict)
-        draft.provenance_json = cls._canonical_json(provenance, dict)
+        draft.provenance_json = cls._canonical_json(
+            cls._provenance_with_preserved_compliance(draft, provenance), dict,
+        )
         draft.source_fact_hash = fact_hash
         draft.validation_status = "stale"
         draft.validation_result_json = cls._canonical_json({
@@ -4963,12 +5037,12 @@ class MarketplaceDraftService:
         )
 
         if draft.product_type is not None:
-            previous_auto = cls._auto_map_attributes(
+            previous_auto, _ = cls._auto_map_attributes(
                 product_type=draft.product_type,
                 facts_document=previous_facts,
                 category_mapping=draft.category_mapping,
             )
-            current_auto = cls._auto_map_attributes(
+            current_auto, _ = cls._auto_map_attributes(
                 product_type=draft.product_type,
                 facts_document=current_facts,
                 category_mapping=draft.category_mapping,
@@ -5051,7 +5125,9 @@ class MarketplaceDraftService:
             )
 
         draft.source_facts_json = cls._canonical_json(current_facts, dict)
-        draft.provenance_json = cls._canonical_json(provenance, dict)
+        draft.provenance_json = cls._canonical_json(
+            cls._provenance_with_preserved_compliance(draft, provenance), dict,
+        )
         draft.source_fact_hash = fact_hash
         draft.validation_status = "stale"
         draft.validation_result_json = cls._canonical_json({
@@ -5156,7 +5232,7 @@ class MarketplaceDraftService:
             for item in current
             if isinstance(item, dict)
         }
-        generated = cls._auto_map_attributes(
+        generated, _ = cls._auto_map_attributes(
             product_type=draft.product_type,
             facts_document=cls._stored_json(
                 draft.source_facts_json,

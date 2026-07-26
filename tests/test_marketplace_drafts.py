@@ -2987,6 +2987,189 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertNotIn('22232', rebased_ids)
         self.assertNotIn('23536', rebased_ids)
 
+    def test_create_draft_records_compliance_provenance(self):
+        """Task 8b: type-bind time is when the compliance layer writes a
+        value, so it is the only point that can record exactly what it
+        wrote -- `apply_to_existing_drafts(refresh=True)` later trusts only
+        this record to decide whether a stored value is still "ours".
+        """
+        module = 'services.ozon_compliance_defaults'
+        resolved = {
+            'tnved': {
+                'code': '4202220000',
+                'value': '4202220000 - Тестовое значение',
+                'external_value_id': 'tnved-value-1',
+                'default_id': 11,
+                'dictionary_version': 2,
+            },
+            'marking': True,
+            'unresolved': [],
+            'evidence': {'tnved_default_id': 11, 'registry_version_id': 5},
+        }
+        product = self._product(external_id="compliance-create")
+        with patch(f'{module}.resolve_type_defaults', return_value=resolved):
+            draft = MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                product_type_id=self.product_type.id,
+            )
+
+        provenance = json.loads(draft.provenance_json)
+        self.assertEqual(
+            provenance['compliance.22232']['external_value_id'],
+            'tnved-value-1',
+        )
+        self.assertEqual(
+            provenance['compliance.22232']['source'],
+            'admin_compliance_default',
+        )
+        self.assertEqual(provenance['compliance.23536']['value'], 'true')
+        # The merge must not clobber the fact-provenance keys `create_draft`
+        # already wrote for this same draft.
+        fact_keys = [
+            key for key in provenance if not key.startswith('compliance.')
+        ]
+        self.assertTrue(fact_keys)
+
+        stored_attrs = {
+            item['attribute_id']: item
+            for item in json.loads(draft.attributes_json)
+        }
+        self.assertEqual(
+            stored_attrs['22232']['values'][0]['dictionary_value_id'],
+            'tnved-value-1',
+        )
+
+    def test_update_draft_type_bind_records_compliance_provenance(self):
+        module = 'services.ozon_compliance_defaults'
+        resolved = {
+            'tnved': {
+                'code': '4202220000',
+                'value': '4202220000 - Тестовое значение',
+                'external_value_id': 'tnved-value-2',
+                'default_id': 12,
+                'dictionary_version': 2,
+            },
+            'marking': False,
+            'unresolved': [],
+            'evidence': {'tnved_default_id': 12},
+        }
+        product = self._product(external_id="compliance-update")
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+        )
+        self.assertIsNone(draft.product_type_id)
+
+        with patch(f'{module}.resolve_type_defaults', return_value=resolved):
+            updated = MarketplaceDraftService.update_draft(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                patch={'product_type_id': self.product_type.id},
+            )
+
+        provenance = json.loads(updated.provenance_json)
+        self.assertEqual(
+            provenance['compliance.22232']['external_value_id'],
+            'tnved-value-2',
+        )
+        self.assertEqual(provenance['compliance.23536']['value'], 'false')
+
+    def test_source_rebase_preserves_prior_compliance_provenance(self):
+        """Task 8b: `rebase_source_defaults` fully replaces `provenance_json`
+        with a fresh fact snapshot on every call; it must not discard the
+        compliance layer's own provenance markers while doing so (it does
+        not recompute them -- see
+        `test_source_rebase_never_reclassifies_compliance_attributes`
+        above). Otherwise a routine, unrelated facts refresh would make the
+        admin refresh path (`apply_to_existing_drafts(refresh=True)`) treat
+        the byte-identical stored value as no longer "ours".
+        """
+        product, draft = self._ready_draft(
+            external_id="compliance-provenance-rebase"
+        )
+
+        manual_provenance = json.loads(draft.provenance_json)
+        self.assertTrue(
+            manual_provenance, "sanity: fact provenance already populated"
+        )
+        manual_provenance['compliance.22232'] = {
+            'source': 'admin_compliance_default',
+            'default_id': 1,
+            'code': '1111111111',
+            'external_value_id': 'value-a',
+            'dictionary_version': 1,
+        }
+        draft.provenance_json = json.dumps(
+            manual_provenance, ensure_ascii=False,
+        )
+        db.session.commit()
+
+        original = json.loads(product.original_data)
+        original['description'] = 'Описание изменилось для rebase провенанса'
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.description = 'Описание изменилось для rebase провенанса'
+        db.session.commit()
+
+        rebased = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+
+        rebased_provenance = json.loads(rebased.provenance_json)
+        self.assertEqual(
+            rebased_provenance['compliance.22232']['external_value_id'],
+            'value-a',
+            'Compliance-провенанс не должен пропадать при обычном facts '
+            'rebase',
+        )
+        non_compliance_keys = [
+            key for key in rebased_provenance
+            if not key.startswith('compliance.')
+        ]
+        self.assertTrue(
+            non_compliance_keys,
+            'Merge must not have wiped the fact-derived provenance either',
+        )
+
+    def test_refresh_facts_preserves_prior_compliance_provenance(self):
+        product, draft = self._ready_draft(
+            external_id="compliance-provenance-refresh"
+        )
+
+        manual_provenance = json.loads(draft.provenance_json)
+        manual_provenance['compliance.23536'] = {
+            'source': 'admin_marking_registry',
+            'registry_version_id': 3,
+            'value': 'true',
+        }
+        draft.provenance_json = json.dumps(
+            manual_provenance, ensure_ascii=False,
+        )
+        db.session.commit()
+
+        original = json.loads(product.original_data)
+        original['description'] = 'Описание изменилось для refresh_facts'
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.description = 'Описание изменилось для refresh_facts'
+        db.session.commit()
+
+        refreshed = MarketplaceDraftService.refresh_facts(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+
+        refreshed_provenance = json.loads(refreshed.provenance_json)
+        self.assertEqual(
+            refreshed_provenance['compliance.23536']['value'], 'true',
+            'Compliance-провенанс не должен пропадать при refresh_facts',
+        )
+
     def test_seller_can_select_official_type_without_admin_preload(self):
         self.product_type.is_enabled = False
         db.session.commit()

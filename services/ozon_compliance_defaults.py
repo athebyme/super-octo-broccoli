@@ -489,6 +489,10 @@ def apply_to_attributes(
     )
     report["unresolved"] = list(defaults.get("unresolved") or [])
     report["evidence"] = dict(defaults.get("evidence") or {})
+    # Exposed so a caller that wants provenance (`build_provenance_entries`)
+    # never has to resolve the same type a second time — this is exactly the
+    # already-resolved dict used above, not a re-resolved copy.
+    report["defaults"] = defaults
 
     tnved = defaults.get("tnved")
     if tnved and not _has_value(result, TNVED_ATTRIBUTE_ID):
@@ -506,3 +510,44 @@ def apply_to_attributes(
         report["applied"].append(MARKING_ATTRIBUTE_ID)
 
     return result, report
+
+
+def build_provenance_entries(report: Optional[dict], defaults: Optional[dict]) -> dict:
+    """Провенанс заполненных compliance-атрибутов.
+
+    Записывается точное значение, которое слой поставил: обновлять его позже
+    (``services.ozon_compliance_admin.compliance_value_is_ours``) разрешено
+    только пока оно побайтово равно записанному здесь. Любая последующая
+    правка продавца автоматически выводит атрибут из-под автоматического
+    обновления — сравнение всегда идёт с этой записью, а не с текущим
+    состоянием черновика.
+
+    Ничего не резолвит и не обращается к БД: ``report`` — результат
+    ``apply_to_attributes`` (со списком фактически ``applied`` атрибутов), а
+    ``defaults`` — тот же ``resolve_type_defaults(...)`` снимок, из которого
+    эти значения были взяты (доступен как ``report["defaults"]``, если
+    вызывающий код не резолвил его отдельно).
+    """
+    applied = set((report or {}).get("applied") or [])
+    evidence = (report or {}).get("evidence") or {}
+    entries: dict = {}
+
+    tnved = (defaults or {}).get("tnved")
+    if TNVED_ATTRIBUTE_ID in applied and tnved:
+        entries[f"compliance.{TNVED_ATTRIBUTE_ID}"] = {
+            "source": "admin_compliance_default",
+            "default_id": tnved.get("default_id"),
+            "code": tnved.get("code"),
+            "external_value_id": tnved.get("external_value_id"),
+            "dictionary_version": tnved.get("dictionary_version"),
+        }
+
+    marking = (defaults or {}).get("marking")
+    if MARKING_ATTRIBUTE_ID in applied and marking is not None:
+        entries[f"compliance.{MARKING_ATTRIBUTE_ID}"] = {
+            "source": "admin_marking_registry",
+            "registry_version_id": evidence.get("registry_version_id"),
+            "value": "true" if marking else "false",
+        }
+
+    return entries

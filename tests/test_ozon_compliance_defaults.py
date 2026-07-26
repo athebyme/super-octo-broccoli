@@ -674,5 +674,62 @@ class ApplyComplianceDefaultsTestCase(unittest.TestCase):
         self.assertEqual(sorted(report['applied']), ['22232', '23536'])
 
 
+class ComplianceProvenanceTestCase(unittest.TestCase):
+    def test_provenance_records_written_values(self):
+        from services.ozon_compliance_defaults import build_provenance_entries
+
+        report = {
+            'applied': ['22232', '23536'],
+            'unresolved': [],
+            'evidence': {'tnved_default_id': 7, 'dictionary_version': 3,
+                         'registry_version_id': 1},
+        }
+        defaults = {
+            'tnved': {'code': '3307900008', 'value': '3307900008 - X',
+                      'external_value_id': '971397758', 'default_id': 7,
+                      'dictionary_version': 3},
+            'marking': False,
+        }
+        entries = build_provenance_entries(report, defaults)
+        self.assertEqual(entries['compliance.22232']['source'],
+                         'admin_compliance_default')
+        self.assertEqual(entries['compliance.22232']['external_value_id'],
+                         '971397758')
+        self.assertEqual(entries['compliance.23536']['value'], 'false')
+
+    def test_nothing_recorded_for_unapplied_attributes(self):
+        from services.ozon_compliance_defaults import build_provenance_entries
+
+        report = {'applied': [], 'unresolved': ['22232', '23536'],
+                  'evidence': {}}
+        entries = build_provenance_entries(report, {'tnved': None,
+                                                    'marking': None})
+        self.assertEqual(entries, {})
+
+    def test_apply_to_attributes_report_exposes_resolved_defaults(self):
+        """``apply_to_attributes`` кладёт использованный ``defaults`` в отчёт,
+        чтобы вызывающий код не резолвил тип повторно только ради провенанса.
+        """
+        module = 'services.ozon_compliance_defaults'
+        defaults = {
+            'tnved': {'code': '3307900008', 'value': '3307900008 - X',
+                      'external_value_id': '971397758', 'default_id': 7,
+                      'dictionary_version': 3},
+            'marking': True,
+            'unresolved': [],
+            'evidence': {'tnved_default_id': 7, 'registry_version_id': 1},
+        }
+        with patch(f'{module}.resolve_type_defaults', return_value=defaults):
+            from services.ozon_compliance_defaults import (
+                apply_to_attributes, build_provenance_entries,
+            )
+            attributes, report = apply_to_attributes([], 1609)
+
+        self.assertIs(report['defaults'], defaults)
+        entries = build_provenance_entries(report, report['defaults'])
+        self.assertIn('compliance.22232', entries)
+        self.assertIn('compliance.23536', entries)
+
+
 if __name__ == '__main__':
     unittest.main()

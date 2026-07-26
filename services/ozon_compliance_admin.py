@@ -27,7 +27,13 @@ from datetime import date, datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
-from services.ozon_compliance_defaults import normalize_code, resolve_marking_batch
+from services.ozon_compliance_defaults import (
+    MARKING_ATTRIBUTE_ID,
+    TNVED_ATTRIBUTE_ID,
+    build_provenance_entries,
+    normalize_code,
+    resolve_marking_batch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -573,7 +579,79 @@ def _bounded_limit(limit) -> int:
     return max(1, min(int(limit), 200))
 
 
-def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
+def compliance_value_is_ours(attribute_id, stored_item, provenance) -> bool:
+    """Ставил ли это значение сам слой, и не менял ли его с тех пор продавец.
+
+    Единственное допустимое доказательство — побайтовое совпадение текущего
+    сохранённого значения с тем, что зафиксировано в провенансе в момент
+    записи (``build_provenance_entries``). Отсутствие записи в провенансе
+    (черновик создан до Task 8b, либо значение вообще не из этого слоя)
+    трактуется fail-closed как «не наше» — обновлять его нельзя.
+    """
+    entry = (provenance or {}).get(f"compliance.{attribute_id}")
+    if not isinstance(entry, dict):
+        return False
+    values = (stored_item or {}).get("values")
+    if not isinstance(values, list) or len(values) != 1:
+        return False
+    value = values[0]
+    if not isinstance(value, dict):
+        return False
+    if attribute_id == MARKING_ATTRIBUTE_ID:
+        return value.get("value") == entry.get("value")
+    return (
+        value.get("dictionary_value_id") == entry.get("external_value_id")
+    )
+
+
+def _stored_provenance(raw_value) -> dict:
+    """Разобрать ``provenance_json`` черновика в безопасный dict.
+
+    Возвращает свежий словарь на каждый вызов (как
+    ``MarketplaceDraftService._stored_json`` в соседнем модуле): вызывающий
+    код мутирует и пересохраняет его, не трогая переданную ORM-строку.
+    """
+    try:
+        value = json.loads(raw_value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _stored_attribute_item(attributes, attribute_id):
+    """Найти существующую запись атрибута по ``attribute_id`` в списке."""
+    for item in attributes:
+        if isinstance(item, dict) and str(item.get("attribute_id")) == attribute_id:
+            return item
+    return None
+
+
+def _compliance_desired_values(attribute_id, resolved) -> list:
+    """Каноническое представление разрешённого значения в формате ``values``.
+
+    Обязано побайтово совпадать с тем, что кладёт ``_set_value`` внутри
+    ``ozon_compliance_defaults.apply_to_attributes`` — иначе refresh считал бы
+    «уже актуально» при фактически другой сериализации значения.
+    """
+    if attribute_id == MARKING_ATTRIBUTE_ID:
+        return [{"value": "true" if resolved else "false"}]
+    return [{
+        "dictionary_value_id": resolved.get("external_value_id"),
+        "value": resolved.get("value"),
+    }]
+
+
+def _replace_attribute_values(attributes, attribute_id, values) -> None:
+    """Заменить ``values`` существующей записи атрибута на месте."""
+    for item in attributes:
+        if isinstance(item, dict) and str(item.get("attribute_id")) == attribute_id:
+            item["values"] = values
+            return
+
+
+def apply_to_existing_drafts(
+    *, product_type_id, limit: int = 200, refresh: bool = False,
+) -> dict:
     """Разнести подписанное админом решение по уже существующим черновикам типа.
 
     Прогон только локальный: ни одной ``MarketplaceOperation`` он не создаёт и
@@ -591,9 +669,17 @@ def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
     Черновик пропускается, если он архивный либо на него уже ссылается
     активная (ещё не терминальная) ``MarketplaceOperation`` — черновик,
     который прямо сейчас отправляется/сверяется с Ozon, не должен получить
-    параллельную локальную правку. Уже заполненный атрибут не трогается: это
-    единственная поддерживаемая здесь операция — ДОзаполнение пустого,
-    обновление уже заполненных значений остаётся отдельной задачей.
+    параллельную локальную правку. По умолчанию (``refresh=False``) уже
+    заполненный атрибут не трогается — это ДОзаполнение пустого.
+
+    ``refresh=True`` дополнительно включает обновление уже заполненного
+    значения, но ТОЛЬКО когда оно побайтово равно тому, что этот же слой
+    записал в прошлый раз (``compliance_value_is_ours`` по провенансу
+    ``MarketplaceProductDraft.provenance_json``, ключи ``compliance.<id>``
+    из ``build_provenance_entries``). Значение, вписанное продавцом вручную
+    (или вообще без сохранённого провенанса — черновики до Task 8b),
+    считается fail-closed «не нашим» и не трогается ни при каких условиях.
+    Совпавшее с текущим резолвом значение не переписывается повторно.
 
     Запросы к БД bounded и НЕ растут с числом черновиков: черновики типа,
     множество ``draft_id`` с активной операцией среди них и резолв
@@ -603,19 +689,21 @@ def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
     ``apply_to_attributes`` получает уже посчитанный резолв через
     ``resolved_defaults=defaults``, поэтому и она не резолвит заново на
     каждой карточке (см. её docstring в ``ozon_compliance_defaults.py``).
+    Проверка ``refresh`` — чистое сравнение уже загруженного JSON, без
+    дополнительных SELECT: query count не растёт при включении флага.
 
     Работа по одной строке (проверка архивности/активной операции, парсинг
-    ``attributes_json``, вызов ``apply_to_attributes``, запись) целиком
-    находится под ОДНИМ per-draft ``try/except`` — требование «ошибка одной
-    строки не откатывает уже обработанные» не ограничивается только фазой
-    записи, поэтому ни одна часть построчной работы не должна оставаться
-    снаружи try. Внутри самой записи используется ``db.session.begin_nested()``;
-    ошибка там учитывается в ``failed``, но явный ``db.session.rollback()``
-    для НЕЁ не вызывается — SQLAlchemy сама откатывает транзакцию только до
-    SAVEPOINT при выходе из ``with`` с исключением, а полный
-    ``session.rollback()`` откатил бы весь ещё не закоммиченный прогон
-    целиком (тот же паттерн, что в ``services/supplier_service.py`` и
-    ``services/brand_engine.py``).
+    ``attributes_json``/``provenance_json``, вызов ``apply_to_attributes``,
+    запись) целиком находится под ОДНИМ per-draft ``try/except`` —
+    требование «ошибка одной строки не откатывает уже обработанные» не
+    ограничивается только фазой записи, поэтому ни одна часть построчной
+    работы не должна оставаться снаружи try. Внутри самой записи
+    используется ``db.session.begin_nested()``; ошибка там учитывается в
+    ``failed``, но явный ``db.session.rollback()`` для НЕЁ не вызывается —
+    SQLAlchemy сама откатывает транзакцию только до SAVEPOINT при выходе из
+    ``with`` с исключением, а полный ``session.rollback()`` откатил бы весь
+    ещё не закоммиченный прогон целиком (тот же паттерн, что в
+    ``services/supplier_service.py`` и ``services/brand_engine.py``).
 
     Отдельно вся функция обёрнута внешним ``try/except``: если исключение
     всё же вышло за пределы per-draft try (prefetch, резолв, финальный
@@ -624,11 +712,16 @@ def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
     ``db.session.rollback()``, а не всплывает наружу голым ``500`` — маршрут
     ловит только ``OzonComplianceAdminError``.
 
-    Возвращает счётчики, честно различающие причину: ``updated``,
+    Возвращает счётчики, честно различающие причину. ``updated`` считает
+    черновики, получившие хотя бы одно НОВОЕ (ранее пустое) значение;
+    ``refreshed``/``already_current``/``skipped_seller_owned`` — per-атрибут
+    счётчики режима обновления (``refresh=True``): обновили своё устаревшее,
+    наше и уже совпадает, значение не наше — не тронуто. Плюс
     ``skipped_active_operation``, ``skipped_archived``,
-    ``skipped_already_filled``, ``failed`` и типовой (не per-черновик)
-    список ``unresolved`` — какие из двух compliance-атрибутов вообще не
-    резолвятся для этого типа прямо сейчас.
+    ``skipped_already_filled`` (черновик вообще не изменился в этом вызове),
+    ``failed`` и типовой (не per-черновик) список ``unresolved`` — какие из
+    двух compliance-атрибутов вообще не резолвятся для этого типа прямо
+    сейчас.
     """
     from models import db, MarketplaceOperation, MarketplaceProductDraft
     from services.ozon_compliance_defaults import (
@@ -637,12 +730,17 @@ def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
 
     type_key = _parse_positive_int(product_type_id, "product_type_id")
     bounded = _bounded_limit(limit)
+    if not isinstance(refresh, bool):
+        raise OzonComplianceAdminError("refresh должен быть boolean")
 
     counters = {
         "updated": 0,
+        "refreshed": 0,
+        "already_current": 0,
         "skipped_active_operation": 0,
         "skipped_archived": 0,
         "skipped_already_filled": 0,
+        "skipped_seller_owned": 0,
         "failed": 0,
         "unresolved": [],
     }
@@ -696,21 +794,83 @@ def apply_to_existing_drafts(*, product_type_id, limit: int = 200) -> dict:
                 if not isinstance(current, list):
                     raise ValueError("attributes_json is not a JSON array")
 
-                updated, report = apply_to_attributes(
+                current, report = apply_to_attributes(
                     current, type_key, resolved_defaults=defaults,
                 )
-                if not report.get("applied"):
+                newly_filled = list(report.get("applied") or [])
+                draft_changed = bool(newly_filled)
+                provenance_updates = build_provenance_entries(
+                    report, report.get("defaults") or defaults,
+                )
+
+                if refresh:
+                    provenance = _stored_provenance(draft.provenance_json)
+                    refreshed_ids = []
+                    for attribute_id, resolved in (
+                        (TNVED_ATTRIBUTE_ID, defaults.get("tnved")),
+                        (MARKING_ATTRIBUTE_ID, defaults.get("marking")),
+                    ):
+                        # Just filled from empty above -- not an "already
+                        # filled" refresh candidate, and no prior provenance
+                        # to compare against.
+                        if attribute_id in newly_filled:
+                            continue
+                        if resolved is None:
+                            continue
+                        stored_item = _stored_attribute_item(
+                            current, attribute_id,
+                        )
+                        if stored_item is None:
+                            continue
+                        if not compliance_value_is_ours(
+                            attribute_id, stored_item, provenance,
+                        ):
+                            counters["skipped_seller_owned"] += 1
+                            continue
+                        desired_values = _compliance_desired_values(
+                            attribute_id, resolved,
+                        )
+                        if stored_item.get("values") == desired_values:
+                            counters["already_current"] += 1
+                            continue
+                        _replace_attribute_values(
+                            current, attribute_id, desired_values,
+                        )
+                        counters["refreshed"] += 1
+                        refreshed_ids.append(attribute_id)
+                        draft_changed = True
+                    if refreshed_ids:
+                        refreshed_report = {
+                            "applied": refreshed_ids,
+                            "evidence": dict(defaults.get("evidence") or {}),
+                        }
+                        provenance_updates.update(
+                            build_provenance_entries(refreshed_report, defaults)
+                        )
+
+                if not draft_changed:
                     counters["skipped_already_filled"] += 1
                     continue
 
                 with db.session.begin_nested():
                     draft.attributes_json = json.dumps(
-                        updated, ensure_ascii=False, sort_keys=True,
+                        current, ensure_ascii=False, sort_keys=True,
                     )
+                    if provenance_updates:
+                        merged_provenance = _stored_provenance(
+                            draft.provenance_json,
+                        )
+                        merged_provenance.update(provenance_updates)
+                        draft.provenance_json = json.dumps(
+                            merged_provenance,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
                     draft.validation_status = "stale"
                     draft.updated_at = datetime.utcnow()
                     db.session.flush()
-                counters["updated"] += 1
+                if newly_filled:
+                    counters["updated"] += 1
             except Exception:
                 logger.exception(
                     "Не удалось применить compliance-дефолты к черновику %s",

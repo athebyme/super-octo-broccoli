@@ -952,6 +952,73 @@ class BoundedLimitTestCase(unittest.TestCase):
         self.assertEqual(_bounded_limit(50), 50)
 
 
+class RefreshExistingDraftsTestCase(unittest.TestCase):
+    """``compliance_value_is_ours`` — чистая функция, без БД и app context.
+
+    (Task 8b) Единственное допустимое доказательство «это наше значение» —
+    побайтовое совпадение с тем, что зафиксировано в провенансе в момент
+    записи. Ничего, кроме этого совпадения (включая уверенность/heuristics),
+    не должно давать ``True``.
+    """
+
+    def test_only_value_we_wrote_is_refreshed(self):
+        from services.ozon_compliance_admin import compliance_value_is_ours
+
+        provenance = {'compliance.22232': {'external_value_id': '971397758'}}
+        stored = {'attribute_id': '22232',
+                  'values': [{'dictionary_value_id': '971397758',
+                              'value': '3307900008 - X'}]}
+        self.assertTrue(compliance_value_is_ours('22232', stored, provenance))
+
+    def test_seller_edited_value_is_not_ours(self):
+        from services.ozon_compliance_admin import compliance_value_is_ours
+
+        provenance = {'compliance.22232': {'external_value_id': '971397758'}}
+        stored = {'attribute_id': '22232',
+                  'values': [{'dictionary_value_id': '999999999',
+                              'value': 'Другой код'}]}
+        self.assertFalse(compliance_value_is_ours('22232', stored, provenance))
+
+    def test_value_without_provenance_is_not_ours(self):
+        from services.ozon_compliance_admin import compliance_value_is_ours
+
+        stored = {'attribute_id': '22232',
+                  'values': [{'dictionary_value_id': '971397758'}]}
+        self.assertFalse(compliance_value_is_ours('22232', stored, {}))
+
+    def test_marking_compares_the_literal_value_field(self):
+        from services.ozon_compliance_admin import compliance_value_is_ours
+
+        provenance = {'compliance.23536': {'value': 'false'}}
+        stored = {'attribute_id': '23536', 'values': [{'value': 'false'}]}
+        self.assertTrue(compliance_value_is_ours('23536', stored, provenance))
+
+        stored_edited = {'attribute_id': '23536', 'values': [{'value': 'true'}]}
+        self.assertFalse(
+            compliance_value_is_ours('23536', stored_edited, provenance)
+        )
+
+    def test_multi_value_or_malformed_entry_is_never_ours(self):
+        """Значение из этого слоя всегда ровно одна запись в ``values``; всё
+        остальное (несколько значений, отсутствующий/не-list/не-dict values)
+        не может быть побайтово сравнено и fail-closed не считается нашим.
+        """
+        from services.ozon_compliance_admin import compliance_value_is_ours
+
+        provenance = {'compliance.22232': {'external_value_id': '971397758'}}
+        multi = {'attribute_id': '22232', 'values': [
+            {'dictionary_value_id': '971397758', 'value': 'X'},
+            {'dictionary_value_id': '971397758', 'value': 'X'},
+        ]}
+        self.assertFalse(compliance_value_is_ours('22232', multi, provenance))
+
+        empty = {'attribute_id': '22232', 'values': []}
+        self.assertFalse(compliance_value_is_ours('22232', empty, provenance))
+
+        missing = {'attribute_id': '22232'}
+        self.assertFalse(compliance_value_is_ours('22232', missing, provenance))
+
+
 class ApplyToExistingDraftsIntegrationTestCase(_AdminServiceDbTestCase):
     """``apply_to_existing_drafts`` на реальной БД — полный прогон."""
 
@@ -1247,6 +1314,172 @@ class ApplyToExistingDraftsIntegrationTestCase(_AdminServiceDbTestCase):
 
         marginal_per_draft = (big_count - small_count) / (15 - 3)
         self.assertLessEqual(marginal_per_draft, 3)
+
+
+class RefreshExistingDraftsIntegrationTestCase(_AdminServiceDbTestCase):
+    """``apply_to_existing_drafts(refresh=True)`` на реальной БД (Task 8b).
+
+    Marking намеренно оставлен нерезолвленным (без активной версии перечня)
+    во всех сценариях этого класса: иначе он резолвился бы в одно и то же
+    ``True`` в обоих прогонах и добавлял бы собственный
+    ``already_current``/``refreshed`` инкремент поверх сценария теста,
+    смешивая два независимых атрибута в одном счётчике.
+    """
+
+    def _resolved_type_with_decision(self, external_type_id, tnved_codes, active_code):
+        from services.ozon_compliance_admin import save_decision
+
+        product_type = self._make_product_type(external_type_id)
+        self._make_tnved_dictionary(product_type, tnved_codes)
+        save_decision(
+            product_type_id=product_type.id,
+            tnved_code=active_code,
+            rationale="test",
+            user_id=self.user_id,
+        )
+        return product_type
+
+    def test_refresh_replaces_stale_value_we_wrote_and_updates_provenance(self):
+        import json as json_module
+
+        from models import MarketplaceProductDraft
+        from services.ozon_compliance_admin import (
+            apply_to_existing_drafts, save_decision,
+        )
+        from services.ozon_compliance_defaults import TNVED_ATTRIBUTE_ID
+
+        product_type = self._resolved_type_with_decision(
+            "1609", ["3307900008", "3307900009"], "3307900008",
+        )
+        draft = self._make_draft(product_type.id, "offer-1")
+
+        first = apply_to_existing_drafts(product_type_id=product_type.id)
+        self.assertEqual(first["updated"], 1)
+
+        save_decision(
+            product_type_id=product_type.id,
+            tnved_code="3307900009",
+            rationale="исправление",
+            user_id=self.user_id,
+        )
+
+        second = apply_to_existing_drafts(
+            product_type_id=product_type.id, refresh=True,
+        )
+        self.assertEqual(second["refreshed"], 1)
+        self.assertEqual(second["updated"], 0)
+        self.assertEqual(second["skipped_seller_owned"], 0)
+
+        refreshed = MarketplaceProductDraft.query.get(draft.id)
+        refreshed_attrs = json_module.loads(refreshed.attributes_json)
+        refreshed_tnved = next(
+            item for item in refreshed_attrs
+            if item["attribute_id"] == TNVED_ATTRIBUTE_ID
+        )
+        self.assertEqual(
+            refreshed_tnved["values"][0]["value"].split(" ")[0],
+            "3307900009",
+        )
+        provenance = json_module.loads(refreshed.provenance_json)
+        self.assertEqual(
+            provenance[f"compliance.{TNVED_ATTRIBUTE_ID}"]["code"],
+            "3307900009",
+        )
+
+    def test_refresh_leaves_seller_edited_value_untouched(self):
+        import json as json_module
+
+        from models import db, MarketplaceProductDraft
+        from services.ozon_compliance_admin import (
+            apply_to_existing_drafts, save_decision,
+        )
+        from services.ozon_compliance_defaults import TNVED_ATTRIBUTE_ID
+
+        product_type = self._resolved_type_with_decision(
+            "1610", ["3307900008", "3307900009"], "3307900008",
+        )
+        draft = self._make_draft(product_type.id, "offer-2")
+        apply_to_existing_drafts(product_type_id=product_type.id)
+
+        # Продавец (или экран массовой починки) вручную переписал значение,
+        # не трогая провенанс — ровно сценарий, который обязан заблокировать
+        # автоматическое обновление.
+        stored = MarketplaceProductDraft.query.get(draft.id)
+        attrs = json_module.loads(stored.attributes_json)
+        for item in attrs:
+            if item["attribute_id"] == TNVED_ATTRIBUTE_ID:
+                item["values"] = [{
+                    "dictionary_value_id": "manual-value-id",
+                    "value": "Ручной код продавца",
+                }]
+        stored.attributes_json = json_module.dumps(attrs, ensure_ascii=False)
+        db.session.commit()
+
+        save_decision(
+            product_type_id=product_type.id,
+            tnved_code="3307900009",
+            rationale="исправление",
+            user_id=self.user_id,
+        )
+        counters = apply_to_existing_drafts(
+            product_type_id=product_type.id, refresh=True,
+        )
+        self.assertEqual(counters["refreshed"], 0)
+        self.assertEqual(counters["skipped_seller_owned"], 1)
+        self.assertEqual(counters["skipped_already_filled"], 1)
+
+        final = MarketplaceProductDraft.query.get(draft.id)
+        final_attrs = json_module.loads(final.attributes_json)
+        final_tnved = next(
+            item for item in final_attrs
+            if item["attribute_id"] == TNVED_ATTRIBUTE_ID
+        )
+        self.assertEqual(
+            final_tnved["values"][0]["dictionary_value_id"],
+            "manual-value-id",
+        )
+
+    def test_refresh_is_a_noop_when_value_already_matches_current_default(self):
+        from services.ozon_compliance_admin import apply_to_existing_drafts
+
+        product_type = self._resolved_type_with_decision(
+            "1611", ["3307900008"], "3307900008",
+        )
+        self._make_draft(product_type.id, "offer-3")
+        apply_to_existing_drafts(product_type_id=product_type.id)
+
+        counters = apply_to_existing_drafts(
+            product_type_id=product_type.id, refresh=True,
+        )
+        self.assertEqual(counters["refreshed"], 0)
+        self.assertEqual(counters["already_current"], 1)
+        self.assertEqual(counters["skipped_seller_owned"], 0)
+        self.assertEqual(counters["skipped_already_filled"], 1)
+
+    def test_without_refresh_flag_stale_value_is_left_alone(self):
+        """Regression guard: дефолтный ``refresh=False`` обязан сохранять
+        старое поведение бит-в-бит — уже заполненный атрибут не трогается,
+        даже если админское решение с тех пор изменилось.
+        """
+        from services.ozon_compliance_admin import (
+            apply_to_existing_drafts, save_decision,
+        )
+
+        product_type = self._resolved_type_with_decision(
+            "1612", ["3307900008", "3307900009"], "3307900008",
+        )
+        self._make_draft(product_type.id, "offer-4")
+        apply_to_existing_drafts(product_type_id=product_type.id)
+
+        save_decision(
+            product_type_id=product_type.id,
+            tnved_code="3307900009",
+            rationale="исправление",
+            user_id=self.user_id,
+        )
+        counters = apply_to_existing_drafts(product_type_id=product_type.id)
+        self.assertEqual(counters["updated"], 0)
+        self.assertEqual(counters["skipped_already_filled"], 1)
 
 
 if __name__ == '__main__':
