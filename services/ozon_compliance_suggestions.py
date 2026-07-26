@@ -87,7 +87,7 @@ class OzonComplianceSuggestionService:
         normalized = cls._normalize(material_signal)
         rubber_like = bool(
             re.search(
-                r"\b(?:tpr|tpe|тпэ|тпр|тпу|резин\w*|эластомер\w*|"
+                r"\b(?:tpr|tpe|тпэ|тпр|резин\w*|эластомер\w*|"
                 r"термоэластопласт\w*)\b",
                 normalized,
             )
