@@ -4838,6 +4838,7 @@ class OzonMarkingRule(db.Model):
             'registry_version_id', 'code_prefix',
             name='uq_ozon_marking_rule_scope',
         ),
+        db.Index('ix_ozon_marking_rules_prefix', 'code_prefix'),
     )
 
     def __repr__(self):

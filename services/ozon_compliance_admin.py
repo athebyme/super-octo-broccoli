@@ -489,7 +489,7 @@ def activate_registry_version(*, version_id, user_id):
         candidate.declared_by_user_id = int(user_id)
         candidate.declared_at = datetime.utcnow()
         db.session.commit()
-    except (StaleDataError, IntegrityError):
+    except IntegrityError:
         db.session.rollback()
         raise OzonComplianceAdminError(
             "Версия перечня уже активирована другим администратором"

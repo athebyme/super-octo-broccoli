@@ -1246,6 +1246,10 @@ def main():
                 migrate as migrate_ozon_product_type_visibility,
             )
             migrate_ozon_product_type_visibility(db_path)
+            from migrate_add_ozon_compliance_defaults import (
+                apply_migration as migrate_ozon_compliance_defaults,
+            )
+            migrate_ozon_compliance_defaults(db_path)
             from migrate_add_marketplace_listings import (
                 STARTUP_BACKFILL_LIMIT,
                 migrate as migrate_marketplace_listings,
