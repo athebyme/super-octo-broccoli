@@ -133,6 +133,23 @@ def _registry_rules(version) -> list:
     ).all()
 
 
+def _marking_from_prefixes(
+    code: str, prefixes: list, is_complete: bool,
+) -> Optional[bool]:
+    """Чистое сравнение кода с уже полученным набором префиксов правил.
+
+    Вынесено отдельно от ``_marking_for_version``, чтобы batch-резолвер
+    (``resolve_marking_batch``) мог посчитать маркировку для множества кодов
+    по ОДНОМУ уже полученному набору префиксов, не читая заново активную
+    версию и её правила на каждый код — иначе вызывающий код в цикле по N
+    кодам делает 2*N запросов к БД.
+    """
+    matched = any(prefix and code.startswith(prefix) for prefix in prefixes)
+    if matched:
+        return True
+    return False if is_complete else None
+
+
 def _marking_for_version(code: str, version) -> Optional[bool]:
     """Определить признак маркировки по уже полученной версии перечня.
 
@@ -150,15 +167,10 @@ def _marking_for_version(code: str, version) -> Optional[bool]:
     if version is None:
         return None
 
-    matched = any(
-        prefix and code.startswith(prefix)
-        for prefix in (
-            normalize_code(rule.code_prefix) for rule in _registry_rules(version)
-        )
-    )
-    if matched:
-        return True
-    return False if bool(version.is_complete) else None
+    prefixes = [
+        normalize_code(rule.code_prefix) for rule in _registry_rules(version)
+    ]
+    return _marking_from_prefixes(code, prefixes, bool(version.is_complete))
 
 
 def resolve_marking(tnved_code: Any) -> Optional[bool]:
@@ -174,6 +186,40 @@ def resolve_marking(tnved_code: Any) -> Optional[bool]:
 
     version = _active_registry_version()
     return _marking_for_version(code, version)
+
+
+def resolve_marking_batch(codes: Any) -> dict:
+    """Вывести признак маркировки для набора кодов ОДНИМ проходом по БД.
+
+    ``resolve_marking(code)`` в цикле по N кодам делает 2*N запросов:
+    активная версия перечня и её правила читаются заново на каждый вызов.
+    Здесь оба запроса выполняются ровно один раз независимо от количества
+    кодов. Предназначено для admin-агрегаций (``list_type_rows``,
+    ``preview_registry_switch``), которым нужна маркировка сразу для многих
+    решений; публичный ``resolve_marking`` для одиночного кода не меняется и
+    остаётся основным API для остальных вызывающих мест.
+
+    Возвращает ``{нормализованный_код: True|False|None}``. Пустой/невалидный
+    исходный код в результат не попадает — вызывающий код сам решает, что
+    показать при отсутствии кода.
+    """
+    normalized = {normalize_code(raw) for raw in codes}
+    normalized.discard("")
+    if not normalized:
+        return {}
+
+    version = _active_registry_version()
+    if version is None:
+        return {code: None for code in normalized}
+
+    prefixes = [
+        normalize_code(rule.code_prefix) for rule in _registry_rules(version)
+    ]
+    is_complete = bool(version.is_complete)
+    return {
+        code: _marking_from_prefixes(code, prefixes, is_complete)
+        for code in normalized
+    }
 
 
 def resolve_type_defaults(product_type_id: Any) -> dict:
