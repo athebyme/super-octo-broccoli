@@ -19,12 +19,13 @@ SQLAlchemy (unit of work сортирует "грязные" объекты по
 МЕНЬШИМ id, чем у текущей активной строки, детерминированно ловит
 partial-unique constraint по обеим строкам сразу.
 """
-from datetime import datetime
+import hashlib
+from datetime import date, datetime
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 
-from services.ozon_compliance_defaults import resolve_marking_batch
+from services.ozon_compliance_defaults import normalize_code, resolve_marking_batch
 
 
 class OzonComplianceAdminError(Exception):
@@ -208,6 +209,172 @@ def list_type_rows() -> list:
             "decided_at": decision.decided_at if decision is not None else None,
         })
     return result
+
+
+_MIN_REGISTRY_PREFIX_DIGITS = 2
+_MAX_REGISTRY_PREFIX_DIGITS = 10
+_MAX_REGISTRY_RULES = 5000
+_MAX_REGISTRY_LABEL_LEN = 200
+_MAX_REGISTRY_NORMATIVE_REF_LEN = 300
+_MAX_REGISTRY_NOTE_LEN = 2000
+
+
+def _parse_registry_rule_date(raw, line_no):
+    """Строго распарсить необязательную дату действия правила (ISO)."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        raise OzonComplianceAdminError(
+            f"Строка {line_no}: дата действия должна быть в формате "
+            "ГГГГ-ММ-ДД"
+        )
+
+
+def _parse_registry_rules(rules_text) -> list:
+    """Разобрать textarea новой версии перечня в проверенный список правил.
+
+    Формат строки — ``код;ссылка на акт;дата ГГГГ-ММ-ДД;примечание``, только
+    код обязателен, остальные поля можно опустить (``maxsplit=3`` — точка с
+    запятой внутри примечания не ломает разбор). Пустые строки и строки,
+    начинающиеся с ``#``, — комментарии и пропускаются, в результат и в
+    итоговый ``rule_count`` не попадают.
+
+    Любая проблема прерывает разбор целиком с номером строки: версия либо
+    сохраняется полностью валидной, либо не сохраняется вовсе — частичный
+    перечень маркировки опаснее явного отказа.
+    """
+    lines = (rules_text or "").splitlines()
+    parsed = []
+    seen = {}
+    for line_no, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        parts = line.split(";", 3)
+        code_raw = parts[0].strip()
+        normative_ref = parts[1].strip() if len(parts) > 1 else ""
+        valid_from_raw = parts[2].strip() if len(parts) > 2 else ""
+        note = parts[3].strip() if len(parts) > 3 else ""
+
+        code = normalize_code(code_raw)
+        if not (
+            _MIN_REGISTRY_PREFIX_DIGITS
+            <= len(code)
+            <= _MAX_REGISTRY_PREFIX_DIGITS
+        ):
+            # Пустой префикс совпал бы с ЛЮБЫМ кодом через ``startswith`` и
+            # сделал бы маркируемым весь каталог — это не мелкая опечатка, а
+            # отказ, который обязан остановить сохранение версии целиком.
+            raise OzonComplianceAdminError(
+                f"Строка {line_no}: код должен содержать от "
+                f"{_MIN_REGISTRY_PREFIX_DIGITS} до "
+                f"{_MAX_REGISTRY_PREFIX_DIGITS} цифр"
+            )
+        if code in seen:
+            raise OzonComplianceAdminError(
+                f"Строка {line_no}: код {code} уже встречался на строке "
+                f"{seen[code]}"
+            )
+        seen[code] = line_no
+
+        if len(normative_ref) > _MAX_REGISTRY_NORMATIVE_REF_LEN:
+            raise OzonComplianceAdminError(
+                f"Строка {line_no}: ссылка на нормативный акт слишком длинная"
+            )
+        if len(note) > _MAX_REGISTRY_NOTE_LEN:
+            raise OzonComplianceAdminError(
+                f"Строка {line_no}: примечание слишком длинное"
+            )
+
+        parsed.append({
+            "code_prefix": code,
+            "normative_ref": normative_ref or None,
+            "valid_from": _parse_registry_rule_date(valid_from_raw, line_no),
+            "note": note or None,
+        })
+
+    if not parsed:
+        raise OzonComplianceAdminError(
+            "Нужно хотя бы одно правило — построчно, "
+            "код;ссылка на акт;дата ГГГГ-ММ-ДД;примечание"
+        )
+    if len(parsed) > _MAX_REGISTRY_RULES:
+        raise OzonComplianceAdminError(
+            f"Правил больше {_MAX_REGISTRY_RULES} — похоже на вставку "
+            "целого файла, разбейте на части"
+        )
+    return parsed
+
+
+def _compute_registry_checksum(prefixes, is_complete) -> str:
+    """SHA-256 канонического содержимого версии перечня.
+
+    Порядок строк в исходном тексте не должен влиять на контрольную сумму:
+    список нормализованных префиксов сортируется перед хэшированием, поэтому
+    две версии с одинаковым набором правил и одинаковым ``is_complete`` дают
+    одинаковый checksum независимо от порядка ввода.
+    """
+    canonical = "|".join(sorted(prefixes)) + f"::{bool(is_complete)}"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def create_registry_version(*, label, is_complete, rules_text, user_id):
+    """Создать новую версию нормативного перечня маркировки.
+
+    Версия сохраняется со ``status='superseded'`` — активация всегда
+    отдельный явный шаг (``activate_registry_version``), который админ
+    выполняет после того, как посмотрел ``preview_registry_switch`` на уже
+    сохранённой версии. Совмещать создание с активацией нельзя: тогда теряется
+    смысл предпросмотра последствий переключения — сколько типов поменяют
+    вычисленный флаг маркировки ДО того, как это реально произойдёт.
+    """
+    from models import db, OzonMarkingRegistryVersion, OzonMarkingRule
+
+    clean_label = (label or "").strip()
+    if not clean_label:
+        raise OzonComplianceAdminError("Название версии обязательно")
+    if len(clean_label) > _MAX_REGISTRY_LABEL_LEN:
+        raise OzonComplianceAdminError("Название версии слишком длинное")
+
+    complete_flag = bool(is_complete)
+    parsed_rules = _parse_registry_rules(rules_text)
+    checksum = _compute_registry_checksum(
+        [rule["code_prefix"] for rule in parsed_rules], complete_flag,
+    )
+
+    try:
+        version = OzonMarkingRegistryVersion(
+            label=clean_label,
+            is_complete=complete_flag,
+            declared_by_user_id=int(user_id),
+            declared_at=datetime.utcnow(),
+            rule_count=len(parsed_rules),
+            checksum=checksum,
+            status="superseded",
+        )
+        db.session.add(version)
+        db.session.flush()
+
+        for rule in parsed_rules:
+            db.session.add(OzonMarkingRule(
+                registry_version_id=version.id,
+                code_prefix=rule["code_prefix"],
+                normative_ref=rule["normative_ref"],
+                valid_from=rule["valid_from"],
+                note=rule["note"],
+            ))
+        db.session.commit()
+    except (StaleDataError, IntegrityError):
+        db.session.rollback()
+        raise OzonComplianceAdminError(
+            "Не удалось сохранить версию перечня — конкурентное изменение, "
+            "повторите"
+        ) from None
+    return version
 
 
 def activate_registry_version(*, version_id, user_id):

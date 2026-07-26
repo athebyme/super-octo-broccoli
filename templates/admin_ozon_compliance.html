@@ -1,0 +1,377 @@
+{% extends "base.html" %}
+{% from "macros/components.html" import page_header, empty_state, toggle %}
+{% from "macros/icons.html" import icon %}
+
+{% block title %}ТН ВЭД и маркировка Ozon · Админ · Seller Hub{% endblock %}
+
+{% block content %}
+<style>
+  .oc-summary { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:14px; font-size:12px; color:var(--text-secondary); }
+  .oc-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:11px; font-weight:700; white-space:nowrap; border:1px solid var(--border); background:var(--bg-hover); color:var(--text-secondary); }
+  .oc-chip--warn { border-color:var(--warn-border); background:var(--warn-bg); color:var(--warn); }
+  .oc-chip--ok { border-color:var(--ok-border); background:var(--ok-bg); color:var(--ok); }
+  .oc-chip--info { border-color:var(--info-border); background:var(--info-bg); color:var(--info); }
+  .oc-table-name { font-weight:700; color:var(--text); }
+  .oc-table-meta { margin-top:3px; font-size:11px; color:var(--text-muted); }
+  .oc-table-code { font-variant-numeric:tabular-nums; font-weight:700; color:var(--text); }
+  .oc-row-form td { background:var(--bg-hover); padding:16px; }
+  .oc-field { display:block; margin-bottom:12px; }
+  .oc-field:last-child { margin-bottom:0; }
+  .oc-field > span { display:block; margin-bottom:5px; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); }
+  .oc-input, .oc-textarea { width:100%; border:1px solid var(--border); border-radius:7px; background:var(--bg-card); color:var(--text); padding:8px 10px; font-size:13px; font-family:inherit; }
+  .oc-input:focus-visible, .oc-textarea:focus-visible { outline:2px solid var(--focus-ring); outline-offset:1px; }
+  .oc-textarea { min-height:150px; resize:vertical; line-height:1.55; font-variant-numeric:tabular-nums; }
+  .oc-hint { margin-top:6px; font-size:11px; line-height:1.55; color:var(--text-muted); }
+  .oc-form-actions { display:flex; align-items:center; gap:10px; margin-top:4px; }
+  .oc-empty-code { font-size:12px; color:var(--text-muted); }
+  .oc-panel-grid { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr); gap:16px; align-items:start; }
+  /* Грид-трек с minmax(0, Nfr) не убирает автоматический min-content у самого
+     элемента: без явного min-width:0 карточка с таблицей внутри раздувает
+     колонку шире доступной ширины на узких экранах, несмотря на overflow-x:auto
+     у самой таблицы (это ограничивает только её собственный оверфлоу, не
+     базовый размер грид-трека). */
+  .oc-panel-grid > .sh-card { min-width:0; }
+  @media (max-width:960px) { .oc-panel-grid { grid-template-columns:1fr; } }
+  .oc-kv { display:grid; grid-template-columns:auto 1fr; gap:4px 12px; font-size:12px; }
+  .oc-kv dt { color:var(--text-muted); }
+  .oc-kv dd { color:var(--text); font-weight:600; }
+  .oc-modal-list { list-style:none; padding:0; margin:0; display:grid; gap:6px; text-align:left; font-size:13px; }
+</style>
+
+{% set blocker_rows = type_rows | selectattr('tnved_code', 'equalto', none) | list %}
+{% set blocker_count = blocker_rows | length %}
+{% set active_version = registry_versions | selectattr('status', 'equalto', 'active') | first %}
+{% set known_codes = [] %}
+
+<div class="max-w-7xl mx-auto px-4 py-6"
+     x-data="{
+       tab: (new URLSearchParams(window.location.search).get('tab') === 'registry') ? 'registry' : 'types',
+       registryConfirm: { open:false, loading:false, error:null, counts:null, versionId:null, label:'' },
+       previewUrlBase: '{{ url_for('admin_ozon_compliance.registry_preview', version_id=0) }}',
+       openRegistryConfirm(id, label) {
+         this.registryConfirm = { open:true, loading:true, error:null, counts:null, versionId:id, label:label };
+         fetch(this.previewUrlBase.replace('/0/preview', '/' + id + '/preview'))
+           .then(function (r) { return r.json(); })
+           .then((data) => {
+             this.registryConfirm.loading = false;
+             if (data.error) { this.registryConfirm.error = data.error; }
+             else { this.registryConfirm.counts = data; }
+           })
+           .catch(() => {
+             this.registryConfirm.loading = false;
+             this.registryConfirm.error = 'Не удалось получить превью — попробуйте ещё раз.';
+           });
+       }
+     }">
+
+  {{ page_header('ТН ВЭД и маркировка Ozon', 'Админские дефолты для обязательных атрибутов 22232 (ТН ВЭД) и 23536 (нужен код маркировки). Отсюда не выполняется ни один вызов Ozon.') }}
+
+  <div class="sh-segmented mb-4" role="tablist" aria-label="Раздел">
+    <button type="button" role="tab" class="sh-segmented-item" :class="{'sh-segmented-item--active': tab === 'types'}"
+            :aria-selected="tab === 'types' ? 'true' : 'false'" @click="tab = 'types'">
+      Типы и решения
+    </button>
+    <button type="button" role="tab" class="sh-segmented-item" :class="{'sh-segmented-item--active': tab === 'registry'}"
+            :aria-selected="tab === 'registry' ? 'true' : 'false'" @click="tab = 'registry'">
+      Перечень маркировки
+    </button>
+  </div>
+
+  <!-- ================= ВКЛАДКА 1: ТИПЫ И РЕШЕНИЯ ================= -->
+  <section x-show="tab === 'types'" x-cloak>
+    <div class="oc-summary">
+      <span>Задействовано типов: <strong>{{ type_rows|length }}</strong></span>
+      {% if blocker_count %}
+      <span class="oc-chip oc-chip--warn">{{ icon('warning', size=13) }} без решения: {{ blocker_count }}</span>
+      {% else %}
+      <span class="oc-chip oc-chip--ok">{{ icon('check-circle', size=13) }} у всех типов есть решение</span>
+      {% endif %}
+    </div>
+
+    {% if not type_rows %}
+    {{ empty_state('Пока нет задействованных Ozon-типов', 'Тип появится здесь после первого листинга, черновика или маппинга категории.') }}
+    {% else %}
+    <datalist id="oc-known-codes">
+      {% for opt in type_rows %}
+        {% if opt.tnved_code and opt.tnved_code not in known_codes %}
+          {% set _ = known_codes.append(opt.tnved_code) %}
+          <option value="{{ opt.tnved_code }}">{{ opt.tnved_display or opt.tnved_code }}</option>
+        {% endif %}
+      {% endfor %}
+    </datalist>
+
+    <div class="sh-table-wrap">
+      <table class="sh-table">
+        <thead>
+          <tr>
+            <th style="width:26%">Тип</th>
+            <th class="text-right">Листингов</th>
+            <th class="text-right">Черновиков</th>
+            <th>ТН ВЭД</th>
+            <th>Маркировка</th>
+            <th>Кто и когда</th>
+            <th style="width:1%"></th>
+          </tr>
+        </thead>
+        {% for row in type_rows %}
+        <tbody x-data="{ open: false }">
+          <tr>
+            <td>
+              <div class="oc-table-name">{{ row.name }}</div>
+              <div class="oc-table-meta">Ozon external_type_id {{ row.external_type_id }}</div>
+            </td>
+            <td class="text-right">{{ row.listings }}</td>
+            <td class="text-right">{{ row.drafts }}</td>
+            <td>
+              {% if row.tnved_code %}
+              <div class="oc-table-code">{{ row.tnved_code }}</div>
+              {% if row.tnved_display %}<div class="oc-table-meta">{{ row.tnved_display }}</div>{% endif %}
+              {% else %}
+              <span class="oc-chip oc-chip--warn" title="Держит {{ row.listings + row.drafts }} карточек без решения по ТН ВЭД">
+                {{ icon('warning', size=13) }} без решения — держит {{ row.listings + row.drafts }} карт.
+              </span>
+              {% endif %}
+            </td>
+            <td>
+              {% if row.marking is sameas true %}
+              <span class="oc-chip oc-chip--info">Нужна маркировка</span>
+              {% elif row.marking is sameas false %}
+              <span class="oc-chip oc-chip--ok">Не требуется</span>
+              {% else %}
+              <span class="oc-chip oc-chip--warn"
+                    title="Ответа нет: нет активного исчерпывающего перечня, либо код не подпадает ни под одно его правило. Это не «не требуется» — заполнить атрибут нельзя, пока это неизвестно.">
+                {{ icon('warning', size=13) }} неизвестно
+              </span>
+              {% endif %}
+            </td>
+            <td>
+              {% if row.decided_by_user_id %}
+              <div class="oc-table-meta">Админ #{{ row.decided_by_user_id }}</div>
+              {% if row.decided_at %}<div class="oc-table-meta">{{ row.decided_at.strftime('%d.%m.%Y %H:%M') }}</div>{% endif %}
+              {% else %}
+              <span class="oc-empty-code">—</span>
+              {% endif %}
+            </td>
+            <td>
+              <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm"
+                      @click="open = !open" :aria-expanded="open.toString()">
+                {{ icon('edit', size=13) }} {{ 'Изменить' if row.tnved_code else 'Указать код' }}
+              </button>
+            </td>
+          </tr>
+          <tr x-show="open" x-cloak class="oc-row-form">
+            <td colspan="7">
+              <form method="post" action="{{ url_for('admin_ozon_compliance.save') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="product_type_id" value="{{ row.product_type_id }}">
+                <div class="grid gap-3" style="grid-template-columns:minmax(0,260px) minmax(0,1fr); align-items:start">
+                  <label class="oc-field">
+                    <span>Код ТН ВЭД</span>
+                    <input type="text" name="tnved_code" class="oc-input" list="oc-known-codes"
+                           value="{{ row.tnved_code or '' }}" maxlength="32" required
+                           aria-label="Код ТН ВЭД для {{ row.name }}"
+                           placeholder="например, 3307 90 000 8">
+                    <div class="oc-hint">Поиск по уже введённым в системе кодам — Ozon здесь не запрашивается.</div>
+                  </label>
+                  <label class="oc-field">
+                    <span>Обоснование (обязательно)</span>
+                    <textarea name="rationale" class="oc-textarea" style="min-height:64px" required maxlength="2000"
+                              aria-label="Обоснование решения по {{ row.name }}"
+                              placeholder="Почему выбран этот код: категория товара, нормативная ссылка"></textarea>
+                  </label>
+                </div>
+                <div class="oc-form-actions">
+                  <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm">Сохранить решение</button>
+                  <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" @click="open = false">Отмена</button>
+                </div>
+              </form>
+            </td>
+          </tr>
+        </tbody>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- ================= ВКЛАДКА 2: ПЕРЕЧЕНЬ МАРКИРОВКИ ================= -->
+  <section x-show="tab === 'registry'" x-cloak>
+    <div class="oc-panel-grid mb-4">
+      <div class="sh-card p-4">
+        <h3 class="sh-card-title mb-3">Активная версия</h3>
+        {% if active_version %}
+        <dl class="oc-kv mb-3">
+          <dt>Название</dt><dd>{{ active_version.label }}</dd>
+          <dt>Исчерпывающий</dt>
+          <dd>
+            {% if active_version.is_complete %}
+            <span class="oc-chip oc-chip--ok">да</span>
+            {% else %}
+            <span class="oc-chip oc-chip--warn">нет</span>
+            {% endif %}
+          </dd>
+          <dt>Правил</dt><dd>{{ active_version.rule_count }}</dd>
+          <dt>Активирована</dt>
+          <dd>{{ active_version.declared_at.strftime('%d.%m.%Y %H:%M') if active_version.declared_at else '—' }}
+            {% if active_version.declared_by_user_id %} · админ #{{ active_version.declared_by_user_id }}{% endif %}</dd>
+        </dl>
+        <p class="oc-hint mb-3">
+          {% if active_version.is_complete %}
+          Перечень объявлен исчерпывающим: код ТН ВЭД, не попавший ни в одно правило ниже, считается НЕ требующим маркировки.
+          {% else %}
+          Перечень НЕ объявлен исчерпывающим: код вне правил ниже остаётся «неизвестно», атрибут маркировки для него не заполняется.
+          {% endif %}
+        </p>
+        <div class="sh-table-wrap" style="margin-bottom:0">
+          <table class="sh-table">
+            <thead>
+              <tr><th>Префикс</th><th>Норматив</th><th>Действует с</th><th>Примечание</th></tr>
+            </thead>
+            <tbody>
+              {% for rule in active_version.rules.all() %}
+              <tr>
+                <td class="oc-table-code">{{ rule.code_prefix }}</td>
+                <td>{{ rule.normative_ref or '—' }}</td>
+                <td>{{ rule.valid_from.strftime('%d.%m.%Y') if rule.valid_from else '—' }}</td>
+                <td>{{ rule.note or '—' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        {{ empty_state('Активной версии перечня нет', 'Пока не активирована ни одна версия, маркировка для всех типов остаётся «неизвестно». Создайте версию справа и активируйте её ниже.') }}
+        {% endif %}
+      </div>
+
+      <div class="sh-card p-4">
+        <h3 class="sh-card-title mb-3">Создать новую версию</h3>
+        <form method="post" action="{{ url_for('admin_ozon_compliance.create_registry') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label class="oc-field">
+            <span>Название версии</span>
+            <input type="text" name="label" class="oc-input" maxlength="200" required
+                   placeholder="например, Перечень 2026-08">
+          </label>
+          <label class="oc-field">
+            <span>Правила (одно на строку)</span>
+            <textarea name="rules_text" class="oc-textarea" required
+                      placeholder="6402;ПП РФ № 1958 от 05.12.2019;2020-07-01;обувь&#10;6403&#10;3401&#10;# строка с # — комментарий"></textarea>
+            <div class="oc-hint">Формат строки: <code>код;ссылка на акт;дата ГГГГ-ММ-ДД;примечание</code> — обязателен только код (2–10 цифр). Пустые строки и строки, начинающиеся с <code>#</code>, пропускаются как комментарии.</div>
+          </label>
+          <div class="oc-field">
+            {{ toggle('is_complete', label='Перечень исчерпывающий', id='oc-is-complete') }}
+            <div class="oc-hint">Включите, если это ПОЛНЫЙ перечень маркируемых групп: тогда код вне перечня будет считаться не требующим маркировки. Выключено — коды вне перечня останутся «неизвестно», и атрибут маркировки для них не заполнится.</div>
+          </div>
+          <div class="oc-form-actions">
+            <button type="submit" class="sh-btn sh-btn--primary sh-btn--sm">{{ icon('plus', size=13) }} Создать версию</button>
+          </div>
+          <div class="oc-hint mt-2">Новая версия создаётся неактивной. Активируйте её отдельно ниже — так вы увидите превью последствий до переключения.</div>
+        </form>
+      </div>
+    </div>
+
+    <div class="sh-card">
+      <div class="sh-card-header">
+        <h3 class="sh-card-title">Последние версии</h3>
+      </div>
+      {% if not registry_versions %}
+      <div class="p-4">{{ empty_state('Версий ещё нет', 'Создайте первую версию перечня формой выше.') }}</div>
+      {% else %}
+      <div class="sh-table-wrap" style="margin-bottom:0;border:none;border-radius:0">
+        <table class="sh-table">
+          <thead>
+            <tr>
+              <th>Название</th><th>Статус</th><th>Исчерпывающий</th>
+              <th class="text-right">Правил</th><th>Объявлена</th><th style="width:1%"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for version in registry_versions %}
+            <tr>
+              <td class="oc-table-name">{{ version.label }}</td>
+              <td>
+                {% if version.status == 'active' %}
+                <span class="oc-chip oc-chip--ok">{{ icon('check-circle', size=13) }} активна</span>
+                {% else %}
+                <span class="oc-chip">архив</span>
+                {% endif %}
+              </td>
+              <td>{{ 'да' if version.is_complete else 'нет' }}</td>
+              <td class="text-right">{{ version.rule_count }}</td>
+              <td class="oc-table-meta">
+                {{ version.declared_at.strftime('%d.%m.%Y %H:%M') if version.declared_at else '—' }}
+                {% if version.declared_by_user_id %}· #{{ version.declared_by_user_id }}{% endif %}
+              </td>
+              <td>
+                {% if version.status != 'active' %}
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm"
+                        @click="openRegistryConfirm({{ version.id }}, {{ version.label|tojson|forceescape }})">
+                  Активировать
+                </button>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <!-- Подтверждение активации версии перечня: сначала превью последствий.
+       Тот же x-data (registryConfirm), поэтому teleport и $refs остаются
+       в области видимости компонента — вынос за пределы этого div ломает
+       обе привязки после перемещения узла в <body>. -->
+  <template x-teleport="body">
+  <div x-show="registryConfirm.open" x-cloak class="sh-modal sh-modal--sm"
+       @keydown.escape.window="registryConfirm.open = false"
+       x-trap.noscroll.inert="registryConfirm.open"
+       role="alertdialog" aria-modal="true" aria-labelledby="oc-confirm-title" aria-describedby="oc-confirm-desc">
+    <div class="sh-backdrop" x-show="registryConfirm.open"
+         x-transition:enter="sh-backdrop-enter" x-transition:leave="sh-backdrop-leave"
+         @click="registryConfirm.open = false"></div>
+    <div class="sh-modal-panel" x-show="registryConfirm.open"
+         x-transition:enter="sh-modal-enter" x-transition:leave="sh-modal-leave" @click.stop>
+      <div class="sh-modal-body" style="text-align:center;padding-top:32px">
+        <div class="sh-confirm-icon sh-confirm-icon--warning" style="margin:0 auto 16px">
+          {{ icon('warning', size=24, stroke=1.5) }}
+        </div>
+        <h2 class="sh-modal-title" id="oc-confirm-title" style="margin-bottom:8px">
+          Активировать «<span x-text="registryConfirm.label"></span>»?
+        </h2>
+        <div id="oc-confirm-desc" style="font-size:13px">
+          <template x-if="registryConfirm.loading">
+            <p style="color:var(--text-secondary)">Считаем, сколько типов поменяют признак маркировки…</p>
+          </template>
+          <template x-if="registryConfirm.error">
+            <p style="color:var(--danger)" x-text="registryConfirm.error"></p>
+          </template>
+          <template x-if="registryConfirm.counts">
+            <ul class="oc-modal-list">
+              <li>Станет «нужна маркировка»: <strong x-text="registryConfirm.counts.to_true"></strong></li>
+              <li>Станет «не требуется»: <strong x-text="registryConfirm.counts.to_false"></strong></li>
+              <li style="color:var(--warn)">Станет «неизвестно»: <strong x-text="registryConfirm.counts.to_unresolved"></strong></li>
+              <li style="color:var(--text-muted)">Без изменений: <strong x-text="registryConfirm.counts.unchanged"></strong></li>
+            </ul>
+          </template>
+        </div>
+      </div>
+      <div class="sh-modal-footer" style="justify-content:center">
+        <button type="button" @click="registryConfirm.open = false" class="sh-btn sh-btn--secondary sh-btn--md">Отмена</button>
+        <button type="button" class="sh-btn sh-btn--primary sh-btn--md"
+                :disabled="registryConfirm.loading || !!registryConfirm.error"
+                @click="$refs.ocActivateForm.version_id.value = registryConfirm.versionId; $refs.ocActivateForm.submit()">
+          Активировать
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
+  <form method="post" action="{{ url_for('admin_ozon_compliance.activate_registry') }}" x-ref="ocActivateForm" style="display:none" aria-hidden="true">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version_id" value="">
+  </form>
+</div>
+{% endblock %}

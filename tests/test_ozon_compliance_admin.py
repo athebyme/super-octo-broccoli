@@ -304,6 +304,136 @@ class ListTypeRowsTestCase(_AdminServiceDbTestCase):
         self.assertLessEqual(big_count, 6)
 
 
+class CreateRegistryVersionTestCase(_AdminServiceDbTestCase):
+    def test_valid_input_creates_superseded_version_with_parsed_rules(self):
+        from models import OzonMarkingRule
+        from services.ozon_compliance_admin import create_registry_version
+
+        version = create_registry_version(
+            label="Перечень 2026-08",
+            is_complete=True,
+            rules_text=(
+                "6402;ПП РФ № 1958 от 05.12.2019;2020-07-01;обувь\n"
+                "6403\n"
+                "3401\n"
+            ),
+            user_id=self.user_id,
+        )
+
+        self.assertEqual(version.status, "superseded")
+        self.assertEqual(version.label, "Перечень 2026-08")
+        self.assertTrue(version.is_complete)
+        self.assertEqual(version.declared_by_user_id, self.user_id)
+        self.assertEqual(version.rule_count, 3)
+        self.assertIsNotNone(version.checksum)
+
+        rules = {
+            rule.code_prefix: rule
+            for rule in OzonMarkingRule.query.filter_by(
+                registry_version_id=version.id,
+            ).all()
+        }
+        self.assertEqual(set(rules.keys()), {"6402", "6403", "3401"})
+        self.assertEqual(
+            rules["6402"].normative_ref, "ПП РФ № 1958 от 05.12.2019",
+        )
+        self.assertEqual(rules["6402"].note, "обувь")
+        self.assertEqual(rules["6402"].valid_from.isoformat(), "2020-07-01")
+        self.assertIsNone(rules["6403"].normative_ref)
+        self.assertIsNone(rules["6403"].valid_from)
+
+    def test_created_version_is_not_automatically_active(self):
+        from models import OzonMarkingRegistryVersion
+        from services.ozon_compliance_admin import create_registry_version
+
+        version = create_registry_version(
+            label="v1", is_complete=False, rules_text="6402",
+            user_id=self.user_id,
+        )
+
+        self.assertEqual(version.status, "superseded")
+        self.assertIsNone(
+            OzonMarkingRegistryVersion.query.filter_by(
+                status="active",
+            ).first(),
+        )
+
+    def test_empty_prefix_is_rejected_with_line_number(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            create_registry_version(
+                label="v1", is_complete=True,
+                rules_text="6402\n;пустой код\n6403",
+                user_id=self.user_id,
+            )
+        self.assertIn("Строка 2", str(ctx.exception))
+
+    def test_single_digit_prefix_is_rejected_with_line_number(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            create_registry_version(
+                label="v1", is_complete=True, rules_text="6\n6403",
+                user_id=self.user_id,
+            )
+        self.assertIn("Строка 1", str(ctx.exception))
+
+    def test_duplicate_prefix_is_rejected_with_clear_message(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            create_registry_version(
+                label="v1", is_complete=True,
+                rules_text="6402\n6403\n64-02",
+                user_id=self.user_id,
+            )
+        message = str(ctx.exception)
+        self.assertIn("Строка 3", message)
+        self.assertIn("6402", message)
+
+    def test_comment_and_blank_lines_are_skipped(self):
+        from services.ozon_compliance_admin import create_registry_version
+
+        version = create_registry_version(
+            label="v1", is_complete=True,
+            rules_text="# заголовок\n\n6402\n   \n# ещё комментарий\n6403\n",
+            user_id=self.user_id,
+        )
+        self.assertEqual(version.rule_count, 2)
+
+    def test_exceeding_rule_limit_is_rejected(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            create_registry_version,
+        )
+        rules_text = "\n".join(f"{1000 + i}" for i in range(5001))
+        with self.assertRaises(OzonComplianceAdminError):
+            create_registry_version(
+                label="v1", is_complete=True, rules_text=rules_text,
+                user_id=self.user_id,
+            )
+
+    def test_checksum_is_stable_regardless_of_line_order(self):
+        from services.ozon_compliance_admin import create_registry_version
+
+        first = create_registry_version(
+            label="v1", is_complete=True, rules_text="6402\n6403\n3401",
+            user_id=self.user_id,
+        )
+        second = create_registry_version(
+            label="v2", is_complete=True, rules_text="3401\n6403\n6402",
+            user_id=self.user_id,
+        )
+        self.assertEqual(first.checksum, second.checksum)
+
+
 class PreviewRegistrySwitchTestCase(_AdminServiceDbTestCase):
     def test_preview_counts_changes_without_persisting_anything(self):
         from models import db, OzonMarkingRegistryVersion

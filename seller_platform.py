@@ -6806,6 +6806,10 @@ from routes.internal_api import internal_api_bp
 app.register_blueprint(internal_api_bp)
 csrf.exempt(internal_api_bp)
 
+# ============= АДМИНСКИЙ ЭКРАН COMPLIANCE-ДЕФОЛТОВ OZON =============
+from routes.admin_ozon_compliance import admin_ozon_compliance_bp
+app.register_blueprint(admin_ozon_compliance_bp)
+
 
 def _run_startup_migrations():
     """Безопасно добавляет новые колонки, которых нет в БД."""
