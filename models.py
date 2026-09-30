@@ -463,9 +463,15 @@ class BulkEditHistory(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
     completed_at = db.Column(db.DateTime)  # Когда завершено
     duration_seconds = db.Column(db.Float)  # Длительность выполнения
+    # One-use key for a reviewed bulk edit submission. Legacy rows remain NULL.
+    review_key = db.Column(db.String(64), nullable=True)
 
     # Связи
     product_changes = db.relationship('CardEditHistory', backref='bulk_operation', lazy='dynamic')
+
+    __table_args__ = (
+        db.Index('uq_bulk_edit_history_review_key', 'review_key', unique=True),
+    )
 
     def __repr__(self) -> str:
         return f'<BulkEditHistory {self.operation_type} ({self.success_count}/{self.total_products})>'
