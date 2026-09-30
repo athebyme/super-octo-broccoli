@@ -53,26 +53,51 @@ STANDALONE = frozenset(f'migrations/migrate_add_{name}.py' for name in (
 ))
 
 
-def run_batch(database_path: str | Path, scripts: list[str], *, verbose=True) -> None:
+def run_batch(
+    database_path: str | Path,
+    scripts: list[str],
+    *,
+    verbose=True,
+    skip_scripts=(),
+    before_step=None,
+    after_step=None,
+    connection: sqlite3.Connection | None = None,
+) -> None:
     if (not scripts or len(scripts) > 32 or len(set(scripts)) != len(scripts)
             or any(name not in PROFILES and name not in STANDALONE for name in scripts)):
         raise ValueError('Migration batch must contain reviewed, unique script paths')
+    skip_scripts = set(skip_scripts)
+    if not skip_scripts <= set(scripts):
+        raise ValueError('Skipped migration must belong to the reviewed batch')
+    selected = [name for name in scripts if name not in skip_scripts]
+    if not selected:
+        return
     # Resolve/import before opening the database; an unsupported script is not
     # allowed to leave the first part of an accidentally configured batch applied.
     steps = [(name, None if name in STANDALONE else import_module(name[:-3].replace('/', '.')).apply_migration)
-             for name in scripts]
+             for name in selected]
     path = Path(database_path).resolve()
-    connection = sqlite3.connect(path.as_uri() + '?mode=rw', uri=True)
+    owns_connection = connection is None
+    if owns_connection:
+        connection = sqlite3.connect(path.as_uri() + '?mode=rw', uri=True)
     try:
         with reuse_foreign_key_scans(connection):
             for name, apply in steps:
                 started = monotonic()
                 if connection.in_transaction:
                     raise RuntimeError('Migration step did not release its transaction')
+                if before_step is not None:
+                    before_step(connection, name)
+                if connection.in_transaction:
+                    raise RuntimeError('Migration journal callback left a transaction open')
                 if apply is None:
                     project_root = Path(__file__).resolve().parent.parent
                     subprocess.run([sys.executable, str(project_root / name), str(path)],
                                    cwd=project_root, check=True)
+                    if after_step is not None:
+                        after_step(connection, name)
+                    if connection.in_transaction:
+                        raise RuntimeError('Migration journal callback left a transaction open')
                     if verbose:
                         print(f'Migration batch: {Path(name).stem} standalone complete ({monotonic()-started:.3f}s)', flush=True)
                     continue
@@ -87,13 +112,18 @@ def run_batch(database_path: str | Path, scripts: list[str], *, verbose=True) ->
                 try:
                     apply(connection, verbose=verbose, **kwargs)
                     connection.commit()
+                    if after_step is not None:
+                        after_step(connection, name)
+                    if connection.in_transaction:
+                        raise RuntimeError('Migration journal callback left a transaction open')
                 except Exception:
                     connection.rollback()
                     raise
                 if verbose:
                     print(f'Migration batch: {Path(name).stem} complete ({monotonic()-started:.3f}s)', flush=True)
     finally:
-        connection.close()
+        if owns_connection:
+            connection.close()
 
 
 def main() -> None:

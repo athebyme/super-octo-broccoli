@@ -1,14 +1,17 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-09-30T15:31:36.471031+00:00",
+  "generated_at": "2026-09-30T19:10:32.724146+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
     "docs/design/ux-01-implementation.md",
     "docs/design/ux-01-plan-2026-09-30.md",
     "docs/design/ux-01-source-manifest.json",
-    "docs/design/ux-01-verification-matrix.md"
+    "docs/design/ux-01-verification-matrix.md",
+    "docs/operations/2026-09-30-startup-step-journal.md",
+    "docs/operations/2026-09-30-ux-01-main-handoff.md",
+    "docs/operations/2026-09-30-ux-01-production.md"
   ],
   "excluded_result_artifact_directories": [
     "docs/design/ux-01-implementation-artifacts"
@@ -24,7 +27,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "fa5699e30c16fae8d63697a0971aafb74608113ab3be65b092bb669f97c32cb7"
+      "sha256": "ad97833de2958157df78326c701c7616898768aad893c278354d4502044105cd"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -52,7 +55,7 @@
     },
     {
       "path": "OZON_INTEGRATION_STATUS.md",
-      "sha256": "98a7a2eca61381a69076c67b128ae69f827f608f65d88e8231da6641d426869e"
+      "sha256": "df7e07309953d0c29660d3c25ab40d747f12a31040c102a3dacc01a74debf6ec"
     },
     {
       "path": "PARSING_QUALITY_IMPROVEMENT_PLAN.md",
@@ -184,7 +187,7 @@
     },
     {
       "path": "docker-entrypoint.sh",
-      "sha256": "ee648723cb6551b0646a12f7f41ad6cd88c19c5552b5a7f0279f149445312679"
+      "sha256": "cd7afdb23f7048e4262291db08ebb9c30d08e52fe88998823528f3724ffb30bb"
     },
     {
       "path": "docs/ADMIN_CREDENTIALS.md",
@@ -436,7 +439,7 @@
     },
     {
       "path": "docs/design/ozon-prices.md",
-      "sha256": "8ccebaad82b72b626cd5c90aaeae9d4f7484b559a2067f9b2b0fc087764d0e4f"
+      "sha256": "abf163f6c8a29b21e217c6829b4647088bc8c921b833656c3b898f3889babd7a"
     },
     {
       "path": "docs/design/ozon-quality-workspace.md",
@@ -1220,7 +1223,7 @@
     },
     {
       "path": "migrations/run_scoped_batch.py",
-      "sha256": "90222f910b406c132735618f6eca991d218b3db91b523048c4d90a645fa1eb63"
+      "sha256": "dfc63ffabb450700fc3fa4e1d6a521a68847757d6da48787c3677d378aa73292"
     },
     {
       "path": "models.py",
@@ -1631,8 +1634,20 @@
       "sha256": "82b3485348449d16ec15ad0dd7cb8f64eaff1a515053932be93cee2c7109f30f"
     },
     {
+      "path": "scripts/startup_migration_bootstrap.py",
+      "sha256": "68ce43fd165e77795f4a63fcde2fcdaee8ae391563e6a470b9f776f16f51530b"
+    },
+    {
+      "path": "scripts/startup_migration_legacy_receipt.json",
+      "sha256": "957d13009688e486dd1ccbf0fda15378160f30a3c806fc69bb4632045f079f41"
+    },
+    {
+      "path": "scripts/startup_migration_steps.py",
+      "sha256": "756333adb0a5c4bee291e55452046dc6e770e431bbc40424cfd6d3597eb34259"
+    },
+    {
       "path": "scripts/startup_migrations.py",
-      "sha256": "4b59c11af885b7108184ec9d2ff95b6b80001316fbfb045408a3763da616fe95"
+      "sha256": "7e16ba1230531406a0923c115dd52a2f7f47c10aab678ab65e8763cb487a1a40"
     },
     {
       "path": "scripts/test_init.py",
@@ -4600,7 +4615,7 @@
     },
     {
       "path": "tests/test_startup_migrations.py",
-      "sha256": "9e8f235beb78160b27e0b6e0ddcdc099d3c77ada8b13697d8ba23b584f394108"
+      "sha256": "9e3a1233e0772f60337395cb23e6a353f53addb07a2ac78bc702fedf329d3c3a"
     },
     {
       "path": "tests/test_subject_charcs_cache.py",
@@ -4843,5 +4858,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "a69f940834b3f8eb558c5f2a22e618f066fdd69ec7f8d88ac05523328f1e0543"
+  "aggregate_sha256": "41f25edeb2712b41eedf4bd0bd8e824e3f667e1645015f81018418f162201d31"
 }
