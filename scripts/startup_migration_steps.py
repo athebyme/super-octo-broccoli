@@ -139,6 +139,10 @@ def migration_steps() -> tuple[MigrationStep, ...]:
         "migrations/migrate_add_imported_content_overrides.py",
         "{database}",
     ))
+    steps.append(_python(
+        "migrations/migrate_add_wb_bulk_review_key.py",
+        "{database}",
+    ))
 
     keys = [step.key for step in steps]
     if len(keys) != len(set(keys)):

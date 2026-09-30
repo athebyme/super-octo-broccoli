@@ -21,11 +21,13 @@ def _write(root: Path, relative: str, body: str) -> Path:
     return path
 
 
-def test_common_content_schema_step_is_appended_after_existing_plan():
+def test_new_schema_steps_are_appended_after_existing_plan():
     steps = migration_steps()
-    assert len(steps) == 80
-    assert steps[-1].key == "migrate-add-imported-content-overrides"
-    assert steps[-1].script == "migrations/migrate_add_imported_content_overrides.py"
+    assert len(steps) == 81
+    assert steps[-2].key == "migrate-add-imported-content-overrides"
+    assert steps[-2].script == "migrations/migrate_add_imported_content_overrides.py"
+    assert steps[-1].key == "migrate-add-wb-bulk-review-key"
+    assert steps[-1].script == "migrations/migrate_add_wb_bulk_review_key.py"
     assert len({step.key for step in steps}) == len(steps)
 
 
