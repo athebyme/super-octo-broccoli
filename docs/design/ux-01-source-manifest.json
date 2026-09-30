@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-09-30T19:35:45.224445+00:00",
+  "generated_at": "2026-09-30T20:28:43.051660+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -27,7 +27,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "329aa5906722a02aaaa9a1c4142fedd4d3ad51f942f41dc291bde5dcee7f9aff"
+      "sha256": "04c9dd299ea2241a536c90273834cd49fd599642c432c0f38aba929bef4038d2"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -55,7 +55,7 @@
     },
     {
       "path": "OZON_INTEGRATION_STATUS.md",
-      "sha256": "39e212ff1ca55ae4688b900c1cdab0a0446d741ee23a338f20de90712d2405a8"
+      "sha256": "588ff950fca6942cd3088b67e4caceb585eb9b219f806f9726fe122982bfbcde"
     },
     {
       "path": "PARSING_QUALITY_IMPROVEMENT_PLAN.md",
@@ -1459,7 +1459,7 @@
     },
     {
       "path": "scripts/autodeploy.sh",
-      "sha256": "09792770bf0f803bf205a851b1048a62cb6599bc915f8bfa394f955a44de0b19"
+      "sha256": "d409ff93bfb077605a34412d1d0d5850427d1a6d4c847a5bf8d04fd85c292c7a"
     },
     {
       "path": "scripts/backup_database.sh",
@@ -3839,7 +3839,7 @@
     },
     {
       "path": "tests/test_deploy_telegram.py",
-      "sha256": "cbef44cc9f2df17ef1c1abe946d843256c0cb5151f7bd70ed91b02a6e0faebfd"
+      "sha256": "f85df87bf0026b94bdc88fa4caebc9def6246c117530b098ed7c3b264c368335"
     },
     {
       "path": "tests/test_enrichment_inference.py",
@@ -4854,5 +4854,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "2c657df0c6ee59875287b9e84e3b1cec0018edbab742d71a5011eb88fc1284bc"
+  "aggregate_sha256": "3b4dd5310b50453f98eeec996d44a7368c7bcce97d21c78fc7d4bae127b3feab"
 }

@@ -200,24 +200,118 @@ def test_autodeploy_uses_shared_sender_without_evaluating_credentials():
     assert 'curl' not in function and 'source "$PROJECT_DIR/.env.autodeploy"' not in text
 
 
-@pytest.mark.parametrize('status_failure',[False,True])
-def test_watcher_restart_cannot_pull_or_deploy_dirty_worktree(tmp_path,status_failure):
-    binary=tmp_path/'git';calls=tmp_path/'calls'
-    binary.write_text('''#!/usr/bin/env python3
-import sys
+def run_autodeploy_fixture(tmp_path, *, local='a'*40, remote='b'*40,
+                           remote_is_descendant=True, merge_advances=True,
+                           worktree='', status_failure=False):
+    bindir=tmp_path/'bin';bindir.mkdir()
+    state_file=tmp_path/'git-state.json'
+    state_file.write_text(json.dumps({'head':local,'remote':remote,
+        'remote_is_descendant':remote_is_descendant,'worktree':worktree,
+        'status_failure':status_failure,'merge_advances':merge_advances}))
+    git_calls=tmp_path/'git-calls.jsonl';docker_calls=tmp_path/'docker-calls.jsonl'
+    git=bindir/'git'
+    git.write_text('''#!/usr/bin/env python3
+import json,sys
 from pathlib import Path
 args=sys.argv[1:]
-with (Path(__file__).parent/'calls').open('a') as f:f.write(args[0]+'\\n')
-if args[0]=='rev-parse':print('main' if '--abbrev-ref' in args else 'local' if 'HEAD' in args else 'remote')
-elif args[0]=='status':print(' M local-change.py')
-elif args[0]!='fetch':raise SystemExit(97)
+base=Path(__file__).parent.parent
+state_file=base/'git-state.json'
+state=json.loads(state_file.read_text())
+with (base/'git-calls.jsonl').open('a') as f:f.write(json.dumps(args)+'\\n')
+if args[0]=='rev-parse':
+    if '--abbrev-ref' in args: print('main')
+    elif args[-1]=='HEAD': print(state['head'])
+    elif args[-1]=='origin/main': print(state['remote'])
+    else: raise SystemExit(96)
+elif args[0]=='fetch': pass
+elif args[0]=='merge-base':
+    ok=(args[1]=='--is-ancestor' and args[2]==state['head'] and
+        args[3]==state['remote'] and state['remote_is_descendant'])
+    raise SystemExit(0 if ok else 1)
+elif args[0]=='status':
+    if state['status_failure']: raise SystemExit(1)
+    print(state['worktree'])
+elif args[0]=='merge':
+    if (args==['merge','--ff-only',state['remote']] and
+        state['remote_is_descendant'] and state['head']!=state['remote']):
+        if state['merge_advances']:
+            state['head']=state['remote']
+            state_file.write_text(json.dumps(state))
+    else: raise SystemExit(1)
+elif args[0]=='log':
+    if '--oneline' in args: print('1234567 synthetic change')
+    elif '--format=%an' in args: print('Synthetic Author')
+    elif '--format=%s' in args: print('Synthetic change')
+    else: raise SystemExit(95)
+elif args[0]=='diff': pass
+else: raise SystemExit(97)
 ''')
-    if status_failure:
-        binary.write_text(binary.read_text().replace("elif args[0]=='status':print(' M local-change.py')", "elif args[0]=='status':raise SystemExit(1)"))
-    binary.chmod(0o700)
+    git.chmod(0o700)
+    docker=bindir/'docker'
+    docker.write_text('''#!/usr/bin/env python3
+import json,sys
+from pathlib import Path
+args=sys.argv[1:]
+with (Path(__file__).parent.parent/'docker-calls.jsonl').open('a') as f:
+    f.write(json.dumps(args)+'\\n')
+if args and args[0]=='inspect': print('healthy')
+''')
+    docker.chmod(0o700)
+    sleep=bindir/'sleep';sleep.write_text('#!/bin/sh\nexit 0\n');sleep.chmod(0o700)
+    fake_python=tmp_path/'venv'/'bin'/'python';fake_python.parent.mkdir(parents=True)
+    fake_python.write_text('#!/bin/sh\nexit 0\n');fake_python.chmod(0o700)
     script=Path(__file__).parents[1]/'scripts/autodeploy.sh'
     result=subprocess.run(['bash',str(script),'--once','--project-dir',str(tmp_path)],
-                          env={**os.environ,'PATH':str(tmp_path)+os.pathsep+os.environ['PATH']},
-                          capture_output=True,text=True,timeout=5)
-    assert result.returncode==0 and 'automatic deployment deferred' in result.stdout
-    assert calls.read_text().splitlines()==['rev-parse','rev-parse','fetch','rev-parse','status']
+        env={**os.environ,'PATH':str(bindir)+os.pathsep+os.environ['PATH']},
+        capture_output=True,text=True,timeout=5)
+    read_calls=lambda path:[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    return result,read_calls(git_calls),read_calls(docker_calls),json.loads(state_file.read_text())
+
+
+def test_autodeploy_does_not_build_when_local_branch_is_ahead(tmp_path):
+    result,git_calls,docker_calls,_=run_autodeploy_fixture(
+        tmp_path,local='c'*40,remote='a'*40,remote_is_descendant=False)
+    assert result.returncode==0
+    assert 'not ahead of local HEAD' in result.stdout
+    assert not any(args[0]=='merge' for args in git_calls)
+    assert not any(args[0]=='pull' for args in git_calls)
+    assert docker_calls==[]
+
+
+def test_autodeploy_builds_once_after_remote_fast_forward(tmp_path):
+    old_hash='a'*40;new_hash='b'*40
+    result,git_calls,docker_calls,state=run_autodeploy_fixture(
+        tmp_path,local=old_hash,remote=new_hash)
+    assert result.returncode==0
+    assert state['head']==new_hash
+    assert ['merge','--ff-only',new_hash] in git_calls
+    assert not any(args[0]=='pull' for args in git_calls)
+    builds=[args for args in docker_calls if args[:3]==['compose','build','seller-platform']]
+    assert len(builds)==1
+    assert f"New commits detected on 'main': {old_hash[:7]} -> {new_hash[:7]}" in result.stdout
+
+
+def test_autodeploy_skips_build_when_fast_forward_did_not_move_head(tmp_path):
+    old_hash='a'*40
+    result,git_calls,docker_calls,state=run_autodeploy_fixture(
+        tmp_path,local=old_hash,remote='b'*40,merge_advances=False)
+    assert result.returncode==0
+    assert state['head']==old_hash
+    assert 'did not advance HEAD' in result.stdout
+    assert ['merge','--ff-only','b'*40] in git_calls
+    assert docker_calls==[]
+
+
+@pytest.mark.parametrize(('worktree','status_failure','message'),[
+    ('?? local-change.py',False,'Working tree has local changes'),
+    ('',True,'Working tree inspection failed'),
+])
+def test_watcher_cannot_merge_or_deploy_dirty_or_uninspectable_worktree(
+        tmp_path,worktree,status_failure,message):
+    result,git_calls,docker_calls,_=run_autodeploy_fixture(
+        tmp_path,worktree=worktree,status_failure=status_failure)
+    assert result.returncode==0 and message in result.stdout
+    assert any(args[0]=='status' for args in git_calls)
+    assert not any(args[0]=='merge' for args in git_calls)
+    assert not any(args[0]=='pull' for args in git_calls)
+    assert docker_calls==[]

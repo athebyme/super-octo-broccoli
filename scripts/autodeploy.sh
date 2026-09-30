@@ -171,46 +171,43 @@ log "  Project: $PROJECT_DIR"
 log "  Interval: ${INTERVAL}s"
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-LAST_HASH=$(git rev-parse HEAD)
+INITIAL_HASH=$(git rev-parse HEAD)
 log "  Branch: $BRANCH"
-log "  Current: ${LAST_HASH:0:7}"
+log "  Current: ${INITIAL_HASH:0:7}"
 
 while true; do
     # Тихо проверяем remote
     if git fetch origin "$BRANCH" 2>/dev/null; then
         REMOTE_HASH=$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")
+        LOCAL_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-        if [ -n "$REMOTE_HASH" ] && [ "$REMOTE_HASH" != "$LAST_HASH" ]; then
-            # Never pull/build an agent's or developer's unfinished working tree.
-            # Also makes restarting this watcher for notification changes safe.
-            if ! WORKTREE_CHANGES=$(git status --porcelain); then
+        if [ -n "$REMOTE_HASH" ] && [ -n "$LOCAL_HASH" ] && [ "$REMOTE_HASH" != "$LOCAL_HASH" ]; then
+            # A fetched remote is deployable only when it strictly advances the
+            # current local HEAD. Local-ahead and diverged branches are deferred.
+            if ! git merge-base --is-ancestor "$LOCAL_HASH" "$REMOTE_HASH"; then
+                log "Remote branch is not ahead of local HEAD; automatic deployment deferred (local ${LOCAL_HASH:0:7}, remote ${REMOTE_HASH:0:7})"
+            elif ! WORKTREE_CHANGES=$(git status --porcelain); then
                 log "Working tree inspection failed; automatic deployment deferred"
-                if [ "$ONCE" = true ]; then
-                    break
-                fi
-                sleep "$INTERVAL"
-                continue
-            fi
-            if [ -n "$WORKTREE_CHANGES" ]; then
+            elif [ -n "$WORKTREE_CHANGES" ]; then
+                # Never pull/build an agent's or developer's unfinished working tree.
+                # Also makes restarting this watcher for notification changes safe.
                 log "Working tree has local changes; automatic deployment deferred"
-                if [ "$ONCE" = true ]; then
-                    break
+            else
+                # Refuse to move a branch that changed after the ancestry/status checks.
+                CHECK_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
+                if [ "$CHECK_HASH" != "$LOCAL_HASH" ]; then
+                    log "Local HEAD changed during remote check; automatic deployment deferred"
+                elif ! git merge --ff-only "$REMOTE_HASH" 2>/dev/null; then
+                    log "Fast-forward to fetched remote failed; automatic deployment deferred"
+                else
+                    NEW_HASH=$(git rev-parse HEAD 2>/dev/null || echo "")
+                    if [ -n "$NEW_HASH" ] && [ "$NEW_HASH" != "$LOCAL_HASH" ] && [ "$NEW_HASH" = "$REMOTE_HASH" ]; then
+                        deploy "$BRANCH" "$LOCAL_HASH" "$NEW_HASH" || true
+                    else
+                        log "Fast-forward did not advance HEAD to fetched remote; automatic deployment skipped (old ${LOCAL_HASH:0:7}, current ${NEW_HASH:0:7}, remote ${REMOTE_HASH:0:7})"
+                    fi
                 fi
-                sleep "$INTERVAL"
-                continue
             fi
-            # Есть новые коммиты — pull и деплой
-            git pull --ff-only origin "$BRANCH" 2>/dev/null || {
-                log "WARNING: fast-forward pull failed, trying merge..."
-                git pull origin "$BRANCH" 2>/dev/null || {
-                    log "ERROR: git pull failed, skipping this cycle"
-                    sleep "$INTERVAL"
-                    continue
-                }
-            }
-
-            deploy "$BRANCH" "$LAST_HASH" "$REMOTE_HASH" || true
-            LAST_HASH="$REMOTE_HASH"
         fi
     else
         log "WARNING: git fetch failed (network issue?), retrying in ${INTERVAL}s"
