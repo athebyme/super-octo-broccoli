@@ -7,7 +7,7 @@
     <!-- Хлебные крошки -->
     <nav class="mb-6 text-sm">
         <ol class="flex items-center space-x-2 text-gray-500">
-            <li><a href="{{ url_for('products_list') }}" class="hover:text-indigo-600">Товары</a></li>
+            <li><a href="{{ return_to }}" class="hover:text-indigo-600">Товары</a></li>
             <li>/</li>
             <li class="text-gray-900">Массовое редактирование</li>
         </ol>
@@ -16,6 +16,7 @@
     <!-- Hero Banner -->
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative">
+            <p class="text-xs uppercase tracking-wide text-gray-400">Аккаунт: {{ account_label }} · Канал: Wildberries</p>
             <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Массовое редактирование</h1>
             <p class="mt-2 text-sm text-gray-400 flex items-center">
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-white/10 text-white mr-2">
@@ -23,6 +24,7 @@
                 </span>
                 Изменения применятся ко всем выбранным товарам
             </p>
+            <p class="mt-2 text-xs text-gray-400">Схема характеристик читается из локального справочника Seller Hub. Открытие редактора не запрашивает каталог или схему у WB.</p>
         </div>
     </div>
 
@@ -52,8 +54,8 @@
             </div>
         </div>
         {% else %}
-        <p class="mt-2 text-sm text-yellow-600">
-            ⚠️ Категории не определены - требуется синхронизация с WB
+        <p class="mt-2 text-sm text-yellow-700">
+            Точные WB subjectID не найдены у выбранных товаров. Категория по названию не подставляется.
         </p>
         {% endif %}
     </div>
@@ -115,13 +117,16 @@
 
     <!-- Alpine.js компонент -->
     <script>
+    const initialCharacteristicsBatch = {{ request.form.get('characteristics_batch', '')|tojson }};
+    const initialAddCharacteristicId = {{ request.form.get('char_id', '')|tojson }};
+    const initialAddCharacteristicValue = {{ request.form.get('value', '')|tojson }};
     window.bulkEditFormData = function() {
         return {
         operation: {{ request.form.get('operation', '') | tojson | default("''", true) }},
         // AI мульти-операции (чекбоксы)
         aiOperations: [],
         categories: {{ categories | tojson }},
-        selectedCategory: null,
+        selectedCategory: {{ request.form.get('selected_category', '')|tojson }},
         showCategorySelector: false,
         characteristics: [],
         commonCharacteristics: [],
@@ -165,11 +170,11 @@
             const hasManual = !!this.operation;
             const aiCount = this.aiOperations.length;
             if (hasManual && aiCount > 0) {
-                return `Применить всё для ${n} товаров`;
+                return `Сформировать проверку для ${n} товаров`;
             } else if (aiCount > 0) {
                 return `▶ Запустить AI (${aiCount} ${aiCount === 1 ? 'операция' : aiCount < 5 ? 'операции' : 'операций'}) для ${n} товаров`;
             } else {
-                return `Применить к ${n} товарам`;
+                return `Сформировать проверку для ${n} товаров`;
             }
         },
         get isAiSubmit() {
@@ -184,6 +189,27 @@
                 } catch (e) {
                     console.error('Failed to parse products data:', e);
                     this.products = [];
+                }
+            }
+            if (this.categories && this.categories.length === 1 && this.categories[0].subject_id) {
+                this.selectedCategory = String(this.categories[0].subject_id);
+            }
+
+            if (this.operation === 'update_characteristic' && initialCharacteristicsBatch) {
+                try {
+                    const rows = JSON.parse(initialCharacteristicsBatch);
+                    this.pendingChanges = Array.isArray(rows) ? rows.map(row => {
+                        const value = row.value;
+                        const displayValue = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+                        return {
+                            charId: String(row.char_id ?? row.id),
+                            charName: `Характеристика #${row.char_id ?? row.id}`,
+                            value,
+                            displayValue
+                        };
+                    }) : [];
+                } catch (_error) {
+                    this.pendingChanges = [];
                 }
             }
 
@@ -208,6 +234,10 @@
             }
 
             if (this.operation === 'update_characteristic') {
+                if (!this.selectedCategory) {
+                    alert('Выберите точный предмет WB по subjectID');
+                    return false;
+                }
                 if (this.pendingChanges.length === 0) {
                     alert('Добавьте хотя бы одну характеристику для изменения');
                     return false;
@@ -223,6 +253,10 @@
             }
 
             if (this.operation === 'add_characteristic') {
+                if (!this.selectedCategory) {
+                    alert('Выберите точный предмет WB по subjectID');
+                    return false;
+                }
                 const charIdField = document.getElementById('char_id_common');
                 const charId = charIdField ? charIdField.value : null;
                 if (!charId) {
@@ -232,6 +266,16 @@
                 if (!this.charValueAdd || !this.charValueAdd.trim()) {
                     alert('Выберите или введите значение характеристики');
                     return false;
+                }
+                if (this.selectedChar && this.selectedChar.charc_type === 1 && this.selectedChar.max_count > 1) {
+                    const values = this.selectedChar.values && this.selectedChar.values.length
+                        ? this.selectedValuesAdd
+                        : this.charValueAdd.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+                    const valueField = document.getElementById('value_input_add');
+                    if (valueField) valueField.value = JSON.stringify(values);
+                } else {
+                    const valueField = document.getElementById('value_input_add');
+                    if (valueField) valueField.value = this.charValueAdd.trim();
                 }
             }
 
@@ -343,10 +387,17 @@
             const char = this.characteristics.find(c => c.id == this.addingCharId);
             const charName = char ? char.name : `ID: ${this.addingCharId}`;
 
+            let value = String(this.addingValue).trim();
+            if (char && char.charc_type === 1 && char.max_count > 1) {
+                value = char.values && char.values.length
+                    ? [...this.addingSelectedValues]
+                    : value.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
+            }
+
             // Вычисляем отображаемое значение (раскрываем ID словарных значений в названия)
-            let displayValue = this.addingValue;
+            let displayValue = Array.isArray(value) ? value.join(', ') : value;
             if (char && char.values && char.values.length > 0) {
-                const ids = String(this.addingValue).split(',').map(v => v.trim()).filter(v => v);
+                const ids = Array.isArray(value) ? value : String(value).split(',').map(v => v.trim()).filter(v => v);
                 const names = ids.map(id => {
                     const found = char.values.find(v => String(v.id) === id);
                     return found ? found.value : id;
@@ -357,7 +408,7 @@
             const entry = {
                 charId: String(this.addingCharId),
                 charName: charName,
-                value: String(this.addingValue).trim(),
+                value,
                 displayValue: displayValue
             };
 
@@ -412,7 +463,7 @@
 
         async loadCharacteristics() {
             if (!this.categories || this.categories.length === 0) {
-                console.log('No categories');
+                this.loadError = 'У выбранных товаров нет подтверждённого subjectID WB.';
                 return;
             }
 
@@ -426,90 +477,69 @@
             this.loadError = null;
 
             try {
-                // Если выбрана конкретная категория - загружаем только её
-                if (this.selectedCategory) {
-                    console.log('Loading characteristics for category:', this.selectedCategory);
-                    const response = await fetch(`/api/characteristics/${encodeURIComponent(this.selectedCategory)}`);
-
-                    if (!response.ok) {
-                        const errorData = await response.json();
-                        if (errorData.suggestion) {
-                            throw new Error(errorData.error + ' ' + errorData.suggestion);
-                        }
-                        throw new Error(errorData.error || `HTTP ${response.status}`);
+                const response = await fetch('/api/characteristics/multi-category', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''
+                    },
+                    body: JSON.stringify({
+                        product_ids: this.products.map(product => Number(product.id)),
+                        subject_ids: this.selectedCategory ? [Number(this.selectedCategory)] : []
+                    })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+                this.characteristicsByCategory = data.by_subject || {};
+                this.commonCharacteristics = data.common || [];
+                this.characteristics = this.selectedCategory
+                    ? (this.characteristicsByCategory[String(this.selectedCategory)] || [])
+                    : this.commonCharacteristics;
+                this.pendingChanges = this.pendingChanges.map(change => {
+                    const char = this.characteristics.find(item => String(item.id) === String(change.charId));
+                    return char ? {...change, charName: char.name} : change;
+                });
+                if (this.operation === 'add_characteristic' && initialAddCharacteristicId) {
+                    let value = initialAddCharacteristicValue;
+                    if (typeof value === 'string' && value.trim().startsWith('[')) {
+                        try { value = JSON.parse(value); } catch (_error) {}
                     }
-
-                    const data = await response.json();
-                    this.characteristics = data.characteristics || [];
-                    console.log('Characteristics loaded:', this.characteristics.length, 'items');
-
-                    // Логируем ВСЕ характеристики с values для отладки
-                    if (this.characteristics.length > 0) {
-                        const charsWithValues = this.characteristics.filter(ch => ch.values && ch.values.length > 0);
-                        const charsWithoutValues = this.characteristics.filter(ch => !ch.values || ch.values.length === 0);
-
-                        console.log(`✅ ${charsWithValues.length} characteristics WITH values:`);
-                        charsWithValues.forEach(ch => {
-                            console.log(`  - ${ch.name} (ID: ${ch.id}): ${ch.values.length} values`);
-                        });
-
-                        console.log(`⚠️ ${charsWithoutValues.length} characteristics WITHOUT values`);
-                    }
-                }
-                // Иначе загружаем для всех категорий и находим общие
-                else {
-                    const categoryNames = this.categories.map(c => c.name);
-                    console.log('Loading characteristics for multiple categories:', categoryNames);
-
-                    const response = await fetch('/api/characteristics/multi-category', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ categories: categoryNames })
-                    });
-
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
-
-                    const data = await response.json();
-                    this.commonCharacteristics = data.common || [];
-                    this.characteristicsByCategory = data.by_category || {};
-                    this.characteristics = this.commonCharacteristics;
-
-                    console.log('Common characteristics:', this.commonCharacteristics.length, 'items');
-
-                    // Логируем ВСЕ характеристики с values для отладки
-                    if (this.commonCharacteristics.length > 0) {
-                        const charsWithValues = this.commonCharacteristics.filter(ch => ch.values && ch.values.length > 0);
-                        const charsWithoutValues = this.commonCharacteristics.filter(ch => !ch.values || ch.values.length === 0);
-
-                        console.log(`✅ ${charsWithValues.length} characteristics WITH values:`);
-                        charsWithValues.forEach(ch => {
-                            console.log(`  - ${ch.name} (ID: ${ch.id}): ${ch.values.length} values`);
-                        });
-
-                        console.log(`⚠️ ${charsWithoutValues.length} characteristics WITHOUT values`);
+                    this.selectedCharId = String(initialAddCharacteristicId);
+                    this.selectedChar = this.characteristics.find(
+                        item => String(item.id) === this.selectedCharId,
+                    ) || null;
+                    const hiddenField = document.getElementById('char_id_common');
+                    if (hiddenField) hiddenField.value = this.selectedCharId;
+                    if (Array.isArray(value)) {
+                        this.selectedValuesAdd = value.map(String);
+                        this.charValueAdd = this.selectedValuesAdd.join(', ');
+                    } else {
+                        this.charValueAdd = String(value ?? '');
                     }
                 }
-
-                if (this.characteristics.length === 0) {
-                    this.loadError = this.selectedCategory
-                        ? 'WB API не вернул характеристики для этой категории.'
-                        : 'Нет общих характеристик для выбранных категорий. Выберите конкретную категорию для редактирования.';
+                if (!this.selectedCategory && this.categories.length > 1) {
+                    this.loadError = 'Сначала выберите точный предмет WB. Общие поля между разными subjectID не объединяются.';
+                } else if (!this.characteristics.length) {
+                    this.loadError = 'Локальная схема для этого subjectID пуста или недоступна. Проверьте freshness справочника WB.';
                 }
             } catch (e) {
-                console.error('Failed to load characteristics:', e);
+                console.error('Failed to load cached exact-subject characteristics:', e);
                 this.loadError = e.message;
             } finally {
                 this.loading = false;
             }
         },
 
-        selectCategory(categoryName) {
-            this.selectedCategory = categoryName;
+        selectedSubjectLabel() {
+            const group = this.categories.find(category => String(category.subject_id) === String(this.selectedCategory));
+            return group ? `${group.name} (subjectID ${group.subject_id})` : (this.selectedCategory ? `subjectID ${this.selectedCategory}` : '');
+        },
+
+        selectCategory(subjectId) {
+            this.selectedCategory = String(subjectId);
             this.showCategorySelector = false;
+            this.clearFields();
             this.loadCharacteristics();
         },
 
@@ -530,7 +560,10 @@
     </script>
 
     <!-- Форма массового редактирования -->
-    <form method="POST" @submit="if (!handleSubmit()) { $event.preventDefault(); }" x-data="bulkEditFormData()">
+    <form method="POST" action="{{ url_for('products_bulk_edit') }}" @submit="if (!handleSubmit()) { $event.preventDefault(); }" x-data="bulkEditFormData()">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="selection_token" value="{{ selection_token }}">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
         <!-- Выбор операции -->
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-8">
             <div class="px-6 py-4 bg-gray-50 border-b border-gray-200">
@@ -568,7 +601,7 @@
                                     <div class="flex items-center gap-2">
                                         <span class="font-medium text-sm text-gray-900" :class="operation === '{{ op.id }}' ? 'text-indigo-700' : ''">{{ op.name }}</span>
                                         {% if op.id == 'update_characteristic' or op.id == 'add_characteristic' %}
-                                        <span class="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full">WB API</span>
+                                        <span class="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full">Проверка WB</span>
                                         {% elif op.id == 'update_keywords' %}
                                         <span class="text-xs px-1.5 py-0.5 bg-emerald-100 text-emerald-600 rounded-full">SEO</span>
                                         {% endif %}
@@ -899,14 +932,9 @@
                                 <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
                             </svg>
                             <div class="ml-3">
-                                <h3 class="text-sm font-medium text-yellow-800">Категория товаров не определена</h3>
+                                <h3 class="text-sm font-medium text-yellow-800">Нет точного subjectID WB</h3>
                                 <div class="mt-2 text-sm text-yellow-700">
-                                    <p>Для работы с характеристиками необходимо синхронизировать товары с WB.</p>
-                                    <ol class="list-decimal ml-5 mt-2 space-y-1">
-                                        <li>Перейти в раздел <a href="{{ url_for('products_list') }}" class="underline font-medium">Товары</a></li>
-                                        <li>Нажать кнопку "Синхронизировать с WB"</li>
-                                        <li>Дождаться завершения синхронизации</li>
-                                    </ol>
+                                    <p>Редактор характеристик требует subjectID, подтверждённый для выбранной карточки. Категория по имени не подставляется автоматически.</p>
                                 </div>
                             </div>
                         </div>
@@ -923,28 +951,22 @@
                             </h4>
                             <p class="text-xs text-blue-700 mb-3">
                                 <template x-if="!selectedCategory && categories.length > 1">
-                                    <span>Показаны общие характеристики для всех категорий</span>
+                                    <span>Выберите точный subjectID. Схемы разных предметов не объединяются.</span>
                                 </template>
                                 <template x-if="selectedCategory">
-                                    <span>Редактирование для категории: <strong x-text="selectedCategory"></strong></span>
+                                    <span>Точная схема: <strong x-text="selectedSubjectLabel()"></strong></span>
                                 </template>
                                 <template x-if="categories.length === 1">
-                                    <span>Категория: <strong x-text="categories[0].name"></strong></span>
+                                    <span>Категория: <strong x-text="`${categories[0].name} (subjectID ${categories[0].subject_id || 'нет'})`"></strong></span>
                                 </template>
                             </p>
                             <template x-if="categories.length > 1">
                                 <div class="flex flex-wrap gap-2">
-                                    <button type="button"
-                                            @click="clearCategoryFilter()"
-                                            class="px-3 py-1 text-xs rounded-md transition"
-                                            :class="!selectedCategory ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
-                                        Все общие
-                                    </button>
-                                    <template x-for="category in categories" :key="category.name">
-                                        <button type="button"
-                                                @click="selectCategory(category.name)"
+                                    <template x-for="category in categories" :key="category.subject_id || category.name">
+                                        <button type="button" :disabled="!category.subject_id"
+                                                @click="selectCategory(category.subject_id)"
                                                 class="px-3 py-1 text-xs rounded-md transition"
-                                                :class="selectedCategory === category.name ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                                                :class="String(selectedCategory) === String(category.subject_id) ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
                                             <span x-text="category.name"></span>
                                             <span class="ml-1 font-semibold" x-text="`(${category.count})`"></span>
                                         </button>
@@ -987,8 +1009,8 @@
                                     :disabled="loading || characteristics.length === 0">
                                 <option value="">-- Выберите характеристику --</option>
                                 <template x-for="char in characteristics" :key="char.id">
-                                    <option :value="char.id"
-                                            x-text="`${char.name}${char.required ? ' *' : ''}${isAlreadyInPending(char.id) ? ' ✓' : ''}`">
+                                    <option :value="char.id" :disabled="!char.usable"
+                                            x-text="`${char.name}${char.required ? ' *' : ''}${char.usable ? '' : ' — недоступно'}${isAlreadyInPending(char.id) ? ' ✓' : ''}`">
                                     </option>
                                 </template>
                             </select>
@@ -1004,6 +1026,7 @@
                             <label class="block text-sm font-medium text-gray-700 mb-1.5">
                                 Новое значение
                                 <span x-show="addingChar && addingChar.required" class="text-red-500 ml-0.5">*</span>
+                                <span x-show="addingChar && addingChar.unit_name" class="text-xs text-gray-500 font-normal ml-1" x-text="addingChar && addingChar.unit_name"></span>
                                 <span x-show="addingChar && addingChar.max_count > 1" class="text-xs text-gray-500 font-normal ml-1">
                                     (до <span x-text="addingChar && addingChar.max_count"></span> значений)
                                 </span>
@@ -1052,10 +1075,23 @@
 
                             <!-- Свободный ввод (нет словаря) -->
                             <template x-if="addingChar && (!addingChar.values || addingChar.values.length === 0)">
-                                <input type="text"
-                                       x-model="addingValue"
-                                       placeholder="Введите значение"
-                                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                <template x-if="addingChar.charc_type === 4">
+                                    <input type="number" step="any" inputmode="decimal"
+                                           x-model="addingValue"
+                                           placeholder="Введите число"
+                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                </template>
+                                <template x-if="addingChar.charc_type === 1 && addingChar.max_count > 1">
+                                    <textarea x-model="addingValue" rows="3"
+                                              placeholder="По одному значению на строку"
+                                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                                </template>
+                                <template x-if="addingChar.charc_type !== 4 && !(addingChar.charc_type === 1 && addingChar.max_count > 1)">
+                                    <input type="text"
+                                           x-model="addingValue"
+                                           placeholder="Введите значение"
+                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                                </template>
                             </template>
 
                             <!-- Текущие значения у товаров (компактно, по клику) -->
@@ -1162,8 +1198,8 @@
                                 <span>
                                     <strong x-text="pendingChanges.length"></strong>
                                     <span x-text="pendingChanges.length === 1 ? ' характеристика' : pendingChanges.length < 5 ? ' характеристики' : ' характеристик'"></span>
-                                    будут обновлены у
-                                    <strong>{{ products|length }}</strong> товаров при нажатии «Применить»
+                                    войдут в локальный предпросмотр для
+                                    <strong>{{ products|length }}</strong> товаров перед отдельным подтверждением
                                 </span>
                             </div>
                         </div>
@@ -1189,29 +1225,23 @@
                                     </h4>
                                     <p class="text-xs text-blue-700 mb-3">
                                         <template x-if="!selectedCategory && categories.length > 1">
-                                            <span>Будут показаны только общие характеристики для всех категорий</span>
+                                            <span>Выберите точный subjectID. Схемы разных предметов не объединяются.</span>
                                         </template>
                                         <template x-if="selectedCategory">
-                                            <span>Редактирование для категории: <strong x-text="selectedCategory"></strong></span>
+                                            <span>Точная схема: <strong x-text="selectedSubjectLabel()"></strong></span>
                                         </template>
                                         <template x-if="categories.length === 1">
-                                            <span>Категория: <strong x-text="categories[0].name"></strong></span>
+                                            <span>Категория: <strong x-text="`${categories[0].name} (subjectID ${categories[0].subject_id || 'нет'})`"></strong></span>
                                         </template>
                                     </p>
 
                                     <template x-if="categories.length > 1">
                                         <div class="flex flex-wrap gap-2">
-                                            <button type="button"
-                                                    @click="clearCategoryFilter()"
-                                                    class="px-3 py-1 text-xs rounded-md transition"
-                                                    :class="!selectedCategory ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
-                                                Все общие
-                                            </button>
-                                            <template x-for="category in categories" :key="category.name">
-                                                <button type="button"
-                                                        @click="selectCategory(category.name)"
+                                            <template x-for="category in categories" :key="category.subject_id || category.name">
+                                                <button type="button" :disabled="!category.subject_id"
+                                                        @click="selectCategory(category.subject_id)"
                                                         class="px-3 py-1 text-xs rounded-md transition"
-                                                        :class="selectedCategory === category.name ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
+                                                        :class="String(selectedCategory) === String(category.subject_id) ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100'">
                                                     <span x-text="category.name"></span>
                                                     <span class="ml-1 font-semibold" x-text="`(${category.count})`"></span>
                                                 </button>
@@ -1238,7 +1268,7 @@
                                         <li>Нажать кнопку "Синхронизировать с WB"</li>
                                         <li>Дождаться завершения синхронизации</li>
                                     </ol>
-                                    <p class="mt-2">После синхронизации категории будут загружены из Wildberries API.</p>
+                                    <p class="mt-2">Текущая локальная схема читается из кэша справочников Seller Hub.</p>
                                 </div>
                             </div>
                         </div>
@@ -1266,7 +1296,7 @@
                                 :disabled="loading || characteristics.length === 0">
                             <option value="">-- Выберите характеристику --</option>
                             <template x-for="char in characteristics" :key="char.id">
-                                <option :value="char.id" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}`"></option>
+                                <option :value="char.id" :disabled="!char.usable" x-text="`${char.name} (ID: ${char.id})${char.required ? ' *' : ''}${char.usable ? '' : ' — недоступно'}`"></option>
                             </template>
                         </select>
 
@@ -1323,6 +1353,7 @@
                         <label for="value_char_add" class="block text-sm font-medium text-gray-700 mb-2">
                             Новое значение
                             <span x-show="selectedChar && selectedChar.required" class="text-red-500">*</span>
+                            <span x-show="selectedChar && selectedChar.unit_name" class="text-xs text-gray-500" x-text="selectedChar && selectedChar.unit_name"></span>
                             <span x-show="selectedChar && selectedChar.max_count && selectedChar.max_count > 1" class="text-xs text-gray-500">
                                 (можно указать до <span x-text="selectedChar && selectedChar.max_count"></span> значений)
                             </span>
@@ -1374,10 +1405,23 @@
 
                         <!-- Если нет словаря - свободный ввод -->
                         <template x-if="selectedChar && (!selectedChar.values || selectedChar.values.length === 0)">
-                            <input type="text"
-                                   x-model="charValueAdd"
-                                   placeholder="Введите значение характеристики"
-                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            <template x-if="selectedChar.charc_type === 4">
+                                <input type="number" step="any" inputmode="decimal"
+                                       x-model="charValueAdd"
+                                       placeholder="Введите число"
+                                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            </template>
+                            <template x-if="selectedChar.charc_type === 1 && selectedChar.max_count > 1">
+                                <textarea x-model="charValueAdd" rows="3"
+                                          placeholder="По одному значению на строку"
+                                          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"></textarea>
+                            </template>
+                            <template x-if="selectedChar.charc_type !== 4 && !(selectedChar.charc_type === 1 && selectedChar.max_count > 1)">
+                                <input type="text"
+                                       x-model="charValueAdd"
+                                       placeholder="Введите значение характеристики"
+                                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                            </template>
                         </template>
 
                         <!-- Скрытое поле для отправки значения -->
@@ -1408,6 +1452,7 @@
                 </a>
 
                 <div class="flex items-center space-x-4">
+                    <span class="hidden text-xs text-gray-500 lg:inline">Для изменений характеристик сначала откроется локальный предпросмотр</span>
                     <!-- Краткая информация о выбранных товарах -->
                     <div class="hidden sm:flex items-center text-sm text-gray-500">
                         <svg class="w-4 h-4 mr-1.5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1461,11 +1506,6 @@
         <!-- Скрытые поля для add_characteristic (одиночная операция) -->
         <input type="hidden" name="char_id" id="char_id_common" :disabled="operation !== 'add_characteristic'">
         <input type="hidden" name="selected_category" id="selected_category" x-model="selectedCategory" :disabled="operation !== 'update_characteristic' && operation !== 'add_characteristic'">
-
-        <!-- Скрытые поля с ID товаров -->
-        {% for product in products %}
-        <input type="hidden" name="product_ids" value="{{ product.id }}">
-        {% endfor %}
     </form>
 
     <!-- Предупреждение -->
@@ -1489,7 +1529,7 @@
                         <svg class="w-4 h-4 mr-2 mt-0.5 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
                         </svg>
-                        <span>Изменения отправляются в WB API для каждого товара отдельно</span>
+                        <span>Характеристики проходят локальную проверку по exact subjectID и отправляются в WB только после отдельного подтверждения.</span>
                     </li>
                     <li class="flex items-start">
                         <svg class="w-4 h-4 mr-2 mt-0.5 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">

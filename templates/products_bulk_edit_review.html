@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Проверка изменений — Wildberries{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <nav class="mb-6 text-sm text-gray-500" aria-label="Хлебные крошки">
+        <a href="{{ return_to }}" class="hover:text-indigo-700">Товары</a>
+        <span class="mx-2">/</span>
+        <form method="POST" action="{{ url_for('products_bulk_edit') }}" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="selection_token" value="{{ selection_token }}">
+            <input type="hidden" name="return_to" value="{{ return_to }}">
+            <input type="hidden" name="back_to_editor" value="1">
+            <input type="hidden" name="operation" value="{{ preview.operation }}">
+            <input type="hidden" name="selected_category" value="{{ selected_category }}">
+            {% if preview.operation == 'update_characteristic' %}
+            <textarea hidden name="characteristics_batch">{{ characteristics_batch }}</textarea>
+            {% else %}
+            <input type="hidden" name="char_id" value="{{ char_id }}">
+            <input type="hidden" name="value" value="{{ value }}">
+            {% endif %}
+            <button type="submit" class="hover:underline">Массовое редактирование</button>
+        </form>
+        <span class="mx-2">/</span>
+        <span class="text-gray-900">Проверка</span>
+    </nav>
+
+    <div class="sh-card">
+        <p class="text-xs uppercase tracking-wide" style="color:var(--accent)">Аккаунт: {{ account_label }} · Канал: {{ preview.channel }}</p>
+        <h1 class="mt-2 text-2xl font-semibold" style="color:var(--text)">Проверьте изменения перед применением</h1>
+        <p class="mt-2 text-sm" style="color:var(--text-secondary)">
+            subjectID {{ preview.subject_id }} · {{ preview.subject_name }} ·
+            {% if preview.mode == 'fill_missing' %}Заполнить отсутствующие значения{% else %}Обновить выбранные значения{% endif %}
+        </p>
+        <p class="mt-2 text-sm" style="color:var(--text-secondary)">Предпросмотр рассчитан по локальному снимку и справочнику. Он не отправляет данные в WB.</p>
+    </div>
+
+    <section class="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5" aria-label="Сводка предпросмотра">
+        {% for label, value in [
+            ('Выбрано', preview.selected_count),
+            ('Подходит по subjectID', preview.eligible_count),
+            ('Изменится', preview.changed_count),
+            ('Пропущено', preview.skipped_count),
+            ('Ошибки', preview.error_count)
+        ] %}
+        <div class="sh-card">
+            <p class="text-xs" style="color:var(--text-muted)">{{ label }}</p>
+            <p class="mt-1 text-2xl font-semibold" style="color:{% if label == 'Ошибки' and value %}var(--danger){% else %}var(--text){% endif %}">{{ value }}</p>
+        </div>
+        {% endfor %}
+    </section>
+
+    {% if preview.diff %}
+    <section class="sh-card sh-card--flush mt-6 overflow-hidden">
+        <div class="border-b px-5 py-4" style="border-color:var(--border)">
+            <h2 class="font-semibold" style="color:var(--text)">Изменения: текущее → новое</h2>
+            <p class="mt-1 text-xs" style="color:var(--text-secondary)">{{ preview.diff_count }} полей в {{ preview.changed_count }} карточках</p>
+        </div>
+        <div class="max-h-[32rem] overflow-auto">
+            <table class="min-w-full divide-y divide-gray-100 text-sm">
+                <thead class="sticky top-0 text-left text-xs uppercase" style="background:var(--bg);color:var(--text-secondary)">
+                    <tr><th class="px-4 py-3">Артикул / nmID</th><th class="px-4 py-3">Характеристика</th><th class="px-4 py-3">Было</th><th class="px-4 py-3">Будет</th></tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for row in preview.diff %}
+                    <tr>
+                        <td class="px-4 py-3" style="color:var(--text)"><strong>{{ row.vendor_code or '—' }}</strong><div class="text-xs" style="color:var(--text-muted)">{{ row.nm_id }}</div></td>
+                        <td class="px-4 py-3" style="color:var(--text)">{{ row.characteristic }} <span class="text-xs" style="color:var(--text-muted)">#{{ row.characteristic_id }}</span></td>
+                        <td class="max-w-sm whitespace-pre-wrap px-4 py-3" style="color:var(--text-secondary)">{{ row.before|join(', ') if row.before else 'Пусто' }}</td>
+                        <td class="max-w-sm whitespace-pre-wrap px-4 py-3 font-medium" style="color:var(--accent)">{{ row.after|join(', ') if row.after else 'Пусто' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% else %}
+    <div class="sh-card mt-6 text-sm" style="border-color:var(--warn-border);background:var(--warn-bg);color:var(--warn)">
+        Нет изменений для применения. Внешний вызов не будет выполнен.
+    </div>
+    {% endif %}
+
+    {% if preview.skipped %}
+    <details class="sh-card mt-4">
+        <summary class="cursor-pointer font-medium" style="color:var(--text)">Пропущено: {{ preview.skipped_count }} карточек ({{ preview.skipped_detail_count }} причины)</summary>
+        <ul class="mt-3 max-h-56 space-y-1 overflow-auto text-sm" style="color:var(--text-secondary)">
+            {% for row in preview.skipped %}<li>{{ row.vendor_code or ('ID ' ~ row.product_id) }}: {{ row.reason }}</li>{% endfor %}
+        </ul>
+    </details>
+    {% endif %}
+
+    {% if preview.errors %}
+    <details open class="sh-card mt-4" style="border-color:var(--danger-border);background:var(--danger-bg)">
+        <summary class="cursor-pointer font-medium" style="color:var(--danger)">Ошибки: {{ preview.error_count }} карточек ({{ preview.error_detail_count }} причины)</summary>
+        <ul class="mt-3 max-h-56 space-y-1 overflow-auto text-sm" style="color:var(--danger)">
+            {% for row in preview.errors %}<li>{{ row.vendor_code or ('ID ' ~ row.product_id) }}: {{ row.reason }}</li>{% endfor %}
+        </ul>
+    </details>
+    {% endif %}
+
+    <div class="mt-8 flex flex-wrap items-center justify-between gap-3">
+        <a href="{{ return_to }}" class="sh-btn sh-btn--secondary">Вернуться к товарам</a>
+        <form method="POST" action="{{ url_for('products_bulk_edit') }}" class="flex items-center gap-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="selection_token" value="{{ selection_token }}">
+            <input type="hidden" name="preview_token" value="{{ preview_token or '' }}">
+            <input type="hidden" name="return_to" value="{{ return_to }}">
+            <input type="hidden" name="operation" value="{{ preview.operation }}">
+            <input type="hidden" name="selected_category" value="{{ selected_category }}">
+            {% if preview.operation == 'update_characteristic' %}
+            <textarea hidden name="characteristics_batch">{{ characteristics_batch }}</textarea>
+            {% else %}
+            <input type="hidden" name="char_id" value="{{ char_id }}">
+            <input type="hidden" name="value" value="{{ value }}">
+            {% endif %}
+            <button type="submit" class="sh-btn sh-btn--accent" {% if not preview_token %}disabled{% endif %}>
+                Подтвердить и применить {{ preview.changed_count }} карточек
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

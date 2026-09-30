@@ -1643,190 +1643,42 @@ def products_list():
             db.session.commit()
 
     try:
-        # Параметры пагинации
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 50, type=int)
-        per_page = min(per_page, 200)  # Увеличено до 200 на странице
+        from services.product_selection import (
+            build_product_list_query,
+            build_products_return_url,
+            parse_product_list_state,
+            product_filter_fingerprint,
+            product_list_url_args,
+        )
 
-        # Базовые фильтры
-        search = request.args.get('search', '').strip()
-        # Исправлено: чекбокс отправляет '1', нужна правильная обработка
-        active_only = request.args.get('active_only', '').strip() in ['1', 'true', 'True', 'on']
-        disabled_only = request.args.get('disabled_only', '').strip() in ['1', 'true', 'True', 'on']
-
-        # Расширенные фильтры
-        filter_brand = request.args.get('brand', '').strip()
-        filter_category = request.args.get('category', '').strip()
-        filter_has_stock = request.args.get('has_stock', '').strip()  # 'yes', 'no', ''
-        filter_block_status = request.args.get('block_status', '').strip()  # 'blocked', 'shadowed', 'ok', ''
-        filter_rating_min = request.args.get('rating_min', '', type=str).strip()
-        filter_rating_max = request.args.get('rating_max', '', type=str).strip()
-        filter_quality_weak = request.args.get('quality_weak', '').strip() in ['1', 'true', 'True', 'on']
-        filter_supplier = request.args.get('supplier_id', type=int)
-
-        # Сортировка
-        sort_by = request.args.get('sort', 'updated_at')  # по умолчанию по дате обновления
-        sort_order = request.args.get('order', 'desc')  # 'asc' или 'desc'
-
-        # Построение запроса.  P11 can use MarketplaceListing as the WB catalog
-        # membership source only after a completed exact parity sweep.  A
-        # requested-but-not-ready cutover falls back to the legacy query.
-        try:
-            from services.marketplace_rollout import MarketplaceRolloutService
-            base_catalog_query, marketplace_read_state = (
-                MarketplaceRolloutService.wb_product_query(
-                    seller_id=current_user.seller.id,
-                    common_read_requested=bool(app.config.get(
-                        'MARKETPLACE_WB_COMMON_READ_ENABLED',
-                        False,
-                    )),
-                )
-            )
-        except Exception as rollout_error:
-            app.logger.warning(
-                'WB common-read readiness unavailable for seller_id=%s: %s',
+        query, list_state, base_catalog_query, marketplace_read_state = (
+            build_product_list_query(
                 current_user.seller.id,
-                type(rollout_error).__name__,
-            )
-            base_catalog_query = Product.query.filter_by(
-                seller_id=current_user.seller.id,
-            )
-            marketplace_read_state = {
-                'read_mode': 'legacy_fallback',
-                'common_read_requested': bool(app.config.get(
-                    'MARKETPLACE_WB_COMMON_READ_ENABLED',
-                    False,
+                request.args,
+                common_read_requested=bool(app.config.get(
+                    'MARKETPLACE_WB_COMMON_READ_ENABLED', False,
                 )),
-                'cutover_ready': False,
-                'blockers': ['rollout_readiness_unavailable'],
-            }
-        query = base_catalog_query
-
-        if active_only:
-            query = query.filter(Product.is_active.is_(True))
-        elif disabled_only:
-            query = query.filter(Product.is_active.is_(False))
-
-        if search:
-            # Поиск по артикулу, названию или бренду
-            search_filter = or_(
-                Product.vendor_code.ilike(f'%{search}%'),
-                Product.title.ilike(f'%{search}%'),
-                Product.brand.ilike(f'%{search}%'),
-                Product.nm_id.cast(db.String).ilike(f'%{search}%')
             )
-            query = query.filter(search_filter)
-
-        # Фильтр по бренду
-        if filter_brand:
-            query = query.filter(Product.brand.ilike(f'%{filter_brand}%'))
-
-        # Фильтр по категории
-        if filter_category:
-            query = query.filter(Product.object_name.ilike(f'%{filter_category}%'))
-
-        # Фильтр по наличию остатков (исправлен JOIN для избежания дубликатов)
-        if filter_has_stock == 'yes':
-            # Товары у которых есть хотя бы один остаток > 0
-            # Используем EXISTS вместо JOIN чтобы избежать дубликатов строк
-            query = query.filter(
-                db.exists().where(
-                    db.and_(
-                        ProductStock.product_id == Product.id,
-                        ProductStock.quantity > 0
-                    )
-                )
-            )
-        elif filter_has_stock == 'no':
-            # Товары без остатков или с нулевыми остатками
-            # Используем NOT EXISTS для чистого запроса без группировки
-            query = query.filter(
-                ~db.exists().where(
-                    db.and_(
-                        ProductStock.product_id == Product.id,
-                        ProductStock.quantity > 0
-                    )
-                )
-            )
-
-        # Фильтр по статусу блокировки
-        if filter_block_status in ('blocked', 'shadowed', 'ok'):
-            try:
-                from models import BlockedCard, ShadowedCard
-                if filter_block_status == 'blocked':
-                    _blocked_ids = db.session.query(BlockedCard.nm_id).filter_by(
-                        seller_id=current_user.seller.id, is_active=True
-                    ).subquery()
-                    query = query.filter(Product.nm_id.in_(_blocked_ids))
-                elif filter_block_status == 'shadowed':
-                    _shadowed_ids = db.session.query(ShadowedCard.nm_id).filter_by(
-                        seller_id=current_user.seller.id, is_active=True
-                    ).subquery()
-                    query = query.filter(Product.nm_id.in_(_shadowed_ids))
-                elif filter_block_status == 'ok':
-                    _blocked_ids = db.session.query(BlockedCard.nm_id).filter_by(
-                        seller_id=current_user.seller.id, is_active=True
-                    ).subquery()
-                    _shadowed_ids = db.session.query(ShadowedCard.nm_id).filter_by(
-                        seller_id=current_user.seller.id, is_active=True
-                    ).subquery()
-                    query = query.filter(
-                        ~Product.nm_id.in_(_blocked_ids),
-                        ~Product.nm_id.in_(_shadowed_ids),
-                    )
-            except Exception:
-                pass  # Таблицы могут не существовать
-
-        # Фильтр по рейтингу карточки
-        if filter_rating_min:
-            try:
-                query = query.filter(Product.nm_rating >= float(filter_rating_min))
-            except (ValueError, TypeError):
-                pass
-        if filter_rating_max:
-            try:
-                query = query.filter(Product.nm_rating <= float(filter_rating_max))
-            except (ValueError, TypeError):
-                pass
-
-        # Фильтр «Только слабые карточки» (v2: есть непустые причины внимания,
-        # см. services/card_quality_scorer.compute_attention/ATTENTION_REASONS)
-        if filter_quality_weak:
-            query = query.filter(
-                Product.attention_reasons.isnot(None), Product.attention_reasons != ''
-            )
-
-        # Фильтр по поставщику (карточки, созданные из каталога поставщика)
-        if filter_supplier:
-            query = query.filter(
-                db.exists().where(
-                    db.and_(
-                        ImportedProduct.product_id == Product.id,
-                        ImportedProduct.seller_id == current_user.seller.id,
-                        ImportedProduct.supplier_id == filter_supplier,
-                    )
-                )
-            )
-
-        # Сортировка
-        sort_column = {
-            'updated_at': Product.updated_at,
-            'created_at': Product.created_at,
-            'vendor_code': Product.vendor_code,
-            'title': Product.title,
-            'brand': Product.brand,
-            'nm_id': Product.nm_id,
-            'category': Product.object_name,
-            'price': Product.price,
-            'supplier_price': Product.supplier_price,
-            'nm_rating': Product.nm_rating,
-            'quality_score': Product.quality_score,
-        }.get(sort_by, Product.updated_at)
-
-        if sort_order == 'asc':
-            query = query.order_by(sort_column.asc())
-        else:
-            query = query.order_by(sort_column.desc())
+        )
+        page = list_state['page']
+        per_page = list_state['per_page']
+        search = list_state['search']
+        active_only = list_state['active_only']
+        disabled_only = list_state['disabled_only']
+        filter_brand = list_state['brand']
+        filter_category = list_state['category']
+        filter_has_stock = list_state['has_stock']
+        filter_block_status = list_state['block_status']
+        filter_rating_min = (
+            '' if list_state['rating_min'] is None else str(list_state['rating_min'])
+        )
+        filter_rating_max = (
+            '' if list_state['rating_max'] is None else str(list_state['rating_max'])
+        )
+        filter_quality_weak = list_state['quality_weak']
+        filter_supplier = list_state['supplier_id']
+        sort_by = list_state['sort']
+        sort_order = list_state['order']
 
         # Пагинация
         pagination = query.paginate(
@@ -1943,6 +1795,41 @@ def products_list():
                 app.logger.debug(f"Ozon channel badge data failed: {e}")
 
         from services.wb_stock_sync import latest_stock_sync
+        page_url_args = product_list_url_args(list_state)
+        page_numbers = list(pagination.iter_pages(
+            left_edge=1, right_edge=1, left_current=2, right_current=2,
+        ))
+        page_urls = {
+            page_number: url_for(
+                'products_list', **page_url_args, page=page_number,
+            )
+            for page_number in page_numbers if page_number
+        }
+        selection_config = {
+            'sellerId': int(current_user.seller.id),
+            'marketplace': 'wb',
+            'wbAccountId': current_user.seller.wb_seller_id or None,
+            'accountLabel': (
+                f"{current_user.seller.company_name} · WB account "
+                f"{current_user.seller.wb_seller_id}"
+                if current_user.seller.wb_seller_id
+                else f"{current_user.seller.company_name or 'WB'} · Seller Hub #{current_user.seller.id}"
+            ),
+            'channelLabel': 'Wildberries',
+            'filterFingerprint': product_filter_fingerprint(
+                current_user.seller.id, list_state['filters'],
+            ),
+            'filters': list_state['filters'],
+            'sort': list_state['sort'],
+            'order': list_state['order'],
+            'page': list_state['page'],
+            'per_page': list_state['per_page'],
+            'filteredCount': int(total_products),
+            'selectionLimit': 200,
+            'returnTo': build_products_return_url(list_state),
+            'resolveUrl': url_for('products_selection_resolve'),
+            'bulkEditUrl': url_for('products_bulk_edit'),
+        }
         return render_template(
             'products.html',
             stock_sync=latest_stock_sync(current_user.seller.id),
@@ -1974,11 +1861,149 @@ def products_list():
             filter_supplier=filter_supplier,
             marketplace_read_state=marketplace_read_state,
             ozon_listings_map=ozon_listings_map,
+            selection_config=selection_config,
+            previous_page_url=(
+                url_for('products_list', **page_url_args, page=pagination.prev_num)
+                if pagination.has_prev else None
+            ),
+            next_page_url=(
+                url_for('products_list', **page_url_args, page=pagination.next_num)
+                if pagination.has_next else None
+            ),
+            page_urls=page_urls,
         )
     except Exception as e:
         app.logger.exception(f"Error in products_list: {e}")
         flash(f'Ошибка при загрузке карточек товаров: {str(e)}', 'danger')
         return redirect(url_for('dashboard'))
+
+
+@app.route('/products/selection/resolve', methods=['POST'])
+@login_required
+def products_selection_resolve():
+    """Resolve a bounded exact seller-owned WB selection without provider I/O."""
+    from services.product_selection import (
+        MAX_BULK_PRODUCT_SELECTION,
+        ProductSelectionError,
+        build_product_list_query,
+        issue_product_selection_token,
+        parse_product_list_state,
+        parse_selected_product_ids,
+        product_filter_fingerprint,
+        safe_products_return_url,
+    )
+
+    if not current_user.seller:
+        return jsonify({'error': 'No seller profile'}), 403
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON body is required'}), 400
+    allowed_keys = {
+        'mode', 'ids', 'filters', 'sort', 'order', 'page', 'per_page', 'return_to',
+    }
+    if set(data).difference(allowed_keys):
+        return jsonify({'error': 'Unsupported selection fields'}), 400
+
+    try:
+        mode = data.get('mode')
+        if mode not in {'ids', 'all_filtered'}:
+            raise ProductSelectionError('Укажите режим точного выбора товаров')
+        filters = data.get('filters', {})
+        if not isinstance(filters, dict) or set(filters).difference({
+            'search', 'active_only', 'disabled_only', 'brand', 'category',
+            'has_stock', 'block_status', 'rating_min', 'rating_max',
+            'quality_weak', 'supplier_id',
+        }):
+            raise ProductSelectionError('Фильтры выбора имеют неверный формат')
+        state = parse_product_list_state({
+            **filters,
+            'sort': data.get('sort', 'updated_at'),
+            'order': data.get('order', 'desc'),
+            'page': data.get('page', 1),
+            'per_page': data.get('per_page', 50),
+        }, strict=True, reject_unknown=True)
+        return_to = safe_products_return_url(data.get('return_to'))
+
+        query, _, _, _ = build_product_list_query(
+            current_user.seller.id,
+            {
+                **state['filters'],
+                'sort': state['sort'],
+                'order': state['order'],
+                'page': state['page'],
+                'per_page': state['per_page'],
+            },
+            common_read_requested=bool(app.config.get(
+                'MARKETPLACE_WB_COMMON_READ_ENABLED', False,
+            )),
+            strict=True,
+        )
+
+        if mode == 'all_filtered':
+            selected_count = query.order_by(None).count()
+            if selected_count > MAX_BULK_PRODUCT_SELECTION:
+                return jsonify({
+                    'error': (
+                        f'По фильтрам найдено {selected_count} товаров. '
+                        f'Лимит одной внутренней выборки — {MAX_BULK_PRODUCT_SELECTION}; '
+                        'сузьте фильтры или выберите явную партию.'
+                    ),
+                    'code': 'selection_limit',
+                    'count': selected_count,
+                    'limit': MAX_BULK_PRODUCT_SELECTION,
+                }), 409
+            product_ids = [row[0] for row in query.with_entities(Product.id).all()]
+            if not product_ids:
+                raise ProductSelectionError('По текущим фильтрам товары не найдены')
+        else:
+            product_ids = parse_selected_product_ids(data.get('ids'))
+            owned_ids = {
+                row[0] for row in db.session.query(Product.id).filter(
+                    Product.seller_id == current_user.seller.id,
+                    Product.id.in_(product_ids),
+                ).all()
+            }
+            if owned_ids != set(product_ids):
+                return jsonify({
+                    'error': 'В выборе есть недоступный товар',
+                    'code': 'selection_unavailable',
+                }), 403
+            matching_ids = {
+                row[0] for row in query.with_entities(Product.id).filter(
+                    Product.id.in_(product_ids),
+                ).all()
+            }
+            if matching_ids != set(product_ids):
+                return jsonify({
+                    'error': 'Фильтр каталога изменился; обновите выбор товаров',
+                    'code': 'selection_filter_changed',
+                }), 409
+
+        state['page'] = max(1, int(state['page']))
+        token = issue_product_selection_token(
+            secret_key=app.config['SECRET_KEY'],
+            user_id=current_user.id,
+            seller_id=current_user.seller.id,
+            product_ids=product_ids,
+            state=state,
+            return_to=return_to,
+            wb_account_id=current_user.seller.wb_seller_id,
+        )
+        return jsonify({
+            'selection_token': token,
+            'ids': product_ids,
+            'count': len(product_ids),
+            'limit': MAX_BULK_PRODUCT_SELECTION,
+            'marketplace': 'wb',
+            'filter_fingerprint': product_filter_fingerprint(
+                current_user.seller.id, state['filters'],
+            ),
+        })
+    except ProductSelectionError as exc:
+        return jsonify({'error': str(exc), 'code': 'invalid_selection'}), 400
+    except Exception as exc:
+        app.logger.exception('WB product selection resolver failed')
+        return jsonify({'error': 'Не удалось проверить выбор товаров'}), 500
 
 
 @app.route('/products/bulk-action', methods=['POST'])
@@ -1990,23 +2015,24 @@ def bulk_products_action():
         return redirect(url_for('dashboard'))
 
     try:
+        from services.product_selection import (
+            ProductSelectionError,
+            parse_selected_product_ids,
+        )
         # Получаем параметры
         action = request.form.get('action', '').strip()
-        product_ids = request.form.getlist('product_ids')
+        raw_product_ids = request.form.getlist('product_ids')
 
         if not action:
             flash('Не указано действие', 'warning')
             return redirect(url_for('products_list'))
 
-        if not product_ids:
-            flash('Не выбраны товары', 'warning')
-            return redirect(url_for('products_list'))
-
-        # Преобразуем в целые числа
         try:
-            product_ids = [int(pid) for pid in product_ids]
-        except ValueError:
-            flash('Неверный формат ID товаров', 'danger')
+            product_ids = parse_selected_product_ids(
+                raw_product_ids, from_query=True,
+            )
+        except ProductSelectionError as selection_error:
+            flash(str(selection_error), 'warning')
             return redirect(url_for('products_list'))
 
         # Проверяем что все товары принадлежат текущему продавцу
@@ -2940,192 +2966,193 @@ def _create_wb_history_snapshot(product: Product, wb_card: dict) -> dict:
 @app.route('/products/<int:product_id>/edit', methods=['GET', 'POST'])
 @login_required
 def product_edit(product_id):
-    """Редактирование карточки товара"""
+    """Редактирование карточки товара по seller-scoped WB product."""
     if not current_user.seller:
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
 
-    product = Product.query.get_or_404(product_id)
-
-    # Проверка доступа
-    if product.seller_id != current_user.seller.id:
-        flash('У вас нет доступа к этому товару', 'danger')
-        return redirect(url_for('products_list'))
+    seller_id = int(current_user.seller.id)
+    product = Product.query.filter_by(
+        id=product_id,
+        seller_id=seller_id,
+    ).first_or_404()
 
     if not current_user.seller.has_valid_api_key():
         flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
         return redirect(url_for('api_settings'))
 
-    # Парсим JSON данные
-    characteristics = json.loads(product.characteristics_json) if product.characteristics_json else []
-    sizes = json.loads(product.sizes_json) if product.sizes_json else []
+    from services.wb_edit_review import (
+        WBEditReviewError,
+        _parse_current_characteristics,
+        parse_exact_wb_subject_id,
+        prepare_single_product_characteristic_patch,
+        product_characteristics_form,
+    )
 
-    # Получаем конфигурацию доступных характеристик для категории товара
-    characteristics_config = []
     try:
-        if product.subject_id:
-            # Если есть subject_id, используем его напрямую
-            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-                config_data = client.get_card_characteristics_config(product.subject_id)
-                characteristics_config = config_data.get('data', [])
-        elif product.object_name:
-            # Если нет subject_id, получаем характеристики по object_name
-            with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-                config_data = client.get_card_characteristics_by_object_name(product.object_name)
-                characteristics_config = config_data.get('data', [])
-    except Exception as e:
-        app.logger.warning(f"Не удалось загрузить конфигурацию характеристик: {e}")
+        edit_model = product_characteristics_form(product)
+        characteristics = _parse_current_characteristics(product.characteristics_json)
+    except WBEditReviewError as exc:
+        app.logger.warning('Local WB characteristics snapshot is unusable for product %s: %s', product.id, exc)
+        edit_model = {
+            'subject_id': product.subject_id,
+            'subject_name': None,
+            'schema_usable': False,
+            'schema_issues': [{'message': str(exc)}],
+            'schema_revision': None,
+            'characteristic_fields': [],
+            'unknown_characteristics': [],
+            'current_parse_ok': False,
+        }
+        characteristics = []
+
+    try:
+        sizes = json.loads(product.sizes_json) if product.sizes_json else []
+        if not isinstance(sizes, list):
+            sizes = []
+    except (TypeError, json.JSONDecodeError):
+        sizes = []
 
     if request.method == 'POST':
         try:
-            app.logger.info(f"📝 Starting edit for product {product.id} (nmID={product.nm_id}, vendor_code={product.vendor_code})")
-
-            # Создаем снимок ПЕРЕД изменениями
+            app.logger.info(
+                'Starting WB edit for product %s seller %s nmID=%s',
+                product.id, seller_id, product.nm_id,
+            )
             snapshot_before_local = _create_product_snapshot(product)
-
-            # Получаем данные из формы
             vendor_code = request.form.get('vendor_code', '').strip()
             title = request.form.get('title', '').strip()
             description = request.form.get('description', '').strip()
             brand = request.form.get('brand', '').strip()
 
-            app.logger.debug(f"Form data: vendor_code={vendor_code}, title={title[:50] if title else 'N/A'}, brand={brand}")
+            characteristic_patch = prepare_single_product_characteristic_patch(
+                product, request.form,
+            )
+            updates = {}
+            if vendor_code and vendor_code != product.vendor_code:
+                updates['vendorCode'] = vendor_code
+            if title and title != product.title:
+                updates['title'] = title
+            if description and description != product.description:
+                updates['description'] = description
+            if brand and brand != product.brand:
+                updates['brand'] = brand
+            if characteristic_patch:
+                updates['characteristics'] = characteristic_patch
 
-            # Собираем характеристики из формы
-            updated_characteristics = []
-            for char in characteristics:
-                char_id = char.get('id')
-                char_name = char.get('name')
-                if char_id:
-                    new_value = request.form.get(f'char_{char_id}', '').strip()
-                    if new_value:
-                        updated_characteristics.append({
-                            'id': char_id,
-                            'name': char_name,
-                            'value': new_value
-                        })
+            if not updates:
+                flash('Нет изменений для сохранения', 'info')
+            else:
+                snapshot_context = {}
 
-            app.logger.debug(f"Updated characteristics count: {len(updated_characteristics)}")
-
-            # Обновляем карточку через WB API
-            with WildberriesAPIClient(
-                current_user.seller.wb_api_key,
-                db_logger_callback=APILog.log_request
-            ) as client:
-                updates = {}
-
-                if vendor_code and vendor_code != product.vendor_code:
-                    updates['vendorCode'] = vendor_code
-
-                if title and title != product.title:
-                    updates['title'] = title
-
-                if description and description != product.description:
-                    updates['description'] = description
-
-                if brand and brand != product.brand:
-                    updates['brand'] = brand
-
-                if updated_characteristics:
-                    updates['characteristics'] = updated_characteristics
-
-                if updates:
-                    app.logger.info(f"🔧 Sending updates to WB API: {list(updates.keys())}")
-
-                    # Отправляем обновление в WB
+                def verify_live_subject(snapshot):
+                    before = snapshot.get('before') if isinstance(snapshot, dict) else None
+                    observed_subject = before.get('subjectID') if isinstance(before, dict) else None
                     try:
-                        wb_snapshot_context = {}
-                        result = client.update_card(
-                            product.nm_id,
-                            updates,
-                            log_to_db=True,
-                            seller_id=current_user.seller.id,
-                            snapshot_context=wb_snapshot_context,
+                        observed_subject = parse_exact_wb_subject_id(observed_subject)
+                    except WBEditReviewError as exc:
+                        raise WBAPIException(
+                            'Свежая WB-карточка не содержит точный subjectID'
+                        ) from exc
+                    if not product.subject_id or observed_subject != int(product.subject_id):
+                        raise WBAPIException(
+                            'subjectID свежей WB-карточки не совпадает с локальным exact subjectID'
                         )
-                        app.logger.info(f"✅ WB API response: {result}")
-                    except Exception as api_error:
-                        app.logger.error(f"❌ WB API error for nmID={product.nm_id}: {str(api_error)}")
-                        app.logger.error(f"Request body: nmID={product.nm_id}, updates={updates}")
-                        raise
 
-                    # Обновляем локальную БД
-                    changed_fields = []
-                    exact_after = wb_snapshot_context['after']
-                    if 'vendorCode' in updates:
-                        product.vendor_code = exact_after.get('vendorCode')
-                        changed_fields.append('vendor_code')
-                    if 'title' in updates:
-                        product.title = exact_after.get('title')
-                        changed_fields.append('title')
-                    if 'description' in updates:
-                        product.description = exact_after.get('description')
-                        changed_fields.append('description')
-                    if 'brand' in updates:
-                        product.brand = exact_after.get('brand')
-                        changed_fields.append('brand')
-                    if 'characteristics' in updates:
-                        product.characteristics_json = json.dumps(
-                            exact_after.get('characteristics') or [],
-                            ensure_ascii=False,
-                        )
-                        changed_fields.append('characteristics')
-
-                    product.last_sync = datetime.utcnow()
-
-                    # Создаем снимок ПОСЛЕ изменений
-                    snapshot_before = _create_wb_history_snapshot(
-                        product,
-                        wb_snapshot_context['before'],
+                with WildberriesAPIClient(
+                    current_user.seller.wb_api_key,
+                    db_logger_callback=APILog.log_request,
+                ) as client:
+                    client.update_card(
+                        product.nm_id,
+                        updates,
+                        log_to_db=True,
+                        seller_id=seller_id,
+                        snapshot_context=snapshot_context,
+                        before_send_callback=(verify_live_subject if characteristic_patch else None),
                     )
-                    # Restore local-only values in the before image from the
-                    # capture taken before ORM mutation.
-                    for key, value in snapshot_before_local.items():
-                        if key not in {
-                            'nm_id', 'vendor_code', 'title', 'brand',
-                            'description', 'characteristics', 'dimensions',
-                        }:
-                            snapshot_before[key] = value
-                    snapshot_after = _create_wb_history_snapshot(
-                        product, exact_after)
 
-                    # Сохраняем историю изменений
-                    history = CardEditHistory(
-                        product_id=product.id,
-                        seller_id=current_user.seller.id,
-                        action='update',
-                        changed_fields=changed_fields,
-                        snapshot_before=snapshot_before,
-                        snapshot_after=snapshot_after,
-                        wb_synced=True,
-                        wb_sync_status='success'
+                exact_after = snapshot_context.get('after')
+                exact_before = snapshot_context.get('before')
+                if not isinstance(exact_after, dict) or not isinstance(exact_before, dict):
+                    raise WBAPIException('Не удалось зафиксировать проверенные WB snapshots')
+
+                changed_fields = []
+                if 'vendorCode' in updates:
+                    product.vendor_code = exact_after.get('vendorCode')
+                    changed_fields.append('vendor_code')
+                if 'title' in updates:
+                    product.title = exact_after.get('title')
+                    changed_fields.append('title')
+                if 'description' in updates:
+                    product.description = exact_after.get('description')
+                    changed_fields.append('description')
+                if 'brand' in updates:
+                    product.brand = exact_after.get('brand')
+                    changed_fields.append('brand')
+                if 'characteristics' in updates:
+                    product.characteristics_json = json.dumps(
+                        exact_after.get('characteristics') or [], ensure_ascii=False,
                     )
-                    db.session.add(history)
-                    db.session.commit()
+                    changed_fields.append('characteristics')
+                product.last_sync = datetime.utcnow()
 
-                    app.logger.info(f"✅ Product {product.id} updated successfully in database")
-                    app.logger.info(f"📝 Created CardEditHistory record {history.id} with changed fields: {changed_fields}")
-                    flash('Карточка успешно обновлена на Wildberries', 'success')
-                    return redirect(url_for('product_detail', product_id=product.id))
-                else:
-                    app.logger.info(f"ℹ️ No changes detected for product {product.id}")
-                    flash('Нет изменений для сохранения', 'info')
+                snapshot_before = _create_wb_history_snapshot(product, exact_before)
+                for key, value in snapshot_before_local.items():
+                    if key not in {
+                        'nm_id', 'vendor_code', 'title', 'brand',
+                        'description', 'characteristics', 'dimensions',
+                    }:
+                        snapshot_before[key] = value
+                snapshot_after = _create_wb_history_snapshot(product, exact_after)
+                history = CardEditHistory(
+                    product_id=product.id,
+                    seller_id=seller_id,
+                    action='update',
+                    changed_fields=changed_fields,
+                    snapshot_before=snapshot_before,
+                    snapshot_after=snapshot_after,
+                    wb_synced=True,
+                    wb_sync_status='success',
+                )
+                db.session.add(history)
+                db.session.commit()
+                flash('Карточка успешно обновлена на Wildberries', 'success')
+                return redirect(url_for('product_detail', product_id=product.id))
 
-        except WBAuthException as e:
-            app.logger.error(f"❌ Auth error: {str(e)}")
-            flash(f'Ошибка авторизации WB API: {str(e)}. Проверьте API ключ в настройках.', 'danger')
-        except WBAPIException as e:
-            app.logger.error(f"❌ WB API error: {str(e)}")
-            flash(f'Ошибка WB API: {str(e)}. Возможно, некоторые поля нельзя изменить через API или требуется полная карточка.', 'danger')
-        except Exception as e:
-            app.logger.exception(f"❌ Unexpected error editing product {product.id}: {e}")
-            flash(f'Неожиданная ошибка при обновлении: {str(e)}. Проверьте логи для деталей.', 'danger')
+        except WBAuthException as exc:
+            app.logger.error('WB auth error editing product %s: %s', product.id, exc)
+            flash(f'Ошибка авторизации WB API: {exc}. Проверьте API ключ в настройках.', 'danger')
+        except WBAPIException as exc:
+            app.logger.error('WB API error editing product %s: %s', product.id, exc)
+            flash(f'Ошибка WB API: {exc}', 'danger')
+        except WBEditReviewError as exc:
+            flash(str(exc), 'danger')
+        except Exception as exc:
+            app.logger.exception('Unexpected error editing product %s', product.id)
+            flash(f'Неожиданная ошибка при обновлении: {exc}. Проверьте логи для деталей.', 'danger')
+
+        # Refresh the local display model after a rejected/failed write so the
+        # next submit still carries the currently authoritative schema revision.
+        try:
+            edit_model = product_characteristics_form(product)
+            characteristics = _parse_current_characteristics(product.characteristics_json)
+        except WBEditReviewError:
+            pass
 
     return render_template(
         'product_edit.html',
         product=product,
         characteristics=characteristics,
-        characteristics_config=characteristics_config,
-        sizes=sizes
+        characteristics_config=[],
+        characteristic_fields=edit_model['characteristic_fields'],
+        unknown_characteristics=edit_model['unknown_characteristics'],
+        schema_usable=edit_model['schema_usable'],
+        schema_issues=edit_model['schema_issues'],
+        schema_revision=(edit_model.get('schema_revision') or {}).get('revision', ''),
+        schema_synced_at=(edit_model.get('schema_revision') or {}).get('synced_at'),
+        subject_name=edit_model.get('subject_name'),
+        sizes=sizes,
     )
 
 
@@ -3141,52 +3168,79 @@ def products_bulk_edit():
         flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
         return redirect(url_for('api_settings'))
 
-    # Получаем выбранные товары из сессии или параметров
-    selected_ids = request.args.getlist('ids') or request.form.getlist('product_ids')
+    from services.product_selection import (
+        ProductSelectionError,
+        build_product_list_query,
+        load_product_selection_token,
+        parse_product_list_state,
+        query_for_selection,
+        safe_products_return_url,
+    )
+    from services.wb_edit_review import (
+        WBEditReviewError,
+        bulk_characteristics_payload,
+        bulk_subject_groups,
+        build_bulk_characteristic_preview,
+        commit_wb_bulk_review_claim,
+        find_wb_bulk_review_claim,
+        issue_wb_edit_preview_token,
+        load_wb_edit_preview_token,
+        parse_exact_wb_subject_id,
+        validate_preview_against_current,
+    )
 
-    # Поддержка фильтров по бренду и категории
-    filter_brand = request.args.get('filter_brand', '').strip()
-    filter_category = request.args.get('filter_category', '').strip()
-    filter_type = None  # Тип фильтра для отображения
-
-    # Если есть фильтры, получаем товары по фильтрам
-    if filter_brand or filter_category:
-        query = Product.query.filter(Product.seller_id == current_user.seller.id)
-
-        if filter_brand:
-            query = query.filter(Product.brand == filter_brand)
-            filter_type = f'бренд "{filter_brand}"'
-
-        if filter_category:
-            query = query.filter(Product.object_name == filter_category)
-            filter_type = f'категория "{filter_category}"' if not filter_brand else f'{filter_type} и категория "{filter_category}"'
-
-        products = query.all()
-
+    # The catalog hands this route a signed, exact, bounded selection via POST.
+    # Direct filter expansion and unsigned ID queries are deliberately rejected.
+    selection_token = request.form.get('selection_token', '').strip()
+    if request.method != 'POST' or not selection_token:
+        flash('Вернитесь в каталог и передайте проверенный точный выбор товаров', 'warning')
+        return redirect(url_for('products_list'))
+    try:
+        selection_payload = load_product_selection_token(
+            selection_token,
+            secret_key=app.config['SECRET_KEY'],
+            user_id=current_user.id,
+            seller_id=current_user.seller.id,
+            wb_account_id=current_user.seller.wb_seller_id,
+        )
+        state = parse_product_list_state({
+            **selection_payload['filters'],
+            'sort': selection_payload['sort'],
+            'order': selection_payload['order'],
+            'page': selection_payload['page'],
+            'per_page': selection_payload['per_page'],
+        }, strict=True)
+        _, _, selection_base, _ = build_product_list_query(
+            current_user.seller.id,
+            {
+                **state['filters'], 'sort': state['sort'], 'order': state['order'],
+                'page': state['page'], 'per_page': state['per_page'],
+            },
+            common_read_requested=bool(app.config.get(
+                'MARKETPLACE_WB_COMMON_READ_ENABLED', False,
+            )),
+            strict=True,
+        )
+        products_query = query_for_selection(
+            selection_base, current_user.seller.id, state,
+            product_ids=selection_payload['ids'],
+        )
+        products_by_id = {int(row.id): row for row in products_query.all()}
+        if set(products_by_id) != set(selection_payload['ids']):
+            raise ProductSelectionError(
+                'Точный выбор изменился или больше не соответствует фильтрам; вернитесь в каталог'
+            )
+        products = [products_by_id[product_id] for product_id in selection_payload['ids']]
         if not products:
-            flash(f'Не найдено товаров с фильтром: {filter_type}', 'warning')
-            return redirect(url_for('products_list'))
-
-    # Иначе используем выбранные ID
-    elif selected_ids:
-        try:
-            selected_ids = [int(pid) for pid in selected_ids]
-        except ValueError:
-            flash('Неверный формат ID товаров', 'danger')
-            return redirect(url_for('products_list'))
-
-        # Получаем выбранные товары
-        products = Product.query.filter(
-            Product.id.in_(selected_ids),
-            Product.seller_id == current_user.seller.id
-        ).all()
-    else:
-        flash('Не выбраны товары для редактирования', 'warning')
+            raise ProductSelectionError('Не выбраны товары для редактирования')
+        return_to = safe_products_return_url(selection_payload.get('return_to'))
+    except ProductSelectionError as exc:
+        flash(str(exc), 'warning')
         return redirect(url_for('products_list'))
 
-    if not products:
-        flash('Товары не найдены', 'warning')
-        return redirect(url_for('products_list'))
+    filter_type = None
+    categories = bulk_subject_groups(products)
+    characteristics_payload = bulk_characteristics_payload(products)
 
     # Варианты массового редактирования
     edit_operations = [
@@ -3209,13 +3263,126 @@ def products_bulk_edit():
             {'id': 'ai_keywords', 'name': 'AI: Ключевые слова', 'description': 'AI сгенерирует поисковые запросы и ключевые слова для каждого товара', 'is_ai': True},
         ]
 
+    bulk_context = {
+        'products': [product.to_dict() for product in products],
+        'edit_operations': edit_operations,
+        'categories': categories,
+        'characteristics_payload': characteristics_payload,
+        'selection_token': selection_token,
+        'return_to': return_to,
+        'account_label': (
+            f"{current_user.seller.company_name} · WB account "
+            f"{current_user.seller.wb_seller_id}"
+            if current_user.seller.wb_seller_id
+            else f"{current_user.seller.company_name or 'WB'} · "
+                 f"Seller Hub #{current_user.seller.id}"
+        ),
+        'filter_type': filter_type,
+        'filter_brand': '',
+        'filter_category': '',
+        'ai_enabled': ai_enabled,
+    }
+
+    def render_bulk_editor():
+        return render_template('products_bulk_edit.html', **bulk_context)
+
     if request.method == 'POST':
+        if request.form.get('back_to_editor') == '1':
+            return render_bulk_editor()
+
         operation = request.form.get('operation', '')
         # AI мульти-операции: список выбранных AI-операций из чекбоксов
         ai_operations_list = request.form.getlist('ai_operations')
         # Если operation не задана, но есть AI-операции — запускаем AI-пакет
         if not operation and ai_operations_list:
             operation = 'ai_bulk'
+        if not operation:
+            return render_bulk_editor()
+
+        apply_preview_payload = None
+        if operation in {'update_characteristic', 'add_characteristic'}:
+            try:
+                posted_subject = request.form.get('selected_category', '').strip()
+                if not posted_subject.isascii() or not posted_subject.isdecimal():
+                    raise WBEditReviewError('Выберите точный subjectID WB')
+                posted_subject_id = int(posted_subject)
+                preview_token = request.form.get('preview_token', '').strip()
+                if preview_token:
+                    apply_preview_payload = load_wb_edit_preview_token(
+                        preview_token,
+                        secret_key=app.config['SECRET_KEY'],
+                        user_id=current_user.id,
+                        seller_id=current_user.seller.id,
+                    )
+                    if (
+                        apply_preview_payload.get('product_ids') != selection_payload['ids']
+                        or apply_preview_payload.get('operation') != operation
+                        or apply_preview_payload.get('subject_id') != posted_subject_id
+                        or apply_preview_payload.get('wb_account_id')
+                        != selection_payload.get('wb_account_id')
+                        or apply_preview_payload.get('selection_filter_fingerprint')
+                        != selection_payload.get('filter_fingerprint')
+                    ):
+                        raise WBEditReviewError('Операция или точная выборка не совпадает с предпросмотром')
+                    existing_review = find_wb_bulk_review_claim(
+                        current_user.seller.id,
+                        apply_preview_payload['review_key'],
+                    )
+                    if existing_review is not None:
+                        flash(
+                            'Этот предпросмотр уже был отправлен. Повторной отправки не было; проверьте историю операции.',
+                            'info',
+                        )
+                        return redirect(url_for(
+                            'bulk_edit_history_detail', bulk_id=existing_review.id,
+                        ))
+                    current_preview = validate_preview_against_current(
+                        apply_preview_payload, products,
+                    )
+                    if current_preview.get('changed_count', 0) <= 0 or current_preview.get('error_count', 0):
+                        raise WBEditReviewError('Нет безопасных изменений для применения')
+                else:
+                    preview = build_bulk_characteristic_preview(
+                        products,
+                        operation=operation,
+                        subject_id=posted_subject_id,
+                        change_input=request.form.get('characteristics_batch'),
+                        char_id=request.form.get('char_id'),
+                        value=request.form.get('value'),
+                    )
+                    preview_token = ''
+                    if preview.get('changed_count', 0) > 0 and preview.get('error_count', 0) == 0:
+                        preview_token = issue_wb_edit_preview_token(
+                            secret_key=app.config['SECRET_KEY'],
+                            user_id=current_user.id,
+                            seller_id=current_user.seller.id,
+                            selection_payload=selection_payload,
+                            preview=preview,
+                        )
+                    return render_template(
+                        'products_bulk_edit_review.html',
+                        preview=preview,
+                        account_label=(
+                            f"{current_user.seller.company_name} · WB account "
+                            f"{current_user.seller.wb_seller_id}"
+                            if current_user.seller.wb_seller_id
+                            else f"{current_user.seller.company_name or 'WB'} · "
+                                 f"Seller Hub #{current_user.seller.id}"
+                        ),
+                        preview_token=preview_token,
+                        selection_token=selection_token,
+                        return_to=return_to,
+                        selected_category=str(posted_subject_id),
+                        characteristics_batch=json.dumps(
+                            preview['normalized_changes'], ensure_ascii=False,
+                        ) if operation == 'update_characteristic' else '',
+                        char_id=(preview['normalized_changes'][0]['id'] if operation == 'add_characteristic' else ''),
+                        value=(preview['normalized_changes'][0]['value'] if operation == 'add_characteristic' else ''),
+                    )
+            except WBEditReviewError as exc:
+                flash(str(exc), 'danger')
+                return render_bulk_editor()
+
         start_time = time.time()
 
         # Создаем запись bulk операции
@@ -3253,10 +3420,25 @@ def products_bulk_edit():
             operation_params={'value': operation_value} if operation_value else {},
             description=operation_descriptions.get(operation, 'Массовая операция'),
             total_products=len(products),
-            status='in_progress'
+            status='in_progress',
+            review_key=(
+                apply_preview_payload.get('review_key')
+                if apply_preview_payload else None
+            ),
         )
-        db.session.add(bulk_operation)
-        db.session.commit()  # Коммитим чтобы получить ID
+        if bulk_operation.review_key:
+            bulk_operation, claim_created = commit_wb_bulk_review_claim(bulk_operation)
+            if not claim_created:
+                flash(
+                    'Этот предпросмотр уже был отправлен. Повторной отправки не было; проверьте историю операции.',
+                    'info',
+                )
+                return redirect(url_for(
+                    'bulk_edit_history_detail', bulk_id=bulk_operation.id,
+                ))
+        else:
+            db.session.add(bulk_operation)
+            db.session.commit()  # Коммитим чтобы получить ID
 
         app.logger.info(f"🚀 Starting bulk operation {bulk_operation.id}: {operation} for {len(products)} products")
 
@@ -3270,7 +3452,7 @@ def products_bulk_edit():
         # Показываем ВСЕ поля (кроме product_ids) для отладки
         app.logger.info("📋 All form fields:")
         for key, value in request.form.items():
-            if key != 'product_ids':
+            if key not in {'product_ids', 'selection_token', 'preview_token'}:
                 app.logger.info(f"   {key} = '{value}'")
 
         try:
@@ -3289,9 +3471,7 @@ def products_bulk_edit():
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
-                        return render_template('products_bulk_edit.html',
-                                             products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations)
+                        return render_bulk_editor()
 
                     # Батч: один cards/update на все карточки вместо запроса
                     # на карточку (лимит WB — 10 запросов/мин, до 3000 в запросе)
@@ -3364,9 +3544,7 @@ def products_bulk_edit():
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
-                        return render_template('products_bulk_edit.html',
-                                             products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations)
+                        return render_bulk_editor()
 
                     from services.wb_api_client import chunk_list
                     from services.wb_validators import prepare_batch_cards_safe
@@ -3437,9 +3615,7 @@ def products_bulk_edit():
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
-                        return render_template('products_bulk_edit.html',
-                                             products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations)
+                        return render_bulk_editor()
 
                     from services.wb_api_client import chunk_list
                     from services.wb_validators import prepare_batch_cards_safe
@@ -3517,19 +3693,22 @@ def products_bulk_edit():
                             categories_info[category]['product_ids'].append(product.id)
                         categories = list(categories_info.values())
 
-                        return render_template('products_bulk_edit.html',
-                                             products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations,
-                                             categories=categories)
+                        return render_bulk_editor()
 
                     try:
-                        char_changes = json.loads(characteristics_batch_json)
+                        if apply_preview_payload:
+                            char_changes = [
+                                {'char_id': str(row['id']), 'value': row['value']}
+                                for row in apply_preview_payload['normalized_changes']
+                            ]
+                        else:
+                            char_changes = json.loads(characteristics_batch_json)
                         if not isinstance(char_changes, list) or len(char_changes) == 0:
                             raise ValueError("Пустой список изменений")
                         char_changes = [
-                            {'char_id': str(c['char_id']).strip(), 'value': str(c['value']).strip()}
+                            {'char_id': str(c['char_id']).strip(), 'value': c['value']}
                             for c in char_changes
-                            if c.get('char_id') and c.get('value')
+                            if c.get('char_id') and c.get('value') not in (None, '', [])
                         ]
                         if not char_changes:
                             raise ValueError("Нет валидных изменений в списке")
@@ -3550,10 +3729,11 @@ def products_bulk_edit():
                     db.session.commit()
 
                     # Фильтруем товары по категории если выбрана
-                    products_to_update = products
-                    if selected_category:
-                        products_to_update = [p for p in products if p.object_name == selected_category]
-                        app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
+                    subject_id = int(selected_category) if selected_category.isascii() and selected_category.isdecimal() else 0
+                    if not subject_id or (apply_preview_payload and subject_id != apply_preview_payload.get('subject_id')):
+                        raise ValueError('Нужен точный subjectID из предпросмотра')
+                    products_to_update = [p for p in products if p.subject_id == subject_id]
+                    app.logger.info(f"Filtering by exact subjectID {subject_id}: {len(products_to_update)}/{len(products)} products")
 
                     # ==================== БАТЧИНГ ====================
                     app.logger.info(f"🔄 Preparing {len(products_to_update)} cards for batch update...")
@@ -3562,6 +3742,15 @@ def products_bulk_edit():
                     from services.wb_validators import prepare_batch_cards_safe
 
                     def _char_updates(product, full_card):
+                        fresh_subject_id = full_card.get('subjectID') or full_card.get('subjectId')
+                        try:
+                            fresh_subject_id = parse_exact_wb_subject_id(fresh_subject_id)
+                        except WBEditReviewError:
+                            fresh_subject_id = None
+                        if fresh_subject_id != subject_id:
+                            raise ValueError(
+                                f"nmID {product.nm_id}: fresh WB subjectID does not match {subject_id}"
+                            )
                         # Только изменяемые IDs: helper сам сольёт patch со
                         # свежим полным массивом характеристик WB.
                         return {'characteristics': [
@@ -3657,8 +3846,13 @@ def products_bulk_edit():
                     app.logger.info(f"✅ Batch update complete: {success_count} success, {error_count} errors")
 
                 elif operation == 'add_characteristic':
-                    characteristic_id = request.form.get('char_id', '').strip()
-                    new_value = request.form.get('value', '').strip()
+                    if apply_preview_payload:
+                        normalized_add = apply_preview_payload['normalized_changes'][0]
+                        characteristic_id = str(normalized_add['id'])
+                        new_value = normalized_add['value']
+                    else:
+                        characteristic_id = request.form.get('char_id', '').strip()
+                        new_value = request.form.get('value', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
 
                     app.logger.info(f"🔍 Add characteristic: char_id='{characteristic_id}', value='{new_value}', category='{selected_category}'")
@@ -3678,10 +3872,7 @@ def products_bulk_edit():
                             categories_info[category]['product_ids'].append(product.id)
                         categories = list(categories_info.values())
 
-                        return render_template('products_bulk_edit.html',
-                                             products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations,
-                                             categories=categories)
+                        return render_bulk_editor()
 
                     if not new_value:
                         flash('Не указано значение для добавления (value пустой)', 'warning')
@@ -3698,16 +3889,14 @@ def products_bulk_edit():
                             categories_info[category]['product_ids'].append(product.id)
                         categories = list(categories_info.values())
 
-                        return render_template('products_bulk_edit.html',
-                                             products=[p.to_dict() for p in products],
-                                             edit_operations=edit_operations,
-                                             categories=categories)
+                        return render_bulk_editor()
 
                     # Фильтруем товары по категории если выбрана
-                    products_to_update = products
-                    if selected_category:
-                        products_to_update = [p for p in products if p.object_name == selected_category]
-                        app.logger.info(f"Filtering by category '{selected_category}': {len(products_to_update)}/{len(products)} products")
+                    subject_id = int(selected_category) if selected_category.isascii() and selected_category.isdecimal() else 0
+                    if not subject_id or (apply_preview_payload and subject_id != apply_preview_payload.get('subject_id')):
+                        raise ValueError('Нужен точный subjectID из предпросмотра')
+                    products_to_update = [p for p in products if p.subject_id == subject_id]
+                    app.logger.info(f"Filtering by exact subjectID {subject_id}: {len(products_to_update)}/{len(products)} products")
 
                     # Определяем тип значения: ID из справочника или текст
                     # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
@@ -3717,8 +3906,15 @@ def products_bulk_edit():
                     # Форматируем как строку, позже автоматически обернется в массив
                     # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
                     # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    formatted_value = str(new_value).strip()
-                    app.logger.info(f"Formatted value as string: '{formatted_value}' (will be wrapped in array before API call)")
+                    formatted_value = (
+                        [str(part).strip() for part in new_value if str(part).strip()]
+                        if isinstance(new_value, list)
+                        else str(new_value).strip()
+                    )
+                    app.logger.info(
+                        'Prepared validated characteristic value with type %s',
+                        type(formatted_value).__name__,
+                    )
 
                     # Проверяем существование и мержим только по свежим full
                     # cards WB, а не по потенциально устаревшему Product.
@@ -3729,6 +3925,15 @@ def products_bulk_edit():
                     already_present = {}
 
                     def _add_char_updates(product, full_card):
+                        fresh_subject_id = full_card.get('subjectID') or full_card.get('subjectId')
+                        try:
+                            fresh_subject_id = parse_exact_wb_subject_id(fresh_subject_id)
+                        except WBEditReviewError:
+                            fresh_subject_id = None
+                        if fresh_subject_id != subject_id:
+                            raise ValueError(
+                                f"nmID {product.nm_id}: fresh WB subjectID does not match {subject_id}"
+                            )
                         current = full_card.get('characteristics') or []
                         if any(
                             str(item.get('id')) == characteristic_id
@@ -4223,9 +4428,7 @@ def products_bulk_edit():
                     bulk_operation.status = 'failed'
                     bulk_operation.completed_at = datetime.utcnow()
                     db.session.commit()
-                    return render_template('products_bulk_edit.html',
-                                         products=products,
-                                         edit_operations=edit_operations)
+                    return render_bulk_editor()
 
                 # ── Комбинированный режим: AI-операции дополнительно к ручной ──
                 # Если заданы AI-операции И уже выполнялась ручная операция
@@ -4374,8 +4577,11 @@ def products_bulk_edit():
                     for error in errors[:5]:  # Показываем только первые 5 ошибок
                         flash(error, 'danger')
 
-                flash(f'Операция сохранена в историю. <a href="{url_for("bulk_edit_history_detail", bulk_id=bulk_operation.id)}" class="underline">Посмотреть детали</a>', 'info')
-                return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
+                flash(
+                    f'Операция сохранена в истории (ID {bulk_operation.id}); обновлено: {success_count}, ошибок: {error_count}.',
+                    'info',
+                )
+                return redirect(return_to)
 
         except Exception as e:
             app.logger.exception(f"Ошибка массового редактирования: {e}")
@@ -4388,35 +4594,9 @@ def products_bulk_edit():
             db.session.commit()
 
             flash(f'Ошибка: {str(e)}', 'danger')
-            return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
+            return redirect(return_to)
 
-    # Собираем информацию о категориях выбранных товаров
-    categories_info = {}
-    for product in products:
-        category = product.object_name or 'Без категории'
-        if category not in categories_info:
-            categories_info[category] = {
-                'name': category,
-                'count': 0,
-                'product_ids': [],
-                'subject_id': product.subject_id
-            }
-        categories_info[category]['count'] += 1
-        categories_info[category]['product_ids'].append(product.id)
-
-    # Преобразуем в список для удобства в шаблоне
-    categories = list(categories_info.values())
-
-    return render_template(
-        'products_bulk_edit.html',
-        products=[p.to_dict() for p in products],
-        edit_operations=edit_operations,
-        categories=categories,
-        filter_type=filter_type,
-        filter_brand=filter_brand,
-        filter_category=filter_category,
-        ai_enabled=ai_enabled
-    )
+    return render_bulk_editor()
 
 
 # ============= ИСТОРИЯ ИЗМЕНЕНИЙ КАРТОЧЕК =============
@@ -4620,10 +4800,42 @@ def bulk_edit_history_detail(bulk_id):
         seller_id=seller_id,
     ).order_by(CardEditHistory.created_at.asc()).all()
 
+    # Error payloads may be stale or malformed. Resolve only a small visible
+    # prefix and verify every candidate against the current seller before a
+    # history row is allowed to link into a product page.
+    candidate_ids = {
+        change.product_id
+        for change in product_changes
+        if type(change.product_id) is int and change.product_id > 0
+    }
+    raw_errors = bulk_operation.errors_details
+    if isinstance(raw_errors, list):
+        visible_errors = raw_errors[:200]
+    elif isinstance(raw_errors, dict):
+        visible_errors = [raw_errors]
+    else:
+        visible_errors = []
+    for error_row in visible_errors:
+        if not isinstance(error_row, dict):
+            continue
+        raw_product_id = error_row.get('product_id')
+        if type(raw_product_id) is int and raw_product_id > 0:
+            candidate_ids.add(raw_product_id)
+    owned_product_ids = set()
+    if candidate_ids:
+        owned_product_ids = {
+            product_id
+            for (product_id,) in db.session.query(Product.id).filter(
+                Product.id.in_(candidate_ids),
+                Product.seller_id == seller_id,
+            ).all()
+        }
+
     return render_template(
         'bulk_edit_history_detail.html',
         bulk_operation=bulk_operation,
-        product_changes=product_changes
+        product_changes=product_changes,
+        owned_product_ids=owned_product_ids,
     )
 
 
@@ -4906,37 +5118,15 @@ def api_logs():
 
 # ============= API ENDPOINTS =============
 
-# Кэш для характеристик и справочников WB API
-# Формат: {key: (data, timestamp)}
-_characteristics_cache = {}
-_CACHE_TTL = 3600  # 1 час
-
-def _get_from_cache(key: str):
-    """Получить данные из кэша если они свежие"""
-    if key in _characteristics_cache:
-        data, timestamp = _characteristics_cache[key]
-        if time.time() - timestamp < _CACHE_TTL:
-            app.logger.info(f"💾 Cache HIT for '{key}' (age: {int(time.time() - timestamp)}s)")
-            return data
-        else:
-            app.logger.info(f"⏰ Cache EXPIRED for '{key}' (age: {int(time.time() - timestamp)}s)")
-            del _characteristics_cache[key]
-    return None
-
-def _save_to_cache(key: str, data):
-    """Сохранить данные в кэш"""
-    _characteristics_cache[key] = (data, time.time())
-    app.logger.info(f"💾 Cache SAVED for '{key}'")
-
 @app.route('/api/characteristics/cache/clear', methods=['POST'])
 @login_required
 def api_clear_characteristics_cache():
-    """Очистить кэш характеристик"""
-    global _characteristics_cache
-    count = len(_characteristics_cache)
-    _characteristics_cache.clear()
-    app.logger.info(f"🗑️ Cleared {count} cache entries")
-    return {'success': True, 'cleared_entries': count}
+    """Keep the legacy cache-clear path without mutating admin references."""
+    return {
+        'success': True,
+        'cleared_entries': 0,
+        'cache': 'authoritative WB reference is managed separately',
+    }
 
 @app.route('/api/characteristics/categories')
 @login_required
@@ -4964,382 +5154,199 @@ def api_characteristics_categories():
 @app.route('/api/characteristics/<object_name>')
 @login_required
 def api_characteristics_by_category(object_name):
-    """
-    Получить характеристики для категории из WB API
-
-    Args:
-        object_name: Название категории (например, "Футболки")
-
-    Returns:
-        JSON с характеристиками и их возможными значениями
-    """
+    """Resolve a seller-owned exact object name to its exact local WB subject."""
     if not current_user.seller:
-        return {'error': 'No seller profile'}, 403
+        return {'error': 'No seller profile', 'provider_io': False}, 403
+    if not object_name or len(object_name) > 300:
+        return {'error': 'Некорректное точное название категории', 'provider_io': False}, 400
 
-    if not current_user.seller.has_valid_api_key():
-        return {'error': 'WB API key not configured'}, 400
+    subject_rows = Product.query.filter(
+        Product.seller_id == current_user.seller.id,
+        Product.object_name == object_name,
+    ).with_entities(Product.subject_id).distinct().all()
+    if not subject_rows:
+        return {
+            'error': 'Для точного названия категории нет товара продавца',
+            'object_name': object_name,
+            'provider_io': False,
+        }, 404
 
-    app.logger.info(f"📋 API request for characteristics: category='{object_name}'")
+    observed_subjects = [row[0] for row in subject_rows]
+    if (
+        len(observed_subjects) != 1
+        or observed_subjects[0] is None
+        or isinstance(observed_subjects[0], bool)
+        or not isinstance(observed_subjects[0], int)
+        or observed_subjects[0] <= 0
+    ):
+        return {
+            'error': 'Точное название связано с несколькими или неполными subjectID; выберите subjectID явно',
+            'object_name': object_name,
+            'subject_ids': sorted(value for value in observed_subjects if isinstance(value, int) and value > 0),
+            'provider_io': False,
+        }, 409
 
-    # Проверяем кэш
-    cache_key = f"characteristics_{current_user.seller.id}_{object_name}"
-    cached_result = _get_from_cache(cache_key)
-    if cached_result:
-        return cached_result
+    from services.wb_edit_review import schema_for_subject
 
-    # Функция для определения справочника по названию характеристики (fuzzy matching)
-    def get_directory_type(char_name: str) -> Optional[str]:
-        """Определяет тип справочника по названию характеристики"""
-        name_lower = char_name.lower().strip()
+    subject_id = observed_subjects[0]
+    schema = schema_for_subject(subject_id)
+    result = {
+        'object_name': object_name,
+        'subject_id': subject_id,
+        'schema_revision': schema.get('revision'),
+        'schema_source': 'local_authoritative_cache',
+        'provider_io': False,
+        'issues': schema.get('issues') or [],
+        'characteristics': [],
+        # `data` preserves the older WB-shaped response key; these are
+        # exact, freshness-checked local values rather than provider output.
+        'data': [],
+        'count': 0,
+    }
+    if not schema.get('usable'):
+        result['error'] = 'Точная локальная схема WB устарела или недоступна'
+        return result, 409
 
-        if 'цвет' in name_lower:
-            return 'colors'
-        elif 'стран' in name_lower and 'производ' in name_lower:
-            return 'countries'
-        elif name_lower in ['пол', 'гендер']:
-            return 'kinds'
-        elif 'сезон' in name_lower:
-            return 'seasons'
-        elif 'ндс' in name_lower or 'нвд' in name_lower or 'vat' in name_lower:
-            return 'vat'
-        elif 'тнвэд' in name_lower or 'тн вэд' in name_lower or 'tnved' in name_lower:
-            return 'tnved'
-        return None
-
-    # Функция для безопасного извлечения значения из справочника
-    def extract_value(entry) -> Optional[str]:
-        """Извлекает значение из записи справочника (dict или str)"""
-        if isinstance(entry, dict):
-            return entry.get('name') or entry.get('value') or entry.get('id')
-        elif isinstance(entry, str):
-            return entry
-        return None
-
-    # Сначала попробуем получить из WB API
-    try:
-        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            result = client.get_card_characteristics_by_object_name(object_name)
-
-            # Логируем все названия характеристик для отладки
-            all_char_names = [item.get('name', '') for item in result.get('data', [])]
-            app.logger.info(f"📋 Found characteristics: {all_char_names}")
-
-            # Загружаем справочники для известных характеристик
-            directories = {}
-            for item in result.get('data', []):
-                char_name = item.get('name', '')
-                app.logger.debug(f"🔍 Checking characteristic: '{char_name}'")
-
-                directory_type = get_directory_type(char_name)
-                if directory_type:
-                    app.logger.info(f"✓ Matched '{char_name}' to directory '{directory_type}'")
-
-                    if directory_type not in directories:
-                        # Проверяем кэш справочника
-                        dir_cache_key = f"directory_{directory_type}"
-                        cached_dir = _get_from_cache(dir_cache_key)
-
-                        if cached_dir is not None:
-                            directories[directory_type] = cached_dir
-                            app.logger.info(f"💾 Using cached {directory_type} directory: {len(cached_dir)} items")
-                        else:
-                            try:
-                                method_name = f'get_directory_{directory_type}'
-                                method = getattr(client, method_name)
-                                dir_result = method()
-                                directories[directory_type] = dir_result.get('data', [])
-                                app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
-
-                                # Сохраняем справочник в кэш
-                                _save_to_cache(dir_cache_key, directories[directory_type])
-                            except Exception as e:
-                                app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
-                                directories[directory_type] = []
-                else:
-                    app.logger.debug(f"⊘ No directory mapping for '{char_name}'")
-
-            # Преобразуем результат в более удобный формат
-            characteristics = []
-            for item in result.get('data', []):
-                char = {
-                    'id': item.get('charcID'),
-                    'name': item.get('name'),
-                    'required': item.get('required', False),
-                    'max_count': item.get('maxCount', 1),  # Количество возможных значений
-                    'unit_name': item.get('unitName'),
-                    'values': []
-                }
-
-                # Добавляем возможные значения из словаря API
-                if item.get('dictionary'):
-                    for dict_item in item['dictionary']:
-                        char['values'].append({
-                            'id': dict_item.get('unitID'),
-                            'value': dict_item.get('value')
-                        })
-                # Если словаря нет, но есть справочник - используем его
-                else:
-                    directory_type = get_directory_type(char['name'])
-                    if directory_type:
-                        directory_data = directories.get(directory_type, [])
-
-                        app.logger.info(f"📚 Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
-
-                        # Логируем первые несколько записей для отладки
-                        if directory_data:
-                            sample = directory_data[:3]
-                            app.logger.info(f"  📝 Sample entries: {sample}")
-
-                        # Универсальная обработка всех справочников
-                        values_added = 0
-                        for entry in directory_data:
-                            value = extract_value(entry)
-                            if value:
-                                char['values'].append({
-                                    'id': value,
-                                    'value': value
-                                })
-                                values_added += 1
-
-                        app.logger.info(f"✅ Added {values_added} values to '{char['name']}' (total in char: {len(char['values'])} values)")
-                    else:
-                        app.logger.debug(f"  ℹ️ No directory mapping for '{char['name']}' - will use free text input")
-
-                characteristics.append(char)
-
-            app.logger.info(f"✅ Loaded {len(characteristics)} characteristics for '{object_name}'")
-
-            result = {
-                'object_name': object_name,
-                'characteristics': characteristics,
-                'count': len(characteristics)
-            }
-
-            # Сохраняем в кэш
-            _save_to_cache(cache_key, result)
-
-            return result
-
-    except WBAPIException as e:
-        app.logger.error(f"❌ WB API error getting characteristics for '{object_name}': {e}")
-
-        # Если endpoint не найден (404), предлагаем альтернативу
-        if '404' in str(e):
-            return {
-                'error': 'WB API endpoint для получения характеристик недоступен (404). Этот endpoint может не поддерживаться для данной категории товаров или был изменён в новой версии API.',
-                'suggestion': 'Вы можете редактировать товары по одному или использовать другие операции массового редактирования (бренд, описание).',
-                'category': object_name
-            }, 404
-
-        return {'error': str(e)}, 400
-    except Exception as e:
-        app.logger.exception(f"💥 Unexpected error getting characteristics for '{object_name}': {e}")
-        return {'error': 'Internal server error'}, 500
+    result['characteristics'] = [
+        {
+            'id': field['id'],
+            'name': field['name'],
+            'required': field['required'],
+            'max_count': field['max_count'],
+            'unit_name': field['unit_name'],
+            'charc_type': field['charc_type'],
+            'values': [
+                {'id': value, 'value': value}
+                for value in field['dictionary_values']
+            ],
+        }
+        for field in schema['characteristics']
+        if field.get('usable')
+    ]
+    result['count'] = len(result['characteristics'])
+    return result
 
 
 @app.route('/api/characteristics/multi-category', methods=['POST'])
 @login_required
 def api_characteristics_multi_category():
-    """
-    Получить характеристики для нескольких категорий
-
-    Возвращает:
-    - common: общие характеристики для всех категорий
-    - by_category: характеристики по каждой категории отдельно
-
-    Request JSON:
-    {
-        "categories": ["Категория1", "Категория2"]
-    }
-    """
+    """Return exact subjectID schemas from the local authoritative cache."""
     if not current_user.seller:
         return {'error': 'No seller profile'}, 403
 
-    if not current_user.seller.has_valid_api_key():
-        return {'error': 'WB API key not configured'}, 400
+    from services.product_selection import (
+        MAX_BULK_PRODUCT_SELECTION,
+        ProductSelectionError,
+        parse_selected_product_ids,
+    )
+    from services.wb_edit_review import bulk_characteristics_payload
 
-    data = request.get_json()
-    categories = data.get('categories', [])
-
-    if not categories:
-        return {'error': 'No categories provided'}, 400
-
-    app.logger.info(f"📋 API request for multi-category characteristics: {len(categories)} categories")
-
-    # Функция для определения справочника по названию характеристики (fuzzy matching)
-    def get_directory_type(char_name: str) -> Optional[str]:
-        """Определяет тип справочника по названию характеристики"""
-        name_lower = char_name.lower().strip()
-
-        if 'цвет' in name_lower:
-            return 'colors'
-        elif 'стран' in name_lower and 'производ' in name_lower:
-            return 'countries'
-        elif name_lower in ['пол', 'гендер']:
-            return 'kinds'
-        elif 'сезон' in name_lower:
-            return 'seasons'
-        elif 'ндс' in name_lower or 'нвд' in name_lower or 'vat' in name_lower:
-            return 'vat'
-        elif 'тнвэд' in name_lower or 'тн вэд' in name_lower or 'tnved' in name_lower:
-            return 'tnved'
-        return None
-
-    # Функция для безопасного извлечения значения из справочника
-    def extract_value(entry) -> Optional[str]:
-        """Извлекает значение из записи справочника (dict или str)"""
-        if isinstance(entry, dict):
-            return entry.get('name') or entry.get('value') or entry.get('id')
-        elif isinstance(entry, str):
-            return entry
-        return None
-
-    all_chars = {}  # {category: [characteristics]}
-
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data).difference({'product_ids', 'subject_ids'}):
+        return {'error': 'Request must contain product_ids and optional subject_ids'}, 400
     try:
-        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            # Загружаем справочники один раз для всех категорий
-            directories = {}
+        product_ids = parse_selected_product_ids(data.get('product_ids'))
+        subject_ids = data.get('subject_ids', [])
+        if not isinstance(subject_ids, list) or len(subject_ids) > MAX_BULK_PRODUCT_SELECTION:
+            raise ProductSelectionError('Некорректный список subjectID')
+        normalized_subject_ids = []
+        for subject_id in subject_ids:
+            if isinstance(subject_id, str) and subject_id.isascii() and subject_id.isdecimal():
+                subject_id = int(subject_id)
+            if not isinstance(subject_id, int) or isinstance(subject_id, bool) or subject_id <= 0:
+                raise ProductSelectionError('subjectID должен быть positive integer')
+            if subject_id in normalized_subject_ids:
+                raise ProductSelectionError('В списке subjectID есть повторы')
+            normalized_subject_ids.append(subject_id)
 
-            for category in categories:
-                try:
-                    result = client.get_card_characteristics_by_object_name(category)
-
-                    # Загружаем справочники для этой категории
-                    for item in result.get('data', []):
-                        char_name = item.get('name', '')
-                        directory_type = get_directory_type(char_name)
-                        if directory_type and directory_type not in directories:
-                            try:
-                                method_name = f'get_directory_{directory_type}'
-                                method = getattr(client, method_name)
-                                dir_result = method()
-                                directories[directory_type] = dir_result.get('data', [])
-                                app.logger.info(f"✅ Loaded {directory_type} directory: {len(directories[directory_type])} items")
-                            except Exception as e:
-                                app.logger.warning(f"⚠️ Failed to load {directory_type} directory: {e}")
-                                directories[directory_type] = []
-
-                    characteristics = []
-                    for item in result.get('data', []):
-                        char = {
-                            'id': item.get('charcID'),
-                            'name': item.get('name'),
-                            'required': item.get('required', False),
-                            'max_count': item.get('maxCount', 1),
-                            'unit_name': item.get('unitName'),
-                            'values': []
-                        }
-
-                        # Добавляем возможные значения из словаря API
-                        if item.get('dictionary'):
-                            for dict_item in item['dictionary']:
-                                char['values'].append({
-                                    'id': dict_item.get('unitID'),
-                                    'value': dict_item.get('value')
-                                })
-                        # Если словаря нет, но есть справочник - используем его
-                        else:
-                            directory_type = get_directory_type(char['name'])
-                            if directory_type:
-                                directory_data = directories.get(directory_type, [])
-
-                                app.logger.info(f"📚 [{category}] Loading values for '{char['name']}' from {directory_type} directory ({len(directory_data)} items)")
-
-                                # Логируем первые несколько записей для отладки
-                                if directory_data:
-                                    sample = directory_data[:3]
-                                    app.logger.info(f"  📝 Sample entries: {sample}")
-
-                                # Универсальная обработка всех справочников
-                                values_added = 0
-                                for entry in directory_data:
-                                    value = extract_value(entry)
-                                    if value:
-                                        char['values'].append({
-                                            'id': value,
-                                            'value': value
-                                        })
-                                        values_added += 1
-
-                                app.logger.info(f"✅ [{category}] Added {values_added} values to '{char['name']}' (total in char: {len(char['values'])} values)")
-                            else:
-                                app.logger.debug(f"  ℹ️ [{category}] No directory mapping for '{char['name']}' - will use free text input")
-
-                        characteristics.append(char)
-
-                    all_chars[category] = characteristics
-
-                except Exception as e:
-                    app.logger.warning(f"Failed to load characteristics for '{category}': {e}")
-                    all_chars[category] = []
-
-            # Находим общие характеристики (есть во всех категориях)
-            if len(all_chars) > 1:
-                # Получаем ID характеристик из первой категории
-                first_category = list(all_chars.values())[0]
-                common_char_ids = set(c['id'] for c in first_category if c['id'])
-
-                # Оставляем только те, которые есть во всех категориях
-                for chars in all_chars.values():
-                    char_ids = set(c['id'] for c in chars if c['id'])
-                    common_char_ids &= char_ids
-
-                # Формируем список общих характеристик
-                common_characteristics = [c for c in first_category if c['id'] in common_char_ids]
-            else:
-                # Если только одна категория, все характеристики общие
-                common_characteristics = list(all_chars.values())[0] if all_chars else []
-
-            # Логируем что возвращаем
-            app.logger.info(f"📤 Returning {len(common_characteristics)} common characteristics")
-            chars_with_values = [c for c in common_characteristics if c.get('values') and len(c['values']) > 0]
-            app.logger.info(f"  ✓ {len(chars_with_values)} characteristics have values")
-
-            # Логируем первые несколько характеристик для отладки
-            if common_characteristics:
-                sample = common_characteristics[:5]
-                for ch in sample:
-                    values_count = len(ch.get('values', []))
-                    app.logger.info(f"  - {ch['name']} (ID: {ch['id']}): {values_count} values")
-
-            return {
-                'common': common_characteristics,
-                'by_category': all_chars,
-                'categories_count': len(categories)
+        rows = Product.query.filter(
+            Product.seller_id == current_user.seller.id,
+            Product.id.in_(product_ids),
+        ).all()
+        by_id = {int(product.id): product for product in rows}
+        if set(by_id) != set(product_ids):
+            return {'error': 'В выборе есть недоступный товар'}, 403
+        products = [by_id[product_id] for product_id in product_ids]
+        available_subject_ids = {
+            product.subject_id for product in products
+            if isinstance(product.subject_id, int) and not isinstance(product.subject_id, bool)
+        }
+        if normalized_subject_ids and not set(normalized_subject_ids).issubset(available_subject_ids):
+            return {'error': 'subjectID не принадлежит выбранным товарам'}, 403
+        payload = bulk_characteristics_payload(products)
+        if normalized_subject_ids:
+            allowed = {str(value) for value in normalized_subject_ids}
+            payload['by_subject'] = {
+                key: value for key, value in payload['by_subject'].items() if key in allowed
             }
-
-    except Exception as e:
-        app.logger.exception(f"💥 Error in multi-category characteristics: {e}")
-        return {'error': str(e)}, 500
+            payload['groups'] = [
+                group for group in payload['groups']
+                if group.get('subject_id') in normalized_subject_ids
+            ]
+        return {
+            'groups': payload['groups'],
+            'by_subject': payload['by_subject'],
+            'common': payload['common'],
+            'categories_count': len(payload['groups']),
+            'schema_source': 'local_authoritative_cache',
+            'provider_io': False,
+        }
+    except ProductSelectionError as exc:
+        return {'error': str(exc)}, 400
+    except Exception as exc:
+        app.logger.exception('Local exact-subject characteristic schema lookup failed')
+        return {'error': 'Не удалось прочитать локальную WB-схему'}, 500
 
 
 @app.route('/api/products/characteristics/<int:subject_id>', methods=['GET'])
 @login_required
 def api_get_characteristics_by_subject(subject_id):
-    """Получить конфигурацию характеристик для категории товара по subject_id"""
+    """Return an exact seller-backed subject schema from the local cache."""
     if not current_user.seller:
-        return {'error': 'No seller profile'}, 403
+        return {'error': 'No seller profile', 'provider_io': False}, 403
+    seller_id = int(current_user.seller.id)
+    product = Product.query.filter_by(
+        seller_id=seller_id,
+        subject_id=subject_id,
+    ).first()
+    if product is None:
+        return {
+            'error': 'subjectID не подтверждён товаром текущего продавца',
+            'subject_id': subject_id,
+            'provider_io': False,
+        }, 404
 
-    seller = current_user.seller
+    from services.wb_edit_review import schema_for_subject
 
-    if not seller.has_valid_api_key():
-        return {'error': 'API key not configured'}, 400
-
-    try:
-        wb_client = WildberriesAPIClient(
-            api_key=seller.wb_api_key,
-            db_logger_callback=lambda **kwargs: APILog.log_request(**kwargs)
-        )
-
-        # Получаем конфигурацию характеристик для этой категории
-        result = wb_client.get_card_characteristics_config(subject_id)
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Error getting characteristics for subject_id={subject_id}: {str(e)}")
-        return {'error': str(e)}, 500
+    schema = schema_for_subject(subject_id)
+    response = {
+        'subject_id': subject_id,
+        'subject_name': schema.get('subject_name'),
+        'schema_revision': schema.get('revision'),
+        'schema_source': 'local_authoritative_cache',
+        'provider_io': False,
+        'issues': schema.get('issues') or [],
+        'characteristics': [],
+        'count': 0,
+    }
+    if not schema.get('usable'):
+        response['error'] = 'Точная локальная схема WB устарела или недоступна'
+        return response, 409
+    response['characteristics'] = schema['characteristics']
+    response['data'] = [
+        {
+            'charcID': field['id'],
+            'name': field['name'],
+            'required': field['required'],
+            'maxCount': field['max_count'],
+            'unitName': field['unit_name'],
+            'charcType': field['charc_type'],
+            'dictionary': [{'value': value} for value in field['dictionary_values']],
+        }
+        for field in schema['characteristics']
+    ]
+    response['count'] = len(response['characteristics'])
+    return response
 
 
 @app.route('/api/products/<int:product_id>/characteristics')
