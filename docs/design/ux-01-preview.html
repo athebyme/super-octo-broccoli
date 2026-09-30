@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>UX-01 · Seller Hub — автономная концепция</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #faf9f7;
+      --surface: #ffffff;
+      --ink: #1a1a1a;
+      --muted: #6b6b6b;
+      --accent: #a34a2f;
+      --accent-ink: #ffffff;
+      --rule: #e8e5e1;
+      --soft: #f3f0ec;
+      --soft-accent: #f7ebe6;
+      --positive: #34664b;
+      --positive-soft: #edf4ef;
+      --warning: #805a1f;
+      --warning-soft: #f8f1e5;
+      --negative: #8b3f35;
+      --negative-soft: #f8eeeb;
+      --focus: #1a5fb4;
+      --shadow: 0 14px 36px rgb(26 26 26 / 14%);
+      --nav-width: 12rem;
+      --page-pad: clamp(1rem, 2vw, 2rem);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 100%;
+      color: var(--ink);
+      background: var(--canvas);
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --canvas: #131211;
+      --surface: #1c1a19;
+      --ink: #ebe7e2;
+      --muted: #a39d96;
+      --accent: #e28b6d;
+      --accent-ink: #211814;
+      --rule: #2b2825;
+      --soft: #252220;
+      --soft-accent: #35251f;
+      --positive: #9bc6a9;
+      --positive-soft: #202b23;
+      --warning: #dfbd7d;
+      --warning-soft: #30291d;
+      --negative: #e1a092;
+      --negative-soft: #322320;
+      --focus: #90b9ff;
+      --shadow: 0 14px 36px rgb(0 0 0 / 40%);
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { min-width: 320px; scroll-behavior: smooth; }
+    body { min-width: 320px; min-height: 100vh; margin: 0; background: var(--canvas); color: var(--ink); }
+    button, input, select, textarea { color: inherit; font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    a { color: var(--accent); }
+    :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .skip-link { position: fixed; top: .5rem; left: .5rem; z-index: 300; transform: translateY(-150%); padding: .75rem 1rem; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; }
+    .skip-link:focus,
+    .skip-link:focus-visible { top: 8px; left: 8px; transform: translateY(0) !important; }
+    .app-shell { display: grid; grid-template-columns: var(--nav-width) minmax(0, 1fr); min-height: 100vh; }
+    .sidebar { position: sticky; top: 0; display: flex; overflow-y: auto; overscroll-behavior: contain; flex-direction: column; gap: 1.25rem; height: 100vh; min-height: 34rem; padding: 1rem .75rem .875rem; border-right: 1px solid var(--rule); background: var(--canvas); }
+    .brand { display: flex; align-items: center; gap: .6rem; min-height: 2.5rem; padding: 0 .4rem; font-weight: 700; letter-spacing: -.035em; }
+    .brand-mark { display: grid; width: 1.85rem; height: 1.85rem; place-items: center; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font-size: .76rem; letter-spacing: -.04em; }
+    .nav-caption { margin: 0 .55rem .35rem; color: var(--muted); font-size: .75rem; }
+    .main-nav { display: grid; min-width: 0; gap: .2rem; }
+    .nav-button { display: flex; align-items: center; gap: .6rem; width: 100%; min-width: 0; min-height: 2.75rem; overflow-wrap: anywhere; padding: .55rem .65rem; border: 0; border-radius: 6px; background: transparent; color: var(--muted); text-align: left; line-height: 1.25; }
+    .nav-button:hover { background: var(--soft); color: var(--ink); }
+    .nav-button[aria-current="page"] { background: var(--soft-accent); color: var(--accent); font-weight: 650; }
+    .nav-glyph { display: grid; width: 1.35rem; min-width: 1.35rem; height: 1.35rem; place-items: center; border: 1px solid currentColor; border-radius: 4px; font-size: .68rem; line-height: 1; }
+    .sidebar-bottom { display: grid; gap: .2rem; margin-top: auto; padding-top: .75rem; border-top: 1px solid var(--rule); }
+    .side-note { padding: .6rem .55rem 0; color: var(--muted); font-size: .75rem; line-height: 1.45; overflow-wrap: anywhere; }
+    .content-shell { min-width: 0; }
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.2rem var(--page-pad) .9rem; border-bottom: 1px solid var(--rule); background: var(--surface); }
+    .topbar-left { display: flex; align-items: flex-start; gap: .85rem; min-width: 0; }
+    .menu-toggle { display: none; min-width: 2.75rem; min-height: 2.75rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+    .workspace-heading { min-width: 0; }
+    .workspace-kicker { display: block; margin: .05rem 0 .15rem; color: var(--muted); font-size: .75rem; line-height: 1.35; }
+    .workspace-title { margin: 0; font-family: "Instrument Serif", Georgia, "Times New Roman", serif; font-size: clamp(1.75rem, 2.3vw, 2rem); font-weight: 400; letter-spacing: -.025em; line-height: 1.05; overflow-wrap: anywhere; }
+    .channel-context { align-self: center; min-width: 0; max-width: 17rem; padding: .45rem .65rem; border-left: 1px solid var(--rule); color: var(--muted); font-size: .85rem; line-height: 1.35; overflow-wrap: anywhere; }
+    .channel-context strong { display: block; color: var(--ink); font-weight: 600; }
+    .topbar-tools { display: grid; justify-items: end; gap: .6rem; min-width: 0; }
+    .theme-toggle { min-height: 2.75rem; padding: .5rem .75rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); font-size: .84rem; }
+    .theme-toggle:hover, .button-secondary:hover { background: var(--soft); }
+    .screen-switcher { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .25rem; max-width: 34rem; }
+    .switch-button { min-height: 2.75rem; padding: .45rem .65rem; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); font-size: .81rem; }
+    .switch-button:hover { background: var(--soft); color: var(--ink); }
+    .switch-button[aria-pressed="true"] { border-color: var(--rule); background: var(--canvas); color: var(--ink); font-weight: 650; }
+    .concept-strip { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-height: 2.6rem; padding: .5rem var(--page-pad); border-bottom: 1px solid var(--rule); background: var(--soft); color: var(--muted); font-size: .78rem; }
+    .concept-strip strong { color: var(--ink); font-weight: 600; }
+    main { min-width: 0; padding: 1.25rem var(--page-pad) 3rem; }
+    .screen { max-width: 88rem; margin: 0 auto; }
+    .screen-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin-bottom: 1.2rem; }
+    .screen-heading h2 { margin: 0; font-size: 1.15rem; font-weight: 650; letter-spacing: -.025em; line-height: 1.25; }
+    .screen-heading p { max-width: 64ch; margin: .35rem 0 0; color: var(--muted); font-size: .9rem; line-height: 1.5; }
+    .eyebrow { display: block; margin: 0 0 .35rem; color: var(--muted); font-size: .78rem; line-height: 1.4; }
+    .button-primary, .button-secondary, .button-text { min-height: 2.75rem; padding: .55rem .85rem; border-radius: 5px; line-height: 1.3; text-align: center; }
+    .button-primary { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); font-weight: 650; }
+    .button-primary:hover { filter: brightness(.94); }
+    .button-secondary { border: 1px solid var(--rule); background: var(--surface); color: var(--ink); }
+    .button-text { border: 1px solid transparent; background: transparent; color: var(--accent); }
+    .button-text:hover { background: var(--soft-accent); }
+    .button-row { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .inline-note { color: var(--muted); font-size: .8rem; line-height: 1.45; }
+    .surface { background: var(--surface); }
+    .filter-bar { display: flex; align-items: end; gap: .75rem; padding: 1rem 0 .9rem; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+    .field { display: grid; gap: .35rem; min-width: 0; }
+    .field label, .field-label { color: var(--muted); font-size: .78rem; line-height: 1.35; }
+    .text-input, .select-input, .text-area { width: 100%; min-width: 0; max-width: 100%; min-height: 2.75rem; padding: .55rem .65rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); }
+    .text-input::placeholder, .text-area::placeholder { color: var(--muted); opacity: .85; }
+    .search-field { flex: 1 1 16rem; max-width: 26rem; }
+    .filter-field { flex: 0 1 12rem; }
+    .count-label { margin-left: auto; padding: 0 0 .65rem; color: var(--muted); font-size: .82rem; white-space: nowrap; }
+    .list-head { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .8fr) minmax(0, 1.25fr) minmax(0, 1.25fr) minmax(0, .8fr); gap: 1rem; padding: .7rem .65rem; border-bottom: 1px solid var(--rule); color: var(--muted); font-size: .74rem; }\n    .list-head > span { min-width: 0; overflow-wrap: anywhere; }
+    .product-list { margin: 0; padding: 0; list-style: none; }
+    .product-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, .8fr) minmax(0, 1.25fr) minmax(0, 1.25fr) minmax(0, .8fr); align-items: center; gap: 1rem; padding: .9rem .65rem; border-bottom: 1px solid var(--rule); }
+    .product-cell { min-width: 0; }
+    .cell-label { display: none; margin-bottom: .25rem; color: var(--muted); font-size: .72rem; }
+    .product-main { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+    .product-thumb { display: grid; flex: 0 0 3rem; width: 3rem; height: 3.35rem; place-items: center; border: 1px solid var(--rule); border-radius: 4px; background: var(--soft); color: var(--accent); font-size: 1.2rem; }
+    .product-name { display: block; color: var(--ink); font-weight: 620; line-height: 1.35; overflow-wrap: anywhere; }
+    .product-meta { display: block; margin-top: .2rem; color: var(--muted); font-size: .78rem; line-height: 1.4; overflow-wrap: anywhere; }
+    .status { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .5rem; border-radius: 4px; background: var(--warning-soft); color: var(--warning); font-size: .76rem; font-weight: 600; line-height: 1.35; }
+    .status-dot { width: .45rem; height: .45rem; flex: 0 0 .45rem; border-radius: 50%; background: currentColor; }
+    .fact-line { display: block; color: var(--ink); font-size: .83rem; line-height: 1.45; overflow-wrap: anywhere; }
+    .fact-line + .fact-line { margin-top: .25rem; }
+    .unknown { color: var(--muted); }
+    .row-action { min-width: 0; min-height: 2.75rem; padding: .4rem .55rem; overflow-wrap: anywhere; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--accent); text-align: left; }
+    .row-action:hover { background: var(--soft-accent); }
+    .empty-state { padding: 1.4rem .65rem; color: var(--muted); line-height: 1.5; }
+    .wb-action { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.5rem; padding: 1rem 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+    .wb-action p { max-width: 54ch; margin: .25rem 0 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+    .tabs { display: flex; flex-wrap: wrap; gap: .25rem; margin: 1rem 0; border-bottom: 1px solid var(--rule); }
+    .tab { position: relative; min-width: 0; min-height: 2.75rem; padding: .55rem .8rem; overflow-wrap: anywhere; border: 0; background: transparent; color: var(--muted); }
+    .tab[aria-selected="true"] { color: var(--accent); font-weight: 650; }
+    .tab[aria-selected="true"]::after { position: absolute; right: .6rem; bottom: -1px; left: .6rem; height: 2px; background: var(--accent); content: ""; }
+    .card-overview { display: grid; grid-template-columns: minmax(14rem, .82fr) minmax(0, 1.5fr); gap: 1.5rem; align-items: start; }
+    .product-art { position: relative; display: grid; min-height: 15rem; place-items: center; overflow: hidden; border: 1px solid var(--rule); border-radius: 6px; background: var(--soft); }
+    .art-sheet { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: .35rem; width: min(10rem, 55%); height: 8rem; padding: .55rem; border: 2px solid var(--accent); border-radius: 5px; background: var(--surface); transform: rotate(-3deg); }
+    .art-sheet span { border: 1px solid var(--rule); border-radius: 3px; background: var(--soft-accent); }
+    .art-sheet span:nth-child(2), .art-sheet span:nth-child(5) { background: var(--surface); }
+    .art-caption { position: absolute; right: .75rem; bottom: .65rem; left: .75rem; color: var(--muted); font-size: .75rem; text-align: center; }
+    .identity-block { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-bottom: .9rem; }
+    .type-tag, .channel-tag, .plain-tag { display: inline-flex; align-items: center; min-height: 1.8rem; padding: .25rem .55rem; border: 1px solid var(--rule); border-radius: 4px; color: var(--ink); font-size: .76rem; line-height: 1.3; }
+    .channel-tag { border-color: #2f6cb4; background: var(--surface); color: #2f6cb4; }
+    :root[data-theme="dark"] .channel-tag { border-color: #82abdd; background: var(--surface); color: #82abdd; }
+    .fact-section { padding: .9rem 0; border-top: 1px solid var(--rule); }
+    .fact-section h3 { margin: 0 0 .7rem; font-size: .94rem; font-weight: 650; }
+    .facts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem 1.25rem; }
+    .fact { min-width: 0; }
+    #screen-card dt, #screen-card dd, #screen-card small, #screen-card label { min-width: 0; overflow-wrap: anywhere; }
+    .fact dt { margin: 0 0 .25rem; color: var(--muted); font-size: .76rem; line-height: 1.35; }
+    .fact dd { margin: 0; font-size: .88rem; line-height: 1.45; overflow-wrap: anywhere; }
+    .price-lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: .35rem; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+    .price-lane { padding: .8rem .75rem .85rem 0; }
+    .price-lane + .price-lane { padding-left: .75rem; border-left: 1px solid var(--rule); }
+    .price-lane dt { min-height: 2.2em; margin: 0 0 .35rem; color: var(--muted); font-size: .76rem; line-height: 1.4; overflow-wrap: anywhere; }
+    .price-lane dd { margin: 0; font-size: .9rem; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+    .price-lane small { display: block; margin-top: .25rem; color: var(--muted); font-size: .72rem; font-weight: 400; line-height: 1.4; }
+    .management-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(14rem, .8fr); gap: 1.5rem; align-items: start; }
+    .management-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--rule); }
+    .management-list li { display: grid; grid-template-columns: minmax(8rem, .7fr) minmax(0, 1fr); gap: 1rem; padding: .8rem .1rem; border-bottom: 1px solid var(--rule); line-height: 1.45; }
+    .management-list strong { font-size: .84rem; font-weight: 600; }
+    .management-list span { color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
+    .quiet-panel { padding: .9rem 0 .9rem 1rem; border-left: 2px solid var(--accent); }
+    .quiet-panel h3 { margin: 0 0 .4rem; font-size: .92rem; }
+    .quiet-panel p { margin: 0; color: var(--muted); font-size: .82rem; line-height: 1.5; }
+    .prep-step-list { display: flex; flex-wrap: wrap; gap: 0; margin: 1rem 0 1.25rem; padding: 0; list-style: none; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+    .prep-step-list li { display: flex; flex: 1 1 8rem; align-items: center; gap: .5rem; min-width: 0; padding: .75rem .55rem; color: var(--muted); font-size: .78rem; line-height: 1.35; }
+    .step-mark { display: grid; width: 1.35rem; height: 1.35rem; flex: 0 0 1.35rem; place-items: center; border: 1px solid var(--rule); border-radius: 50%; font-size: .72rem; }
+    .prep-step-list li[data-state="current"] { color: var(--accent); font-weight: 650; }
+    .prep-step-list li[data-state="current"] .step-mark { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+    .prep-step-list li[data-state="done"] .step-mark { border-color: var(--positive); color: var(--positive); }
+    .prep-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(16rem, .75fr); gap: clamp(1.25rem, 3vw, 2.5rem); align-items: start; }
+    .editor-column { min-width: 0; }
+    .editor-fields { display: grid; gap: 1rem; }
+    .text-area { min-height: 7.5rem; resize: vertical; }
+    .source-summary { padding: .9rem 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+    .source-summary p { margin: .3rem 0 0; font-size: .86rem; line-height: 1.45; }
+    .review-column { padding: .9rem 0; border-top: 2px solid var(--accent); }
+    .review-column h3 { margin: 0 0 .35rem; font-size: 1rem; }
+    .review-column > p { margin: 0 0 .8rem; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+    .check-list { display: grid; gap: .55rem; margin: 0; padding: 0; list-style: none; }
+    .check-list li { display: grid; grid-template-columns: 1.2rem minmax(0, 1fr); gap: .5rem; align-items: start; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+    .check-symbol { display: grid; width: 1.1rem; height: 1.1rem; place-items: center; border: 1px solid var(--rule); border-radius: 50%; color: var(--warning); font-size: .68rem; }
+    .draft-state { min-height: 1.5rem; margin: .6rem 0; color: var(--positive); font-size: .8rem; line-height: 1.45; }
+    .demo-callout { margin-top: .9rem; padding: .75rem; border-left: 2px solid var(--warning); background: var(--warning-soft); color: var(--warning); font-size: .8rem; line-height: 1.45; }
+    .summary-band { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.25rem; padding: .85rem 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+    .summary-band strong { font-size: .94rem; }
+    .summary-count { color: var(--muted); font-size: .82rem; }
+    .operation-list { display: grid; gap: 0; margin-top: .5rem; }
+    .operation-row { display: grid; grid-template-columns: minmax(11rem, 1.2fr) minmax(10rem, 1fr) minmax(10rem, .9fr) auto; gap: 1rem; align-items: center; padding: 1rem .35rem; border-bottom: 1px solid var(--rule); }
+    .operation-name { display: block; font-size: .88rem; font-weight: 620; line-height: 1.4; }
+    .operation-meta { display: block; margin-top: .2rem; color: var(--muted); font-size: .76rem; line-height: 1.4; }
+    .error-copy { color: var(--negative); font-size: .82rem; line-height: 1.45; }
+    details { min-width: 0; }
+    details summary { min-height: 2.75rem; padding: .55rem .1rem; color: var(--accent); cursor: pointer; font-size: .81rem; line-height: 1.5; }
+    .technical-details { padding: .6rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--soft); color: var(--muted); font-size: .77rem; line-height: 1.5; overflow-wrap: anywhere; }
+    .technical-details code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
+    .unknown-operation { display: grid; grid-template-columns: minmax(11rem, 1fr) minmax(0, 1.4fr); gap: .9rem; align-items: start; margin-top: 1.2rem; padding: .9rem 0; border-top: 2px solid var(--warning); border-bottom: 1px solid var(--rule); }
+    .unknown-operation p { margin: .4rem 0 0; color: var(--muted); font-size: .82rem; line-height: 1.45; }
+    .settings-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(15rem, .7fr); gap: 2rem; align-items: start; }
+    .settings-section { padding: .9rem 0 1.1rem; border-top: 1px solid var(--rule); }
+    .settings-section h3 { margin: 0 0 .7rem; font-size: 1rem; }
+    .setting-row { display: grid; grid-template-columns: minmax(9rem, .75fr) minmax(0, 1fr); gap: 1rem; padding: .75rem 0; border-bottom: 1px solid var(--rule); }
+    .setting-row .setting-label { color: var(--muted); font-size: .8rem; line-height: 1.45; }
+    .setting-row .setting-value { margin: 0; font-size: .86rem; line-height: 1.45; overflow-wrap: anywhere; }
+    .state-pair { display: grid; gap: .7rem; }
+    .state-line { padding: .7rem 0; border-bottom: 1px solid var(--rule); }
+    .state-line strong { display: block; margin: .15rem 0; font-size: .88rem; }
+    .state-line span { display: block; color: var(--muted); font-size: .78rem; line-height: 1.45; }
+    .status-enabled { color: var(--positive) !important; }
+    .notice { position: fixed; right: 1rem; bottom: 1rem; z-index: 200; width: min(26rem, calc(100vw - 2rem)); padding: .85rem 1rem; border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--surface); box-shadow: var(--shadow); font-size: .86rem; line-height: 1.45; }
+    .notice:empty { display: none; }
+    .nav-scrim { position: fixed; inset: 0; z-index: 90; border: 0; background: rgb(0 0 0 / 42%); }
+    .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+
+    @media (max-width: 68rem) {
+      :root { --nav-width: 10.75rem; }
+      .topbar { flex-wrap: wrap; }
+      .topbar-tools { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+      .screen-switcher { justify-content: flex-start; max-width: none; }
+      .list-head { display: none; }
+      .product-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: .7rem 1rem; }
+      .product-row .product-cell[data-label="Товар"], .product-row .row-action { grid-column: 1 / -1; }
+      .product-row .row-action { justify-self: start; }
+      .cell-label { display: block; }
+      .product-cell[data-label="Товар"] .cell-label { display: none; }
+    }
+    @media (max-width: 54rem) {
+      .app-shell { display: block; }
+      .sidebar { position: fixed; z-index: 100; top: 0; bottom: 0; left: 0; width: min(84vw, 18rem); height: 100dvh; min-height: 0; transform: translateX(-105%); border-right: 1px solid var(--rule); background: var(--canvas); box-shadow: var(--shadow); transition: transform .18s ease-out; }
+      .sidebar.is-open { transform: translateX(0); }
+      .menu-toggle { display: inline-grid; flex: 0 0 2.75rem; place-items: center; }
+      .channel-context { align-self: flex-start; margin-top: .35rem; }
+      .topbar { padding-top: .75rem; }
+      .topbar-tools { align-items: flex-start; }
+      .screen-switcher { display: flex; flex-wrap: wrap; gap: .2rem; }
+    }
+    @media (max-width: 40rem) {
+      .topbar { gap: .75rem; }
+      .topbar-left { flex-wrap: wrap; gap: .5rem .7rem; }
+      .workspace-heading { flex: 1 1 10rem; }
+      .channel-context { flex: 1 1 100%; margin-left: 3.45rem; padding: .2rem 0 .2rem .65rem; }
+      .topbar-tools { display: grid; justify-items: start; gap: .4rem; }
+      .screen-switcher { width: 100%; }
+      .switch-button { flex: 1 1 auto; min-width: 5.4rem; padding-inline: .45rem; }
+      .screen-heading { align-items: flex-start; flex-direction: column; }
+      .filter-bar { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+      .search-field, .filter-field { max-width: none; }
+      .count-label { margin-left: 0; padding: 0; }
+      .list-head { display: none; }
+      .product-row { grid-template-columns: minmax(0, 1fr); gap: .65rem; padding: .9rem .15rem; }
+      .cell-label { display: block; }
+      .product-cell[data-label="Товар"] .cell-label { display: none; }
+      .wb-action { align-items: flex-start; flex-direction: column; }
+      .card-overview, .management-layout, .prep-layout, .settings-grid { grid-template-columns: minmax(0, 1fr); }
+      .product-art { min-height: 11rem; }
+      .price-lanes { grid-template-columns: minmax(0, 1fr); }
+      .price-lane, .price-lane + .price-lane { padding: .7rem 0; border-left: 0; }
+      .price-lane + .price-lane { border-top: 1px solid var(--rule); }
+      .price-lane dt { min-height: 0; }
+      .prep-step-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .prep-step-list li { padding: .6rem .35rem; }
+      .review-column { margin-top: .4rem; }
+      .operation-row { grid-template-columns: minmax(0, 1fr); gap: .55rem; }
+      .operation-row .operation-detail { justify-self: start; }
+      .unknown-operation { grid-template-columns: minmax(0, 1fr); }
+      .summary-band { align-items: flex-start; }
+      .facts-grid { grid-template-columns: minmax(0, 1fr); }
+      .setting-row, .management-list li { grid-template-columns: minmax(0, 1fr); gap: .25rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">К содержимому</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Навигация Seller Hub">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">SH</span><span>Seller Hub</span></div>
+      <div>
+        <p class="nav-caption">Рабочее место</p>
+        <nav class="main-nav" id="main-navigation" aria-label="Разделы">
+          <button class="nav-button" type="button" data-demo-message="Композиция «Обзор» не представлена в этом просмотре."><span class="nav-glyph" aria-hidden="true">О</span>Обзор</button>
+          <button class="nav-button" type="button" data-screen="catalog" aria-current="page"><span class="nav-glyph" aria-hidden="true">Т</span>Товары</button>
+          <button class="nav-button" type="button" data-demo-message="Композиция «Цены» не представлена в этом просмотре."><span class="nav-glyph" aria-hidden="true">₽</span>Цены</button>
+          <button class="nav-button" type="button" data-screen="operations"><span class="nav-glyph" aria-hidden="true">↻</span>Операции</button>
+          <button class="nav-button" type="button" data-demo-message="Композиция «Общение» не представлена в этом просмотре."><span class="nav-glyph" aria-hidden="true">С</span>Общение</button>
+          <button class="nav-button" type="button" data-demo-message="Композиция «Аналитика» не представлена в этом просмотре."><span class="nav-glyph" aria-hidden="true">А</span>Аналитика</button>
+          <button class="nav-button" type="button" data-demo-message="Композиция «Конкуренты» не представлена в этом просмотре."><span class="nav-glyph" aria-hidden="true">К</span>Конкуренты</button>
+          <button class="nav-button" type="button" data-demo-message="Композиция «Продвижение» не представлена в этом просмотре."><span class="nav-glyph" aria-hidden="true">П</span>Продвижение</button>
+        </nav>
+      </div>
+      <div class="sidebar-bottom">
+        <button class="nav-button" type="button" data-screen="settings"><span class="nav-glyph" aria-hidden="true">⚙</span>Настройки</button>
+        <button class="nav-button" type="button" data-demo-message="Раздел «Помощник» не представлен в этом просмотре."><span class="nav-glyph" aria-hidden="true">?</span>Помощник</button>
+        <button class="nav-button" type="button" data-demo-message="Раздел «Документация» не представлен в этом просмотре."><span class="nav-glyph" aria-hidden="true">i</span>Документация</button>
+        <div class="side-note">Ozon · Учебный кабинет</div>
+      </div>
+    </aside>
+    <button class="nav-scrim" id="nav-scrim" type="button" aria-label="Закрыть меню" hidden></button>
+
+    <div class="content-shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="menu-toggle" id="menu-toggle" type="button" aria-label="Открыть меню" aria-controls="sidebar" aria-expanded="false">☰</button>
+          <div class="workspace-heading">
+            <span class="workspace-kicker" id="workspace-kicker">Товары · Карточки</span>
+            <h1 class="workspace-title" id="workspace-title" tabindex="-1">Каталог</h1>
+          </div>
+          <div class="channel-context"><strong>Ozon</strong>Учебный кабинет</div>
+        </div>
+        <div class="topbar-tools">
+          <div class="screen-switcher" role="group" aria-label="Композиции концепции">
+            <button class="switch-button" type="button" data-screen="catalog" aria-controls="screen-catalog" aria-pressed="true">Каталог</button>
+            <button class="switch-button" type="button" data-screen="card" aria-controls="screen-card" aria-pressed="false">Карточка</button>
+            <button class="switch-button" type="button" data-screen="preparation" aria-controls="screen-preparation" aria-pressed="false">Подготовка</button>
+            <button class="switch-button" type="button" data-screen="operations" aria-controls="screen-operations" aria-pressed="false">Операции</button>
+            <button class="switch-button" type="button" data-screen="settings" aria-controls="screen-settings" aria-pressed="false">Настройки</button>
+          </div>
+          <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false">Тёмная тема</button>
+        </div>
+      </header>
+      <div class="concept-strip"><strong>Концепция · учебные данные · действия демонстрационные</strong></div>
+
+      <main id="main-content">
+        <section class="screen" id="screen-catalog" data-screen-panel="catalog" aria-labelledby="catalog-heading">
+          <div class="screen-heading">
+            <div>
+              <span class="eyebrow">Ozon · Карточки</span>
+              <h2 id="catalog-heading">Каталог товаров</h2>
+              <p>В одной строке видны тип объекта, состояние и отдельные ценовые факты.</p>
+            </div>
+            <button class="button-primary" type="button" data-demo-message="Добавление внутреннего товара">Добавить товар</button>
+          </div>
+          <form class="filter-bar" id="catalog-filters">
+            <div class="field search-field">
+              <label for="catalog-search">Поиск по товарам</label>
+              <input class="text-input" id="catalog-search" type="search" placeholder="Название или поставщик" autocomplete="off">
+            </div>
+            <div class="field filter-field">
+              <label for="catalog-state">Состояние</label>
+              <select class="select-input" id="catalog-state">
+                <option value="all">Все состояния</option>
+                <option value="needs">Нужно заполнить</option>
+                <option value="draft">Есть черновик</option>
+              </select>
+            </div>
+            <span class="count-label" id="catalog-count" aria-live="polite">2 учебных товара</span>
+          </form>
+          <div class="list-head" aria-hidden="true"><span>Карточка Ozon</span><span>Состояние</span><span>Цена продавца / предложение</span><span>Покупательская цена</span><span>Действие</span></div>
+          <ul class="product-list" id="product-list" aria-label="Карточки Ozon">
+            <li class="product-row" data-state="needs" data-search="настольный органайзер учебный каталог">
+              <div class="product-cell" data-label="Товар">
+                <div class="product-main"><span class="product-thumb" aria-hidden="true">▤</span><span><span class="product-name">Настольный органайзер</span><span class="product-meta">Карточка Ozon · внутренний товар не связан</span><span class="product-meta">ID предложения OZN-DEMO-0421 · учебный, без ссылки</span><span class="product-meta">Источник: учебный каталог · свежесть неизвестна</span></span></div>
+              </div>
+              <div class="product-cell" data-label="Состояние"><span class="status"><span class="status-dot" aria-hidden="true"></span>Нужно заполнить</span></div>
+              <div class="product-cell" data-label="Цена продавца / предложение"><span class="cell-label">Цена продавца / предложение</span><span class="fact-line unknown">Цена продавца: неизвестна</span><span class="fact-line unknown">Предложение: не задано</span></div>
+              <div class="product-cell" data-label="Покупательская цена"><span class="cell-label">Покупательская цена</span><span class="fact-line unknown">Ozon: нет наблюдения</span><span class="fact-line unknown">Скидка площадки: неизвестна</span></div>
+              <button class="row-action" type="button" data-screen="card">Открыть карточку</button>
+            </li>
+            <li class="product-row" data-state="draft" data-search="коробка для хранения учебный каталог">
+              <div class="product-cell" data-label="Товар">
+                <div class="product-main"><span class="product-thumb" aria-hidden="true">▧</span><span><span class="product-name">Коробка для хранения</span><span class="product-meta">Карточка Ozon · есть отдельный черновик обновления</span><span class="product-meta">ID предложения OZN-DEMO-0422 · учебный, без ссылки</span><span class="product-meta">Черновик DRAFT-DEMO-0422 · отдельная запись</span><span class="product-meta">Источник: учебный каталог · свежесть неизвестна</span></span></div>
+              </div>
+              <div class="product-cell" data-label="Состояние"><span class="status"><span class="status-dot" aria-hidden="true"></span>Есть черновик обновления</span></div>
+              <div class="product-cell" data-label="Цена продавца / предложение"><span class="cell-label">Цена продавца / предложение</span><span class="fact-line unknown">Цена продавца: неизвестна</span><span class="fact-line unknown">Предложение: не задано</span></div>
+              <div class="product-cell" data-label="Покупательская цена"><span class="cell-label">Покупательская цена</span><span class="fact-line unknown">Ozon: нет наблюдения</span><span class="fact-line unknown">Скидка площадки: неизвестна</span></div>
+              <button class="row-action" type="button" data-screen="preparation">Открыть подготовку</button>
+            </li>
+            <li class="empty-state" id="catalog-empty" hidden>По заданному поиску товаров нет.</li>
+          </ul>
+          <section class="wb-action" aria-labelledby="wb-action-heading">
+            <div><span class="eyebrow">Wildberries · отдельное действие</span><strong id="wb-action-heading">Группировка WB-карточек</strong><p>Группировка карточек Wildberries по imtID не связывает внутренний товар с карточкой Ozon.</p></div>
+            <button class="button-secondary" type="button" data-demo-message="Объединение карточек Wildberries по imtID">Объединить карточки WB по imtID</button>
+          </section>
+        </section>
+
+        <section class="screen" id="screen-card" data-screen-panel="card" aria-labelledby="card-main-heading" hidden>
+          <div class="screen-heading">
+            <div>
+              <span class="eyebrow">Товар · Ozon</span>
+              <h2 id="card-main-heading">Настольный органайзер</h2>
+              <p>Один объект остаётся в заголовке при переключении между обзором и управлением.</p>
+            </div>
+            <span class="type-tag">Карточка Ozon</span>
+          </div>
+          <div class="identity-block"><span class="channel-tag">Ozon · Учебный кабинет</span><span class="status"><span class="status-dot" aria-hidden="true"></span>Нужно заполнить</span><span class="plain-tag">Внутренний товар — отдельная сущность</span></div>
+          <div class="tabs" role="tablist" aria-label="Разделы карточки товара">
+            <button class="tab" id="tab-overview" type="button" role="tab" aria-selected="true" aria-controls="panel-overview" tabindex="0">Обзор</button>
+            <button class="tab" id="tab-management" type="button" role="tab" aria-selected="false" aria-controls="panel-management" tabindex="-1">Управление</button>
+          </div>
+          <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+            <div class="card-overview">
+              <div class="product-art" role="img" aria-label="Условная иллюстрация настольного органайзера">
+                <div class="art-sheet" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+                <span class="art-caption">Учебная иллюстрация · фото не загружено</span>
+              </div>
+              <div>
+                <div class="facts-grid">
+                  <dl class="fact"><dt>Тип объекта</dt><dd>Карточка Ozon</dd></dl>
+                  <dl class="fact"><dt>Внутренний товар</dt><dd>Настольный органайзер</dd></dl>
+                  <dl class="fact"><dt>Источник</dt><dd>Учебный каталог поставщика</dd></dl>
+                  <dl class="fact"><dt>Состояние</dt><dd>Нужно заполнить</dd></dl>
+                </div>
+                <div class="fact-section">
+                  <h3>Цены — отдельные факты</h3>
+                  <dl class="price-lanes">
+                    <div class="price-lane"><dt>Цена продавца</dt><dd class="unknown">Неизвестна</dd><small>Нет наблюдаемого значения</small></div>
+                    <div class="price-lane"><dt>Покупательская цена Ozon</dt><dd class="unknown">Нет наблюдения</dd><small>Не подменяется ценой продавца</small></div>
+                    <div class="price-lane"><dt>Предложение продавца</dt><dd class="unknown">Не задано</dd><small>Отдельное изменяемое поле</small></div>
+                  </dl>
+                </div>
+              </div>
+            </div>
+            <div class="fact-section">
+              <h3>Что известно об объекте</h3>
+              <div class="facts-grid">
+                <dl class="fact"><dt>Название из источника</dt><dd>Настольный органайзер с отделениями</dd></dl>
+                <dl class="fact"><dt>Категория</dt><dd>Не выбрана</dd></dl>
+                <dl class="fact"><dt>Свежесть источника</dt><dd class="unknown">Оценка по учебному снимку · время наблюдения неизвестно</dd></dl>
+                <dl class="fact"><dt>Публикация</dt><dd>Не выполнялась</dd></dl>
+              </div>
+            </div>
+            <div class="button-row"><button class="button-primary" type="button" data-screen="preparation">Перейти к подготовке</button><button class="button-secondary" type="button" data-demo-message="Связь внутреннего товара и карточки Ozon не подтверждена.">Показать связь объектов</button></div>
+          </div>
+          <div id="panel-management" role="tabpanel" aria-labelledby="tab-management" tabindex="0" hidden>
+            <div class="management-layout">
+              <div>
+                <div class="fact-section"><h3>Состояние управления</h3>
+                  <dl class="management-list">
+                    <li><strong>Остаток</strong><span>Нет наблюдения</span></li>
+                    <li><strong>Склад</strong><span>Не выбран</span></li>
+                    <li><strong>Цена продавца</strong><span>Неизвестна · источник не подтверждён</span></li>
+                    <li><strong>Предложение продавца</strong><span>Не задано · отдельное редактируемое поле</span></li>
+                    <li><strong>Покупательская цена Ozon</strong><span>Нет наблюдения · не заменяется seller price</span></li>
+                  </dl>
+                </div>
+                <div class="fact-section"><h3>Связанные объекты</h3><p class="inline-note">Внутренний товар и карточка Ozon показаны отдельно. Связь не предполагается по совпадению названия.</p></div>
+              </div>
+              <aside class="quiet-panel"><h3>Снимок карточки</h3><p>Текущее наблюдение отсутствует. Доступ кабинета не подтверждён.</p></aside>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-preparation" data-screen-panel="preparation" aria-labelledby="preparation-heading" hidden>
+          <div class="screen-heading">
+            <div><span class="eyebrow">Товар · Карточка Ozon</span><h2 id="preparation-heading">Подготовка карточки</h2><p>Поля черновика, этапы процесса и проверка собраны вокруг одного товара.</p></div>
+            <span class="type-tag">Настольный органайзер</span>
+          </div>
+          <ol class="prep-step-list" id="prep-steps" aria-label="Этапы подготовки и публикации">
+            <li data-step="1" data-state="done"><span class="step-mark" aria-hidden="true">✓</span><span>Источник</span></li>
+            <li data-step="2" data-state="done"><span class="step-mark" aria-hidden="true">✓</span><span>Внутренний товар</span></li>
+            <li data-step="3" data-state="current" aria-current="step"><span class="step-mark" aria-hidden="true">3</span><span>Черновик Ozon</span></li>
+            <li data-step="4"><span class="step-mark" aria-hidden="true">4</span><span>Проверка</span></li>
+            <li data-step="5"><span class="step-mark" aria-hidden="true">5</span><span>Публикация</span></li>
+            <li data-step="6"><span class="step-mark" aria-hidden="true">6</span><span>Результат</span></li>
+          </ol>
+          <div class="prep-layout">
+            <div class="editor-column">
+              <div class="source-summary"><span class="eyebrow">Источник и свежесть</span><strong>Учебный каталог поставщика</strong><p>Настольный органайзер с отделениями · оценка по учебному снимку · время наблюдения неизвестно.</p></div>
+              <form class="editor-fields" id="draft-form">
+                <div class="field"><label for="draft-title">Название карточки Ozon</label><input class="text-input" id="draft-title" name="title" value="Настольный органайзер с отделениями" autocomplete="off"></div>
+                <div class="field"><label for="draft-description">Описание</label><textarea class="text-area" id="draft-description" name="description">Настольный органайзер для хранения канцелярских принадлежностей.</textarea></div>
+                <div class="facts-grid">
+                  <dl class="fact"><dt>Цена продавца</dt><dd class="unknown">Неизвестна</dd></dl>
+                  <dl class="fact"><dt>Покупательская цена Ozon</dt><dd class="unknown">Нет наблюдения</dd></dl>
+                  <dl class="fact"><dt>Предложение продавца</dt><dd class="unknown">Не задано</dd></dl>
+                  <dl class="fact"><dt>Скидка площадки</dt><dd class="unknown">Неизвестна</dd></dl>
+                </div>
+                <div class="button-row"><button class="button-primary" id="save-draft" type="button">Сохранить черновик</button><button class="button-secondary" id="go-to-review" type="button">Перейти к проверке</button></div>
+                <p class="draft-state" id="draft-state" role="status" aria-live="polite"></p>
+              </form>
+            </div>
+            <aside class="review-column" aria-labelledby="review-heading">
+              <span class="eyebrow">Отдельная зона контроля</span><h3 id="review-heading" tabindex="-1">Проверка перед публикацией</h3><p id="review-intro">Проверьте обязательные поля карточки перед продолжением.</p>
+              <ul class="check-list">
+                <li><span class="check-symbol" aria-hidden="true">!</span><span>Категория и обязательные характеристики не выбраны.</span></li>
+                <li><span class="check-symbol" aria-hidden="true">?</span><span>Цена продавца отсутствует; покупательская цена не наблюдалась.</span></li>
+                <li><span class="check-symbol" aria-hidden="true">?</span><span>Предложение продавца остаётся отдельным незаданным значением.</span></li>
+              </ul>
+              <div class="demo-callout">Публикация — отдельный этап после проверки; результат пока не подтверждён.</div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-operations" data-screen-panel="operations" aria-labelledby="operations-heading" hidden>
+          <div class="screen-heading"><div><span class="eyebrow">История · Ozon</span><h2 id="operations-heading">Операции</h2><p>Результат, счётчики и проблемные строки видны до открытия технических подробностей.</p></div><button class="button-secondary" type="button" data-demo-message="Фильтры доступны по типу операции, каналу и результату.">Настроить фильтр</button></div>
+          <div class="summary-band"><strong>Обновление карточек</strong><span class="status" style="background:var(--negative-soft);color:var(--negative)"><span class="status-dot" aria-hidden="true"></span>Завершено с ошибками</span><span class="summary-count">2 товара</span><span class="summary-count">0 успешно</span><span class="summary-count">2 ошибки</span><span class="summary-count">Сегодня, 10:42</span></div>
+          <div class="operation-list" aria-label="Строки результата операции">
+            <article class="operation-row">
+              <div><span class="operation-name">Настольный органайзер</span><span class="operation-meta">Карточка Ozon · Учебный кабинет</span></div>
+              <div><span class="status" style="background:var(--negative-soft);color:var(--negative)">Ошибка</span><span class="operation-meta">Не выбрана категория</span></div>
+              <div class="error-copy">Карточка не прошла учебную проверку.</div>
+              <details class="operation-detail"><summary>Технические детали</summary><div class="technical-details"><code>validation_failed</code><br>Причина: не выбрана категория</div></details>
+            </article>
+            <article class="operation-row">
+              <div><span class="operation-name">Коробка для хранения</span><span class="operation-meta">Карточка Ozon · Учебный кабинет</span></div>
+              <div><span class="status" style="background:var(--negative-soft);color:var(--negative)">Ошибка</span><span class="operation-meta">Проверка карточки</span></div>
+              <div class="error-copy">Не удалось подтвердить состояние карточки.</div>
+              <details class="operation-detail"><summary>Технические детали</summary><div class="technical-details"><code>status_unavailable</code><br>Состояние карточки не подтверждено</div></details>
+            </article>
+          </div>
+          <section class="unknown-operation" aria-labelledby="unknown-heading">
+            <div><span class="eyebrow">Отдельное наблюдение</span><strong id="unknown-heading">Неизвестный исход</strong><p>Черновик Ozon · учебная запись · результат не подтверждён.</p></div>
+            <p>Повторная запись недоступна до сверки фактического состояния карточки.</p>
+          </section>
+        </section>
+
+        <section class="screen" id="screen-settings" data-screen-panel="settings" aria-labelledby="settings-heading" hidden>
+          <div class="screen-heading"><div><span class="eyebrow">Кабинет · Ozon</span><h2 id="settings-heading">Настройки</h2><p>Состояние подключения и подтверждённые возможности кабинета показаны отдельно.</p></div><span class="channel-tag">Учебный кабинет</span></div>
+          <div class="settings-grid">
+            <div>
+              <section class="settings-section" aria-labelledby="connection-heading"><h3 id="connection-heading">Подключение</h3>
+                <div class="setting-row"><span class="setting-label">Подключение в интерфейсе</span><span class="setting-value"><span class="status status-enabled"><span class="status-dot" aria-hidden="true"></span>Включено</span></span></div>
+                <div class="setting-row"><span class="setting-label">Фактический доступ к методам</span><span class="setting-value unknown">Не подтверждён</span></div>
+                <div class="setting-row"><span class="setting-label">Состояние кабинета</span><span class="setting-value">Учебный кабинет · доступ не проверен</span></div>
+                <div class="setting-row"><span class="setting-label">Проверка подключения</span><span class="setting-value unknown">Не выполнялась</span></div>
+              </section>
+              <section class="settings-section" aria-labelledby="catalog-settings-heading"><h3 id="catalog-settings-heading">Параметры товаров</h3>
+                <div class="setting-row"><span class="setting-label">Источник новых товаров</span><span class="setting-value">Учебный каталог поставщика</span></div>
+                <div class="setting-row"><span class="setting-label">Покупательские цены</span><span class="setting-value unknown">Нет наблюдений</span></div>
+              </section>
+              <section class="settings-section" aria-labelledby="notification-settings-heading"><h3 id="notification-settings-heading">Уведомления</h3>
+                <div class="setting-row"><span class="setting-label">Результаты операций</span><span class="setting-value">Состояние канала уведомлений не проверялось</span></div>
+              </section>
+            </div>
+            <aside>
+              <section class="settings-section state-pair" aria-labelledby="access-heading"><h3 id="access-heading">Доступ и роли</h3>
+                <div class="state-line"><span>Настройка</span><strong class="status-enabled">Подключение включено</strong><span>Отдельно от фактического доступа.</span></div>
+                <div class="state-line"><span>Фактический доступ</span><strong>Не подтверждён</strong><span>Перечень ролей сам по себе не доказывает доступ к каждому методу.</span></div>
+                <details><summary>Как читать это состояние</summary><div class="technical-details">Список ролей показывает назначенные разрешения. Фактическая доступность метода подтверждается отдельной проверкой.</div></details>
+              </section>
+              <div class="quiet-panel"><h3>Диагностика</h3><p>Источник состояния и время последней проверки неизвестны.</p></div>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <div class="notice" id="demo-notice" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+    (() => {
+      "use strict";
+      const root = document.documentElement;
+      const panels = [...document.querySelectorAll("[data-screen-panel]")];
+      const screenButtons = [...document.querySelectorAll("[data-screen]")];
+      const title = document.getElementById("workspace-title");
+      const kicker = document.getElementById("workspace-kicker");
+      const sidebar = document.getElementById("sidebar");
+      const menuToggle = document.getElementById("menu-toggle");
+      const navScrim = document.getElementById("nav-scrim");
+      const notice = document.getElementById("demo-notice");
+      const screenMeta = {
+        catalog: ["Каталог", "Товары · Карточки", "screen-catalog"],
+        card: ["Настольный органайзер", "Товары · Карточка Ozon", "screen-card"],
+        preparation: ["Подготовка", "Товары · Подготовка", "screen-preparation"],
+        operations: ["Операции", "История · Ozon", "screen-operations"],
+        settings: ["Настройки", "Кабинет · Ozon", "screen-settings"]
+      };
+      const navSectionForScreen = { catalog: "catalog", card: "catalog", preparation: "catalog", operations: "operations", settings: "settings" };
+      let mobileNavOpen = false;
+      let noticeTimer;
+
+      function announce(message) {
+        notice.textContent = message;
+        window.clearTimeout(noticeTimer);
+        noticeTimer = window.setTimeout(() => { notice.textContent = ""; }, 5200);
+      }
+
+      function closeMobileNav(returnFocus) {
+        mobileNavOpen = false;
+        sidebar.classList.remove("is-open");
+        sidebar.inert = true;
+        sidebar.setAttribute("aria-hidden", "true");
+        menuToggle.setAttribute("aria-expanded", "false");
+        menuToggle.setAttribute("aria-label", "Открыть меню");
+        navScrim.hidden = true;
+        if (returnFocus) menuToggle.focus();
+      }
+
+      function openMobileNav() {
+        mobileNavOpen = true;
+        sidebar.classList.add("is-open");
+        sidebar.inert = false;
+        sidebar.removeAttribute("aria-hidden");
+        menuToggle.setAttribute("aria-expanded", "true");
+        menuToggle.setAttribute("aria-label", "Закрыть меню");
+        navScrim.hidden = false;
+        const activeLink = sidebar.querySelector('[aria-current="page"]');
+        if (activeLink) activeLink.focus();
+      }
+
+      function syncNavToViewport() {
+        const compact = window.matchMedia("(max-width: 54rem)").matches;
+        if (compact) {
+          menuToggle.hidden = false;
+          if (!mobileNavOpen) closeMobileNav(false);
+        } else {
+          mobileNavOpen = false;
+          menuToggle.hidden = true;
+          menuToggle.setAttribute("aria-expanded", "false");
+          sidebar.classList.remove("is-open");
+          sidebar.inert = false;
+          sidebar.removeAttribute("aria-hidden");
+          navScrim.hidden = true;
+        }
+      }
+
+      function activateScreen(key, focusHeading = false) {
+        const meta = screenMeta[key];
+        if (!meta) return;
+        title.textContent = meta[0];
+        kicker.textContent = meta[1];
+        panels.forEach(panel => { panel.hidden = panel.dataset.screenPanel !== key; });
+        screenButtons.forEach(button => {
+          const active = button.dataset.screen === key;
+          if (button.classList.contains("switch-button")) button.setAttribute("aria-pressed", String(active));
+          if (button.classList.contains("nav-button")) {
+            if (button.dataset.screen === navSectionForScreen[key]) button.setAttribute("aria-current", "page");
+            else button.removeAttribute("aria-current");
+          }
+        });
+        if (focusHeading) title.focus();
+      }
+
+      screenButtons.forEach(button => button.addEventListener("click", () => {
+        activateScreen(button.dataset.screen, Boolean(button.closest("[data-screen-panel]")));
+        if (button.classList.contains("nav-button") && window.matchMedia("(max-width: 54rem)").matches) {
+          closeMobileNav(false);
+          title.focus();
+        }
+      }));
+
+      menuToggle.addEventListener("click", () => mobileNavOpen ? closeMobileNav(true) : openMobileNav());
+      navScrim.addEventListener("click", () => closeMobileNav(true));
+      document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && mobileNavOpen) {
+          event.preventDefault();
+          closeMobileNav(true);
+        }
+      });
+      window.addEventListener("resize", syncNavToViewport, { passive: true });
+      syncNavToViewport();
+
+      document.getElementById("theme-toggle").addEventListener("click", event => {
+        const dark = root.dataset.theme !== "dark";
+        root.dataset.theme = dark ? "dark" : "light";
+        event.currentTarget.setAttribute("aria-pressed", String(dark));
+        event.currentTarget.textContent = dark ? "Светлая тема" : "Тёмная тема";
+      });
+
+      const tabs = [...document.querySelectorAll('[role="tab"]')];
+      function activateCardTab(tab, moveFocus = false) {
+        tabs.forEach(item => {
+          const selected = item === tab;
+          item.setAttribute("aria-selected", String(selected));
+          item.tabIndex = selected ? 0 : -1;
+          document.getElementById(item.getAttribute("aria-controls")).hidden = !selected;
+        });
+        if (moveFocus) tab.focus();
+      }
+      tabs.forEach((tab, index) => {
+        tab.addEventListener("click", () => activateCardTab(tab));
+        tab.addEventListener("keydown", event => {
+          let nextIndex = index;
+          if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+          else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === "Home") nextIndex = 0;
+          else if (event.key === "End") nextIndex = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          activateCardTab(tabs[nextIndex], true);
+        });
+      });
+
+      const search = document.getElementById("catalog-search");
+      const stateFilter = document.getElementById("catalog-state");
+      const rows = [...document.querySelectorAll(".product-row")];
+      const count = document.getElementById("catalog-count");
+      const empty = document.getElementById("catalog-empty");
+      function filterCatalog() {
+        const needle = search.value.trim().toLocaleLowerCase("ru");
+        const wantedState = stateFilter.value;
+        let visible = 0;
+        rows.forEach(row => {
+          const matchText = row.dataset.search.includes(needle);
+          const matchState = wantedState === "all" || row.dataset.state === wantedState;
+          row.hidden = !(matchText && matchState);
+          if (!row.hidden) visible += 1;
+        });
+        count.textContent = `${visible} ${visible === 1 ? "учебный товар" : "учебных товара"}`;
+        empty.hidden = visible !== 0;
+      }
+      document.getElementById("catalog-filters").addEventListener("submit", event => event.preventDefault());
+      search.addEventListener("input", filterCatalog);
+      stateFilter.addEventListener("change", filterCatalog);
+
+      document.getElementById("draft-form").addEventListener("submit", event => event.preventDefault());
+      document.getElementById("save-draft").addEventListener("click", () => {
+        document.getElementById("draft-state").textContent = "Черновик отмечен как сохранённый до перезагрузки страницы.";
+        announce("Черновик отмечен как сохранённый до перезагрузки страницы.");
+      });
+      document.getElementById("go-to-review").addEventListener("click", () => {
+        const steps = [...document.querySelectorAll("#prep-steps li")];
+        steps.forEach((step, index) => {
+          const number = index + 1;
+          step.removeAttribute("aria-current");
+          if (number < 4) {
+            step.dataset.state = "done";
+            step.querySelector(".step-mark").textContent = "✓";
+          } else if (number === 4) {
+            step.dataset.state = "current";
+            step.setAttribute("aria-current", "step");
+            step.querySelector(".step-mark").textContent = String(number);
+          } else {
+            step.removeAttribute("data-state");
+            step.querySelector(".step-mark").textContent = String(number);
+          }
+        });
+        document.getElementById("review-intro").textContent = "Выбран шаг «Проверка». Результат пока не подтверждён.";
+        document.getElementById("review-heading").focus?.();
+        announce("Открыт учебный шаг проверки карточки Ozon.");
+      });
+
+      document.querySelectorAll("[data-demo-message]").forEach(button => button.addEventListener("click", () => {
+        announce(button.dataset.demoMessage);
+        if (button.classList.contains("nav-button") && window.matchMedia("(max-width: 54rem)").matches) {
+          closeMobileNav(true);
+        }
+      }));
+    })();
+  </script>
+</body>
+</html>
