@@ -34,7 +34,9 @@ Root принимает архитектурные решения, провер�
 
 Refresh поставщика/CSV обновляет исходные факты и наследуемые поля, сохраняя ручные overrides. Agent write конфликтует с изменяемым вручную полем; reverse Ozon→common proposal сохраняет прежний exact-account контракт и требует сначала явного reset-inheritance при конфликте. Ручные характеристики/фото не становятся source evidence. Фото выбираются только из exact существующего source/common pool, без arbitrary URL, нового proxy или неподтверждённого upload.
 
-Изменение model schema ожидаемо меняет fingerprints шести прежних startup steps (bootstrap и пять зависимых migrations), плюс добавляется новый последний шаг; остальные receipts не пересертифицируются. Приёмка должна проверить именно этот scoped rerun и повторный no-op запуск на отдельной восстановленной копии, а также expected fail-closed для несовместимого legacy bridge.
+WB preview также получает durable single-use claim: подписанный nonce сохраняется в nullable unique `BulkEditHistory.review_key` до любого provider I/O. Повтор той же подтверждённой формы возвращает существующую seller-owned историю и не создаёт новый вызов, включая failed/unknown результат. Наличие свежего local fingerprint и transport single-attempt само по себе не защищает повторный POST. Legacy history остаётся совместимой с `review_key=NULL`.
+
+Изменение model schema ожидаемо меняет fingerprints шести прежних startup steps (bootstrap и пять зависимых migrations), плюс добавляются два последних шага: common overrides и WB bulk review key; остальные receipts не пересертифицируются. Приёмка должна проверить именно этот scoped rerun и повторный no-op запуск на отдельной восстановленной копии, а также expected fail-closed для несовместимого legacy bridge.
 
 ## Сверка переданного списка
 
