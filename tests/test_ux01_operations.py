@@ -430,7 +430,7 @@ def test_batch31_detail_shows_readable_field_values_and_seller_scoped_fix_links(
         "status": "failed",
         "reason": "foreign_id_payload",
         "error": "Foreign row must not receive a link",
-    }], error_count=1, operation_id=31, product_changes=[change], owned_product_ids=[814])
+    }], error_count=1, operation_id=31, product_changes=[change, foreign_change], owned_product_ids=[814])
 
     assert "Завершено с ошибками" in html
     assert "0 из 2" in html
@@ -454,5 +454,8 @@ def test_batch31_detail_shows_readable_field_values_and_seller_scoped_fix_links(
     assert "Да" in html and "Нет" in html
     assert "Полное структурированное значение" in html
     assert "Foreign seller private title" not in html
+    assert "Foreign details must stay hidden" not in html
+    assert "foreign before" not in html and "foreign after" not in html
+    assert "Сведения об этой карточке скрыты" in html
     assert 'href="/products/815"' not in html
     assert "WB вернул ошибку" in html

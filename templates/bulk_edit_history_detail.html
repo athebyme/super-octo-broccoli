@@ -401,6 +401,12 @@
             {% for change in product_changes %}
             {% set change_product_owned = change.product and change.product.id == change.product_id and change.product.seller_id == bulk_operation.seller_id %}
             <div class="border border-gray-200 rounded-lg p-4 {% if change.reverted %}opacity-60{% endif %}" data-operations-product-id="{{ change.product_id }}">
+                {% if change.product and not change_product_owned %}
+                <div>
+                    <h4 class="font-semibold text-gray-900">Товар #{{ change.product_id }}</h4>
+                    <p class="mt-2 text-sm text-gray-600">Сведения об этой карточке скрыты, потому что её принадлежность продавцу не подтверждена.</p>
+                </div>
+                {% else %}
                 <div class="flex items-start justify-between">
                     <div class="flex-1">
                         <div class="flex items-center space-x-2 mb-1">
@@ -486,6 +492,7 @@
                         {% endif %}
                     </div>
                 </div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
