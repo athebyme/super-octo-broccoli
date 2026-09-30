@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from scripts import startup_migrations as startup
-from scripts.startup_migration_steps import MigrationStep
+from scripts.startup_migration_steps import MigrationStep, migration_steps
+from migrations.migrate_add_imported_content_overrides import migrate as migrate_common_content
 
 
 def _write(root: Path, relative: str, body: str) -> Path:
@@ -18,6 +19,61 @@ def _write(root: Path, relative: str, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
     return path
+
+
+def test_common_content_schema_step_is_appended_after_existing_plan():
+    steps = migration_steps()
+    assert len(steps) == 80
+    assert steps[-1].key == "migrate-add-imported-content-overrides"
+    assert steps[-1].script == "migrations/migrate_add_imported_content_overrides.py"
+    assert len({step.key for step in steps}) == len(steps)
+
+
+def test_common_content_migration_preserves_populated_legacy_imported_products(tmp_path):
+    database = tmp_path / "populated-legacy.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE imported_products ("
+            "id INTEGER PRIMARY KEY, seller_id INTEGER NOT NULL, title TEXT, "
+            "description TEXT, original_data TEXT, import_status TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO imported_products (id,seller_id,title,description,original_data,import_status) "
+            "VALUES (41,7,'Existing title','Existing description','{\"title\":\"Existing title\"}','validated')"
+        )
+
+    assert migrate_common_content(str(database)) is True
+    assert migrate_common_content(str(database)) is True
+    with sqlite3.connect(database) as connection:
+        columns = {row[1]: row for row in connection.execute("PRAGMA table_info(imported_products)")}
+        row = connection.execute(
+            "SELECT id,seller_id,title,description,original_data,import_status,content_overrides_json,content_edit_version "
+            "FROM imported_products WHERE id=41"
+        ).fetchone()
+
+    assert columns["content_overrides_json"][2] == "TEXT"
+    assert columns["content_overrides_json"][3] == 0
+    assert columns["content_edit_version"][2] == "INTEGER"
+    assert columns["content_edit_version"][3] == 1
+    assert str(columns["content_edit_version"][4]).strip("'\"() ") == "1"
+    assert row == (41, 7, "Existing title", "Existing description", '{"title":"Existing title"}', "validated", None, 1)
+
+
+def test_common_content_migration_rolls_back_partial_ddl_on_incompatible_schema(tmp_path):
+    database = tmp_path / "incompatible.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE imported_products ("
+            "id INTEGER PRIMARY KEY, content_edit_version TEXT NOT NULL DEFAULT '1')"
+        )
+        connection.execute("INSERT INTO imported_products (id,content_edit_version) VALUES (1,'1')")
+
+    assert migrate_common_content(str(database)) is False
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(imported_products)")}
+        values = connection.execute("SELECT content_edit_version FROM imported_products WHERE id=1").fetchone()
+    assert "content_overrides_json" not in columns
+    assert values == ("1",)
 
 
 @pytest.fixture

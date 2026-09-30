@@ -135,6 +135,11 @@ def migration_steps() -> tuple[MigrationStep, ...]:
         _python("migrations/migrate_compact_competitor_snapshots.py", "{database}"),
     ])
 
+    steps.append(_python(
+        "migrations/migrate_add_imported_content_overrides.py",
+        "{database}",
+    ))
+
     keys = [step.key for step in steps]
     if len(keys) != len(set(keys)):
         raise RuntimeError("Startup migration plan contains duplicate step keys")

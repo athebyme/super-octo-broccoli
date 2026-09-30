@@ -1161,6 +1161,12 @@ class ImportedProduct(db.Model):
     supplier_id = db.Column(db.Integer, db.ForeignKey('suppliers.id'), nullable=True, index=True)
     # Последняя версия общей SupplierProduct, скопированная продавцу.
     supplier_content_revision = db.Column(db.Integer, default=0, nullable=False)
+    # Seller-authored common content is separate from observed original_data.
+    # Only allowlisted title/description/photos/characteristics live here.
+    content_overrides_json = db.Column(db.Text, nullable=True)
+    content_edit_version = db.Column(
+        db.Integer, default=1, server_default='1', nullable=False,
+    )
 
     # Исходные данные из CSV
     external_id = db.Column(db.String(200), index=True)  # ID из внешнего источника
