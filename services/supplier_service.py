@@ -1624,11 +1624,37 @@ class SupplierService:
             for name, value in marketplace_characteristics.items():
                 add_fact(suggested, suggested_names, name, value)
 
+        marketplace_results = []
+        meta = ai_marketplace.get('_meta', {}) if isinstance(ai_marketplace, dict) else {}
+        if isinstance(meta, dict) and meta.get('workflow') == 'codex_luna_v2':
+            from services.supplier_luna_enrichment import source_matches
+            current_source = source_matches(product, meta)
+            channels = meta.get('channels', {})
+            for code, label in (('wb', 'Wildberries'), ('ozon', 'Ozon')):
+                channel = channels.get(code) if isinstance(channels, dict) else None
+                if not isinstance(channel, dict):
+                    continue
+                confirmed, inferred, approved = [], [], []
+                for key, target in (('fields', confirmed), ('inferences', inferred),
+                                    ('approved_inferences', approved)):
+                    names = set()
+                    for fact in (channel.get(key) or [])[:80]:
+                        if isinstance(fact, dict):
+                            add_fact(target, names, fact.get('name'), fact.get('value'))
+                marketplace_results.append({
+                    'code': code, 'label': label,
+                    'category': str((channel.get('target') or {}).get('name') or '')[:300],
+                    'confirmed': confirmed, 'inferred': inferred, 'approved': approved,
+                    'missing_required_count': len(channel.get('missing_required') or []),
+                    'source_current': current_source,
+                })
+
         return {
             'observed': observed,
             'suggested': suggested,
             'observed_count': len(observed),
             'suggested_count': len(suggested),
+            'marketplace_results': marketplace_results,
         }
 
     @staticmethod
@@ -2154,13 +2180,19 @@ class SupplierService:
     # ===================================================================
 
     @staticmethod
-    def _get_ai_service(supplier: Supplier, model_override: str = None):
+    def _get_ai_service(supplier: Supplier, model_override: str = None,
+                        task_profile: str = None):
         """Создать AIService из настроек поставщика"""
         from services.ai_service import AIConfig, AIService as AISvc
-        config = AIConfig.from_settings(supplier)
+        if task_profile == 'supplier_parsing_flash':
+            config = AIConfig.for_supplier_parsing(supplier, model_override)
+        elif task_profile is None:
+            config = AIConfig.from_settings(supplier)
+        else:
+            raise ValueError('Неизвестный профиль AI-задачи.')
         if not config:
             return None
-        if model_override:
+        if model_override and task_profile is None:
             config.model = model_override
         return AISvc(config)
 
@@ -4618,6 +4650,10 @@ def _supplier_characteristics_payload(sp: SupplierProduct) -> Optional[str]:
                     if not str(name).startswith('_')
                     and value not in (None, '', [])
                 }
+                if meta.get('workflow') == 'codex_luna_v2':
+                    from services.supplier_luna_enrichment import source_matches
+                    if not source_matches(sp, meta):
+                        marketplace_fields = {}
         except (TypeError, ValueError):
             marketplace_fields = {}
 

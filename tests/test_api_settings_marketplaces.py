@@ -42,7 +42,7 @@ class ApiSettingsMarketplaceTest(unittest.TestCase):
     def _user():
         return SimpleNamespace(
             id=17,
-            seller=SimpleNamespace(id=71),
+            seller=SimpleNamespace(id=71, wb_api_key="synthetic-private-wb-key"),
             is_authenticated=True,
             is_active=True,
             is_admin=False,
@@ -81,19 +81,25 @@ class ApiSettingsMarketplaceTest(unittest.TestCase):
         self.assertFalse(context["ozon_publication_enabled"])
         self.assertFalse(context["ozon_commercial_writes_enabled"])
         self.assertNotIn("credentials_encrypted", str(context))
+        self.assertEqual(context["wb_credential"], {
+            "configured": True, "expired": False, "expires_at": None,
+        })
 
-    def test_template_has_direct_ozon_create_and_read_only_check_forms(self):
+    def test_template_uses_one_ozon_setup_entry_and_keeps_wb_form_safe(self):
         self.app.jinja_env.get_template("api_settings.html")
         template = (
             Path(__file__).parents[1] / "templates" / "api_settings.html"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("marketplace_accounts.create_ozon", template)
-        self.assertIn("marketplace_accounts.check", template)
-        self.assertIn('name="return_to" value="api_settings"', template)
+        self.assertIn("marketplace_accounts.index", template)
+        self.assertNotIn("marketplace_accounts.create_ozon", template)
+        self.assertNotIn("marketplace_accounts.check", template)
+        self.assertIn("НДС и настройки публикации можно выбрать позже", template)
         self.assertIn('name="csrf_token"', template)
         self.assertIn("Публикация карточек и изменение цен или остатков", template)
         self.assertNotIn("credentials_encrypted", template)
+        self.assertNotIn('value="{{ seller.wb_api_key', template)
+        self.assertIn("wb_credential.expired", template)
 
 
 if __name__ == "__main__":

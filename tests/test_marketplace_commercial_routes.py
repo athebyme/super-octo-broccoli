@@ -2,6 +2,7 @@
 """Commercial routes keep tenant, review, type and feature-flag boundaries."""
 
 import json
+from datetime import datetime
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,8 @@ from models import (
     Marketplace,
     MarketplaceCommercialProposal,
     MarketplaceListing,
+    MarketplaceWarehouse,
+    MarketplaceWarehouseStock,
     Seller,
     SellerMarketplaceAccount,
     User,
@@ -230,6 +233,70 @@ class MarketplaceCommercialRoutesTest(unittest.TestCase):
         self.assertNotIn("foreign-commercial-secret", encoded)
         self.assertNotIn("foreign-route-idempotency-secret", foreign.get_data(as_text=True))
 
+    def test_context_uses_seller_price_and_exact_free_stock_without_provider(self):
+        with self.app.app_context():
+            listing = db.session.get(MarketplaceListing, self.listing1_id)
+            listing.title = 'Цена {{ literal }} <script>literal</script>'
+            listing.price_summary_json = json.dumps({"available": True, "currency": "RUB",
+                "values": {"price": "1000.05", "marketing_seller_price": "850", "old_price": "1200"}})
+            listing.stock_summary_json = '{"present":9999}'
+            warehouse = MarketplaceWarehouse(seller_id=self.seller1_id, marketplace_id=listing.marketplace_id,
+                account_id=self.account1_id, external_warehouse_id="7001", name="Наш FBS",
+                sync_fingerprint="a"*64, last_seen_at=datetime.utcnow(), last_synced_at=datetime.utcnow())
+            db.session.add(warehouse)
+            db.session.flush()
+            db.session.add(MarketplaceWarehouseStock(seller_id=self.seller1_id,
+                marketplace_id=listing.marketplace_id, account_id=self.account1_id, listing_id=listing.id,
+                warehouse_id=warehouse.id, offer_id=listing.offer_id, external_product_id=listing.external_product_id,
+                sku="9001", present=5, reserved=5, free_stock=0, sync_fingerprint="b"*64, observed_at=datetime.utcnow()))
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch, patch('requests.sessions.Session.request', side_effect=AssertionError('No provider in GET')):
+            response = self.client.get(f'/marketplaces/commercial/listings/{self.listing1_id}/context')
+            listing_response = self.client.get('/marketplaces/commercial/', headers={'Accept':'application/json'})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['price']['price'], '1000.05')
+        self.assertEqual(data['stocks'][0]['free_stock'], 0)
+        self.assertEqual(data['warehouses'][0]['name'], 'Наш FBS')
+        self.assertNotIn('stock_summary', data)
+        self.assertEqual(listing_response.get_json()['items'][0]['product']['title'], 'Цена {{ literal }} <script>literal</script>')
+        self.assertNotIn('credentials', json.dumps(listing_response.get_json()))
+
+    def test_context_rejects_foreign_archived_disabled_and_bounds_warehouses(self):
+        with self.app.app_context():
+            foreign_id = db.session.get(MarketplaceCommercialProposal, self.foreign_proposal_id).listing_id
+            listing = db.session.get(MarketplaceListing, self.listing1_id)
+            for i in range(101):
+                db.session.add(MarketplaceWarehouse(seller_id=self.seller1_id, marketplace_id=listing.marketplace_id,
+                    account_id=self.account1_id, external_warehouse_id=str(8000+i), name=f'Склад {i:03}',
+                    sync_fingerprint='a'*64, last_seen_at=datetime.utcnow(), last_synced_at=datetime.utcnow()))
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            data = self.client.get(f'/marketplaces/commercial/listings/{self.listing1_id}/context').get_json()
+            self.assertEqual(len(data['warehouses']), 100)
+            self.assertTrue(data['warehouses_truncated'])
+            self.assertEqual(self.client.get(f'/marketplaces/commercial/listings/{foreign_id}/context').status_code,404)
+            with self.app.app_context():
+                listing = db.session.get(MarketplaceListing,self.listing1_id)
+                listing.is_archived = True
+                db.session.commit()
+            self.assertEqual(self.client.get(f'/marketplaces/commercial/listings/{self.listing1_id}/context').status_code,409)
+            self.app.config['MARKETPLACE_OZON_ENABLED'] = False
+            self.assertEqual(self.client.get(f'/marketplaces/commercial/listings/{self.listing1_id}/context').status_code,404)
+
+    def test_context_does_not_substitute_unavailable_or_legacy_prices(self):
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            for value in ({'available':False,'values':{'price':'1000'}}, {'price':'1000','discount_price':'850'}):
+                with self.app.app_context():
+                    db.session.get(MarketplaceListing,self.listing1_id).price_summary_json=json.dumps(value)
+                    db.session.commit()
+                data=self.client.get(f'/marketplaces/commercial/listings/{self.listing1_id}/context').get_json()
+                self.assertEqual(data['price'],{})
+                self.assertEqual(data['stocks'],[])
+
     def test_price_json_is_strict_and_uses_authenticated_author(self):
         user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
         with self.app.app_context():
@@ -418,13 +485,13 @@ class MarketplaceCommercialRoutesTest(unittest.TestCase):
         self.assertEqual(duplicate.status_code, 400)
 
     def test_warehouse_sync_accepts_only_empty_object(self):
-        result = SimpleNamespace(to_public_dict=lambda: {"status": "completed"})
+        result = {"id": 1, "kind": "warehouses", "account_id": self.account1_id,
+                  "status": "queued", "active": True}
         user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
-        with user_patch, login_patch, patch.object(
-            MarketplaceWarehouseService,
-            "sync_warehouses",
+        with user_patch, login_patch, patch(
+            "routes.marketplace_commercial.warehouse_reads.enqueue_refresh",
             return_value=result,
-        ) as sync:
+        ) as enqueue:
             unknown = self.client.post(
                 f"/marketplaces/commercial/accounts/{self.account1_id}/warehouses/sync",
                 json={"seller_id": self.seller2_id},
@@ -434,10 +501,10 @@ class MarketplaceCommercialRoutesTest(unittest.TestCase):
                 json={},
             )
         self.assertEqual(unknown.status_code, 400)
-        self.assertEqual(valid.status_code, 200)
-        sync.assert_called_once_with(
-            seller_id=self.seller1_id,
-            account_id=self.account1_id,
+        self.assertEqual(valid.status_code, 202)
+        self.assertEqual(valid.get_json()["refresh"]["status"], "queued")
+        enqueue.assert_called_once_with(
+            seller_id=self.seller1_id, kind="warehouses", account_id=self.account1_id,
         )
 
     def test_unexpected_exception_is_redacted(self):

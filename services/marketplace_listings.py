@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import fcntl
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -41,6 +42,8 @@ from services.marketplace_adapters import (
     get_marketplace_registry,
 )
 from services.marketplace_adapters.base import MarketplaceAdapterError
+from services.marketplace_credential_identity import ozon_credential_fingerprint
+from services.marketplace_operation_locks import try_account_operation_lock
 from services.ozon_api_client import OzonAPIError
 
 
@@ -86,6 +89,7 @@ class MarketplaceListingService:
     MAX_JSON_BYTES = 262_144
     MAX_DESCRIPTION_CHARS = 100_000
     MAX_ATTRIBUTE_VALUE_CHARS = 10_000
+    OZON_DESCRIPTION_ATTRIBUTE_ID = "4191"
     STALE_RUN_AFTER = timedelta(minutes=15)
     PHASES = {
         "active": "ALL",
@@ -367,6 +371,16 @@ class MarketplaceListingService:
                 raise MarketplaceListingValidationError(
                     "adapter and credentials must be injected together"
                 )
+            if credentials.external_account_id != account.external_account_id:
+                raise MarketplaceListingValidationError(
+                    "Injected Ozon credentials do not match the selected account"
+                )
+            if account.has_credentials:
+                stored = account.get_credentials()
+                if not hmac.compare_digest(credentials.api_key, stored['api_key']):
+                    raise MarketplaceListingValidationError(
+                        "Injected Ozon credentials do not match the selected account"
+                    )
             resolved_adapter = adapter
             resolved_credentials = credentials
         else:
@@ -826,6 +840,53 @@ class MarketplaceListingService:
         return result
 
     @classmethod
+    def _description_from_attributes(
+        cls,
+        attributes: List[Dict[str, Any]],
+        field_name: str,
+    ) -> str:
+        """Extract Ozon's exact simple description attribute.
+
+        Current product info does not reliably expose ``description`` as a
+        top-level field.  Attribute 4191 is the authoritative full-state lane;
+        absence is an observed empty description, while an ambiguous or
+        dictionary-backed shape rejects the complete page transaction.
+        """
+        matches = [
+            item
+            for item in attributes
+            if item.get("id") == cls.OZON_DESCRIPTION_ATTRIBUTE_ID
+        ]
+        if not matches:
+            return ""
+        if len(matches) != 1:
+            raise MarketplaceCatalogProtocolError(
+                f"Ozon {field_name} contains ambiguous description 4191"
+            )
+        item = matches[0]
+        if item.get("complex_id") not in (None, "0"):
+            raise MarketplaceCatalogProtocolError(
+                f"Ozon {field_name} description 4191 must be simple"
+            )
+        values = item.get("values")
+        # A fully observed attribute may explicitly have no values (current
+        # Ozon catalog reads do return 4191/values=[]). This is the same empty
+        # description as an absent 4191, not an ambiguous or malformed one.
+        if isinstance(values, list) and not values:
+            return ""
+        if (
+            not isinstance(values, list)
+            or len(values) != 1
+            or not isinstance(values[0], dict)
+            or values[0].get("dictionary_value_id") is not None
+        ):
+            raise MarketplaceCatalogProtocolError(
+                f"Ozon {field_name} description 4191 has invalid values"
+            )
+        value = values[0].get("value")
+        return value if isinstance(value, str) else ""
+
+    @classmethod
     def normalize_product_attributes_page(
         cls,
         response: Any,
@@ -899,6 +960,10 @@ class MarketplaceListingService:
             raw_barcodes = raw.get("barcodes")
             if raw_barcodes is None and raw.get("barcode") not in (None, ""):
                 raw_barcodes = [raw["barcode"]]
+            attributes = cls._normalize_attributes(
+                raw.get("attributes"),
+                f"product_attributes.result[{index}].attributes",
+            )
             items[product_id] = {
                 "product_id": product_id,
                 "offer_id": offer_id,
@@ -919,8 +984,9 @@ class MarketplaceListingService:
                     optional=True,
                 ),
                 "sku": sku,
-                "attributes": cls._normalize_attributes(
-                    raw.get("attributes"),
+                "attributes": attributes,
+                "description": cls._description_from_attributes(
+                    attributes,
                     f"product_attributes.result[{index}].attributes",
                 ),
                 "complex_attributes": cls._normalize_complex_attributes(
@@ -1350,7 +1416,21 @@ class MarketplaceListingService:
         page: Mapping[str, Any],
         enrichment: Mapping[str, Mapping[str, Mapping[str, Any]]],
         now: datetime,
+        checkpoint=None,
+        observed_at: Optional[Mapping[str, Any]] = None,
     ) -> None:
+        def actual_time(domain, product_id=None):
+            if not observed_at:
+                return now
+            if domain == 'list':
+                return observed_at.get('list') or now
+            return (
+                observed_at.get('items', {}).get(domain, {}).get(product_id)
+                or observed_at.get('domain', {}).get(domain)
+                or observed_at.get('list')
+                or now
+            )
+
         items = list(page["items"])
         product_ids = [item["product_id"] for item in items]
         offer_ids = [item["offer_id"] for item in items]
@@ -1477,6 +1557,9 @@ class MarketplaceListingService:
             stock_summary = (
                 stock["summary"] if stock else {"available": False}
             )
+            description = info.get("description")
+            if description is None:
+                description = attrs.get("description")
             snapshot = {
                 "offer_id": offer_id,
                 "external_product_id": product_id,
@@ -1485,7 +1568,7 @@ class MarketplaceListingService:
                 "category_id": category_id,
                 "type_id": type_id,
                 "title": info.get("title") or attrs.get("title"),
-                "description": info.get("description"),
+                "description": description,
                 "normalized_status": normalized_status,
                 "provider_status": provider_status,
                 "visibility": visibility_name,
@@ -1513,8 +1596,8 @@ class MarketplaceListingService:
             new_title = info.get("title") or attrs.get("title")
             if new_title is not None:
                 listing.title = new_title
-            if "description" in info and info.get("description") is not None:
-                listing.description = info["description"]
+            if description is not None:
+                listing.description = description
             listing.normalized_status = normalized_status
             listing.provider_status = provider_status
             listing.visibility = visibility_name or (
@@ -1547,12 +1630,12 @@ class MarketplaceListingService:
             listing.stock_summary_json = cls._stable_json(stock_summary, {})
             listing.upstream_created_at = info.get("created_at")
             listing.upstream_updated_at = info.get("updated_at")
-            listing.list_synced_at = now
-            listing.info_synced_at = now if info else listing.info_synced_at
-            listing.attributes_synced_at = now
-            listing.prices_synced_at = now
-            listing.stocks_synced_at = now
-            listing.last_seen_at = now
+            listing.list_synced_at = actual_time('list')
+            listing.info_synced_at = actual_time('info', product_id) if info else listing.info_synced_at
+            listing.attributes_synced_at = actual_time('attributes', product_id)
+            listing.prices_synced_at = actual_time('prices', product_id)
+            listing.stocks_synced_at = actual_time('stocks', product_id)
+            listing.last_seen_at = actual_time('list')
             listing.last_catalog_sync_id = run.id
             listing.last_catalog_sync_phase = run.phase
             listing.sync_fingerprint = cls._fingerprint(snapshot)
@@ -1604,6 +1687,12 @@ class MarketplaceListingService:
             run.cursor = next_cursor
 
         try:
+            if checkpoint is not None:
+                from models import MarketplaceCatalogPageItem
+                MarketplaceCatalogPageItem.query.filter_by(
+                    checkpoint_id=checkpoint.id,
+                ).delete(synchronize_session=False)
+                db.session.delete(checkpoint)
             # Exact offer/vendor identities are reconciled in the same local
             # transaction as the page.  This never calls Ozon or an LLM and it
             # never guesses from a title; ambiguous identities remain unlinked.
@@ -1669,8 +1758,10 @@ class MarketplaceListingService:
         cls,
         *,
         account: SellerMarketplaceAccount,
+        credential_fingerprint: str,
         force_restart: bool,
         now: datetime,
+        recover_abandoned: bool = False,
     ) -> MarketplaceCatalogSync:
         running = MarketplaceCatalogSync.query.filter_by(
             seller_id=account.seller_id,
@@ -1680,7 +1771,7 @@ class MarketplaceListingService:
         ).order_by(MarketplaceCatalogSync.id.desc()).first()
         if running is not None:
             heartbeat = running.heartbeat_at or running.started_at
-            if heartbeat and heartbeat > now - cls.STALE_RUN_AFTER:
+            if not recover_abandoned and heartbeat and heartbeat > now - cls.STALE_RUN_AFTER:
                 raise MarketplaceCatalogBusy(
                     "Синхронизация этого кабинета Ozon уже выполняется"
                 )
@@ -1690,15 +1781,23 @@ class MarketplaceListingService:
                 "Предыдущий процесс не обновлял heartbeat; запуск доступен для resume"
             )
             db.session.commit()
+            if force_restart or running.credential_fingerprint != credential_fingerprint:
+                from services.ozon_catalog_checkpoints import CatalogPageCheckpointService
+                CatalogPageCheckpointService.discard_for_run(running.id)
 
         if not force_restart:
-            resumable = MarketplaceCatalogSync.query.filter(
+            latest = MarketplaceCatalogSync.query.filter(
                 MarketplaceCatalogSync.seller_id == account.seller_id,
                 MarketplaceCatalogSync.marketplace_id == account.marketplace_id,
                 MarketplaceCatalogSync.account_id == account.id,
-                MarketplaceCatalogSync.status.in_(("paused", "failed")),
             ).order_by(MarketplaceCatalogSync.id.desc()).first()
-            if resumable is not None:
+            # A completed/newer sweep supersedes older failure checkpoints.
+            # Resuming a historical cursor after a successful sweep otherwise
+            # loops forever on total/order drift as the catalog changes.
+            if (latest is not None and latest.status in ("paused", "failed")
+                    and latest.error_code != 'ozon_catalog_checkpoint_exhausted'
+                    and latest.credential_fingerprint == credential_fingerprint):
+                resumable = latest
                 resumable.status = "running"
                 resumable.heartbeat_at = now
                 resumable.error_code = None
@@ -1711,6 +1810,19 @@ class MarketplaceListingService:
                         "Синхронизация этого кабинета Ozon уже выполняется"
                     ) from None
                 return resumable
+            if latest is not None and latest.status in ("paused", "failed"):
+                # An unbound legacy run or a rotated credential must never
+                # inherit its cursor. Private staged reads are disposable.
+                from services.ozon_catalog_checkpoints import CatalogPageCheckpointService
+                CatalogPageCheckpointService.discard_for_run(latest.id)
+        elif force_restart:
+            latest = MarketplaceCatalogSync.query.filter_by(
+                seller_id=account.seller_id, marketplace_id=account.marketplace_id,
+                account_id=account.id,
+            ).order_by(MarketplaceCatalogSync.id.desc()).first()
+            if latest is not None:
+                from services.ozon_catalog_checkpoints import CatalogPageCheckpointService
+                CatalogPageCheckpointService.discard_for_run(latest.id)
 
         run = MarketplaceCatalogSync(
             seller_id=account.seller_id,
@@ -1720,6 +1832,7 @@ class MarketplaceListingService:
             phase="active",
             visibility=cls.PHASES["active"],
             cursor="",
+            credential_fingerprint=credential_fingerprint,
             started_at=now,
             heartbeat_at=now,
         )
@@ -1771,6 +1884,8 @@ class MarketplaceListingService:
         adapter=None,
         credentials: Optional[MarketplaceCredentials] = None,
         now: Optional[datetime] = None,
+        recover_abandoned: bool = False,
+        account_claim_held: bool = False,
     ) -> MarketplaceCatalogSync:
         seller_id = cls._positive_integer(seller_id, "seller_id")
         account_id = cls._positive_integer(account_id, "account_id")
@@ -1783,6 +1898,10 @@ class MarketplaceListingService:
             raise MarketplaceListingValidationError(
                 "force_restart должен быть boolean"
             )
+        if not isinstance(recover_abandoned, bool):
+            raise MarketplaceListingValidationError("recover_abandoned должен быть boolean")
+        if not isinstance(account_claim_held, bool):
+            raise MarketplaceListingValidationError("account_claim_held должен быть boolean")
         current_time = now or datetime.utcnow()
         account, resolved_adapter, resolved_credentials = (
             cls._account_adapter_credentials(
@@ -1793,8 +1912,34 @@ class MarketplaceListingService:
                 now=current_time,
             )
         )
-        lock_file = cls._try_claim(account.id)
+        credential_fingerprint = ozon_credential_fingerprint(account)
+        account_claim = None
+        if not account_claim_held:
+            account_claim = try_account_operation_lock(account.id)
+            if account_claim is None:
+                raise MarketplaceCatalogBusy("Кабинет Ozon занят другой операцией")
+            try:
+                db.session.expire_all()
+                fresh_account = MarketplaceAccountService.get_owned_account(
+                    seller_id=seller_id, account_id=account_id, marketplace_code='ozon',
+                )
+                if (not fresh_account.is_active or (credentials is None and not fresh_account.has_credentials)
+                        or ozon_credential_fingerprint(fresh_account) != credential_fingerprint):
+                    raise MarketplaceCatalogConfigurationError(
+                        "Реквизиты кабинета Ozon изменились до загрузки каталога"
+                    )
+            except Exception:
+                account_claim.close()
+                raise
+        try:
+            lock_file = cls._try_claim(account.id)
+        except Exception:
+            if account_claim is not None:
+                account_claim.close()
+            raise
         if lock_file is None:
+            if account_claim is not None:
+                account_claim.close()
             raise MarketplaceCatalogBusy(
                 "Синхронизация этого кабинета Ozon уже выполняется"
             )
@@ -1802,8 +1947,13 @@ class MarketplaceListingService:
         try:
             run = cls._claim_or_create_run(
                 account=account,
+                credential_fingerprint=credential_fingerprint,
                 force_restart=force_restart,
                 now=current_time,
+                # The durable worker also holds the shared account-operation
+                # lock. This option is considered only AFTER the catalog file
+                # claim above proves no other catalog process is still alive.
+                recover_abandoned=recover_abandoned,
             )
             processed_pages = 0
             while run.phase != "completed":
@@ -1820,47 +1970,64 @@ class MarketplaceListingService:
                     raise MarketplaceCatalogProtocolError(
                         "Catalog sync has an unknown phase"
                     )
-                response = resolved_adapter.list_products(
-                    resolved_credentials,
-                    {
-                        "filter": {
-                            "offer_id": [],
-                            "product_id": [],
-                            "visibility": visibility,
-                        },
-                        "last_id": run.cursor,
-                        "limit": cls.PAGE_SIZE,
-                    },
+                from services.ozon_catalog_checkpoints import (
+                    CatalogPageCheckpointService, CatalogCheckpointDeferred,
                 )
-                page = cls.normalize_product_list_page(response)
-                enrichment = cls._fetch_enrichment(
-                    adapter=resolved_adapter,
-                    credentials=resolved_credentials,
-                    base_items=page["items"],
-                )
-                cls._apply_catalog_page(
-                    run=run,
-                    page=page,
-                    enrichment=enrichment,
-                    now=datetime.utcnow(),
-                )
+                try:
+                    applied = CatalogPageCheckpointService.advance_one_page(
+                        run=run, adapter=resolved_adapter,
+                        credentials=resolved_credentials,
+                        credential_fingerprint=credential_fingerprint,
+                        listing_service=cls,
+                    )
+                except CatalogCheckpointDeferred:
+                    applied = False
+                if not applied:
+                    run.status = 'paused'
+                    run.heartbeat_at = datetime.utcnow()
+                    db.session.commit()
+                    break
                 run = db.session.get(MarketplaceCatalogSync, run.id)
                 processed_pages += 1
             return run
         except MarketplaceListingError as exc:
             if run is not None:
+                if isinstance(exc, MarketplaceCatalogProtocolError):
+                    from services.ozon_catalog_checkpoints import (
+                        CatalogPageCheckpointService, CatalogCheckpointTerminal,
+                    )
+                    db.session.rollback()
+                    if not isinstance(exc, CatalogCheckpointTerminal):
+                        CatalogPageCheckpointService.discard_for_run(run.id)
                 cls._mark_failed(run.id, exc, now=datetime.utcnow())
             raise
         except OzonAPIError as exc:
+            if exc.code == 'ozon_read_budget':
+                db.session.rollback()
+                if run is not None:
+                    run = db.session.get(MarketplaceCatalogSync, run.id)
+                    run.status = 'paused'
+                    run.heartbeat_at = datetime.utcnow()
+                    db.session.commit()
+                return run
             if run is not None:
                 cls._mark_failed(run.id, exc, now=datetime.utcnow())
-            raise MarketplaceCatalogSyncError(str(exc)) from None
+            error = MarketplaceCatalogSyncError(str(exc))
+            # Preserve typed transport facts for durable deferral, without raw
+            # provider payloads or an exception chain carrying request objects.
+            error.provider_status_code = exc.status_code
+            error.provider_code = exc.code
+            error.retry_after = exc.retry_after
+            error.retriable = exc.retriable
+            raise error from None
         except Exception as exc:
             if run is not None:
                 cls._mark_failed(run.id, exc, now=datetime.utcnow())
             raise
         finally:
             cls._release_claim(lock_file)
+            if account_claim is not None:
+                account_claim.close()
 
     @classmethod
     def list_listings(
@@ -2359,9 +2526,15 @@ class MarketplaceListingService:
     @classmethod
     def latest_syncs(cls, *, seller_id: int) -> Dict[int, MarketplaceCatalogSync]:
         seller_id = cls._positive_integer(seller_id, "seller_id")
+        latest_ids = db.session.query(func.max(MarketplaceCatalogSync.id)).filter_by(
+            seller_id=seller_id,
+        ).group_by(MarketplaceCatalogSync.account_id)
         rows = MarketplaceCatalogSync.query.options(
             joinedload(MarketplaceCatalogSync.marketplace),
-        ).filter_by(seller_id=seller_id).order_by(
+        ).filter(
+            MarketplaceCatalogSync.seller_id == seller_id,
+            MarketplaceCatalogSync.id.in_(latest_ids),
+        ).order_by(
             MarketplaceCatalogSync.id.desc()
         ).all()
         result = {}

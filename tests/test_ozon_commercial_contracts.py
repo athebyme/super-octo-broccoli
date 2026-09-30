@@ -18,7 +18,7 @@ class OzonPriceContractTest(unittest.TestCase):
         item = {
             "offer_id": "seller-offer-1",
             "product_id": "12345",
-            "price": "1250.50",
+            "price": "1250.00",
             "currency_code": "RUB",
         }
         item.update(overrides)
@@ -32,7 +32,7 @@ class OzonPriceContractTest(unittest.TestCase):
             "prices": [{
                 "offer_id": "seller-offer-1",
                 "product_id": 12345,
-                "price": "1250.5",
+                "price": "1250",
                 "currency_code": "RUB",
                 "old_price": "1500",
             }],
@@ -48,11 +48,27 @@ class OzonPriceContractTest(unittest.TestCase):
             self._item(price="0"),
             self._item(price="NaN"),
             self._item(price="1.001"),
+            self._item(price="1250.50"),
             self._item(old_price="1000"),
         ):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(OzonCommercialPayloadError):
                     OzonPriceContract.build_payload([invalid])
+
+    def test_rounding_is_explicit_preparation_not_write_or_read_coercion(self):
+        for entered, rounded in (("1323.75", "1324"), ("1100.49", "1100"),
+                                 ("1100.50", "1101"), ("1100.00", "1100"),
+                                 ("0.50", "1"), ("999999999.49", "999999999")):
+            with self.subTest(entered=entered):
+                review = OzonPriceContract.prepare_price(entered)
+                self.assertEqual(review["price"], rounded)
+                self.assertEqual(Decimal(review["requested_price"]), Decimal(entered))
+                self.assertEqual(review["rounded"], Decimal(entered) != Decimal(rounded))
+                self.assertEqual(OzonPriceContract.build_item(**self._item(price=rounded))["price"], rounded)
+        for value in ("0.49", "999999999.50", "NaN", "1.001", True):
+            with self.subTest(value=value):
+                with self.assertRaises(OzonCommercialPayloadError):
+                    OzonPriceContract.prepare_price(value)
 
     def test_build_payload_rejects_duplicates_and_oversized_batches(self):
         with self.assertRaises(OzonCommercialPayloadError):

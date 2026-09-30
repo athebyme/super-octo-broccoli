@@ -73,6 +73,26 @@ def _ensure_factory_catalog_feature(factory):
         raise ContentFactoryScopeError('Ozon-интеграция выключена')
 
 
+def _vk_group_id(value):
+    """Normalize a numeric community ID without accepting an arbitrary URL."""
+    if isinstance(value, bool):
+        return None
+    raw = str(value or '').strip().removeprefix('-')
+    if (not raw.isascii() or not raw.isdigit() or len(raw) > 20
+            or int(raw) <= 0):
+        return None
+    return raw
+
+
+def _vk_token(value):
+    if not isinstance(value, str):
+        return None
+    token = value.strip()
+    if not token or len(token) > 4096 or any(ch.isspace() for ch in token):
+        return None
+    return token
+
+
 def register_content_factory_routes(app):
     """Регистрирует роуты контент-фабрики."""
 
@@ -1004,186 +1024,59 @@ def register_content_factory_routes(app):
 
         return jsonify({'success': True})
 
-    # ================================================================
-    # API: Диагностика загрузки фото VK
+    # API: Диагностика подключения VK без скачивания фото и выдачи URL
     # ================================================================
 
     @app.route('/api/content-factory/items/<int:item_id>/debug-photos', methods=['POST'])
     @login_required
     def api_content_item_debug_photos(item_id):
-        """Диагностика: тестирует загрузку фото для контента в VK."""
-        import io
-        import requests as _requests
-
+        """Read-only, seller-scoped VK capability summary without signed URLs."""
         if not current_user.seller:
             return jsonify({'error': 'Продавец не найден'}), 403
-
         item = ContentItem.query.filter_by(
-            id=item_id, seller_id=current_user.seller.id
+            id=item_id, seller_id=current_user.seller.id,
         ).first()
-        if not item:
+        if item is None:
             return jsonify({'error': 'Контент не найден'}), 404
-
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Некорректный запрос'}), 400
+        account_id = data.get('social_account_id') or item.social_account_id
         result = {
             'item_id': item.id,
             'platform': item.platform,
-            'media_urls_json_raw': item.media_urls_json,
+            'media_count': len(item.get_media_urls()),
             'steps': [],
         }
-
-        # Проверяем связь Product → ImportedProduct
-        product_ids = item.get_product_ids()
-        result['product_ids'] = product_ids
-        if product_ids:
-            product = Product.query.get(product_ids[0])
-            if product:
-                result['product_id'] = product.id
-                result['product_nm_id'] = product.nm_id
-                result['product_photos_json'] = product.photos_json[:500] if product.photos_json else None
-
-                # Проверяем ImportedProduct
-                from models import ImportedProduct
-                imported = ImportedProduct.query.filter_by(product_id=product.id).first()
-                if imported:
-                    result['imported_product_id'] = imported.id
-                    result['imported_supplier_product_id'] = imported.supplier_product_id
-                    result['imported_photo_urls'] = imported.photo_urls[:500] if imported.photo_urls else None
-
-                    # Генерируем локальные фото URL
-                    try:
-                        from routes.photos import generate_public_photo_urls
-                        local_urls = generate_public_photo_urls(imported)
-                        result['local_photo_urls'] = local_urls
-                        result['local_photo_urls_count'] = len(local_urls)
-                    except Exception as e:
-                        result['local_photo_urls_error'] = type(e).__name__
-                else:
-                    result['imported_product'] = 'NOT FOUND (no ImportedProduct linked to this Product)'
-
-        # Шаг 1: get_media_urls
-        media_urls = item.get_media_urls()
-        result['media_urls'] = media_urls
-        result['media_urls_count'] = len(media_urls)
-
-        if not media_urls:
-            result['steps'].append({'step': 'get_media_urls', 'status': 'EMPTY', 'detail': 'Нет URL фото'})
+        if not account_id:
+            result['steps'].append({
+                'step': 'vk_account', 'status': 'SKIP',
+                'detail': 'Аккаунт VK не выбран',
+            })
             return jsonify(result)
-
-        result['steps'].append({'step': 'get_media_urls', 'status': 'OK', 'count': len(media_urls)})
-
-        # Шаг 2: Скачиваем первое фото (с правильными заголовками)
-        test_url = media_urls[0]
-        result['test_photo_url'] = test_url
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-            'Referer': 'https://www.wildberries.ru/',
-        }
-        try:
-            photo_resp = _requests.get(test_url, timeout=10, headers=headers)
+        account = SocialAccount.query.filter_by(
+            id=account_id,
+            seller_id=current_user.seller.id,
+            platform='vk',
+        ).first()
+        if account is None:
             result['steps'].append({
-                'step': 'download_photo',
-                'status': 'OK' if photo_resp.status_code == 200 else 'FAIL',
-                'http_status': photo_resp.status_code,
-                'content_type': photo_resp.headers.get('Content-Type', ''),
-                'content_length': len(photo_resp.content),
+                'step': 'vk_account', 'status': 'FAIL',
+                'detail': 'Аккаунт VK не найден',
             })
-
-            if photo_resp.status_code == 200 and len(photo_resp.content) > 512:
-                # Шаг 3: Конвертируем в JPEG
-                try:
-                    from PIL import Image
-                    img = Image.open(io.BytesIO(photo_resp.content))
-                    buf = io.BytesIO()
-                    if img.mode not in ('RGB',):
-                        img = img.convert('RGB')
-                    img.save(buf, format='JPEG', quality=93)
-                    jpeg_size = len(buf.getvalue())
-                    result['steps'].append({
-                        'step': 'convert_jpeg',
-                        'status': 'OK',
-                        'original_format': img.format,
-                        'original_size': f'{img.size[0]}x{img.size[1]}',
-                        'jpeg_bytes': jpeg_size,
-                    })
-                except Exception as e:
-                    result['steps'].append({
-                        'step': 'convert_jpeg',
-                        'status': 'FAIL',
-                        'error': type(e).__name__,
-                    })
-        except Exception as e:
-            result['steps'].append({
-                'step': 'download_photo',
-                'status': 'FAIL',
-                'error': type(e).__name__,
-            })
-
-        # Шаг 4: Проверяем VK аккаунт
-        data = request.get_json(silent=True) or {}
-        social_account_id = data.get('social_account_id') or item.social_account_id
-        if social_account_id:
-            account = SocialAccount.query.filter_by(
-                id=social_account_id,
-                seller_id=current_user.seller.id,
-            ).first()
-            if account:
-                creds = account.get_credentials_dict()
-                access_token = creds.get('access_token', '')
-                user_token = creds.get('user_token', '')
-                group_id = str(creds.get('group_id', '') or account.account_id).lstrip('-')
-                api_version = creds.get('api_version', '5.199')
-
-                result['vk_group_id'] = group_id
-                result['vk_access_token_present'] = bool(access_token)
-                result['vk_user_token_present'] = bool(user_token)
-
-                # Тестируем getWallUploadServer
-                if not user_token:
-                    result['steps'].append({
-                        'step': 'vk_getWallUploadServer',
-                        'status': 'FAIL',
-                        'error_code': 'vk_user_token_required',
-                        'error': 'Для загрузки фото нужен user_token',
-                    })
-                else:
-                    try:
-                        srv_resp = _requests.get(
-                            'https://api.vk.com/method/photos.getWallUploadServer',
-                            params={
-                                'access_token': user_token,
-                                'group_id': group_id,
-                                'v': api_version,
-                            },
-                            timeout=10,
-                        )
-                        srv_data = srv_resp.json()
-                        if 'error' in srv_data:
-                            result['steps'].append({
-                                'step': 'vk_getWallUploadServer',
-                                'status': 'FAIL',
-                                'error_code': srv_data['error'].get('error_code'),
-                                'error_msg': srv_data['error'].get('error_msg'),
-                            })
-                        else:
-                            result['steps'].append({
-                                'step': 'vk_getWallUploadServer',
-                                'status': 'OK',
-                                'upload_url_present': bool(
-                                    srv_data.get('response', {}).get('upload_url')
-                                ),
-                            })
-                    except Exception as e:
-                        result['steps'].append({
-                            'step': 'vk_getWallUploadServer',
-                            'status': 'FAIL',
-                            'error': type(e).__name__,
-                        })
-            else:
-                result['steps'].append({'step': 'vk_account', 'status': 'FAIL', 'error': f'Account {social_account_id} not found'})
-        else:
-            result['steps'].append({'step': 'vk_account', 'status': 'SKIP', 'detail': 'No social_account_id'})
-
+            return jsonify(result)
+        from services.content_publishers import get_publisher
+        valid, error = get_publisher('vk').validate_account(account)
+        result['steps'].append({
+            'step': 'vk_account',
+            'status': 'OK' if valid else 'FAIL',
+            'detail': 'Ключ сообщества доступен для проверки прав' if valid else error,
+        })
+        result['photo_mode'] = (
+            'legacy_user_token' if account.get_credentials_dict().get('user_token')
+            else 'vk_id_app_required'
+        )
+        result['publication_tested'] = False
         return jsonify(result)
 
     # ================================================================
@@ -1210,20 +1103,58 @@ def register_content_factory_routes(app):
         if not current_user.seller:
             return jsonify({'error': 'Продавец не найден'}), 403
 
-        data = request.get_json() or {}
-        platform = data.get('platform', '').strip()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Некорректный запрос'}), 400
+        platform = data.get('platform')
+        if not isinstance(platform, str):
+            return jsonify({'error': 'Некорректная платформа'}), 400
+        platform = platform.strip()
         if platform not in CONTENT_PLATFORMS:
             return jsonify({'error': f'Неподдерживаемая платформа: {platform}'}), 400
 
+        creds = data.get('credentials', {})
+        if not isinstance(creds, dict):
+            return jsonify({'error': 'credentials должен быть объектом'}), 400
+        account_id = data.get('account_id')
+        if not isinstance(account_id, str):
+            return jsonify({'error': 'Некорректный ID аккаунта'}), 400
+        account_id = account_id.strip()
+        if platform == 'vk':
+            group_id = _vk_group_id(account_id)
+            if not group_id or (
+                creds.get('group_id') and _vk_group_id(creds['group_id']) != group_id
+            ):
+                return jsonify({'error': 'Укажите числовой ID сообщества VK'}), 400
+            access_token = _vk_token(creds.get('access_token'))
+            if not access_token:
+                return jsonify({'error': 'Укажите действующий ключ сообщества VK'}), 400
+            account_id = group_id
+            existing = SocialAccount.query.filter_by(
+                seller_id=current_user.seller.id,
+                platform='vk',
+                account_id=group_id,
+            ).first()
+            if existing is not None:
+                return jsonify({
+                    'error': 'Это сообщество VK уже подключено. Обновите его ключ в списке аккаунтов.',
+                }), 409
+            creds = {
+                'access_token': access_token,
+                'group_id': group_id,
+            }
+
+        account_name = data.get('account_name', '')
+        if not isinstance(account_name, str):
+            return jsonify({'error': 'Некорректное название аккаунта'}), 400
         account = SocialAccount(
             seller_id=current_user.seller.id,
             platform=platform,
-            account_name=data.get('account_name', '').strip(),
-            account_id=data.get('account_id', '').strip(),
+            account_name=account_name.strip(),
+            account_id=account_id,
         )
 
         # Сохраняем credentials
-        creds = data.get('credentials', {})
         if creds:
             account.set_credentials_dict(creds)
 
@@ -1247,6 +1178,62 @@ def register_content_factory_routes(app):
         return jsonify({
             'success': True,
             'account': account.to_dict(),
+        })
+
+    @app.route('/api/content-factory/accounts/<int:account_id>/credentials', methods=['PATCH'])
+    @login_required
+    def api_social_account_update_vk_credentials(account_id):
+        """Rotate only this seller's VK community key; keep its destination ID."""
+        if not current_user.seller:
+            return jsonify({'error': 'Продавец не найден'}), 403
+        account = SocialAccount.query.filter_by(
+            id=account_id,
+            seller_id=current_user.seller.id,
+            platform='vk',
+        ).first()
+        if account is None:
+            return jsonify({'error': 'Аккаунт VK не найден'}), 404
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or set(data) != {'access_token'}:
+            return jsonify({'error': 'Передайте только новый access_token'}), 400
+        access_token = _vk_token(data['access_token'])
+        if not access_token:
+            return jsonify({'error': 'Укажите действующий ключ сообщества VK'}), 400
+        group_id = _vk_group_id(account.account_id)
+        if group_id is None:
+            return jsonify({'error': 'Некорректный ID сообщества VK'}), 400
+        if ContentItem.query.filter_by(
+            seller_id=current_user.seller.id,
+            social_account_id=account.id,
+            status='publishing',
+        ).first() is not None:
+            return jsonify({
+                'error': 'Для этого аккаунта идёт публикация. Повторите смену ключа после её завершения.',
+            }), 409
+
+        creds = account.get_credentials_dict()
+        creds['access_token'] = access_token
+        creds['group_id'] = group_id
+        from services.content_publishers import get_publisher
+        from types import SimpleNamespace
+        candidate = SimpleNamespace(
+            account_id=account.account_id,
+            get_credentials_dict=lambda: creds,
+        )
+        valid, error = get_publisher('vk').validate_account(candidate)
+        if not valid:
+            return jsonify({'error': error}), 422
+        account.set_credentials_dict(creds)
+        db.session.commit()
+        # A credential change cannot prove a wall write succeeded. Preserve
+        # the existing automatic-publish quarantine until a manual publish.
+        return jsonify({
+            'success': True,
+            'account': account.to_dict(),
+            'warning': (
+                'Ключ сохранён. Если автопубликация была остановлена, '
+                'опубликуйте один пост вручную для проверки.'
+            ),
         })
 
     @app.route('/api/content-factory/accounts/<int:account_id>', methods=['DELETE'])

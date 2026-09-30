@@ -34,6 +34,21 @@ mkdir -p uploads processed data
 # Run lightweight initialization depending on the application we serve.
 if [ "$APP_MODULE" = "seller_platform:app" ]; then
 python scripts/validate_runtime_config.py
+if [ -z "${ADMIN_PASSWORD:-}" ]; then
+  echo "ADMIN_PASSWORD must be configured before seller-platform startup" >&2
+  exit 1
+fi
+export ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+if [ "${1:-}" != "--run-database-migrations" ]; then
+python scripts/startup_migrations.py --database-path /app/data/seller_platform.db
+# Credentials can change independently of schema/migration code. Synchronize
+# the administrator on every boot, including when the bundle is already current.
+SKIP_SCHEDULER=1 python - <<'PYADMIN'
+from seller_platform import app, _ensure_admin_from_env
+with app.app_context():
+    _ensure_admin_from_env()
+PYADMIN
+else
 echo "🚀 Инициализация seller-platform..."
 
 # Сначала создаем базовую структуру БД через Flask/SQLAlchemy
@@ -41,15 +56,8 @@ echo "📦 Создание базовой структуры базы данн�
 SKIP_SCHEDULER=1 python - <<'PYCODE'
 import os
 
-# DATABASE_URL уже установлен из docker-compose.yml
-# Проверяем что пришло
-db_url_from_env = os.environ.get('DATABASE_URL', 'NOT_SET')
-print(f"🔍 DATABASE_URL from environment: {db_url_from_env}")
-
 from seller_platform import app, db, ensure_storage_roots
 from models import User
-
-print(f"🗄️  Используется база данных: {app.config['SQLALCHEMY_DATABASE_URI']}")
 
 ensure_storage_roots()
 with app.app_context():
@@ -75,10 +83,7 @@ with app.app_context():
     email = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
     password = os.environ.get('ADMIN_PASSWORD', '')
     if not password:
-        import secrets as _s
-        password = _s.token_urlsafe(16)
-        print(f"⚠️  ADMIN_PASSWORD не задан! Сгенерирован случайный пароль: {password}")
-        print(f"   ОБЯЗАТЕЛЬНО сохраните его и задайте ADMIN_PASSWORD в .env!")
+        raise RuntimeError('ADMIN_PASSWORD must be configured before startup')
 
     # Ищем по username, по email или первого админа
     admin_user = (
@@ -133,59 +138,71 @@ python migrations/migrate_db.py --db-path /app/data/seller_platform.db
 python migrations/migrate_add_characteristics.py /app/data/seller_platform.db
 python migrations/migrate_add_history_and_logging.py --db-path /app/data/seller_platform.db
 python migrations/migrate_add_subject_id.py /app/data/seller_platform.db
-python migrations/migrate_add_price_monitoring.py || echo "⚠️ Price monitoring migration skipped (already applied or error)"
-python migrations/migrate_add_product_sync_settings.py || echo "⚠️ Product sync settings migration skipped (already applied or error)"
-python migrations/migrate_add_admin_features.py || echo "⚠️ Admin features migration skipped (already applied or error)"
-python migrations/migrate_add_card_merge_history.py --db-path /app/data/seller_platform.db || echo "⚠️ Card merge history migration skipped (already applied or error)"
-python migrations/migrate_add_supplier_price.py || echo "⚠️ Supplier price migration skipped (already applied or error)"
-python migrations/migrate_add_safe_price_change.py || echo "⚠️ Safe price change migration skipped (already applied or error)"
-python migrations/migrate_add_unlimited_batch.py || echo "⚠️ Unlimited batch migration skipped (already applied or error)"
-python migrations/migrate_add_blocked_cards.py || echo "⚠️ Blocked cards migration skipped (already applied or error)"
-python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db || echo "⚠️ Price stock sync migration skipped (already applied or error)"
-python migrations/migrate_add_marketplace_tables.py || echo "⚠️ Marketplace tables migration skipped (already applied or error)"
-python migrations/migrate_add_marketplace_accounts.py /app/data/seller_platform.db
-python migrations/migrate_add_ozon_references.py /app/data/seller_platform.db
-python migrations/migrate_add_ozon_product_type_visibility.py /app/data/seller_platform.db
-python migrations/migrate_add_ozon_compliance_defaults.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_reference_freshness.py /app/data/seller_platform.db
-python migrations/migrate_add_brand_category_external_id.py /app/data/seller_platform.db
-python migrations/migrate_add_wb_dictionary_provenance.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_listings.py \
-  /app/data/seller_platform.db --backfill-limit 200
-python migrations/migrate_add_marketplace_product_links.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_canonical_content.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_rollout.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_drafts.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_draft_attribute_removals.py \
-  /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_operations.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_commercial.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_product_updates.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_auto_publish.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_quality_analytics.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_fulfillment.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_finance.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_inbox.py /app/data/seller_platform.db
-python migrations/add_ai_job_model_field.py || echo "⚠️ AI job model field migration skipped (already applied or error)"
-python migrations/add_ai_job_heartbeat.py || echo "⚠️ AI job heartbeat migration skipped (already applied or error)"
-python migrations/add_parsing_quality_fields.py || echo "⚠️ Parsing quality fields migration skipped (already applied or error)"
+python migrations/migrate_add_price_monitoring.py
+python migrations/migrate_add_product_sync_settings.py
+python migrations/migrate_add_admin_features.py
+python migrations/migrate_add_card_merge_history.py --db-path /app/data/seller_platform.db
+python migrations/migrate_add_supplier_price.py
+python migrations/migrate_add_safe_price_change.py
+python migrations/migrate_add_unlimited_batch.py
+python migrations/migrate_add_blocked_cards.py
+python migrations/migrate_add_price_stock_sync.py /app/data/seller_platform.db
+python migrations/migrate_add_marketplace_tables.py
+python -m migrations.run_scoped_batch /app/data/seller_platform.db \
+  migrations/migrate_add_marketplace_accounts.py \
+  migrations/migrate_add_marketplace_credential_notices.py \
+  migrations/migrate_add_marketplace_account_events.py \
+  migrations/migrate_add_ozon_references.py \
+  migrations/migrate_add_ozon_product_type_visibility.py \
+  migrations/migrate_add_ozon_reference_reviews.py \
+  migrations/migrate_add_ozon_compliance_defaults.py \
+  migrations/migrate_add_marketplace_reference_freshness.py \
+  migrations/migrate_add_brand_category_external_id.py \
+  migrations/migrate_add_wb_dictionary_provenance.py \
+  migrations/migrate_add_marketplace_listings.py \
+  migrations/migrate_add_ozon_catalog_checkpoints.py \
+  migrations/migrate_add_marketplace_product_links.py \
+  migrations/migrate_add_marketplace_canonical_content.py \
+  migrations/migrate_add_marketplace_rollout.py \
+  migrations/migrate_add_marketplace_drafts.py \
+  migrations/migrate_add_marketplace_draft_attribute_removals.py \
+  migrations/migrate_add_marketplace_operations.py \
+  migrations/migrate_add_ozon_upload_queue.py \
+  migrations/migrate_add_ozon_draft_ai_completion.py \
+  migrations/migrate_add_marketplace_commercial.py \
+  migrations/migrate_add_ozon_warehouse_reads.py \
+  migrations/migrate_add_marketplace_product_updates.py \
+  migrations/migrate_add_marketplace_auto_publish.py \
+  migrations/migrate_add_marketplace_quality_analytics.py \
+  migrations/migrate_add_marketplace_fulfillment.py \
+  migrations/migrate_add_marketplace_finance.py \
+  migrations/migrate_add_marketplace_inbox.py \
+  migrations/migrate_add_marketplace_read_schedules.py \
+  migrations/migrate_add_marketplace_read_requests.py \
+  migrations/migrate_add_inbox_read_queue.py \
+  migrations/migrate_add_marketplace_read_credential_identity.py
+python migrations/add_ai_job_model_field.py
+python migrations/add_ai_job_heartbeat.py
+python migrations/add_parsing_quality_fields.py
 python migrations/migrate_add_supplier_catalog_enrichment.py /app/data/seller_platform.db
-python migrations/migrate_add_service_agents.py /app/data/seller_platform.db || echo "⚠️ Service agents migration skipped (already applied or error)"
+python migrations/migrate_add_service_agents.py /app/data/seller_platform.db
 python migrations/migrate_add_card_quality_v2.py /app/data/seller_platform.db
-python migrations/migrate_add_agent_chat.py /app/data/seller_platform.db || echo "⚠️ Unified agent chat migration skipped (already applied or error)"
+python migrations/migrate_add_agent_chat.py /app/data/seller_platform.db
 python migrations/migrate_add_agent_knowledge.py /app/data/seller_platform.db
-python migrations/run_all_migrations.py /app/data/seller_platform.db || echo "⚠️ Comprehensive migration skipped (already applied or error)"
-python migrations/migrate_add_imported_wb_nm_id.py /app/data/seller_platform.db || echo "⚠️ Imported wb_nm_id migration skipped (already applied or error)"
+python migrations/run_all_migrations.py /app/data/seller_platform.db --base-only
+python migrations/migrate_add_imported_wb_nm_id.py /app/data/seller_platform.db
 python migrations/migrate_add_image_generation_lab.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_reference_watermark.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_angle_synthesis.py /app/data/seller_platform.db
 python migrations/migrate_add_image_lab_marketplace_target.py /app/data/seller_platform.db
-python migrations/migrate_add_infographic_campaigns.py /app/data/seller_platform.db
-python migrations/migrate_add_marketplace_media_publications.py /app/data/seller_platform.db
-python migrations/migrate_add_bestseller_image_recommendations.py /app/data/seller_platform.db
-python migrations/migrate_add_content_factory_marketplace_scope.py /app/data/seller_platform.db
-python migrations/migrate_add_social_account_publish_health.py /app/data/seller_platform.db
-python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db || echo "⚠️ Sexopt supplier migration skipped (already applied or error)"
+python -m migrations.run_scoped_batch /app/data/seller_platform.db \
+  migrations/migrate_add_infographic_campaigns.py \
+  migrations/migrate_add_marketplace_media_publications.py \
+  migrations/migrate_add_marketplace_write_quarantine.py \
+  migrations/migrate_add_bestseller_image_recommendations.py \
+  migrations/migrate_add_content_factory_marketplace_scope.py \
+  migrations/migrate_add_social_account_publish_health.py
+python migrations/migrate_add_sexopt_supplier.py /app/data/seller_platform.db
 # Fail-fast: добавляет колонки, которые ORM читает сразу после старта
 python migrations/migrate_andrey_feed_full_ingest.py /app/data/seller_platform.db
 # Fail-fast: rebuild CHECK mode обогащения + items.inference_json
@@ -210,6 +227,8 @@ python migrations/migrate_compact_competitor_snapshots.py /app/data/seller_platf
 unset SKIP_SCHEDULER
 
 echo "✅ Инициализация seller-platform завершена"
+exit 0
+fi
 fi
 
 echo "🌐 Запуск gunicorn на порту ${PORT}..."

@@ -25,6 +25,7 @@
         'apiSettings': url_for('api_settings'),
         'classic': url_for('seller_my_products'),
         'ozonUploads': ozon_uploads_url,
+        'ozonByRequest': url_for('ozon_bulk_uploads.find_by_request'),
     },
 } | tojson }}</script>
 
@@ -86,6 +87,13 @@
     </sh-filter-bar>
 
     <sh-error :message="error" @retry="load"></sh-error>
+    <div v-if="ozonError" ref="ozonError" class="mp-ozon-message mp-ozon-message--error" role="alert" tabindex="-1">{{ ozonError }}</div>
+    <div v-if="ozonSessionEnded" class="mp-ozon-message" role="status">Действия Ozon остановлены. Войдите снова и проверьте состояние подготовки.</div>
+    <div v-if="ozonStorageProblem" class="mp-ozon-message" role="status"><div><strong>Сохранённый результат подготовки нельзя прочитать.</strong><p>Проверьте историю запусков перед новым действием.</p></div><div class="mp-ozon-actions"><a class="sh-btn sh-btn--secondary" :href="urls.ozonUploads">История запусков</a><button type="button" class="sh-btn sh-btn--secondary" @click="clearOzonStorageProblem">Я проверил историю</button></div></div>
+    <div v-if="ozonPending" class="mp-ozon-message" role="status">
+        <div><strong>Результат локальной подготовки пока неизвестен.</strong><p>{{ ozonPending.imported_product_ids.length }} товаров · магазин № {{ ozonPending.account_id }}. Сначала проверьте запуск по сохранённому ключу. Повтор возможен только вручную с тем же ключом и набором товаров.</p></div>
+        <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy || ozonSessionEnded" @click="readOzonPending">{{ ozonBusy === 'read' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="ozonRetrySameKey" type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy || ozonSessionEnded" @click="retryOzonPending">Повторить тот же запрос</button></div>
+    </div>
 
     <div class="mp-listhead" v-if="items.length || loading">
         <label class="mp-selectall">
@@ -209,10 +217,18 @@
                 :details="confirm.details" :confirm-label="confirm.label"
                 :danger="confirm.danger" :busy="confirm.busy"
                 @confirm="runAction" @cancel="confirm.open = false"></sh-confirm>
+    <dialog ref="ozonDialog" class="mp-ozon-dialog" aria-labelledby="mp-ozon-dialog-title" @cancel.prevent="closeOzonDialog">
+        <div class="mp-ozon-dialog-head"><div><p class="mp-ozon-eyebrow">Ozon · локальная подготовка</p><h2 id="mp-ozon-dialog-title">Подготовить {{ ozonIds.length }} товаров</h2></div><button type="button" class="mp-ozon-close" aria-label="Закрыть" :disabled="!!ozonBusy" @click="closeOzonDialog">×</button></div>
+        <p>Создадим или обновим локальные черновики. Ничего не отправится в Ozon. После подготовки вы проверите поля, фото и ошибки, затем отдельно подтвердите отправку готовых карточек.</p>
+        <label class="mp-ozon-label" for="mp-ozon-account">Магазин Ozon</label>
+        <select ref="ozonAccount" id="mp-ozon-account" class="sh-input" v-model="ozonAccountId" :disabled="!!ozonBusy" required><option value="">Выберите магазин</option><option v-for="account in ozonAccounts" :key="account.id" :value="String(account.id)">{{ account.label }}</option></select>
+        <label class="mp-ozon-confirm"><input type="checkbox" v-model="ozonConfirmed" :disabled="!!ozonBusy">Подтверждаю локальную подготовку этих товаров в выбранном магазине</label>
+        <div class="mp-ozon-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!ozonBusy" @click="closeOzonDialog">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!ozonConfirmed || !ozonAccountId || !!ozonBusy || !!ozonPending" @click="prepareOzon">{{ ozonBusy === 'post' ? 'Принимаем…' : 'Подготовить черновики' }}</button></div>
+    </dialog>
 {% endraw %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js') }}"></script>
 <script src="{{ url_for('static', filename='my-products-beta.js') }}"></script>
 {% endblock %}

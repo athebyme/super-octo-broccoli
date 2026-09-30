@@ -32,6 +32,7 @@ from models import (
     SupplierProduct,
     db,
 )
+from scripts.validate_luna_parsing import SOURCE_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ MAX_LLM_CALLS = 1_600
 # Отдельный режим предположений: модель видит schema + source + заполненное
 # и предлагает значения незаполненных словарных полей. Только needs_review.
 MODE_INFERENCE = 'characteristics_inference'
+SOURCE_CONTRACT = 'feed_original_v1'
 AUTO_APPLY_CONFIDENCE = 0.92
 AUTO_APPLY_SOURCE_MATCH = 0.90
 ACTIVE_RUN_STATUSES = ('pending', 'running', 'cancelling')
@@ -147,6 +149,8 @@ def _safe_source_value(value: Any, depth: int = 0) -> Any:
     """Bound supplier-owned source facts before they enter a prompt."""
     if depth > 3:
         return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
@@ -170,44 +174,79 @@ def _safe_source_value(value: Any, depth: int = 0) -> Any:
     return _bounded_text(value, 300)
 
 
+def _source_snapshot(product: SupplierProduct) -> Dict[str, Any]:
+    """Only supplier feed facts; normalized columns may contain earlier AI output."""
+    original = _json_load(product.original_data_json, None)
+    if not isinstance(original, dict):
+        return {}
+    return {
+        key: original[key] for key in sorted(SOURCE_KEYS)
+        if key in original and original[key] not in (None, '', [], {})
+    }
+
+
 def _product_source(product: SupplierProduct) -> Dict[str, Any]:
+    original = _source_snapshot(product)
+    source = {'product_id': int(product.id)}
+    for key, value in original.items():
+        clean = _safe_source_value(value)
+        if clean in (None, '', [], {}):
+            continue
+        source['supplier_category' if key == 'category' else key] = clean
+    return source
+
+
+def _source_fingerprint(product: SupplierProduct) -> str:
+    return _hash({'product_id': int(product.id), 'source': _source_snapshot(product)})
+
+
+def _legacy_source_fingerprint(product: SupplierProduct) -> str:
+    """Historical normalized-column hash, used only to guard old rollback."""
     source = {
         'product_id': int(product.id),
         'title': _bounded_text(product.title, 500),
         'description': _bounded_text(product.description, 3000),
         'brand': _bounded_text(product.brand, 200),
         'supplier_category': _bounded_text(product.category, 500),
-        'all_categories': _safe_source_value(
-            _json_load(product.all_categories, []),
-        ),
-        'characteristics': _safe_source_value(
-            _json_load(product.characteristics_json, []),
-        ),
+        'all_categories': _safe_source_value(_json_load(product.all_categories, [])),
+        'characteristics': _safe_source_value(_json_load(product.characteristics_json, [])),
         'colors': _safe_source_value(_json_load(product.colors_json, [])),
-        'materials': _safe_source_value(
-            _json_load(product.materials_json, []),
-        ),
+        'materials': _safe_source_value(_json_load(product.materials_json, [])),
         'sizes': _safe_source_value(_json_load(product.sizes_json, {})),
-        'dimensions': _safe_source_value(
-            _json_load(product.dimensions_json, {}),
-        ),
+        'dimensions': _safe_source_value(_json_load(product.dimensions_json, {})),
         'gender': _bounded_text(product.gender, 50),
         'country': _bounded_text(product.country, 100),
         'season': _bounded_text(product.season, 50),
         'age_group': _bounded_text(product.age_group, 50),
     }
-    return {
+    return _hash({
         key: value for key, value in source.items()
         if value not in (None, '', [], {})
-    }
+    })
 
 
-def _source_fingerprint(product: SupplierProduct) -> str:
-    return _hash(_product_source(product))
+def _run_source_contract(run: SupplierCatalogEnrichmentRun) -> Optional[str]:
+    selection = _json_load(run.selection_json, {})
+    if isinstance(selection, dict):
+        return selection.get('_source_contract')
+    return None
+
+
+def _has_existing_marketplace_content(product: SupplierProduct) -> bool:
+    """A new Flash run must not revalidate or discard earlier AI/Luna lanes."""
+    for raw in (product.ai_marketplace_json, product.marketplace_fields_json):
+        if raw in (None, ''):
+            continue
+        parsed = _json_load(raw, raw)
+        if parsed not in (None, '', [], {}):
+            return True
+    return False
 
 
 def _source_blob(source: Dict[str, Any]) -> str:
-    return _normalized(_json_dump(source))
+    return _normalized(_json_dump({
+        key: value for key, value in source.items() if key != 'product_id'
+    }))
 
 
 def _evidence_is_grounded(evidence: Any, source: Dict[str, Any]) -> bool:
@@ -502,9 +541,14 @@ class SupplierCatalogEnrichmentService:
         prepared_ids = cls._validate_ids(supplier_id, product_ids, mode)
 
         from services.supplier_service import SupplierService
-        ai_service = SupplierService._get_ai_service(
-            supplier, model_override=model_override,
-        )
+        from services.ai_service import AIProfileError
+        try:
+            ai_service = SupplierService._get_ai_service(
+                supplier, model_override=model_override,
+                task_profile='supplier_parsing_flash',
+            )
+        except AIProfileError as exc:
+            raise SupplierCatalogEnrichmentError(exc.code, str(exc)) from None
         if not ai_service:
             raise SupplierCatalogEnrichmentError(
                 'ai_not_configured',
@@ -526,13 +570,17 @@ class SupplierCatalogEnrichmentService:
                     len(prepared_ids) / CHARACTERISTIC_BATCH_SIZE
                 )
         call_limit = min(MAX_LLM_CALLS, max(20, estimated_calls + 10))
+        safe_selection = _safe_source_value(selection or {})
+        if not isinstance(safe_selection, dict):
+            safe_selection = {}
+        safe_selection['_source_contract'] = SOURCE_CONTRACT
         run = SupplierCatalogEnrichmentRun(
             id=str(uuid.uuid4()),
             supplier_id=supplier_id,
             admin_user_id=admin_user_id,
             mode=mode,
             status='pending',
-            selection_json=_json_dump(_safe_source_value(selection or {})),
+            selection_json=_json_dump(safe_selection),
             reference_snapshot_json=_json_dump(reference),
             model_used=model_used,
             total=len(prepared_ids),
@@ -547,21 +595,41 @@ class SupplierCatalogEnrichmentService:
                 SupplierProduct.id.in_(prepared_ids),
             ).all()
         }
-        db.session.add_all([
-            SupplierCatalogEnrichmentItem(
+        items = []
+        for ordinal, product_id in enumerate(prepared_ids, start=1):
+            product = products[product_id]
+            has_source = bool(_source_snapshot(product))
+            has_existing = (
+                model_used == 'deepseek-flash'
+                and _has_existing_marketplace_content(product)
+            )
+            blocked = not has_source or has_existing
+            items.append(SupplierCatalogEnrichmentItem(
                 run_id=run.id,
                 supplier_product_id=product_id,
                 ordinal=ordinal,
-                source_fingerprint=_source_fingerprint(products[product_id]),
+                source_fingerprint=_source_fingerprint(product),
                 # Inference не имеет категорийной фазы: items сразу в
                 # characteristics (CHECK phase не расширяется)
                 phase=(
-                    'characteristics' if mode == MODE_INFERENCE
-                    else 'category'
+                    'done' if blocked else (
+                        'characteristics' if mode == MODE_INFERENCE else 'category'
+                    )
                 ),
-            )
-            for ordinal, product_id in enumerate(prepared_ids, start=1)
-        ])
+                status='needs_review' if blocked else 'pending',
+                error_code=(
+                    'source_snapshot_missing' if not has_source
+                    else 'existing_content_requires_review' if has_existing else None
+                ),
+                error_message=(
+                    'Нет исходного снимка фида; автоматический разбор недоступен.'
+                    if not has_source else
+                    'В карточке уже есть marketplace-контент; требуется отдельный просмотр diff.'
+                    if has_existing else None
+                ),
+                completed_at=datetime.utcnow() if blocked else None,
+            ))
+        db.session.add_all(items)
         try:
             db.session.commit()
         except IntegrityError as exc:
@@ -670,6 +738,17 @@ class SupplierCatalogEnrichmentService:
         if overlap:
             return min(0.9, 0.25 + overlap * 0.65)
         return 0.0
+
+    @classmethod
+    def _current_subject_is_source_supported(
+        cls, category: Any, source: Dict[str, Any],
+    ) -> bool:
+        name = category.subject_name if hasattr(category, 'subject_name') else category['subject_name']
+        candidate = {
+            '_subject_norm': _normalized(name),
+            '_subject_tokens': _tokens(name),
+        }
+        return cls._category_source_match(candidate, source) >= AUTO_APPLY_SOURCE_MATCH
 
     @classmethod
     def _rank_candidates(
@@ -950,6 +1029,162 @@ class SupplierCatalogEnrichmentService:
         return True
 
     @classmethod
+    def _defer_flash_items(
+        cls, run_id: str, item_ids: Sequence[int], code: str,
+        *, physical_attempted: bool = False,
+    ) -> None:
+        """Leave a chunk runnable after capacity or an observed 429."""
+        items = SupplierCatalogEnrichmentItem.query.filter(
+            SupplierCatalogEnrichmentItem.run_id == run_id,
+            SupplierCatalogEnrichmentItem.id.in_(item_ids),
+            SupplierCatalogEnrichmentItem.status == 'running',
+        ).all()
+        for item in items:
+            item.status = 'pending'
+            if not physical_attempted:
+                item.attempt_count = max(0, int(item.attempt_count or 0) - 1)
+            item.error_code = code
+            item.error_message = 'Вызов ИИ отложен до освобождения общего бюджета.'
+            item.completed_at = None
+        db.session.commit()
+
+    @classmethod
+    def _unknown_flash_items(cls, run_id: str, item_ids: Sequence[int]) -> None:
+        items = SupplierCatalogEnrichmentItem.query.filter(
+            SupplierCatalogEnrichmentItem.run_id == run_id,
+            SupplierCatalogEnrichmentItem.id.in_(item_ids),
+            SupplierCatalogEnrichmentItem.status == 'running',
+        ).all()
+        for item in items:
+            cls._mark_item_drift(
+                item, 'unknown_response',
+                'Исход вызова модели неизвестен; автоматический повтор запрещён.',
+            )
+        db.session.commit()
+
+    @classmethod
+    def _reserve_admin_flash(
+        cls, run_id: str, item_ids: Sequence[int], messages,
+        ai_service, max_tokens: int,
+    ) -> Optional[Tuple[str, Any]]:
+        """Admit a reader before charging the shared durable attempt ledger."""
+        from services.ai_parsing_budget import (
+            ADMIN_LANE, AttemptClaim, reserve_attempt,
+        )
+        from services.ozon_draft_ai_transport import (
+            try_acquire_flash_permit, validate_flash_request,
+        )
+
+        run = db.session.get(SupplierCatalogEnrichmentRun, run_id)
+        if not run or run.status not in ('pending', 'running'):
+            cls._unknown_flash_items(run_id, item_ids)
+            return None
+        try:
+            validate_flash_request(
+                ai_service.config, messages, max_output_tokens=max_tokens,
+            )
+        except ValueError:
+            cls._mark_batch_error(
+                run_id, item_ids, 'invalid_model_request',
+                'Запрос к модели превышает лимит или профиль недоступен.',
+            )
+            return None
+        permit = try_acquire_flash_permit()
+        if permit is None:
+            cls._defer_flash_items(run_id, item_ids, 'ai_local_capacity')
+            return None
+        fingerprint = _hash({
+            'run_id': run_id,
+            'item_ids': list(item_ids),
+            'messages': messages,
+            'max_tokens': max_tokens,
+        })
+        transferred = False
+        try:
+            claim = reserve_attempt(
+                call_id=uuid.uuid4().hex,
+                lane=ADMIN_LANE,
+                run_uid=run_id,
+                request_fingerprint=fingerprint,
+                max_run_calls=int(run.llm_call_limit),
+            )
+            if not isinstance(claim, AttemptClaim):
+                if claim.code == 'ai_run_call_budget_exhausted':
+                    run.status = 'failed'
+                    run.error_code = 'llm_budget_exhausted'
+                    run.error_message = 'Лимит физических вызовов ИИ исчерпан.'
+                    run.completed_at = datetime.utcnow()
+                    cls._mark_batch_error(
+                        run_id, item_ids, 'llm_budget_exhausted', run.error_message,
+                    )
+                elif claim.code == 'ai_call_already_attempted':
+                    cls._unknown_flash_items(run_id, item_ids)
+                else:
+                    cls._defer_flash_items(run_id, item_ids, claim.code)
+                return None
+            run.llm_calls += 1
+            run.heartbeat_at = datetime.utcnow()
+            db.session.commit()
+            transferred = True
+            return claim.call_id, permit
+        finally:
+            if not transferred:
+                permit.release()
+
+    @classmethod
+    def _finish_admin_flash(
+        cls, run_id: str, item_ids: Sequence[int], call_id: str, outcome,
+    ) -> Optional[str]:
+        """Persist the attempt result and return strict JSON only on success."""
+        from services.ai_parsing_budget import finish_attempt
+
+        if not finish_attempt(call_id, outcome):
+            cls._unknown_flash_items(run_id, item_ids)
+            return None
+        run = db.session.get(SupplierCatalogEnrichmentRun, run_id)
+        if not run or run.status not in ('pending', 'running'):
+            return None
+        if outcome.kind == 'success':
+            return _json_dump(outcome.content)
+        if outcome.kind == 'rate_limited':
+            cls._defer_flash_items(
+                run_id, item_ids, 'ai_rate_limited', physical_attempted=True,
+            )
+        elif outcome.kind == 'unknown_response':
+            cls._unknown_flash_items(run_id, item_ids)
+        else:
+            cls._mark_batch_error(
+                run_id, item_ids, 'model_call_failed',
+                'Модель не вернула пригодный завершённый ответ.',
+            )
+        return None
+
+    @classmethod
+    def _call_admin_flash(
+        cls, run_id: str, item_ids: Sequence[int], messages,
+        ai_service, max_tokens: int,
+    ) -> Optional[str]:
+        reservation = cls._reserve_admin_flash(
+            run_id, item_ids, messages, ai_service, max_tokens,
+        )
+        if reservation is None:
+            return None
+        call_id, permit = reservation
+        from services.ozon_draft_ai_transport import (
+            FlashOutcome, flash_completion,
+        )
+        try:
+            outcome = flash_completion(
+                ai_service.config, messages, max_output_tokens=max_tokens,
+                permit=permit,
+            )
+        except Exception:
+            outcome = FlashOutcome('unknown_response', safe_code='ai_response_unknown')
+        finally:
+            permit.release()
+        return cls._finish_admin_flash(run_id, item_ids, call_id, outcome)
+
+    @classmethod
     def _mark_batch_error(
         cls,
         run_id: str,
@@ -957,6 +1192,16 @@ class SupplierCatalogEnrichmentService:
         code: str,
         message: str,
     ) -> None:
+        run = db.session.get(SupplierCatalogEnrichmentRun, run_id)
+        single_attempt_failure = bool(
+            run and run.model_used == 'deepseek-flash'
+            and code in (
+                'model_call_failed', 'invalid_model_response',
+                'invalid_model_request', 'llm_budget_exhausted',
+                'category_apply_failed', 'characteristics_apply_failed',
+                'inference_apply_failed',
+            )
+        )
         items = SupplierCatalogEnrichmentItem.query.filter(
             SupplierCatalogEnrichmentItem.run_id == run_id,
             SupplierCatalogEnrichmentItem.id.in_(item_ids),
@@ -965,7 +1210,7 @@ class SupplierCatalogEnrichmentService:
         for item in items:
             item.error_code = code
             item.error_message = _bounded_text(message, 1200)
-            if item.attempt_count >= MAX_ITEM_ATTEMPTS:
+            if single_attempt_failure or item.attempt_count >= MAX_ITEM_ATTEMPTS:
                 product = item.supplier_product
                 if product and (
                     item.category_changed or item.characteristics_changed
@@ -1042,6 +1287,13 @@ class SupplierCatalogEnrichmentService:
                     'Карточку изменили параллельно; автоматическая запись отменена.'
                 )
                 item.completed_at = now
+                continue
+            if run.model_used == 'deepseek-flash' and _has_existing_marketplace_content(product):
+                cls._mark_item_drift(
+                    item,
+                    'existing_content_requires_review',
+                    'В карточке уже есть marketplace-контент; нужен просмотр diff.',
+                )
                 continue
 
             subject_id = result.get('subject_id')
@@ -1189,6 +1441,27 @@ class SupplierCatalogEnrichmentService:
                 item.error_message = 'Товар больше не существует.'
                 item.completed_at = now
                 continue
+            if not _source_snapshot(product):
+                cls._mark_item_drift(
+                    item,
+                    'source_snapshot_missing',
+                    'Исходный снимок фида недоступен.',
+                )
+                continue
+            if _source_fingerprint(product) != item.source_fingerprint:
+                cls._mark_item_drift(
+                    item,
+                    'source_changed',
+                    'Исходные данные изменились после создания запуска.',
+                )
+                continue
+            if run.model_used == 'deepseek-flash' and _has_existing_marketplace_content(product):
+                cls._mark_item_drift(
+                    item,
+                    'existing_content_requires_review',
+                    'В карточке уже есть marketplace-контент; нужен просмотр diff.',
+                )
+                continue
             item.status = 'running'
             item.attempt_count += 1
             item.started_at = item.started_at or now
@@ -1199,12 +1472,12 @@ class SupplierCatalogEnrichmentService:
                 item.before_json = _json_dump(_enrichment_state(product))
 
             current = by_subject.get(product.wb_subject_id)
-            if current:
+            if current and cls._current_subject_is_source_supported(current, source):
                 candidate = {
                     'subject_id': current['subject_id'],
                     'subject_name': current['subject_name'],
                     'parent_name': current['parent_name'],
-                    'source_match': 1.0,
+                    'source_match': cls._category_source_match(current, source),
                 }
                 candidates_by_id[product.id] = {current['subject_id']: candidate}
                 results[product.id] = {
@@ -1295,21 +1568,29 @@ class SupplierCatalogEnrichmentService:
                 item_id_by_product[entry['product_id']]
                 for entry in model_entries
             ]
-            if not cls._reserve_llm_call(run_id):
-                return True
-            try:
-                response = ai_service.client.chat_completion(
-                    cls._category_prompt(model_entries),
-                    temperature=0.0,
-                    max_tokens=7000,
-                    response_format={'type': 'json_object'},
+            prompt = cls._category_prompt(model_entries)
+            if run.model_used == 'deepseek-flash':
+                response = cls._call_admin_flash(
+                    run_id, model_item_ids, prompt, ai_service, 7000,
                 )
-            except Exception as exc:
-                cls._mark_batch_error(
-                    run_id, model_item_ids, 'model_call_failed',
-                    _public_failure('Вызов модели не выполнен', exc),
-                )
-                return True
+                if response is None:
+                    return True
+            else:
+                if not cls._reserve_llm_call(run_id):
+                    return True
+                try:
+                    response = ai_service.client.chat_completion(
+                        prompt,
+                        temperature=0.0,
+                        max_tokens=7000,
+                        response_format={'type': 'json_object'},
+                    )
+                except Exception as exc:
+                    cls._mark_batch_error(
+                        run_id, model_item_ids, 'model_call_failed',
+                        _public_failure('Вызов модели не выполнен', exc),
+                    )
+                    return True
             try:
                 model_results = cls._validate_category_response(
                     response, model_entries,
@@ -1355,21 +1636,29 @@ class SupplierCatalogEnrichmentService:
                     item_id_by_product[entry['product_id']]
                     for entry in lookup_entries
                 ]
-                if not cls._reserve_llm_call(run_id):
-                    return True
-                try:
-                    second_response = ai_service.client.chat_completion(
-                        cls._category_prompt(lookup_entries),
-                        temperature=0.0,
-                        max_tokens=5000,
-                        response_format={'type': 'json_object'},
+                second_prompt = cls._category_prompt(lookup_entries)
+                if run.model_used == 'deepseek-flash':
+                    second_response = cls._call_admin_flash(
+                        run_id, lookup_item_ids, second_prompt, ai_service, 5000,
                     )
-                except Exception as exc:
-                    cls._mark_batch_error(
-                        run_id, lookup_item_ids, 'model_call_failed',
-                        _public_failure('Вызов модели не выполнен', exc),
-                    )
-                    return True
+                    if second_response is None:
+                        return True
+                else:
+                    if not cls._reserve_llm_call(run_id):
+                        return True
+                    try:
+                        second_response = ai_service.client.chat_completion(
+                            second_prompt,
+                            temperature=0.0,
+                            max_tokens=5000,
+                            response_format={'type': 'json_object'},
+                        )
+                    except Exception as exc:
+                        cls._mark_batch_error(
+                            run_id, lookup_item_ids, 'model_call_failed',
+                            _public_failure('Вызов модели не выполнен', exc),
+                        )
+                        return True
                 try:
                     results = cls._validate_category_response(
                         second_response, lookup_entries,
@@ -1628,11 +1917,37 @@ class SupplierCatalogEnrichmentService:
                 item.error_message = 'Товар больше не существует.'
                 item.completed_at = now
                 continue
+            if not _source_snapshot(product):
+                cls._mark_item_drift(
+                    item,
+                    'source_snapshot_missing',
+                    'Исходный снимок фида недоступен.',
+                )
+                continue
             if _source_fingerprint(product) != item.source_fingerprint:
                 cls._mark_item_drift(
                     item,
                     'source_changed',
                     'Исходные данные изменились после категорийного этапа.',
+                )
+                continue
+            if run.model_used == 'deepseek-flash' and _has_existing_marketplace_content(product):
+                cls._mark_item_drift(
+                    item,
+                    'existing_content_requires_review',
+                    'В карточке уже есть marketplace-контент; нужен просмотр diff.',
+                )
+                continue
+            if (
+                run.model_used == 'deepseek-flash'
+                and not cls._current_subject_is_source_supported(
+                    category, _product_source(product),
+                )
+            ):
+                cls._mark_item_drift(
+                    item,
+                    'category_source_unverified',
+                    'Текущая категория не подтверждена исходным снимком фида.',
                 )
                 continue
             category_checkpoint = _json_load(item.after_json, None)
@@ -1748,6 +2063,14 @@ class SupplierCatalogEnrichmentService:
                     )
                     continue
 
+                if run.model_used == 'deepseek-flash' and _has_existing_marketplace_content(product):
+                    cls._mark_item_drift(
+                        item,
+                        'existing_content_requires_review',
+                        'В карточке уже есть marketplace-контент; нужен просмотр diff.',
+                    )
+                    continue
+
                 existing = _json_load(product.ai_marketplace_json, {})
                 existing.pop('_meta', None)
                 existing_validated = validator.parse_response(_json_dump(existing)) or {}
@@ -1824,17 +2147,25 @@ class SupplierCatalogEnrichmentService:
         did_work, ctx = cls._collect_characteristic_chunk(run_id)
         if not ctx:
             return did_work
-        if not cls._reserve_llm_call(run_id):
-            return True
-        try:
-            response = ai_service.client.chat_completion(
-                ctx['prompt'],
-                temperature=0.0,
-                max_tokens=8000,
-                response_format={'type': 'json_object'},
+        run = db.session.get(SupplierCatalogEnrichmentRun, run_id)
+        if run.model_used == 'deepseek-flash':
+            response = cls._call_admin_flash(
+                run_id, ctx['active_item_ids'], ctx['prompt'], ai_service, 8000,
             )
-        except Exception as exc:
-            response = exc
+            if response is None:
+                return True
+        else:
+            if not cls._reserve_llm_call(run_id):
+                return True
+            try:
+                response = ai_service.client.chat_completion(
+                    ctx['prompt'],
+                    temperature=0.0,
+                    max_tokens=8000,
+                    response_format={'type': 'json_object'},
+                )
+            except Exception as exc:
+                response = exc
         cls._apply_characteristic_response(ctx, ai_service.client, response)
         return True
 
@@ -1876,6 +2207,53 @@ class SupplierCatalogEnrichmentService:
             break
         if not ctxs:
             return did_any
+        run = db.session.get(SupplierCatalogEnrichmentRun, run_id)
+        if run.model_used == 'deepseek-flash':
+            from services.ozon_draft_ai_transport import (
+                FlashOutcome, flash_completion,
+            )
+
+            reserved = []
+            try:
+                for ctx in ctxs:
+                    reservation = cls._reserve_admin_flash(
+                        run_id, ctx['active_item_ids'], ctx['prompt'], ai_service,
+                        8000,
+                    )
+                    if reservation is not None:
+                        call_id, permit = reservation
+                        reserved.append((ctx, call_id, permit))
+                if not reserved:
+                    return True
+
+                def flash_call(ctx, permit):
+                    try:
+                        return flash_completion(
+                            ai_service.config, ctx['prompt'],
+                            max_output_tokens=8000,
+                            permit=permit,
+                        )
+                    except Exception:
+                        return FlashOutcome(
+                            'unknown_response', safe_code='ai_response_unknown',
+                        )
+                    finally:
+                        permit.release()
+
+                with ThreadPoolExecutor(max_workers=len(reserved)) as pool:
+                    futures = [pool.submit(flash_call, ctx, permit)
+                               for ctx, _, permit in reserved]
+                    outcomes = [future.result() for future in futures]
+                for (ctx, call_id, _permit), outcome in zip(reserved, outcomes):
+                    response = cls._finish_admin_flash(
+                        run_id, ctx['active_item_ids'], call_id, outcome,
+                    )
+                    if response is not None:
+                        apply_fn(ctx, ai_service.client, response)
+                return True
+            finally:
+                for _ctx, _call_id, permit in reserved:
+                    permit.release()
         ready = []
         for ctx in ctxs:
             if not cls._reserve_llm_call(run_id):
@@ -1890,6 +2268,7 @@ class SupplierCatalogEnrichmentService:
         for _ in ready:
             svc = SupplierService._get_ai_service(
                 supplier, model_override=run.model_used,
+                task_profile='supplier_parsing_flash',
             )
             if not svc:
                 break
@@ -2047,11 +2426,37 @@ class SupplierCatalogEnrichmentService:
                 item.error_message = 'Товар больше не существует.'
                 item.completed_at = now
                 continue
+            if not _source_snapshot(product):
+                cls._mark_item_drift(
+                    item,
+                    'source_snapshot_missing',
+                    'Исходный снимок фида недоступен.',
+                )
+                continue
             if _source_fingerprint(product) != item.source_fingerprint:
                 cls._mark_item_drift(
                     item,
                     'source_changed',
                     'Исходные данные изменились после создания запуска.',
+                )
+                continue
+            if run.model_used == 'deepseek-flash' and _has_existing_marketplace_content(product):
+                cls._mark_item_drift(
+                    item,
+                    'existing_content_requires_review',
+                    'В карточке уже есть marketplace-контент; нужен просмотр diff.',
+                )
+                continue
+            if (
+                run.model_used == 'deepseek-flash'
+                and not cls._current_subject_is_source_supported(
+                    category, _product_source(product),
+                )
+            ):
+                cls._mark_item_drift(
+                    item,
+                    'category_source_unverified',
+                    'Текущая категория не подтверждена исходным снимком фида.',
                 )
                 continue
             filled_names = cls._filled_characteristic_names(product)
@@ -2341,6 +2746,11 @@ class SupplierCatalogEnrichmentService:
             raise SupplierCatalogEnrichmentError(
                 'run_not_found', 'Запуск не найден.',
             )
+        if _run_source_contract(run) != SOURCE_CONTRACT:
+            raise SupplierCatalogEnrichmentError(
+                'legacy_review_required',
+                'Старый запуск использует прежний источник фактов; нужен новый просмотр.',
+            )
         if run.mode != MODE_INFERENCE:
             raise SupplierCatalogEnrichmentError(
                 'invalid_mode', 'Этот запуск не является inference-режимом.',
@@ -2390,6 +2800,11 @@ class SupplierCatalogEnrichmentService:
         if not product or product.supplier_id != supplier_id:
             raise SupplierCatalogEnrichmentError(
                 'product_not_found', 'Товар не найден.',
+            )
+        if run.model_used == 'deepseek-flash' and _has_existing_marketplace_content(product):
+            raise SupplierCatalogEnrichmentError(
+                'existing_content_requires_review',
+                'В карточке уже есть marketplace-контент; нужен отдельный просмотр diff.',
             )
         if _source_fingerprint(product) != item.source_fingerprint:
             item.error_code = 'source_changed'
@@ -2487,17 +2902,25 @@ class SupplierCatalogEnrichmentService:
         did_work, ctx = cls._collect_inference_chunk(run_id)
         if not ctx:
             return did_work
-        if not cls._reserve_llm_call(run_id):
-            return True
-        try:
-            response = ai_service.client.chat_completion(
-                ctx['prompt'],
-                temperature=0.0,
-                max_tokens=8000,
-                response_format={'type': 'json_object'},
+        run = db.session.get(SupplierCatalogEnrichmentRun, run_id)
+        if run.model_used == 'deepseek-flash':
+            response = cls._call_admin_flash(
+                run_id, ctx['active_item_ids'], ctx['prompt'], ai_service, 8000,
             )
-        except Exception as exc:
-            response = exc
+            if response is None:
+                return True
+        else:
+            if not cls._reserve_llm_call(run_id):
+                return True
+            try:
+                response = ai_service.client.chat_completion(
+                    ctx['prompt'],
+                    temperature=0.0,
+                    max_tokens=8000,
+                    response_format={'type': 'json_object'},
+                )
+            except Exception as exc:
+                response = exc
         cls._apply_inference_response(ctx, ai_service.client, response)
         return True
 
@@ -2571,12 +2994,40 @@ class SupplierCatalogEnrichmentService:
                     db.session.get(SupplierCatalogEnrichmentRun, run_id)
                 )
 
+            if _run_source_contract(run) != SOURCE_CONTRACT:
+                run.status = 'failed'
+                run.error_code = 'legacy_review_required'
+                run.error_message = (
+                    'Старый запуск использует прежний источник фактов; '
+                    'нужен новый просмотр без автоматического продолжения.'
+                )
+                run.completed_at = datetime.utcnow()
+                cls._finish_unfinished_items(
+                    run_id,
+                    terminal_status='failed',
+                    error_code=run.error_code,
+                    error_message=run.error_message,
+                )
+                cls._refresh_counters(run_id)
+                return cls.serialize_run(run)
+
             stale_before = datetime.utcnow() - timedelta(minutes=10)
-            SupplierCatalogEnrichmentItem.query.filter(
+            stale_items = SupplierCatalogEnrichmentItem.query.filter(
                 SupplierCatalogEnrichmentItem.run_id == run_id,
                 SupplierCatalogEnrichmentItem.status == 'running',
                 SupplierCatalogEnrichmentItem.updated_at < stale_before,
-            ).update({'status': 'pending'}, synchronize_session=False)
+            )
+            if run.model_used == 'deepseek-flash':
+                # A worker may have sent its one physical request before it
+                # died. The provider outcome cannot be inferred from age.
+                for item in stale_items.all():
+                    cls._mark_item_drift(
+                        item, 'unknown_response',
+                        'Исход прерванного вызова модели неизвестен; '
+                        'автоматический повтор запрещён.',
+                    )
+            else:
+                stale_items.update({'status': 'pending'}, synchronize_session=False)
             run.status = 'running'
             run.started_at = run.started_at or datetime.utcnow()
             run.heartbeat_at = datetime.utcnow()
@@ -2584,9 +3035,25 @@ class SupplierCatalogEnrichmentService:
 
             supplier = db.session.get(Supplier, run.supplier_id)
             from services.supplier_service import SupplierService
-            ai_service = SupplierService._get_ai_service(
-                supplier, model_override=run.model_used,
-            )
+            from services.ai_service import AIProfileError
+            try:
+                ai_service = SupplierService._get_ai_service(
+                    supplier, model_override=run.model_used,
+                    task_profile='supplier_parsing_flash',
+                )
+            except AIProfileError as exc:
+                run.status = 'failed'
+                run.error_code = exc.code
+                run.error_message = str(exc)
+                run.completed_at = datetime.utcnow()
+                cls._finish_unfinished_items(
+                    run_id,
+                    terminal_status='failed',
+                    error_code=run.error_code,
+                    error_message=run.error_message,
+                )
+                cls._refresh_counters(run_id)
+                return cls.serialize_run(run)
             if not ai_service:
                 run.status = 'failed'
                 run.error_code = 'ai_not_configured'
@@ -2628,7 +3095,8 @@ class SupplierCatalogEnrichmentService:
                         else:
                             did_work = sequential(run_id, ai_service)
                     cls._refresh_counters(run_id)
-                    if not did_work or cls._finalize_if_done(run_id):
+                    finished = cls._finalize_if_done(run_id)
+                    if not did_work or finished:
                         break
             except SupplierCatalogEnrichmentError as exc:
                 db.session.rollback()
@@ -2744,6 +3212,11 @@ class SupplierCatalogEnrichmentService:
             raise SupplierCatalogEnrichmentError(
                 'item_not_reviewable', 'Элемент не найден или уже обработан.',
             )
+        if _run_source_contract(item.run) != SOURCE_CONTRACT:
+            raise SupplierCatalogEnrichmentError(
+                'legacy_review_required',
+                'Старый запуск использует прежний источник фактов; нужен новый просмотр.',
+            )
         other_active = SupplierCatalogEnrichmentRun.query.filter(
             SupplierCatalogEnrichmentRun.supplier_id == supplier_id,
             SupplierCatalogEnrichmentRun.id != item.run_id,
@@ -2767,6 +3240,11 @@ class SupplierCatalogEnrichmentService:
                 'Можно выбрать только включённый конечный предмет из свежего WB-справочника.',
             )
         product = item.supplier_product
+        if item.run.model_used == 'deepseek-flash' and _has_existing_marketplace_content(product):
+            raise SupplierCatalogEnrichmentError(
+                'existing_content_requires_review',
+                'В карточке уже есть marketplace-контент; нужен отдельный просмотр diff.',
+            )
         before = _enrichment_state(product)
         # Manual review is a new explicit decision. Its rollback baseline must
         # be the current card, not a potentially stale snapshot from the
@@ -2862,7 +3340,18 @@ class SupplierCatalogEnrichmentService:
             raise SupplierCatalogEnrichmentError(
                 'rollback_snapshot_missing', 'Нет полного снимка для отката.',
             )
-        if _enrichment_state(product) != after:
+        source_drift = False
+        selection = _json_load(item.run.selection_json, {})
+        if isinstance(selection, dict) and selection.get('driver') == 'codex_luna_v2':
+            from services.supplier_luna_enrichment import source_matches
+            source_drift = not source_matches(
+                product, {'source_sha256': item.source_fingerprint},
+            )
+        elif _run_source_contract(item.run) == SOURCE_CONTRACT:
+            source_drift = _source_fingerprint(product) != item.source_fingerprint
+        else:
+            source_drift = _legacy_source_fingerprint(product) != item.source_fingerprint
+        if source_drift or _enrichment_state(product) != after:
             item.status = 'rollback_conflict'
             item.error_code = 'rollback_conflict'
             item.error_message = (

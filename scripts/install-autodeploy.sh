@@ -41,7 +41,8 @@ chmod +x "$AUTODEPLOY_SCRIPT"
 if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" << 'ENVEOF'
 # Telegram-уведомления о деплоях
-# Получи токен бота у @BotFather, chat_id — у @userinfobot или из группы
+# Токен — у @BotFather. Chat ID — optional bootstrap прежнего адресата.
+# Новые подписчики регистрируются командой /start через seller-deploy-telegram.
 AUTODEPLOY_TG_BOT_TOKEN=
 AUTODEPLOY_TG_CHAT_ID=
 ENVEOF
@@ -98,4 +99,5 @@ echo "  sudo journalctl -u seller-autodeploy -f     # live logs"
 echo "  sudo systemctl status seller-autodeploy      # status"
 echo "  sudo systemctl restart seller-autodeploy     # restart"
 echo "  sudo systemctl stop seller-autodeploy        # stop"
+echo "  sudo bash scripts/install-deploy-telegram.sh # enable /start subscriptions"
 echo ""

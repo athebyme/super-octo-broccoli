@@ -435,6 +435,11 @@ OPENROUTER_MODELS = {
 
 # Модели DeepSeek Platform (api.deepseek.com, нативный API)
 DEEPSEEK_MODELS = {
+    "deepseek-flash": {
+        "name": "DeepSeek V4.1 Flash",
+        "description": "Текущая нативная модель DeepSeek для быстрого парсинга",
+        "recommended": False
+    },
     "deepseek-v4-pro": {
         "name": "DeepSeek V4 Pro",
         "description": "Флагман DeepSeek — глубокие рассуждения, максимальное качество",
@@ -1512,6 +1517,14 @@ Rich-контент на WB - это визуальные блоки (слайд
 }
 
 
+class AIProfileError(ValueError):
+    """Public, typed configuration failure before any parsing provider call."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
 @dataclass
 class AIConfig:
     """Конфигурация AI провайдера"""
@@ -1551,6 +1564,52 @@ class AIConfig:
     log_payloads: bool = True
     # Physical provider attempts for one chat_completion call.
     max_retries: int = 3
+    # Only explicitly selected parsing work uses the native Flash contract.
+    task_profile: str = ""
+    parse_retries: int = 2
+
+    @classmethod
+    def for_supplier_parsing(cls, settings, model_override: str = None) -> 'AIConfig':
+        """Fail closed before a supplier parsing job can contact a provider."""
+        from urllib.parse import urlsplit
+
+        if model_override not in (None, '', 'deepseek-flash'):
+            raise AIProfileError(
+                'unsupported_model',
+                'Для разбора каталога доступна только модель DeepSeek Flash.',
+            )
+        try:
+            config = cls.from_settings(settings)
+        except (KeyError, TypeError, ValueError):
+            config = None
+        if config is None or config.provider != AIProvider.DEEPSEEK:
+            raise AIProfileError(
+                'native_deepseek_required',
+                'Для разбора каталога нужен настроенный нативный ключ DeepSeek.',
+            )
+        parsed = urlsplit(config.api_base_url or '')
+        if (
+            parsed.scheme != 'https'
+            or parsed.netloc != 'api.deepseek.com'
+            or parsed.path not in ('', '/', '/v1', '/v1/')
+            or parsed.query or parsed.fragment
+        ):
+            raise AIProfileError(
+                'native_deepseek_base_required',
+                'Нативный адрес DeepSeek для разбора каталога не настроен.',
+            )
+        config.api_base_url = 'https://api.deepseek.com/v1'
+        config.model = 'deepseek-flash'
+        config.task_profile = 'supplier_parsing_flash'
+        config.max_retries = 1
+        config.parse_retries = 1
+        config.log_payloads = False
+        config.proxy_enabled = False
+        try:
+            config.timeout = min(60.0, max(1.0, float(config.timeout)))
+        except (TypeError, ValueError):
+            config.timeout = 60.0
+        return config
 
     @staticmethod
     def _central_provider_base_model(central: dict):
@@ -1832,7 +1891,14 @@ class AIClient:
     def __init__(self, config: AIConfig):
         self.config = config
         self.last_error: Optional[str] = None  # детали последней ошибки
+        self.last_usage: Optional[Dict[str, int]] = None
+        self.last_attempts = 0
+        self.last_finish_reason: Optional[str] = None
         self._session = requests.Session()
+        if config.task_profile == 'supplier_parsing_flash':
+            # Native credentials must not inherit a seller's OpenRouter proxy
+            # or an ambient HTTPS_PROXY/netrc route.
+            self._session.trust_env = False
         self._session.headers.update({
             'Content-Type': 'application/json'
         })
@@ -1842,7 +1908,10 @@ class AIClient:
             proxy_url = os.environ.get('AI_PROXY') or os.environ.get('IMAGE_GEN_PROXY') or os.environ.get('HTTPS_PROXY')
             if proxy_url:
                 self._session.proxies = {'http': proxy_url, 'https': proxy_url}
-                logger.info(f"AI Service [{config.provider.value}] using proxy: {proxy_url}")
+                if config.log_payloads:
+                    logger.info(f"AI Service [{config.provider.value}] using proxy: {proxy_url}")
+                else:
+                    logger.info("AI Service [%s] using configured proxy", config.provider.value)
             else:
                 logger.warning(f"AI Service [{config.provider.value}] — прокси включен, но AI_PROXY не задан")
 
@@ -1902,7 +1971,10 @@ class AIClient:
         # API проверяет prompt_tokens + max_tokens ≤ context_window,
         # поэтому max_tokens=70000 при промпте в 10k вызовет ошибку.
         raw_max = max_tokens or self.config.max_tokens
-        effective_max_tokens = min(raw_max, 16384)
+        effective_max_tokens = min(
+            raw_max,
+            8000 if self.config.task_profile == 'supplier_parsing_flash' else 16384,
+        )
 
         payload = {
             "model": self.config.model,
@@ -1920,7 +1992,40 @@ class AIClient:
             payload["response_format"] = response_format
 
         self.last_error = None
+        self.last_usage = None
+        self.last_attempts = 0
+        self.last_finish_reason = None
+        if self.config.task_profile == 'supplier_parsing_flash':
+            # Native DeepSeek accepts this top-level field. Never send it to
+            # OpenRouter with a native model ID/key by accident.
+            if (
+                self.config.provider != AIProvider.DEEPSEEK
+                or self.config.model != 'deepseek-flash'
+                or self.config.api_base_url != 'https://api.deepseek.com/v1'
+            ):
+                self.last_error = 'Неверный профиль нативного DeepSeek Flash.'
+                return None
+            payload['thinking'] = {'type': 'disabled'}
+            # This is the shared admin parsing lane. Seller draft completion
+            # has its own smaller transport budget; neither sends unbounded
+            # source text to the model.
+            try:
+                payload_bytes = len(json.dumps(
+                    payload, ensure_ascii=False, allow_nan=False,
+                ).encode('utf-8'))
+            except (TypeError, ValueError):
+                self.last_error = 'Запрос DeepSeek Flash содержит недопустимые данные.'
+                return None
+            if payload_bytes > 256 * 1024:
+                self.last_error = 'Запрос DeepSeek Flash превышает лимит 256 KiB.'
+                return None
+
         max_retries = self.config.max_retries
+        if self.config.task_profile == 'supplier_parsing_flash' and (
+            type(max_retries) is not int or max_retries != 1
+        ):
+            self.last_error = 'Неверный бюджет попыток DeepSeek Flash.'
+            return None
         if (
             not isinstance(max_retries, int)
             or isinstance(max_retries, bool)
@@ -1955,12 +2060,48 @@ class AIClient:
                 # на медленных моделях (GLM-4.7-Flash и др.)
                 connect_timeout = min(self.config.timeout, 30)
                 read_timeout = self.config.timeout
+                self.last_attempts += 1
+                flash_profile = self.config.task_profile == 'supplier_parsing_flash'
+                request_options = (
+                    {'allow_redirects': False, 'stream': True}
+                    if flash_profile else {}
+                )
                 response = self._session.post(
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=(connect_timeout, read_timeout)
+                    timeout=(connect_timeout, read_timeout),
+                    **request_options,
                 )
+
+                if flash_profile and 300 <= response.status_code < 400:
+                    self._close_response_safely(response)
+                    self.last_error = 'Нативный DeepSeek вернул запрещённый redirect.'
+                    logger.error(self.last_error)
+                    return None
+
+                flash_data = None
+                if flash_profile:
+                    try:
+                        if response.status_code == 200:
+                            maximum_bytes = 4 * 1024 * 1024
+                            content_length = response.headers.get('Content-Length')
+                            if content_length and content_length.isdecimal() and int(content_length) > maximum_bytes:
+                                self.last_error = 'Ответ DeepSeek превышает лимит 4 MiB.'
+                                logger.error(self.last_error)
+                                return None
+                            chunks = []
+                            total_bytes = 0
+                            for chunk in response.iter_content(chunk_size=65536):
+                                total_bytes += len(chunk)
+                                if total_bytes > maximum_bytes:
+                                    self.last_error = 'Ответ DeepSeek превышает лимит 4 MiB.'
+                                    logger.error(self.last_error)
+                                    return None
+                                chunks.append(chunk)
+                            flash_data = json.loads(b''.join(chunks))
+                    finally:
+                        self._close_response_safely(response)
 
                 # Логируем ответ для отладки
                 if response.status_code != 200:
@@ -1988,7 +2129,8 @@ class AIClient:
                                 pass
                         self.last_error = (
                             f"Rate limit 429 от {self.config.provider.value} "
-                            f"(попытка {attempt}/{max_retries}, жду {wait}с)"
+                            f"(попытка {attempt}/{max_retries}"
+                            + (f", жду {wait}с)" if attempt < max_retries else ")")
                         )
                     logger.warning(f"⏳ {self.last_error}")
                     if attempt < max_retries:
@@ -2000,10 +2142,24 @@ class AIClient:
 
                 response.raise_for_status()
 
-                data = response.json()
+                data = flash_data if flash_profile else response.json()
+                self.last_usage = self._safe_usage(data.get('usage'))
                 choice = data.get('choices', [{}])[0]
                 content = choice.get('message', {}).get('content')
                 finish_reason = choice.get('finish_reason', '')
+                if finish_reason in ('stop', 'length', 'content_filter', 'tool_calls'):
+                    self.last_finish_reason = finish_reason
+                if self.config.task_profile == 'supplier_parsing_flash':
+                    logger.info(
+                        'Supplier Flash usage: attempts=%d tokens=%s finish=%s',
+                        self.last_attempts,
+                        self.last_usage if self.last_usage is not None else 'unknown',
+                        self.last_finish_reason or 'unknown',
+                    )
+                    if finish_reason != 'stop':
+                        self.last_error = 'Ответ DeepSeek не завершён корректно.'
+                        logger.error(self.last_error)
+                        return None
 
                 if content is None:
                     self.last_error = (
@@ -2050,6 +2206,7 @@ class AIClient:
                 # Таймауты не ретраим: если модель зависла, повтор тоже зависнет.
                 # Лучше быстро вернуть ошибку и перейти к следующему товару.
                 return None
+
             except requests.exceptions.ConnectionError as e:
                 detail = str(e)[:150] if self.config.log_payloads else type(e).__name__
                 self.last_error = (
@@ -2113,7 +2270,32 @@ class AIClient:
                     logger.error(traceback.format_exc())
                 return None
 
-        return None
+    @staticmethod
+    def _safe_usage(raw: Any) -> Optional[Dict[str, int]]:
+        """Keep only numeric provider counters; absent usage stays unknown."""
+        if not isinstance(raw, dict):
+            return None
+        counters = {}
+        for key in (
+            'prompt_tokens', 'completion_tokens', 'total_tokens',
+            'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens',
+        ):
+            value = raw.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 2**63 - 1:
+                counters[key] = value
+        details = raw.get('completion_tokens_details')
+        if isinstance(details, dict):
+            reasoning = details.get('reasoning_tokens')
+            if isinstance(reasoning, int) and not isinstance(reasoning, bool) and 0 <= reasoning <= 2**63 - 1:
+                counters['reasoning_tokens'] = reasoning
+        return counters or None
+
+    @staticmethod
+    def _close_response_safely(response: requests.Response) -> None:
+        try:
+            response.close()
+        except Exception as exc:
+            logger.warning('AI response close failed: %s', type(exc).__name__)
 
     def close(self):
         """Закрывает сессию"""
@@ -2169,8 +2351,15 @@ class AITask(ABC):
                 f"= {prompt_len} символов (~{prompt_len // 3} токенов)"
             )
 
+            parse_retries = getattr(self.client.config, 'parse_retries', self.PARSE_RETRIES)
+            if getattr(self.client.config, 'task_profile', '') == 'supplier_parsing_flash' and (
+                type(parse_retries) is not int or parse_retries != 1
+            ):
+                return False, None, f"[{task_name}] Неверный бюджет разбора DeepSeek Flash."
+            if type(parse_retries) is not int or not 1 <= parse_retries <= 3:
+                parse_retries = self.PARSE_RETRIES
             last_error_msg = None
-            for parse_attempt in range(1, self.PARSE_RETRIES + 1):
+            for parse_attempt in range(1, parse_retries + 1):
                 response = self.client.chat_completion(messages)
 
                 if not response:
@@ -2184,14 +2373,17 @@ class AITask(ABC):
                     return True, result, None
 
                 # Ответ пришёл, но парсинг не удался — ретраим
-                snippet = response[:300].replace('\n', ' ')
-                last_error_msg = (
-                    f"[{task_name}] AI ответил, но формат некорректный. "
-                    f"Ответ ({len(response)} симв.): «{snippet}»"
-                )
-                if parse_attempt < self.PARSE_RETRIES:
+                if self.client.config.log_payloads:
+                    snippet = response[:300].replace('\n', ' ')
+                    last_error_msg = (
+                        f"[{task_name}] AI ответил, но формат некорректный. "
+                        f"Ответ ({len(response)} симв.): «{snippet}»"
+                    )
+                else:
+                    last_error_msg = f"[{task_name}] AI ответил в неверном формате."
+                if parse_attempt < parse_retries:
                     logger.warning(
-                        f"⚠️ {last_error_msg} — ретрай {parse_attempt}/{self.PARSE_RETRIES}"
+                        f"⚠️ {last_error_msg} — ретрай {parse_attempt}/{parse_retries}"
                     )
                     import time
                     time.sleep(1)
@@ -2199,11 +2391,15 @@ class AITask(ABC):
             return False, None, last_error_msg
 
         except Exception as e:
-            logger.error(f"❌ Ошибка выполнения AI задачи: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            if self.client.config.log_payloads:
+                logger.error(f"❌ Ошибка выполнения AI задачи: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+            else:
+                logger.error("Ошибка выполнения AI задачи: %s", type(e).__name__)
             task_name = getattr(self, 'task_name', self.__class__.__name__)
-            return False, None, f"[{task_name}] {type(e).__name__}: {str(e)[:200]}"
+            detail = f": {str(e)[:200]}" if self.client.config.log_payloads else ""
+            return False, None, f"[{task_name}] {type(e).__name__}{detail}"
 
 
 class CategoryDetectionTask(AITask):

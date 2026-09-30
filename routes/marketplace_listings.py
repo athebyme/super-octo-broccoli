@@ -13,9 +13,11 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
+from flask_wtf.csrf import generate_csrf
 
 from models import MarketplaceCommercialProposal, db
-from services.marketplace_accounts import MarketplaceAccountService
+from services.marketplace_accounts import MarketplaceAccountError, MarketplaceAccountService
+from services.ozon_account_sync import enqueue_account_sync, latest_account_jobs
 from services.marketplace_listings import (
     MarketplaceListingError,
     MarketplaceListingService,
@@ -30,6 +32,7 @@ from services.marketplace_canonical_content import (
     MarketplaceCanonicalContentService,
 )
 from services.marketplace_warehouses import MarketplaceWarehouseService
+from services.marketplace_listing_display import listing_display
 
 
 marketplace_listings_bp = Blueprint(
@@ -110,6 +113,7 @@ def _error_response(error: Exception, status_code: int = 400):
         MarketplaceListingError,
         MarketplaceProductLinkError,
         MarketplaceCanonicalContentError,
+        MarketplaceAccountError,
     )):
         status_code = error.status_code
         code = error.code
@@ -147,9 +151,9 @@ def _listing_filters() -> Dict[str, Any]:
     }
 
 
-@marketplace_listings_bp.route("/")
+@marketplace_listings_bp.route("/classic")
 @login_required
-def index():
+def classic():
     seller_id = _seller_id()
     if seller_id is None:
         return "Seller account required", 403
@@ -165,6 +169,10 @@ def index():
         latest_syncs = MarketplaceListingService.latest_syncs(
             seller_id=seller_id,
         )
+        onboarding_jobs = latest_account_jobs(
+            seller_id=seller_id,
+            account_ids=[account.id for account in accounts if account.marketplace.code == 'ozon'],
+        )
     except (MarketplaceListingError, ValueError) as exc:
         return _error_response(exc)
     return render_template(
@@ -173,6 +181,16 @@ def index():
         listings=pagination.items,
         accounts=accounts,
         latest_syncs=latest_syncs,
+        onboarding_jobs=onboarding_jobs,
+        listing_previews={row.id: listing_display(row) for row in pagination.items},
+        setup_config={
+            'accounts': [account.to_public_dict() for account in accounts if account.marketplace.code == 'ozon'],
+            'onboarding_jobs': onboarding_jobs,
+            'catalog_syncs': {key: value.to_public_dict() for key, value in latest_syncs.items()},
+            'status_url': url_for('marketplace_accounts.list_api'),
+            'accounts_url': url_for('marketplace_accounts.index'),
+            'ozon_enabled': bool(current_app.config.get('MARKETPLACE_OZON_ENABLED', False)),
+        },
         filters=filters,
         ozon_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
@@ -180,15 +198,28 @@ def index():
     )
 
 
-@marketplace_listings_bp.route("/beta")
+@marketplace_listings_bp.route("/")
+@marketplace_listings_bp.route("/beta", endpoint="beta")
 @login_required
-def beta():
-    """Тестовая клиентская витрина каталога (Vue, только read + существующий синк)."""
+def index():
+    """Primary Vue catalogue; /beta remains a compatible alias for saved URLs."""
     seller_id = _seller_id()
     if seller_id is None:
         return "Seller account required", 403
+    try:
+        filters = _listing_filters()
+        if filters['account_id'] is not None:
+            MarketplaceAccountService.get_owned_account(
+                seller_id=seller_id, account_id=filters['account_id'], marketplace_code='ozon',
+            )
+    except (ValueError, MarketplaceAccountError) as exc:
+        return _error_response(exc)
     accounts = MarketplaceAccountService.list_accounts(seller_id=seller_id)
     latest_syncs = MarketplaceListingService.latest_syncs(seller_id=seller_id)
+    onboarding_jobs = latest_account_jobs(
+        seller_id=seller_id,
+        account_ids=[account.id for account in accounts if account.marketplace.code == 'ozon'],
+    )
     accounts_payload = []
     for account in accounts:
         marketplace_code = (
@@ -203,12 +234,16 @@ def beta():
             "marketplace_code": marketplace_code,
             "is_default": bool(account.is_default),
             "is_active": bool(account.is_active),
+            "has_credentials": account.has_credentials,
+            "credential_expires_at": account.to_public_dict().get('credential_expires_at'),
             "connection_status": account.connection_status,
             "last_sync": last_sync.to_public_dict() if last_sync else None,
+            "sync_job": onboarding_jobs.get(account.id),
         })
     return render_template(
         "marketplace_listings_beta.html",
         accounts_payload=accounts_payload,
+        initial_filters=filters,
         ozon_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
         ),
@@ -216,6 +251,7 @@ def beta():
 
 
 @marketplace_listings_bp.route("/beta/<int:listing_id>")
+@marketplace_listings_bp.route("/view/<int:listing_id>", endpoint="view")
 @login_required
 def beta_detail(listing_id: int):
     """Тестовая деталь товара: каналы одной общей карточки, read-only + существующие link-действия.
@@ -243,11 +279,14 @@ def beta_detail(listing_id: int):
     except MarketplaceListingError as exc:
         return _error_response(exc)
     if _wants_json():
-        return jsonify({
+        response = jsonify({
             "success": True,
             **_beta_detail_payload(seller_id=seller_id, listing=listing),
             "members": members,
+            "csrf": generate_csrf(),
         })
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
     return render_template(
         "marketplace_listing_beta_detail.html",
         listing_id=listing.id,
@@ -283,6 +322,36 @@ def _beta_detail_payload(*, seller_id: int, listing) -> Dict[str, Any]:
         "warehouse_stocks": [row.to_public_dict() for row in warehouse_stocks],
         "product_link": product_link,
     }
+
+
+@marketplace_listings_bp.route('/view/<int:listing_id>/link-candidates', methods=['GET'])
+@login_required
+def vue_link_candidates(listing_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify(success=False, error='Seller account required'), 403
+    try:
+        if set(request.args) - {'q'} or any(
+            len(request.args.getlist(key)) != 1 for key in request.args
+        ):
+            raise ValueError('Недопустимые параметры поиска')
+        query = request.args.get('q', '')
+        if len(query) > 200:
+            raise ValueError('Поиск ограничен 200 символами')
+        listing = MarketplaceListingService.get_listing(
+            seller_id=seller_id, listing_id=listing_id,
+        )
+        if not listing.marketplace or listing.marketplace.code != 'ozon':
+            raise ValueError('Ручная связь доступна только для Ozon')
+        candidates = MarketplaceProductLinkService.search_candidates(
+            seller_id=seller_id, listing_id=listing_id, query=query, limit=20,
+        ) if listing.imported_product_id is None else []
+    except (MarketplaceListingError, MarketplaceProductLinkError, ValueError) as exc:
+        return _error_response(exc)
+    return jsonify(
+        success=True, listing_id=listing.id, link_version=listing.link_version,
+        candidates=candidates,
+    )
 
 
 @marketplace_listings_bp.route("/api/facets")
@@ -459,6 +528,7 @@ def detail(listing_id: int):
     return render_template(
         "marketplace_listing_detail.html",
         listing=listing,
+        listing_preview=listing_display(listing),
         listing_data=listing.to_public_dict(detail=True),
         product_link=product_link,
         link_search=request.args.get("link_search", ""),
@@ -815,13 +885,19 @@ def sync_account(account_id: int):
         ), 404
     data = _payload()
     try:
-        run = MarketplaceListingService.sync_ozon_account(
+        if set(data) - {'max_pages', 'force_restart', 'csrf_token'}:
+            raise ValueError('Запрос загрузки содержит неизвестные поля')
+        # Retain strict parsing for legacy API clients, but no browser/request
+        # can expand the worker's one-page physical budget.
+        pages = _payload_integer(data, 'max_pages', 5)
+        if pages > MarketplaceListingService.MAX_SYNC_PAGES_PER_CALL:
+            raise ValueError('Слишком большой пакет синхронизации')
+        job = enqueue_account_sync(
             seller_id=seller_id,
             account_id=account_id,
-            max_pages=_payload_integer(data, "max_pages", 5),
             force_restart=_payload_boolean(data, "force_restart", False),
         )
-    except (MarketplaceListingError, ValueError) as exc:
+    except (MarketplaceListingError, MarketplaceAccountError, ValueError) as exc:
         return _error_response(exc)
     except Exception:
         db.session.rollback()
@@ -834,19 +910,16 @@ def sync_account(account_id: int):
             MarketplaceListingError("Не удалось синхронизировать каталог Ozon"),
             500,
         )
-    message = (
-        "Каталог Ozon полностью синхронизирован"
-        if run.status == "completed"
-        else "Синхронизация сохранена; продолжите следующий пакет"
-    )
+    message = job['message']
     if _wants_json():
         return jsonify({
             "success": True,
             "message": message,
-            "sync": run.to_public_dict(),
-        })
+            "job": job,
+            "status_url": url_for('marketplace_accounts.setup_status', account_id=account_id),
+        }), 202
     flash(message, "success")
-    return redirect(url_for("marketplace_listings.index", account_id=account_id))
+    return redirect(url_for("marketplace_listings.index", marketplace='ozon', account_id=account_id))
 
 
 def register_marketplace_listing_routes(app) -> None:

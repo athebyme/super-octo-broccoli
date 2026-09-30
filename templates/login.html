@@ -679,7 +679,7 @@
 
             <div class="login-divider anim-fade d4"></div>
 
-            <form method="POST" action="{{ url_for('login') }}">
+            <form method="POST" action="{{ url_for('login', next=request.args.get('next')) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
                 <div class="login-field anim-up d5">

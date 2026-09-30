@@ -133,8 +133,7 @@
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" style="overflow-x:hidden"
-     x-data="myProductsPage()"
-     x-init="init()">
+     x-data="myProductsPage()">
 
     <!-- Inline notification (replaces flash) -->
     <template x-if="notification">
@@ -168,7 +167,16 @@
         </div>
     </div>
 
-    {{ channel_bar(active='wb', wb_href=url_for('seller_my_products'), ozon_href=url_for('marketplace_drafts.index'), class='mb-6') }}
+    {{ channel_bar(active='ozon' if selected_ozon_account else 'wb', account_id=selected_ozon_account.id if selected_ozon_account else none, wb_href=url_for('seller_my_products'), ozon_href=url_for('marketplace_drafts.index'), class='mb-6') }}
+    {% if selected_ozon_account %}
+    <div class="sh-alert sh-alert--info mb-4" role="status">
+        Выбор товаров для Ozon · {{ selected_ozon_account.label }}. Здесь показаны и товары, уже загруженные на WB.
+        {% if not default_ozon_upload_account %}
+        Подготовка черновиков не отправляет данные на Ozon. Перед отправкой проверьте подключение и выберите НДС.
+        <a class="underline" href="{{ url_for('marketplace_accounts.index', account_id=selected_ozon_account.id, _anchor='ozon-account-' ~ selected_ozon_account.id) }}">Настройки кабинета</a>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <!-- Stats -->
     <div class="my-stat-strip mb-6">
@@ -243,6 +251,7 @@
 
     <!-- Search & Filters -->
     <form method="GET" class="myp-surface rounded-lg border p-4 mb-6">
+        {% if selected_ozon_account %}<input type="hidden" name="account_id" value="{{ selected_ozon_account.id }}">{% endif %}
         {% if updates_filter %}
         <input type="hidden" name="updates" value="1">
         {% elif status %}
@@ -408,23 +417,20 @@
                 </button>
             </form>
             {% if not updates_filter %}
-            {% set ozon_upload_enabled = config.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', false) %}
-            {% set available_ozon_accounts = ozon_upload_accounts if ozon_upload_enabled else marketplace_accounts %}
-            {% set preferred_ozon_account = default_ozon_upload_account if ozon_upload_enabled else default_marketplace_account %}
+            {% set ozon_prepare_enabled = config.get('MARKETPLACE_OZON_ENABLED', false) %}
+            {% set available_ozon_accounts = marketplace_accounts %}
+            {% set preferred_ozon_account = default_marketplace_account %}
             {% if available_ozon_accounts %}
             <form method="POST"
-                  action="{{ url_for('ozon_bulk_uploads.create') if ozon_upload_enabled else url_for('marketplace_drafts.bulk_prepare') }}"
+                  action="{{ url_for('ozon_bulk_uploads.create') }}"
                   class="inline-flex items-center gap-2"
-                  {% if ozon_upload_enabled %}onsubmit="return confirm('Синхронизировать выбранные карточки с Ozon? Новые карточки будут созданы, существующие — полностью обновлены после live-проверки. Итог и причины будут на одном экране.')" {% endif %}>
+                  onsubmit="return confirm('Подготовить выбранные товары в локальные черновики? После подготовки вы проверите карточки и отдельно подтвердите отправку в Ozon.')">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                {% if ozon_upload_enabled %}
-                <input type="hidden" name="confirm_write" value="1">
-                {% endif %}
-                {% if not ozon_upload_enabled %}
-                <input type="hidden" name="validate" value="1">
-                {% endif %}
-                {% if preferred_ozon_account %}
+                <input type="hidden" name="confirm_prepare" value="1">
+                <input type="hidden" name="request_key" value="{{ ozon_prepare_request_key }}">
+                {% if selected_ozon_account or available_ozon_accounts|length == 1 %}
                 <input type="hidden" name="account_id" value="{{ preferred_ozon_account.id }}">
+                <span class="text-xs" style="color:var(--text-muted)">Ozon · {{ preferred_ozon_account.label }}</span>
                 {% else %}
                 <select name="account_id" class="px-2 py-2 border rounded-md text-sm" aria-label="Кабинет Ozon">
                     {% for account in available_ozon_accounts %}
@@ -437,15 +443,15 @@
                 </template>
                 <button type="submit" :disabled="selected.length === 0"
                         class="sh-btn sh-btn--md myp-btn-ozon-outline"
-                        title="{{ 'Создать новые и безопасно полностью обновить существующие карточки Ozon с единым итогом' if ozon_upload_enabled else 'Создать и локально проверить Ozon-черновики для выбранных; публикации в Ozon не будет' }}">
-                    {{ 'Синхронизировать Ozon' if ozon_upload_enabled else 'Подготовить Ozon' }}<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
+                        title="Только локальная подготовка черновиков. Отправка в Ozon подтверждается отдельно после проверки.">
+                    Подготовить для Ozon<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
                 </button>
             </form>
-            {% elif ozon_upload_enabled %}
+            {% elif ozon_prepare_enabled %}
             <a class="sh-btn sh-btn--md myp-btn-ozon-outline"
                href="{{ url_for('marketplace_accounts.index') }}"
-               title="Для массовой загрузки нужен проверенный кабинет и выбранная ставка НДС">
-                {{ 'Настроить загрузку Ozon' if marketplace_accounts else 'Подключить Ozon' }}
+               title="Для подготовки нужен активный магазин Ozon">
+                Подключить Ozon
             </a>
             {% endif %}
             <button @click="deleteBulk()" :disabled="selected.length === 0 || (activeJob && (activeJob.status === 'pending' || activeJob.status === 'running'))"
@@ -818,8 +824,11 @@
                         {% set photos = p.photo_urls %}
                         {% if photos and photos != '[]' %}
                         <div class="w-10 h-10 rounded myp-thumb overflow-hidden flex-shrink-0">
-                            <img src="{{ url_for('serve_imported_product_photo', product_id=p.id, photo_idx=0) }}"
-                                 class="w-full h-full object-cover" onerror="this.style.display='none'" alt="">
+                            <img src="{{ url_for('serve_imported_product_photo', product_id=p.id, photo_idx=0, deferred=1) }}"
+                                 class="w-full h-full object-cover"
+                                 width="40" height="40"
+                                 loading="lazy" decoding="async" fetchpriority="low"
+                                 onerror="scheduleProductPhotoRetry(this)" alt="">
                         </div>
                         {% else %}
                         <div class="w-10 h-10 rounded myp-thumb flex items-center justify-center flex-shrink-0">
@@ -1000,31 +1009,27 @@
                            class="inline-flex items-center px-2.5 py-1 myp-btn-soft rounded text-xs font-medium">
                             WB карточка
                         </a>
-                        {% set row_upload_enabled = config.get('MARKETPLACE_OZON_PUBLICATION_ENABLED', false) %}
-                        {% set row_ozon_account = default_ozon_upload_account if row_upload_enabled else default_marketplace_account %}
+                        {% set row_ozon_account = default_marketplace_account %}
                         {% if row_ozon_account %}
                         {% set row_account_draft = ozon_drafts_map.get(p.id, []) | selectattr('account_id', 'equalto', row_ozon_account.id) | list %}
-                        {% set row_published_drafts = row_account_draft | selectattr('published_listing_id') | list %}
-                        {% set row_account_listings = ozon_listings_map.get(p.id, []) | selectattr('account_id', 'equalto', row_ozon_account.id) | list %}
-                        {% set row_is_ozon_update = row_published_drafts | length > 0 or row_account_listings | length > 0 %}
-                        {% if row_upload_enabled or not row_account_draft %}
+                        {% if row_account_draft %}
+                        <a class="inline-flex items-center px-2.5 py-1 border rounded text-xs font-medium ml-1 myp-btn-ozon-outline"
+                           href="/marketplaces/ozon/uploads/review?account_id={{ row_ozon_account.id }}&draft_ids={{ row_account_draft[0].id }}"
+                           title="Проверить текущий черновик перед отдельным подтверждением отправки в {{ row_ozon_account.label }}">Проверить Ozon</a>
+                        {% else %}
                         <form method="post"
-                              action="{{ url_for('ozon_bulk_uploads.create') if row_upload_enabled else url_for('marketplace_drafts.create') }}"
+                              action="{{ url_for('ozon_bulk_uploads.create') }}"
                               class="inline"
-                              {% if row_upload_enabled %}onsubmit="return confirm('{{ 'Полностью обновить эту карточку в Ozon после live-проверки?' if row_is_ozon_update else 'Подготовить, проверить и создать эту карточку в Ozon?' }}')" {% endif %}>
+                              onsubmit="return confirm('Подготовить локальный черновик для {{ row_ozon_account.label }}? Отправка в Ozon подтверждается отдельно после проверки.')">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="account_id" value="{{ row_ozon_account.id }}">
-                            {% if row_upload_enabled %}
-                            <input type="hidden" name="confirm_write" value="1">
+                            <input type="hidden" name="confirm_prepare" value="1">
+                            <input type="hidden" name="request_key" value="{{ ozon_prepare_request_key }}-p{{ p.id }}">
                             <input type="hidden" name="imported_product_ids" value="{{ p.id }}">
-                            {% else %}
-                            <input type="hidden" name="imported_product_id" value="{{ p.id }}">
-                            <input type="hidden" name="validate" value="1">
-                            {% endif %}
                             <button type="submit"
                                     class="inline-flex items-center px-2.5 py-1 border rounded text-xs font-medium ml-1 myp-btn-ozon-outline"
-                                    title="{{ (('Полностью обновить в ' if row_is_ozon_update else 'Создать в ') ~ row_ozon_account.label) if row_upload_enabled else 'Подготовить и локально проверить для ' ~ row_ozon_account.label ~ '; публикации в Ozon не будет' }}">
-                                {{ ('Обновить Ozon' if row_is_ozon_update else 'Загрузить Ozon') if row_upload_enabled else 'Подготовить Ozon' }}
+                                    title="Подготовить локально для {{ row_ozon_account.label }}. Отправка в Ozon подтверждается отдельно.">
+                                Подготовить Ozon
                             </button>
                         </form>
                         {% endif %}
@@ -1620,6 +1625,26 @@ function myProductsPage() {
             if (type !== 'info') setTimeout(() => this.notification = null, 5000);
         }
     };
+}
+
+function scheduleProductPhotoRetry(image) {
+    if (image.dataset.photoRetryScheduled === '1') return;
+    const retries = Number(image.dataset.photoRetries || '0');
+    if (retries >= 5) {
+        image.style.display = 'none';
+        return;
+    }
+
+    image.dataset.photoRetries = String(retries + 1);
+    image.dataset.photoRetryScheduled = '1';
+    const delayMs = Math.min(800 * (2 ** retries), 8000);
+    window.setTimeout(() => {
+        image.dataset.photoRetryScheduled = '0';
+        if (!image.isConnected) return;
+        const retryUrl = new URL(image.src, window.location.origin);
+        retryUrl.searchParams.set('retry', String(Date.now()));
+        image.src = retryUrl.toString();
+    }, delayMs);
 }
 
 function supplierDiff(productId) {

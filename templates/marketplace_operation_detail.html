@@ -2,12 +2,6 @@
 
 {% block title %}Операция Ozon #{{ operation.id }} — Seller Hub{% endblock %}
 
-{% block extra_head %}
-{% if operation.status in ['queued', 'submitting', 'submitted', 'polling', 'uncertain'] and operation.next_poll_at %}
-<meta http-equiv="refresh" content="15">
-{% endif %}
-{% endblock %}
-
 {% block content %}
 {% set status_labels = {
     'queued': 'В очереди', 'submitting': 'Отправляется', 'submitted': 'Отправлено',
@@ -27,7 +21,9 @@
 {% set summary = operation_data.request_summary %}
 {% set quota = operation_data.quota_snapshot %}
 {% set is_commercial = operation.operation_kind in ['price_update', 'stock_update', 'price_rollback', 'stock_rollback'] %}
-<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+<div class="ozon-operation-page max-w-6xl mx-auto px-4 sm:px-6 py-6">
+    {% set result_config = {'kind': 'operation', 'initial': operation_data, 'url': url_for('marketplace_operations.detail', operation_id=operation.id)} %}
+    {% include 'partials/ozon_result_status.html' %}
     <a href="{{ url_for('marketplace_operations.index') }}" class="text-sm" style="color:var(--accent)">← Операции Ozon</a>
     <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0">
@@ -40,12 +36,15 @@
             <h1 class="mt-2 text-2xl font-semibold break-all" style="color:var(--text)">{{ summary.get('offer_id', 'Операция без артикула (offer_id)') }}</h1>
             <p class="mt-1 text-sm" style="color:var(--text-secondary)">Статус: <strong>{{ status_labels.get(operation.status, operation.status) }}</strong> · попыток записи: {{ operation.attempt_count }} · проверок статуса: {{ operation.poll_count }} · сверок: {{ operation.reconcile_count }}</p>
         </div>
+        <div class="flex flex-wrap gap-2">
+        {% if operation.status == 'uncertain' %}<a class="sh-btn sh-btn--primary" href="{{ url_for('marketplace_operations.quarantine_review',operation_id=operation.id) }}">Разобрать результат и остановить новые изменения</a>{% endif %}
         {% if not operation.is_terminal and (operation.status != 'queued' or can_submit_queued) %}
         <form method="post" action="{{ url_for('marketplace_operations.poll', operation_id=operation.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="sh-btn sh-btn--secondary" type="submit">Проверить сейчас</button>
         </form>
         {% endif %}
+        </div>
     </div>
 
 
@@ -59,7 +58,7 @@
     </div>
     {% if operation.operation_kind in ['product_import', 'product_import_rollback', 'product_update', 'product_update_rollback'] and operation.next_poll_at %}
     <details class="sh-card p-4 mt-3">
-        <summary class="cursor-pointer text-sm font-medium" style="color:var(--text)">Остановить автоматическую сверку вручную</summary>
+        <summary class="cursor-pointer text-sm font-medium" style="color:var(--text)">Прежнее действие: остановить только автоматическую сверку</summary>
         <p class="mt-2 text-xs" style="color:var(--text-muted)">Это не объявит запись успешной или неуспешной. Результат останется «нужна сверка», повторная запись останется запрещена, локальная резервация квоты будет освобождена.</p>
         <form class="mt-3 space-y-3" method="post" action="{{ url_for('marketplace_operations.resolve_uncertain', operation_id=operation.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

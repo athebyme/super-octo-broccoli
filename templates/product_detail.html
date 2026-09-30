@@ -280,7 +280,8 @@
                         </div>
                         <div class="p-4 bg-blue-50 rounded-xl text-center">
                             <span class="text-xs font-medium text-blue-600 uppercase tracking-wider">Полное количество</span>
-                            <p class="mt-1 text-3xl font-bold text-blue-700">{{ total_quantity_full }}</p>
+                            <p class="mt-1 text-3xl font-bold text-blue-700">{{ total_quantity_full if total_quantity_full is not none else '—' }}</p>
+                            {% if total_quantity_full is none %}<p class="text-xs mt-1" style="color:var(--text-muted)">Текущий API WB не передаёт этот показатель</p>{% endif %}
                         </div>
                     </div>
 
@@ -306,7 +307,7 @@
                                             {{ stock.quantity }}
                                         </span>
                                     </td>
-                                    <td class="px-4 py-3 text-sm text-right text-gray-600">{{ stock.quantity_full }}</td>
+                                    <td class="px-4 py-3 text-sm text-right text-gray-600">{{ stock.quantity_full if stock.quantity_full is not none else '—' }}</td>
                                     <td class="px-4 py-3 text-sm text-right text-gray-600">{{ (stock.in_way_to_client or 0) + (stock.in_way_from_client or 0) }}</td>
                                 </tr>
                                 {% endfor %}

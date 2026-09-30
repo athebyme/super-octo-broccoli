@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+
+{% block title %}Черновики маркетплейсов — Seller Hub{% endblock %}
+
+{% block content %}
+{% set status_labels = {'needs_category': 'Нет категории', 'draft': 'Черновик', 'ready': 'Готов', 'published': 'Опубликован', 'blocked': 'Заблокирован', 'archived': 'Архив'} %}
+{% set validation_status_labels = {'never_validated': 'Не проверялся', 'valid': 'Готов к публикации', 'invalid': 'Есть ошибки', 'stale': 'Устарело'} %}
+{% set connection_status_labels = {'unchecked': 'не проверен', 'connected': 'подключён', 'invalid': 'ключ отклонён', 'limited': 'ограничен', 'error': 'ошибка проверки', 'disconnected': 'отключён'} %}
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
+        <div>
+            <h1 class="sh-page-title">Черновики Ozon</h1>
+            <p class="sh-page-subtitle">Подготовьте карточки, проверьте обязательные поля и исправьте ошибки перед отправкой в Ozon.</p>
+        </div>
+        <div class="sh-page-actions">
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index', account_id=filters.account_id) }}">Загрузки</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.classic', marketplace='ozon', account_id=filters.account_id) }}">Каталог Ozon</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
+        </div>
+    </div>
+</div>
+
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+
+    {% if ozon_enabled %}
+    {% if not accounts %}
+    <div class="sh-alert sh-alert--info mb-5" role="status">
+        <div>Сначала подключите магазин Ozon. После этого выберите товар и подготовьте карточку — отправка всегда подтверждается отдельно.</div>
+        <a class="sh-btn sh-btn--primary mt-3" href="{{ url_for('marketplace_accounts.index') }}">Подключить Ozon</a>
+    </div>
+    {% endif %}
+    <section class="sh-card p-4 mb-5">
+        <h2 class="font-semibold" style="color:var(--text);font-family:var(--font-body)">Создать черновик</h2>
+        <p class="mt-1 text-xs" style="color:var(--text-muted)">
+            Выберите товар из «Моих товаров». Проверка покажет, что нужно заполнить. Отправка в Ozon — отдельный шаг после подготовки.
+        </p>
+        <form method="post" action="{{ url_for('marketplace_drafts.create', view='classic') }}"
+              x-data='draftSourcePicker({{ url_for("marketplace_drafts.source_search_api")|tojson }}, {{ source_search|tojson }})'
+              @submit="submit($event)"
+              class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="validate" value="1">
+            <label class="block">
+                <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет Ozon</span>
+                <select name="account_id" required class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                        style="border-color:var(--border);color:var(--text)">
+                    <option value="">Выберите кабинет</option>
+                    {% for account in accounts %}
+                    <option value="{{ account.id }}" {% if filters.account_id == account.id or (not filters.account_id and accounts|length == 1) %}selected{% endif %}>{{ account.label }} · {{ connection_status_labels.get(account.connection_status, account.connection_status) }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <div class="block md:col-span-2 relative min-w-0" @click.outside="open = false" @keydown.escape.stop.prevent="open = false">
+                <label for="draft-source-query" class="block text-xs mb-1" style="color:var(--text-muted)">Товар из «Моих товаров»</label>
+                <input type="hidden" name="imported_product_id" :value="selectedId">
+                <input id="draft-source-query" x-ref="sourceQuery" x-model="query" @input="changed()"
+                       @focus="open = true" @keydown.arrow-down.prevent="move(1)" @keydown.arrow-up.prevent="move(-1)" @keydown.enter="enter($event)" @keydown.tab="open = false"
+                       role="combobox" aria-autocomplete="list" aria-controls="draft-source-options" :aria-expanded="open.toString()"
+                       :aria-activedescendant="active >= 0 ? 'draft-source-option-' + active : null"
+                       aria-describedby="draft-source-help" required maxlength="100" autocomplete="off"
+                       placeholder="Название, артикул или ID — поиск по всему каталогу"
+                       class="w-full rounded-md border px-3 py-2 text-sm bg-transparent focus:outline-none focus:ring-2"
+                       style="border-color:var(--border);color:var(--text);--tw-ring-color:var(--focus-ring)">
+                <p id="draft-source-help" class="text-xs mt-1 truncate" style="color:var(--text-muted)" x-text="selectedLabel || 'Начните вводить название или выберите недавний товар.'"></p>
+                <div x-show="open" x-cloak class="absolute left-0 right-0 mt-1 rounded-md border shadow-lg overflow-hidden"
+                     style="z-index:var(--z-dropdown);background:var(--bg-card);border-color:var(--border)">
+                    <p x-show="loading" class="p-3 text-sm" role="status" style="color:var(--text-muted)">Поиск товаров…</p>
+                    <div x-show="error" class="p-3 text-sm" role="status" style="color:var(--danger)">
+                        <span x-text="error"></span>
+                        <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm mt-2" @click="search()">Повторить</button>
+                    </div>
+                    <p x-show="!loading && !error && !items.length" class="p-3 text-sm" role="status" style="color:var(--text-muted)">Ничего не найдено. Попробуйте часть названия или артикул.</p>
+                    <div id="draft-source-options" role="listbox" aria-label="Товары" class="max-h-64 overflow-y-auto">
+                        <template x-for="(item, index) in items" :key="item.id">
+                            <div :id="'draft-source-option-' + index" role="option" :aria-selected="active === index || selectedId === String(item.id)"
+                                 @mousedown.prevent @click="choose(item)" @mouseenter="active = index"
+                                 class="px-3 py-2 cursor-pointer border-b" style="border-color:var(--border)"
+                                 :style="active === index ? 'background:var(--accent-light);color:var(--text)' : 'color:var(--text)'">
+                                <div class="text-sm truncate" x-text="label(item)"></div>
+                                <div class="text-xs truncate" style="color:var(--text-muted)" x-text="item.vendor_code || item.external_id"></div>
+                            </div>
+                        </template>
+                    </div>
+                    <p x-show="hasMore && !loading && !error" class="px-3 py-2 text-xs" style="color:var(--text-muted)">Показаны первые 20. Уточните запрос, чтобы найти нужный товар.</p>
+                </div>
+            </div>
+            <label class="block md:col-span-2">
+                <span class="block text-xs mb-1" style="color:var(--text-muted)">Артикул (offer_id), необязательно</span>
+                <input name="offer_id" maxlength="200" placeholder="По умолчанию артикул поставщика"
+                       class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                       style="border-color:var(--border);color:var(--text)">
+            </label>
+            <div class="flex items-end">
+                <button class="sh-btn sh-btn--primary w-full" type="submit" :disabled="!selectedId || {{ 'true' if not accounts else 'false' }}" {% if not accounts %}disabled{% endif %}>Подготовить и проверить</button>
+            </div>
+        </form>
+    </section>
+    {% else %}
+    <div class="mb-5 rounded-md border px-4 py-3 text-sm"
+         style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
+        Ozon выключен флагом включения. Существующие черновики доступны только для чтения.
+    </div>
+    {% endif %}
+
+    <form method="get" class="sh-card p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет</span>
+            <select name="account_id" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for account in accounts %}
+                <option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="block">
+            <span class="block text-xs mb-1" style="color:var(--text-muted)">Статус</span>
+            <select name="status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
+                    style="border-color:var(--border);color:var(--text)">
+                <option value="">Все</option>
+                {% for status in ['needs_category', 'draft', 'blocked', 'ready', 'published', 'archived'] %}
+                <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status_labels.get(status, status) }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="flex items-end"><button class="sh-btn sh-btn--primary sh-btn--sm w-full" type="submit">Применить</button></div>
+    </form>
+
+    <div class="flex items-center justify-between mb-3 text-sm" style="color:var(--text-secondary)">
+        <span>Найдено: {{ pagination.total }}</span>
+        <span>Страница {{ pagination.page }} из {{ pagination.pages or 1 }}</span>
+    </div>
+    {% if drafts %}
+    <div class="space-y-3" x-data="{ selectedDrafts: [], selectedAccountId: null }">
+        {% if ozon_enabled and publication_enabled %}
+        <div class="sh-card p-3 flex flex-wrap items-center gap-3" x-show="selectedDrafts.length" x-cloak>
+            <span class="text-sm" style="color:var(--text)" x-text="'Выбрано готовых черновиков: ' + selectedDrafts.length"></span>
+            <form method="GET" action="/marketplaces/ozon/uploads/review"
+                  class="flex flex-wrap items-center gap-2">
+                <input type="hidden" name="account_id" :value="selectedAccountId">
+                <input type="hidden" name="draft_ids" :value="selectedDrafts.join(',')">
+                <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit"
+                        :disabled="selectedAccountId === null || selectedDrafts.length === 0 || selectedDrafts.length > 200">
+                    Просмотреть перед отправкой (<span x-text="selectedDrafts.length"></span>)
+                </button>
+                <span class="text-xs" style="color:var(--warn)" x-show="selectedDrafts.length > 200">не больше 200 за запуск</span>
+                <span class="text-xs" style="color:var(--text-muted)">один кабинет на запуск</span>
+            </form>
+        </div>
+        {% endif %}
+        {% for draft in drafts %}
+        {% set summary = draft.to_public_dict().validation_summary %}
+        {% set can_bulk_publish = ozon_enabled and publication_enabled and draft.account_id in upload_ready_account_ids and draft.status in ['ready', 'published'] and summary.publishable %}
+        <article class="sh-card block p-4">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                {% if can_bulk_publish %}
+                <label class="flex items-start pt-1" title="Выбрать для массового создания или обновления">
+                    <input type="checkbox" class="rounded"
+                           :checked="selectedDrafts.includes({{ draft.id }})"
+                           :disabled="selectedAccountId !== null && selectedAccountId !== {{ draft.account_id }}"
+                           @change="if ($event.target.checked) { selectedAccountId = selectedAccountId === null ? {{ draft.account_id }} : selectedAccountId; selectedDrafts = [...selectedDrafts, {{ draft.id }}] } else { selectedDrafts = selectedDrafts.filter(id => id !== {{ draft.id }}); if (selectedDrafts.length === 0) selectedAccountId = null }">
+                </label>
+                {% endif %}
+                <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2 text-xs">
+                        <span class="uppercase font-medium" style="color:var(--accent)">Ozon</span>
+                        <span style="color:var(--text-muted)">{{ draft.account.label }}</span>
+                        <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ status_labels.get(draft.status, draft.status) }}</span>
+                        <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ validation_status_labels.get(draft.validation_status, draft.validation_status) }}</span>
+                    </div>
+                    <h2 class="mt-2 font-semibold truncate" style="font-family:var(--font-body)">
+                        <a href="{{ url_for('marketplace_drafts.classic_detail', draft_id=draft.id) }}" style="color:var(--text)">
+                            {{ draft.imported_product.title or draft.offer_id }}
+                        </a>
+                    </h2>
+                    <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">артикул: {{ draft.offer_id }} · товар-источник #{{ draft.imported_product_id }}</p>
+                    <p class="mt-1 text-xs" style="color:var(--text-muted)">{{ draft.product_type.category.full_path ~ ' / ' ~ draft.product_type.name if draft.product_type else 'Категория не выбрана' }}</p>
+                </div>
+                {% set summary = draft.to_public_dict().validation_summary %}
+                <div class="text-xs md:text-right" style="color:var(--text-muted)">
+                    <div>Ошибок: {{ summary.error_count }} · предупреждений: {{ summary.warning_count }}</div>
+                    <div class="mt-1">Версия {{ draft.version }}</div>
+                    <a class="inline-block mt-2 font-medium" style="color:var(--accent)"
+                       href="{{ url_for('marketplace_drafts.classic_detail', draft_id=draft.id) }}">Открыть →</a>
+                    {% if can_bulk_publish %}<a class="inline-block mt-2 ml-2 font-medium" style="color:var(--accent)"
+                       href="/marketplaces/ozon/uploads/review?account_id={{ draft.account_id }}&draft_ids={{ draft.id }}">Проверить перед отправкой →</a>{% endif %}
+                </div>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="sh-card px-4 py-10 text-center text-sm" style="color:var(--text-muted)">Черновиков пока нет.</div>
+    {% endif %}
+
+    {% if pagination.pages > 1 %}
+    <nav class="mt-5 flex justify-center gap-2">
+        {% if pagination.has_prev %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.classic_index', page=pagination.prev_num, account_id=filters.account_id, status=filters.status) }}">Назад</a>{% endif %}
+        {% if pagination.has_next %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.classic_index', page=pagination.next_num, account_id=filters.account_id, status=filters.status) }}">Дальше</a>{% endif %}
+    </nav>
+    {% endif %}
+</div>
+<script src="{{ url_for('static', filename='draft-source-picker.js') }}"></script>
+{% endblock %}

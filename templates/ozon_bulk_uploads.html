@@ -1,34 +1,36 @@
 {% extends "base.html" %}
 
-{% block title %}Синхронизация Ozon — Seller Hub{% endblock %}
+{% block title %}Подготовка и отправка Ozon — Seller Hub{% endblock %}
 
 {% block content %}
 <div class="sh-page-header">
     <div class="sh-page-header-content">
         <div>
-            <h1 class="sh-page-title">Синхронизация карточек Ozon</h1>
-            <p class="sh-page-subtitle">Один запуск создаёт новые карточки, полностью обновляет существующие и сохраняет понятный результат по каждой.</p>
+            <h1 class="sh-page-title">Подготовка и отправка карточек Ozon</h1>
+            <p class="sh-page-subtitle">Подготовка создаёт локальные черновики. Проверенные версии отправляются отдельным запуском.</p>
         </div>
         <div class="sh-page-actions">
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('seller_my_products') }}">Выбрать товары</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index') }}">Черновики</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('seller_my_products', account_id=selected_account_id) }}">Выбрать товары</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index', account_id=selected_account_id) }}">Черновики</a>
         </div>
     </div>
 </div>
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-    {% if not ozon_enabled or not publication_enabled %}
+    {% if not ozon_enabled %}
     <div class="sh-alert sh-alert--warning mb-5" role="status">
-        <div class="sh-alert-content">Новые загрузки временно выключены оператором. Уже начатые операции продолжают безопасную сверку результата.</div>
+        <div class="sh-alert-content">Новые запуски Ozon сейчас выключены. Уже начатые операции сохраняют результат и безопасную сверку.</div>
     </div>
+    {% elif not publication_enabled %}
+    <div class="sh-alert sh-alert--warning mb-5" role="status"><div class="sh-alert-content">Локальная подготовка доступна, отправка в Ozon сейчас выключена. Черновики остаются для проверки.</div></div>
     {% endif %}
 
     <section class="sh-card p-4 mb-5">
-        <h2 class="font-semibold" style="color:var(--text)">Как синхронизировать много карточек</h2>
+        <h2 class="font-semibold" style="color:var(--text)">Как загрузить несколько карточек</h2>
         <ol class="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3" style="color:var(--text-secondary)">
             <li><strong style="color:var(--text)">1. Выберите товары</strong><br>В «Моих товарах» отметьте до 200 строк.</li>
-            <li><strong style="color:var(--text)">2. Нажмите «Синхронизировать Ozon»</strong><br>Новые карточки создадутся, существующие пройдут безопасное full-state обновление.</li>
-            <li><strong style="color:var(--text)">3. Откройте один итог</strong><br>Увидите созданные, обновлённые, уже актуальные карточки и точные причины отказа.</li>
+            <li><strong style="color:var(--text)">2. Подготовьте и проверьте</strong><br>Локальная партия создаст черновики; заполните недостающее и выберите готовые версии.</li>
+            <li><strong style="color:var(--text)">3. Подтвердите отправку</strong><br>Отдельный запуск покажет создание, обновление и причины отказа по каждой карточке.</li>
         </ol>
     </section>
 
@@ -45,13 +47,19 @@
                         <span>{{ run.created_at[:16].replace('T', ' ') if run.created_at else '—' }}</span>
                     </div>
                     <h2 class="mt-2 font-semibold" style="color:var(--text)">
-                        {% if summary.outcome == 'running' %}Синхронизация выполняется
-                        {% elif summary.outcome == 'success' %}Все карточки синхронизированы
-                        {% elif summary.outcome == 'partial' %}Синхронизация завершена частично
+                        {% if run.mode == 'source_prepare' %}
+                            {% if summary.outcome == 'running' %}Локальная подготовка выполняется
+                            {% elif summary.outcome == 'success' %}Черновики готовы к проверке
+                            {% elif summary.outcome == 'partial' %}Часть черновиков требует внимания
+                            {% else %}Подготовка требует внимания{% endif %}
+                        {% elif summary.outcome == 'running' %}Отправка проверенных карточек выполняется
+                        {% elif summary.outcome == 'success' %}Отправка завершена
+                        {% elif summary.outcome == 'partial' %}Отправка завершена частично
                         {% else %}Карточки требуют внимания{% endif %}
                     </h2>
                     <p class="mt-1 text-sm" style="color:var(--text-secondary)">
-                        Создано: {{ summary.created or 0 }} · обновлено: {{ summary.updated or 0 }} · уже актуальны: {{ (summary.already_current or 0) + (summary.already_published or 0) }} · требуют данных: {{ summary.needs_input or 0 }} · ошибок: {{ summary.failed or 0 }}{% if summary.uncertain %} · неопределённый итог: {{ summary.uncertain }}{% endif %}
+                        {% if run.mode == 'source_prepare' %}Подготовлено локально: {{ summary.prepared or 0 }} · требуют данных: {{ summary.needs_input or 0 }} · в работе: {{ summary.active or 0 }}. Отправки в Ozon не было.
+                        {% else %}Создано: {{ summary.created or 0 }} · обновлено: {{ summary.updated or 0 }} · требуют данных: {{ summary.needs_input or 0 }} · ошибок: {{ summary.failed or 0 }}{% if summary.uncertain %} · неопределённый итог: {{ summary.uncertain }}{% endif %}{% endif %}
                     </p>
                 </div>
                 <div class="sh-btn sh-btn--secondary sh-btn--sm">Открыть итог</div>
@@ -61,9 +69,9 @@
     </div>
     {% else %}
     <div class="sh-card px-4 py-12 text-center">
-        <p class="font-medium" style="color:var(--text)">Массовых синхронизаций ещё не было</p>
-        <p class="mt-1 text-sm" style="color:var(--text-muted)">Выберите карточки в «Моих товарах» — отдельная подготовка черновиков больше не нужна.</p>
-        <a class="sh-btn sh-btn--primary mt-4" href="{{ url_for('seller_my_products') }}">Перейти к товарам</a>
+        <p class="font-medium" style="color:var(--text)">Запусков Ozon ещё не было</p>
+        <p class="mt-1 text-sm" style="color:var(--text-muted)">Выберите товары и подготовьте локальные черновики. Отправка появится после проверки карточек.</p>
+        <a class="sh-btn sh-btn--primary mt-4" href="{{ url_for('seller_my_products', account_id=selected_account_id) }}">Перейти к товарам</a>
     </div>
     {% endif %}
 </div>

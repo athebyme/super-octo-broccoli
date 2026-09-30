@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 import json
 
-from sqlalchemy import or_
+from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import joinedload
 
 from models import (
@@ -31,6 +31,11 @@ class MarketplaceQualityError(RuntimeError):
 class MarketplaceQualityValidationError(MarketplaceQualityError):
     status_code = 400
     code = "invalid_marketplace_quality_request"
+
+
+class MarketplaceQualityBusy(MarketplaceQualityError):
+    status_code = 409
+    code = "quality_busy"
 
 
 class MarketplaceQualityNotFound(MarketplaceQualityError):
@@ -519,7 +524,23 @@ class MarketplaceQualityService:
         }
 
     @classmethod
-    def recompute_account(
+    def recompute_account(cls, *, seller_id, account_id, listing_ids=None,
+                          limit=200, offset=0, now=None):
+        """Serialize all local quality writers, including the automatic scorer."""
+        from services.marketplace_operation_locks import _try_operation_lock
+        account_id = cls._positive_integer(account_id, "account_id")
+        cls._account(seller_id=seller_id, account_id=account_id)
+        claim = _try_operation_lock('ozon-quality', account_id)
+        if claim is None:
+            raise MarketplaceQualityBusy('Оценки уже пересчитываются. Повторите позже.')
+        try:
+            return cls._recompute_account(seller_id=seller_id, account_id=account_id,
+                listing_ids=listing_ids, limit=limit, offset=offset, now=now)
+        finally:
+            claim.close()
+
+    @classmethod
+    def _recompute_account(
         cls,
         *,
         seller_id: int,
@@ -732,6 +753,69 @@ class MarketplaceQualityService:
         }
 
     @classmethod
+    def recompute_next_account_batch(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        limit: int = MAX_BATCH,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Refresh unassessed listings first, then the oldest assessments.
+
+        A fixed first page leaves large accounts permanently under-assessed.
+        The scheduler uses this bounded selector on every tick so coverage
+        converges without an unbounded transaction or provider call.
+        """
+        account = cls._account(seller_id=seller_id, account_id=account_id)
+        limit = cls._positive_integer(limit, "limit", maximum=cls.MAX_BATCH)
+        candidate_rows = db.session.query(MarketplaceListing.id).outerjoin(
+            MarketplaceQualityAssessment,
+            and_(
+                MarketplaceQualityAssessment.listing_id
+                == MarketplaceListing.id,
+                MarketplaceQualityAssessment.seller_id == account.seller_id,
+                MarketplaceQualityAssessment.marketplace_id
+                == account.marketplace_id,
+                MarketplaceQualityAssessment.account_id == account.id,
+            ),
+        ).filter(
+            MarketplaceListing.seller_id == account.seller_id,
+            MarketplaceListing.marketplace_id == account.marketplace_id,
+            MarketplaceListing.account_id == account.id,
+            MarketplaceListing.is_available.is_(True),
+            MarketplaceListing.is_archived.is_(False),
+        ).order_by(
+            case(
+                (MarketplaceQualityAssessment.id.is_(None), 0),
+                else_=1,
+            ).asc(),
+            MarketplaceQualityAssessment.evaluated_at.asc(),
+            MarketplaceListing.id.asc(),
+        ).limit(limit).all()
+        listing_ids = [row[0] for row in candidate_rows]
+        if not listing_ids:
+            return {
+                "processed": 0,
+                "scored": 0,
+                "schema_stale": 0,
+                "unscorable": 0,
+                "total": 0,
+                "next_offset": None,
+                "analytics_sync_id": None,
+                "selection": "unassessed_then_oldest",
+            }
+        result = cls.recompute_account(
+            seller_id=account.seller_id,
+            account_id=account.id,
+            listing_ids=listing_ids,
+            limit=len(listing_ids),
+            now=now,
+        )
+        result["selection"] = "unassessed_then_oldest"
+        return result
+
+    @classmethod
     def _summary(cls, *, seller_id: int, account_id: int) -> Dict[str, Any]:
         account = cls._account(seller_id=seller_id, account_id=account_id)
         total_listings = MarketplaceListing.query.filter(
@@ -741,10 +825,18 @@ class MarketplaceQualityService:
             MarketplaceListing.is_available.is_(True),
             MarketplaceListing.is_archived.is_(False),
         ).count()
-        assessments = MarketplaceQualityAssessment.query.filter(
+        assessments = MarketplaceQualityAssessment.query.join(
+            MarketplaceListing,
+            MarketplaceListing.id == MarketplaceQualityAssessment.listing_id,
+        ).filter(
             MarketplaceQualityAssessment.seller_id == seller_id,
             MarketplaceQualityAssessment.marketplace_id == account.marketplace_id,
             MarketplaceQualityAssessment.account_id == account_id,
+            MarketplaceListing.seller_id == seller_id,
+            MarketplaceListing.marketplace_id == account.marketplace_id,
+            MarketplaceListing.account_id == account_id,
+            MarketplaceListing.is_available.is_(True),
+            MarketplaceListing.is_archived.is_(False),
         ).all()
         distribution = {key: 0 for key in cls.ALLOWED_SEVERITIES}
         reason_counts = {key: 0 for key in REASON_DEFINITIONS}

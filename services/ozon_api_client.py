@@ -2,25 +2,30 @@
 
 Ozon uses POST for both reads and writes. This client therefore classifies
 retry behavior per endpoint instead of treating every POST equally. Read-only
-POST requests may retry bounded transient failures; writes never retry an
+POST requests may retry bounded transport/5xx failures; a rate limit is handed
+back to the durable workflow with its full delay. Writes never retry an
 ambiguous response automatically.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from types import MappingProxyType
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import urljoin
 import re
+import math
 import time
 
 import requests
 from requests.adapters import HTTPAdapter
 
 from services.marketplace_adapters.types import MarketplaceCredentials
+from services.ozon_rate_limit import OzonRateBudget
 
 
 OZON_API_BASE_URL = "https://api-seller.ozon.ru"
+_DEFAULT_RATE_BUDGET = object()
 
 
 @dataclass(frozen=True)
@@ -192,6 +197,7 @@ class OzonSellerAPIClient:
         timeout: Tuple[float, float] = (5.0, 30.0),
         read_retries: int = 2,
         sleep_fn: Callable[[float], None] = time.sleep,
+        rate_budget=_DEFAULT_RATE_BUDGET,
     ) -> None:
         if not credentials.external_account_id:
             raise ValueError("Ozon Client-Id is required")
@@ -212,6 +218,7 @@ class OzonSellerAPIClient:
         self.timeout = (float(timeout[0]), float(timeout[1]))
         self.read_retries = read_retries
         self._sleep = sleep_fn
+        self.rate_budget = OzonRateBudget(credentials.external_account_id) if rate_budget is _DEFAULT_RATE_BUDGET else rate_budget
         self.session = session or self._create_session()
         self.session.headers.update({
             "Client-Id": credentials.external_account_id,
@@ -255,13 +262,21 @@ class OzonSellerAPIClient:
         if raw in (None, ""):
             return None
         try:
-            return max(0.0, float(raw))
+            seconds = float(raw)
+            return max(0.0, seconds) if math.isfinite(seconds) else None
         except (TypeError, ValueError):
             try:
                 retry_at = parsedate_to_datetime(str(raw))
-                now = parsedate_to_datetime(
-                    (getattr(response, "headers", {}) or {}).get("Date", "")
-                )
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                try:
+                    now = parsedate_to_datetime(
+                        (getattr(response, "headers", {}) or {}).get("Date", "")
+                    )
+                    if now.tzinfo is None:
+                        now = now.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError, OverflowError):
+                    now = datetime.now(timezone.utc)
                 return max(0.0, (retry_at - now).total_seconds())
             except (TypeError, ValueError, OverflowError):
                 return None
@@ -312,6 +327,13 @@ class OzonSellerAPIClient:
         max_attempts = self.read_retries + 1 if spec.retry_class == "read" else 1
 
         for attempt in range(max_attempts):
+            delay = self.rate_budget.reserve(endpoint_name) if self.rate_budget is not None else 0
+            if delay:
+                raise OzonRateLimitError(
+                    'Запросы к Ozon временно отложены; сохранённые данные доступны',
+                    code='ozon_local_rate_limited', status_code=429,
+                    retry_after=delay, retriable=spec.retry_class == 'read',
+                )
             try:
                 response = self.session.request(
                     "POST",
@@ -354,9 +376,11 @@ class OzonSellerAPIClient:
                 )
 
             if status_code == 429:
-                if spec.retry_class == "read" and attempt + 1 < max_attempts:
-                    self._sleep(min(retry_after if retry_after is not None else 2 ** attempt, 30))
-                    continue
+                if self.rate_budget is not None:
+                    self.rate_budget.defer(retry_after)
+                # A truncated sleep violates long Retry-After values and holds
+                # web/scheduler workers idle. The caller persists its due time;
+                # even retryable reads must not attempt this request again here.
                 raise OzonRateLimitError(
                     "Ozon временно ограничил частоту запросов",
                     code="ozon_rate_limited",

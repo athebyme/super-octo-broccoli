@@ -146,41 +146,25 @@ def run_migration():
             logger.info("Добавляю колонку price_file_encoding...")
             cursor.execute("ALTER TABLE suppliers ADD COLUMN price_file_encoding VARCHAR(20) DEFAULT 'cp1251'")
 
+        # db.create_all() keeps these defaults on the Python side, so raw SQL
+        # seeds must provide them explicitly. Older databases may lack them.
+        for column in ('ai_proxy_enabled', 'image_gen_enabled'):
+            if column not in columns:
+                cursor.execute(
+                    f'ALTER TABLE suppliers ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT 0'
+                )
+
         # Проверяем, есть ли уже поставщик
         cursor.execute("SELECT id FROM suppliers WHERE code = ?", (SUPPLIER_CODE,))
         existing = cursor.fetchone()
 
-        csv_source_url = (
-            "https://old.sex-opt.ru/catalogue/db_export/"
-            "?type=csv"
-            "&user=romantiki25@yandex.ru"
-            "&hash=d1482b6450a8e8a59cddf7921dac1d65547770d4ee576dfb07e2cb1d15c11ef6"
-            "&columns_separator=%3B"
-            "&encoding=utf-8"
-        )
+        # Credentials belong to the admin's supplier settings, never a seed.
+        csv_source_url = None
         column_mapping_json = json.dumps(SEXOPT_CSV_COLUMN_MAPPING, ensure_ascii=False)
 
         if existing:
             supplier_id = existing['id']
-            logger.info(f"Поставщик '{SUPPLIER_CODE}' уже существует (id={supplier_id}). Обновляю конфигурацию...")
-            cursor.execute("""
-                UPDATE suppliers SET
-                    name = ?,
-                    description = 'Оптовый поставщик товаров (sex-opt.ru). CSV с заголовками, коды вида 0T-00000877.',
-                    website = 'https://old.sex-opt.ru',
-                    csv_source_url = ?,
-                    csv_delimiter = ';',
-                    csv_encoding = 'utf-8',
-                    csv_has_header = 1,
-                    csv_column_mapping = ?,
-                    resize_images = 1,
-                    image_target_size = 1200,
-                    image_background_color = 'white',
-                    updated_at = ?
-                WHERE id = ?
-            """, (SUPPLIER_NAME, csv_source_url, column_mapping_json,
-                  datetime.utcnow().isoformat(), supplier_id))
-            logger.info(f"Конфигурация обновлена")
+            logger.info("Поставщик '%s' уже существует (id=%s); настройки сохранены", SUPPLIER_CODE, supplier_id)
         else:
             # Получаем admin user id
             cursor.execute("SELECT id FROM users WHERE is_admin = 1 LIMIT 1")
@@ -192,7 +176,7 @@ def run_migration():
                     name, code, description, website,
                     csv_source_url, csv_delimiter, csv_encoding, csv_has_header, csv_column_mapping,
                     resize_images, image_target_size, image_background_color,
-                    ai_enabled,
+                    ai_enabled, ai_proxy_enabled, image_gen_enabled,
                     is_active, auto_sync_prices, total_products,
                     created_at, created_by_user_id
                 ) VALUES (
@@ -201,8 +185,8 @@ def run_migration():
                     'https://old.sex-opt.ru',
                     ?, ';', 'utf-8', 1, ?,
                     1, 1200, 'white',
-                    0,
-                    1, 0, 0,
+                    0, 0, 0,
+                    0, 0, 0,
                     ?, ?
                 )
             """, (SUPPLIER_NAME, SUPPLIER_CODE, csv_source_url, column_mapping_json,

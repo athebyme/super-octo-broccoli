@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block title %}AI-предложения для карточек Ozon — Seller Hub{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-ai.css') }}">
+<script type="application/json" id="oai-run-bootstrap">{{ config|tojson }}</script>
+<div id="oai-run-fallback" class="oai-boot">Открываем предложения для карточек…</div>
+<section id="ozon-ai-run" class="oai" v-cloak x-ignore aria-labelledby="oai-title">
+{% raw %}
+    <header class="oai-head"><a class="oai-back" :href="config.urls.history">← Черновики Ozon</a><p class="oai-eyebrow">Локальное AI-дополнение · Ozon</p><h1 id="oai-title">Предложения для характеристик</h1><p>AI ищет только подтверждённые исходными сведениями значения для пустых характеристик. Черновики и товары в Ozon не меняются до вашего отдельного выбора и проверки.</p></header>
+    <div v-if="error" ref="error" class="oai-message oai-message--error" role="alert" tabindex="-1">{{ error }}</div>
+    <div v-if="sessionEnded" class="oai-message" role="status">Действия остановлены. Войдите снова и откройте этот запуск.</div>
+    <div v-if="cancelUncertain" class="oai-message" role="status">Результат отмены неизвестен. Сначала прочитайте состояние запуска.</div>
+    <div class="oai-summary"><div><span>Состояние</span><strong>{{ statusLabel(run.status) }}</strong></div><div><span>Обработано</span><strong>{{ done }} / {{ run.total }}</strong></div><div><span>Модель</span><strong>{{ run.model || 'Не назначена' }}</strong></div><div><span>Использовано попыток</span><strong>{{ run.physical_calls }} / {{ run.max_calls }}</strong></div></div>
+    <div class="oai-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy || sessionEnded" @click="refresh">{{ busy === 'read' ? 'Проверяем…' : 'Обновить состояние' }}</button><button v-if="active" ref="cancelButton" type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy || sessionEnded || cancelUncertain" @click="openCancel">Остановить новые AI-вызовы</button></div>
+    <p class="oai-help">Готовые карточки можно проверять и отправлять независимо от этого запуска. Ответ модели не считается готовностью к публикации.</p>
+    <ol class="oai-list"><li v-for="item in run.items" :key="item.id"><div><span class="oai-number">{{ item.draft_id }}</span><div><strong>{{ item.title || 'Черновик № ' + item.draft_id }}</strong><small>Версия при запуске {{ item.expected_version }} · {{ itemLabel(item.status) }}</small><small v-if="item.code">{{ itemCode(item.code) }}</small></div></div><a :href="editorUrl(item)" class="sh-btn sh-btn--secondary">{{ item.status === 'proposed' ? 'Просмотреть предложения' : 'Открыть карточку' }}</a></li></ol>
+    <dialog ref="cancelDialog" class="oai-dialog" aria-labelledby="oai-cancel-title" @cancel.prevent="closeCancel"><h2 id="oai-cancel-title">Остановить AI-дополнение?</h2><p>Новые запросы к модели не начнутся. Уже отправленный запрос может израсходовать бюджет; его поздний ответ не будет применён.</p><label><input ref="cancelCheck" type="checkbox" v-model="confirmCancel">Остановить новые AI-вызовы этого запуска</label><div class="oai-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy === 'cancel'" @click="closeCancel">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!confirmCancel || !!busy" @click="cancel">Подтвердить остановку</button></div></dialog>
+{% endraw %}
+</section>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-draft-ai-run.js') }}" defer></script>
+{% endblock %}

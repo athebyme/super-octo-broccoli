@@ -524,6 +524,29 @@ def sync_ozon_attribute_values(attribute_id):
     )
 
 
+@marketplaces_bp.route('/ozon/attributes/<int:attribute_id>/review', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def ozon_attribute_review(attribute_id):
+    _require_ozon_feature()
+    attribute = _ozon_attribute_or_404(attribute_id)
+    from services.ozon_reference_reviews import OzonReferenceReviewService
+    if request.method == 'POST':
+        try:
+            return jsonify(OzonReferenceReviewService.approve(
+                attribute, request.get_json(silent=True), current_user.id,
+            )), 202
+        except OzonReferenceValidationError as exc:
+            return jsonify({'success': False, 'error': str(exc)}), 409
+    mode = request.args.get('mode', 'removed')
+    if mode not in ('removed', 'changed', 'current'):
+        return jsonify({'success': False, 'error': 'Неизвестный список значений'}), 400
+    page = _positive_page(request.args.get('page', '1'))
+    if page > 2000:
+        return jsonify({'success': False, 'error': 'Номер страницы слишком большой'}), 400
+    return jsonify(OzonReferenceReviewService.preview(attribute, page=page, mode=mode))
+
+
 @marketplaces_bp.route('/ozon/attributes/<int:attribute_id>/update', methods=['POST'])
 @login_required
 @admin_required

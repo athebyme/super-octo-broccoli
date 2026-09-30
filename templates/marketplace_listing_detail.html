@@ -304,7 +304,16 @@
             <h2 class="font-semibold" style="color:var(--text)">Цена</h2>
             {% set price_values = listing_data.price_summary.get('values', {}) %}
             {% set price_currency = listing_data.price_summary.get('currency') or price_values.get('currency_code') or '' %}
-            {% if price_values %}
+            {% if listing.marketplace.code == 'ozon' %}
+            <dl class="mt-3 space-y-2 text-sm">
+                <div><dt>До скидок</dt><dd class="text-xl font-semibold">{{ listing_preview.base_price }}</dd></div>
+                <div><dt>Цена продавца</dt><dd>{{ listing_preview.price }}</dd></div>
+                <div><dt>С вашими акциями</dt><dd>{{ listing_preview.promotion_price }}</dd></div>
+                <div><dt>Для покупателя</dt><dd>Нет данных</dd></div>
+                <div><dt>Скидка Ozon</dt><dd>Нет данных</dd></div>
+            </dl>
+            <p class="mt-3 text-xs" style="color:var(--text-secondary)">Покупательская цена и скидка площадки пока не подтверждены. Цены продавца показаны отдельно.</p>
+            {% elif price_values %}
             <dl class="mt-3 space-y-2 text-sm">
                 {% if price_values.get('price') is not none %}
                 <div><dt class="text-xs" style="color:var(--text-muted)">Текущая цена</dt><dd style="color:var(--text)">{{ price_values.get('price') }} {{ price_currency }}</dd></div>
@@ -355,7 +364,7 @@
         </div>
         <form method="post" action="{{ url_for('marketplace_commercial.create_price_proposal', listing_id=listing.id) }}" class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label><span class="block text-xs mb-1" style="color:var(--text-muted)">Новая базовая цена, RUB</span><input name="price" required inputmode="decimal" autocomplete="off" placeholder="Сейчас {{ listing_data.price_summary.get('values', {}).get('price', '—') }}" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></label>
+            <label><span class="block text-xs mb-1" style="color:var(--text-muted)">Новая цена продавца, RUB</span><input name="price" required inputmode="decimal" autocomplete="off" placeholder="Сейчас {{ listing_data.price_summary.get('values', {}).get('price', '—') }}" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></label>
             <label class="flex items-center gap-2 text-sm mt-5" style="color:var(--text-secondary)"><input type="checkbox" name="allow_price_decrease" value="1"> Разрешить снижение</label>
             <label class="flex items-center gap-2 text-sm mt-5" style="color:var(--text-secondary)"><input type="checkbox" name="allow_large_change" value="1"> Разрешить &gt;50%</label>
             <div class="flex items-end"><button class="sh-btn sh-btn--secondary" type="submit">Сохранить на проверку</button></div>
@@ -367,8 +376,9 @@
     <section class="sh-card p-4 mt-4">
         <div class="flex flex-wrap items-start justify-between gap-3">
             <div><h2 class="font-semibold" style="color:var(--text)">Точные FBS/rFBS остатки по складам</h2><p class="mt-1 text-xs" style="color:var(--text-muted)">В write уходит free_stock ровно одного owned warehouse; агрегат карточки не используется.</p></div>
-            <form method="post" action="{{ url_for('marketplace_commercial.refresh_stocks', listing_id=listing.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary" type="submit">Обновить live остатки</button></form>
+            <form method="post" action="{{ url_for('marketplace_commercial.refresh_stocks', listing_id=listing.id) }}" data-oc-refresh-form data-status-url="{{ url_for('marketplace_commercial.stock_refresh_status', listing_id=listing.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="sh-btn sh-btn--secondary" type="submit">Обновить FBS/rFBS остатки</button></form>
         </div>
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)" role="status" aria-live="polite" data-oc-refresh-status>Проверяем состояние последнего полного обновления. Текущие значения остаются видны во время чтения Ozon.</p>
         {% if warehouse_stocks %}<div class="mt-4 space-y-3">
             {% for stock in warehouse_stocks %}<article class="rounded border p-3" style="border-color:var(--border)">
                 <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -422,3 +432,4 @@
     {% endif %}
 </div>
 {% endblock %}
+{% block extra_scripts %}<script defer src="{{ url_for('static', filename='ozon-commercial.js') }}"></script>{% endblock %}

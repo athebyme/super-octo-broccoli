@@ -2,6 +2,8 @@
 
 import logging
 
+from services.ozon_read_requests import enqueue_read, read_status
+
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
@@ -35,7 +37,8 @@ def _positive_query(name: str, default=None, *, maximum=None) -> int:
     raw = request.args.get(name)
     if raw is None and default is not None:
         return default
-    if not isinstance(raw, str) or not raw.isdigit() or raw.startswith("0"):
+    if (len(request.args.getlist(name)) > 1 or not isinstance(raw, str)
+            or not raw.isascii() or not raw.isdecimal() or raw.startswith("0") or len(raw) > 18):
         raise MarketplaceFulfillmentValidationError(
             f"{name} должен быть положительным целым числом"
         )
@@ -45,6 +48,18 @@ def _positive_query(name: str, default=None, *, maximum=None) -> int:
             f"{name} превышает лимит {maximum}"
         )
     return value
+
+
+def _validate_query(allowed):
+    if set(request.args) - allowed or any(len(request.args.getlist(k)) != 1 for k in request.args):
+        raise MarketplaceFulfillmentValidationError('Неизвестные или повторяющиеся параметры запроса')
+
+
+def _compact_view():
+    value = request.args.get('view')
+    if value not in (None, 'compact'):
+        raise MarketplaceFulfillmentValidationError('Неизвестное представление списка')
+    return value == 'compact'
 
 
 def _body(allowed: set) -> dict:
@@ -144,6 +159,7 @@ def orders_api():
     if not _feature_enabled():
         return jsonify({"error": "Поддержка Ozon выключена"}), 404
     try:
+        _validate_query({'account_id', 'page', 'per_page', 'period', 'fulfillment', 'status', 'search', 'view'})
         data = MarketplaceFulfillmentService.list_postings(
             seller_id=_seller_id(),
             account_id=_positive_query("account_id"),
@@ -153,6 +169,7 @@ def orders_api():
             fulfillment_kind=request.args.get("fulfillment") or None,
             status=request.args.get("status") or None,
             search=request.args.get("search", ""),
+            compact=_compact_view(),
         )
         return jsonify({"success": True, "data": data})
     except (MarketplaceFulfillmentError, MarketplaceAccountError) as exc:
@@ -168,12 +185,22 @@ def order_detail_api(posting_id):
     if not _feature_enabled():
         return jsonify({"error": "Поддержка Ozon выключена"}), 404
     try:
+        _validate_query({'account_id', 'view', 'item_page', 'item_per_page'})
         posting = MarketplaceFulfillmentService.get_posting(
             seller_id=_seller_id(),
             account_id=_positive_query("account_id"),
             posting_id=posting_id,
         )
-        return jsonify({"success": True, "data": posting.to_public_dict(detail=True)})
+        if _compact_view():
+            from services.marketplace_fulfillment_display import posting_detail
+            document = posting_detail(
+                posting, account=posting.account,
+                page=_positive_query('item_page', 1, maximum=100_000),
+                per_page=_positive_query('item_per_page', 50, maximum=100),
+            )
+        else:
+            document = posting.to_public_dict(detail=True)
+        return jsonify({"success": True, "data": document})
     except (MarketplaceFulfillmentError, MarketplaceAccountError) as exc:
         return _known_error(exc)
     except Exception as exc:
@@ -187,6 +214,7 @@ def returns_api():
     if not _feature_enabled():
         return jsonify({"error": "Поддержка Ozon выключена"}), 404
     try:
+        _validate_query({'account_id', 'page', 'per_page', 'period', 'source', 'status', 'search', 'view'})
         data = MarketplaceFulfillmentService.list_returns(
             seller_id=_seller_id(),
             account_id=_positive_query("account_id"),
@@ -196,6 +224,7 @@ def returns_api():
             source_kind=request.args.get("source") or None,
             status=request.args.get("status") or None,
             search=request.args.get("search", ""),
+            compact=_compact_view(),
         )
         return jsonify({"success": True, "data": data})
     except (MarketplaceFulfillmentError, MarketplaceAccountError) as exc:
@@ -211,6 +240,7 @@ def cancellations_api():
     if not _feature_enabled():
         return jsonify({"error": "Поддержка Ozon выключена"}), 404
     try:
+        _validate_query({'account_id', 'page', 'per_page', 'period', 'source', 'status', 'search', 'view'})
         data = MarketplaceFulfillmentService.list_cancellations(
             seller_id=_seller_id(),
             account_id=_positive_query("account_id"),
@@ -220,6 +250,7 @@ def cancellations_api():
             source_kind=request.args.get("source") or None,
             status=request.args.get("status") or None,
             search=request.args.get("search", ""),
+            compact=_compact_view(),
         )
         return jsonify({"success": True, "data": data})
     except (MarketplaceFulfillmentError, MarketplaceAccountError) as exc:
@@ -229,12 +260,27 @@ def cancellations_api():
         return jsonify({"error": "Не удалось загрузить отмены Ozon"}), 500
 
 
+@marketplace_fulfillment_bp.get("/marketplaces/api/fulfillment/sync")
+@login_required
+def sync_status_api():
+    if not _feature_enabled():
+        return jsonify({"error": "Поддержка Ozon выключена"}), 404
+    try:
+        _validate_query({'account_id', 'period'})
+        result = read_status(seller_id=_seller_id(), account_id=_positive_query('account_id'),
+                             domain='fulfillment', period_code=request.args.get('period', '30d'))
+        return jsonify({"success": True, "data": result})
+    except (MarketplaceFulfillmentError, MarketplaceAccountError) as exc:
+        return _known_error(exc)
+
+
 @marketplace_fulfillment_bp.post("/marketplaces/api/fulfillment/sync")
 @login_required
 def sync_api():
     if not _feature_enabled():
         return jsonify({"error": "Поддержка Ozon выключена"}), 404
     try:
+        _validate_query({'account_id'})
         payload = _body({"period", "force", "max_pages"})
         force = _strict_bool(payload.get("force", False), "force")
         max_pages = payload.get("max_pages", 5)
@@ -242,14 +288,15 @@ def sync_api():
             raise MarketplaceFulfillmentValidationError(
                 "max_pages должен быть целым числом"
             )
-        run = MarketplaceFulfillmentService.sync_account(
+        MarketplaceFulfillmentService._positive_integer(max_pages, "max_pages", maximum=MarketplaceFulfillmentService.MAX_PAGES_PER_CALL)
+        result = enqueue_read(
             seller_id=_seller_id(),
             account_id=_positive_query("account_id"),
             period_code=payload.get("period", "30d"),
             force=force,
-            max_pages=max_pages,
+            domain='fulfillment',
         )
-        return jsonify({"success": True, "data": run.to_public_dict()})
+        return jsonify({"success": True, "data": result}), (202 if result["active"] else 200)
     except (MarketplaceFulfillmentError, MarketplaceAccountError) as exc:
         return _known_error(exc)
     except Exception as exc:

@@ -13,6 +13,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
+from flask_wtf.csrf import generate_csrf
 
 from models import db
 from services.marketplace_accounts import MarketplaceAccountService
@@ -25,6 +26,9 @@ from services.marketplace_warehouses import (
     MarketplaceWarehouseError,
     MarketplaceWarehouseService,
 )
+from services import ozon_warehouse_reads as warehouse_reads
+from services.marketplace_commercial_display import commercial_context, product_summary
+from services import ozon_write_quarantine as write_quarantine
 
 
 marketplace_commercial_bp = Blueprint(
@@ -217,6 +221,18 @@ def _require_write() -> None:
 
 def _document(proposal) -> dict:
     data = proposal.to_public_dict(detail=True)
+    data["write_quarantine"] = write_quarantine.hold_document(
+        write_quarantine.proposal_hold(proposal)
+    )
+    reason = MarketplaceCommercialService.target_unavailable_reason(proposal)
+    data["target_available"] = reason is None
+    data["target_unavailable_reason"] = reason
+    # The list service eagerly loads the listing; no provider or per-row query.
+    listing = proposal.listing
+    data["product"] = product_summary(listing) if listing and (
+        listing.seller_id == proposal.seller_id and listing.account_id == proposal.account_id
+        and listing.marketplace_id == proposal.marketplace_id
+    ) else None
     operation = proposal.operation
     data["operation"] = operation.to_public_dict(detail=True) if operation else None
     if operation and operation.snapshot:
@@ -225,27 +241,35 @@ def _document(proposal) -> dict:
 
 
 def _error_response(error: Exception, *, force_json: bool = False):
-    if isinstance(error, (MarketplaceCommercialError, MarketplaceWarehouseError)):
+    if isinstance(error, (MarketplaceCommercialError, MarketplaceWarehouseError, warehouse_reads.WarehouseReadError)):
         status_code = error.status_code
         code = error.code
     else:
         status_code = 400
         code = "invalid_marketplace_commercial_request"
+    hold = getattr(error, "write_quarantine", None)
     if force_json or _wants_json():
-        return jsonify({
+        payload = {
             "success": False,
             "error": str(error),
             "code": code,
-        }), status_code
+        }
+        if code == "ozon_write_quarantined" and isinstance(hold, dict):
+            payload["write_quarantine"] = hold
+        next_attempt_at = getattr(error, "next_attempt_at", None)
+        if next_attempt_at:
+            payload["next_attempt_at"] = next_attempt_at
+        return jsonify(payload), status_code
     return render_template(
         "marketplace_commercial_error.html",
         error=str(error),
         code=code,
+        write_quarantine=hold if code == "ozon_write_quarantined" else None,
     ), status_code
 
 
 def _write_failure(error: Exception, *, seller_id: int, action: str):
-    if isinstance(error, (MarketplaceCommercialError, MarketplaceWarehouseError)):
+    if isinstance(error, (MarketplaceCommercialError, MarketplaceWarehouseError, warehouse_reads.WarehouseReadError)):
         return _error_response(error)
     db.session.rollback()
     current_app.logger.exception(
@@ -262,6 +286,7 @@ def _write_failure(error: Exception, *, seller_id: int, action: str):
 
 
 @marketplace_commercial_bp.route("/", methods=["GET"])
+@marketplace_commercial_bp.route("/classic", methods=["GET"], endpoint="classic")
 @login_required
 def index():
     seller_id = _seller_id()
@@ -298,12 +323,20 @@ def index():
             )
             if account_id is not None else []
         )
+        warehouse_refresh = (
+            warehouse_reads.status_for_scope(
+                seller_id=seller_id, kind="warehouses", account_id=account_id,
+            ) if account_id is not None else None
+        )
     except (MarketplaceCommercialError, MarketplaceWarehouseError) as exc:
         return _error_response(exc)
+    proposal_docs = {item.id: _document(item) for item in pagination.items}
     if _wants_json():
         return jsonify({
             "success": True,
-            "items": [_document(item) for item in pagination.items],
+            "items": list(proposal_docs.values()),
+            "accounts": [{"id": a.id, "label": a.label, "is_active": bool(a.is_active)} for a in accounts],
+            "write_enabled": _write_enabled(),
             "warehouses": [item.to_public_dict() for item in warehouses],
             "pagination": {
                 "page": pagination.page,
@@ -313,11 +346,13 @@ def index():
             },
         })
     return render_template(
-        "marketplace_commercial.html",
+        "marketplace_commercial_classic.html" if request.endpoint.endswith(".classic") else "marketplace_commercial.html",
         proposals=pagination.items,
+        proposal_docs=proposal_docs,
         pagination=pagination,
         accounts=accounts,
         warehouses=warehouses,
+        warehouse_refresh=warehouse_refresh,
         filters={
             "account_id": account_id,
             "proposal_kind": proposal_kind,
@@ -325,6 +360,20 @@ def index():
         },
         write_enabled=_write_enabled(),
     )
+
+
+@marketplace_commercial_bp.route("/listings/<int:listing_id>/context", methods=["GET"])
+@login_required
+def listing_context(listing_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        _require_feature()
+        data = commercial_context(seller_id=seller_id, listing_id=listing_id)
+    except MarketplaceCommercialError as exc:
+        return _error_response(exc, force_json=True)
+    return jsonify({"success": True, **data})
 
 
 def _detail_response(proposal_id: int, *, force_json: bool = False):
@@ -341,9 +390,9 @@ def _detail_response(proposal_id: int, *, force_json: bool = False):
         return _error_response(exc, force_json=force_json)
     document = _document(proposal)
     if force_json or _wants_json():
-        return jsonify({"success": True, "proposal": document})
+        return jsonify({"success": True, "proposal": document, "write_enabled": _write_enabled()})
     return render_template(
-        "marketplace_commercial_detail.html",
+        "marketplace_commercial_detail_classic.html" if request.endpoint.endswith(".classic_detail") else "marketplace_commercial_detail.html",
         proposal=proposal,
         proposal_data=document,
         write_enabled=_write_enabled(),
@@ -351,6 +400,7 @@ def _detail_response(proposal_id: int, *, force_json: bool = False):
 
 
 @marketplace_commercial_bp.route("/<int:proposal_id>", methods=["GET"])
+@marketplace_commercial_bp.route("/classic/<int:proposal_id>", methods=["GET"], endpoint="classic_detail")
 @login_required
 def detail(proposal_id: int):
     return _detail_response(proposal_id)
@@ -378,19 +428,18 @@ def sync_warehouses(account_id: int):
             raise MarketplaceCommercialValidationError(
                 "Warehouse sync не принимает полей"
             )
-        run = MarketplaceWarehouseService.sync_warehouses(
-            seller_id=seller_id,
-            account_id=account_id,
+        refresh = warehouse_reads.enqueue_refresh(
+            seller_id=seller_id, kind="warehouses", account_id=account_id,
         )
     except Exception as exc:
         return _write_failure(exc, seller_id=seller_id, action="warehouse_sync")
-    if _wants_json():
-        return jsonify({"success": True, "sync": run.to_public_dict()})
-    flash("Склады Ozon синхронизированы полным snapshot", "success")
-    return redirect(url_for(
-        "marketplace_commercial.index",
-        account_id=account_id,
-    ))
+    if not _wants_json():
+        flash("Обновление складов поставлено в очередь; последний полный список сохранён.", "info")
+        return redirect(url_for("marketplace_commercial.classic", account_id=account_id), code=303)
+    response = jsonify({"success": True, "refresh": refresh})
+    response.status_code = 202
+    response.headers["Location"] = url_for("marketplace_commercial.refresh_status", job_id=refresh["id"])
+    return response
 
 
 @marketplace_commercial_bp.route(
@@ -409,19 +458,80 @@ def refresh_stocks(listing_id: int):
             raise MarketplaceCommercialValidationError(
                 "Stock refresh не принимает полей"
             )
-        rows = MarketplaceWarehouseService.refresh_listing_stocks(
-            seller_id=seller_id,
-            listing_id=listing_id,
+        refresh = warehouse_reads.enqueue_refresh(
+            seller_id=seller_id, kind="fbs_stock", listing_id=listing_id,
         )
     except Exception as exc:
         return _write_failure(exc, seller_id=seller_id, action="stock_refresh")
-    if _wants_json():
-        return jsonify({
-            "success": True,
-            "items": [row.to_public_dict() for row in rows],
-        })
-    flash("Точные FBS/rFBS остатки Ozon обновлены", "success")
-    return redirect(url_for("marketplace_listings.detail", listing_id=listing_id))
+    if not _wants_json():
+        flash("Обновление FBS/rFBS остатков поставлено в очередь; последний полный снимок сохранён.", "info")
+        return redirect(url_for("marketplace_listings.detail", listing_id=listing_id), code=303)
+    response = jsonify({"success": True, "refresh": refresh})
+    response.status_code = 202
+    response.headers["Location"] = url_for("marketplace_commercial.refresh_status", job_id=refresh["id"])
+    return response
+
+
+@marketplace_commercial_bp.route("/accounts/<int:account_id>/warehouses/refresh", methods=["GET"])
+@login_required
+def warehouse_refresh_status(account_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        _require_feature()
+        refresh = warehouse_reads.status_for_scope(
+            seller_id=seller_id, kind="warehouses", account_id=account_id,
+        )
+    except Exception as exc:
+        return _error_response(exc, force_json=True)
+    return jsonify({"success": True, "refresh": refresh, "csrf_token": generate_csrf()})
+
+
+@marketplace_commercial_bp.route("/listings/<int:listing_id>/stocks/refresh", methods=["GET"])
+@login_required
+def stock_refresh_status(listing_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        _require_feature()
+        refresh = warehouse_reads.status_for_scope(
+            seller_id=seller_id, kind="fbs_stock", listing_id=listing_id,
+        )
+    except Exception as exc:
+        return _error_response(exc, force_json=True)
+    return jsonify({"success": True, "refresh": refresh, "csrf_token": generate_csrf()})
+
+
+@marketplace_commercial_bp.route("/refreshes/<int:job_id>", methods=["GET"])
+@login_required
+def refresh_status(job_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        _require_feature()
+        refresh = warehouse_reads.status_for_job(seller_id=seller_id, job_id=job_id)
+    except Exception as exc:
+        return _error_response(exc, force_json=True)
+    return jsonify({"success": True, "refresh": refresh, "csrf_token": generate_csrf()})
+
+
+@marketplace_commercial_bp.route("/refreshes/<int:job_id>/cancel", methods=["POST"])
+@login_required
+def cancel_refresh(job_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        _require_feature()
+        if _payload():
+            raise MarketplaceCommercialValidationError("Отмена обновления не принимает полей")
+        refresh = warehouse_reads.cancel_refresh(seller_id=seller_id, job_id=job_id)
+    except Exception as exc:
+        return _write_failure(exc, seller_id=seller_id, action="refresh_cancel")
+    return jsonify({"success": True, "refresh": refresh})
 
 
 @marketplace_commercial_bp.route(

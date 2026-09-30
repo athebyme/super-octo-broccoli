@@ -280,11 +280,6 @@ class ContentFactoryMarketplaceRouteTests(unittest.TestCase):
 
     @mock.patch("requests.get")
     def test_vk_photo_diagnostic_cannot_use_foreign_social_credentials(self, get):
-        response = mock.MagicMock()
-        response.status_code = 404
-        response.content = b""
-        response.headers = {}
-        get.return_value = response
         foreign_account = SocialAccount(
             seller_id=self.seller2.id,
             platform="vk",
@@ -321,7 +316,90 @@ class ContentFactoryMarketplaceRouteTests(unittest.TestCase):
         self.assertNotIn("vk_user_token_present", payload)
         self.assertEqual(payload["steps"][-1]["step"], "vk_account")
         self.assertEqual(payload["steps"][-1]["status"], "FAIL")
-        get.assert_called_once()
+        self.assertNotIn("media_urls", payload)
+        self.assertNotIn("photo_mode", payload)
+        get.assert_not_called()
+
+    @mock.patch("services.content_publishers.vk_publisher.VKPublisher.validate_account")
+    def test_vk_key_can_be_rotated_without_exposing_it(self, validate):
+        validate.return_value = (True, None)
+        account = SocialAccount(
+            seller_id=self.seller1.id,
+            platform="vk",
+            account_name="Test VK",
+            account_id="12345",
+            is_active=True,
+        )
+        account.set_credentials_dict({"access_token": "old-secret", "group_id": "12345"})
+        db.session.add(account)
+        db.session.commit()
+
+        response = self.client.patch(
+            f"/api/content-factory/accounts/{account.id}/credentials",
+            json={"access_token": "new-secret"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(account.get_credentials_dict()["access_token"], "new-secret")
+        self.assertNotIn("new-secret", response.get_data(as_text=True))
+        self.assertNotIn("old-secret", response.get_data(as_text=True))
+
+    def test_vk_key_rotation_is_seller_scoped(self):
+        account = SocialAccount(
+            seller_id=self.seller2.id,
+            platform="vk",
+            account_name="Foreign VK",
+            account_id="99999",
+            is_active=True,
+        )
+        account.set_credentials_dict({"access_token": "foreign-secret", "group_id": "99999"})
+        db.session.add(account)
+        db.session.commit()
+
+        response = self.client.patch(
+            f"/api/content-factory/accounts/{account.id}/credentials",
+            json={"access_token": "new-secret"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(account.get_credentials_dict()["access_token"], "foreign-secret")
+
+    @mock.patch("services.content_publishers.vk_publisher.VKPublisher.validate_account")
+    def test_vk_invalid_replacement_key_keeps_previous_key(self, validate):
+        validate.return_value = (False, "Ключ сообщества VK не имеет доступа к стене.")
+        account = SocialAccount(
+            seller_id=self.seller1.id,
+            platform="vk",
+            account_name="Test VK",
+            account_id="12345",
+            is_active=True,
+        )
+        account.set_credentials_dict({"access_token": "old-secret", "group_id": "12345"})
+        db.session.add(account)
+        db.session.commit()
+
+        response = self.client.patch(
+            f"/api/content-factory/accounts/{account.id}/credentials",
+            json={"access_token": "bad-key"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(account.get_credentials_dict()["access_token"], "old-secret")
+        self.assertNotIn("bad-key", response.get_data(as_text=True))
+
+    @mock.patch("services.content_publishers.vk_publisher.VKPublisher.validate_account")
+    def test_vk_create_rejects_duplicate_community(self, validate):
+        validate.return_value = (True, None)
+        payload = {
+            "platform": "vk", "account_name": "Test VK", "account_id": "12345",
+            "credentials": {"access_token": "synthetic-key", "group_id": "12345"},
+        }
+        first = self.client.post("/api/content-factory/accounts", json=payload)
+        second = self.client.post("/api/content-factory/accounts", json=payload)
+
+        self.assertEqual(first.status_code, 200, first.get_json())
+        self.assertEqual(second.status_code, 409, second.get_json())
+        self.assertEqual(SocialAccount.query.filter_by(platform="vk").count(), 1)
 
 
 if __name__ == "__main__":

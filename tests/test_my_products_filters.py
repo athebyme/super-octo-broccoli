@@ -158,8 +158,9 @@ class TestMyProductsFilters(unittest.TestCase):
     def test_linked_ozon_listing_is_visible_and_uses_update_action(self):
         html = self._get()
         self.assertIn('На Ozon', html)
-        self.assertIn('Обновить Ozon', html)
-        self.assertIn('Полностью обновить эту карточку', html)
+        self.assertIn('Подготовить Ozon', html)
+        self.assertIn('Отправка в Ozon подтверждается отдельно после проверки.', html)
+        self.assertIn('action="/marketplaces/ozon/uploads/"', html)
 
     def test_supplier_filter(self):
         html = self._get(f'?supplier={self.sup_a_id}')
@@ -222,6 +223,35 @@ class TestMyProductsFilters(unittest.TestCase):
         self.assertIn('PROD-ALPHA-STOCK', html)
         self.assertIn('PROD-BETA-NOPHOTO', html)
         self.assertIn('PROD-NOSUP', html)
+
+    def test_explicit_ozon_account_keeps_published_wb_sources_and_never_switches_target(self):
+        from models import ImportedProduct, SellerMarketplaceAccount
+        with self.app.app_context():
+            original = SellerMarketplaceAccount.query.filter_by(external_account_id='my-products-ozon').one()
+            account = SellerMarketplaceAccount(seller_id=original.seller_id, marketplace_id=original.marketplace_id,
+                external_account_id='my-products-second', label='Выбранный магазин B', is_active=True,
+                connection_status='connected', _credentials_encrypted='synthetic-second-key', settings_json='{}')
+            source = ImportedProduct(seller_id=original.seller_id, title='PUBLISHED-WB-FOR-OZON', import_status='imported')
+            self.db.session.add_all([account, source])
+            self.db.session.commit()
+            account_id, source_id = account.id, source.id
+        try:
+            html = self._get('?account_id=' + str(account_id))
+            source_position = html.index('PUBLISHED-WB-FOR-OZON')
+            source_row = html[html.rfind('<tr', 0, source_position):html.find('</tr>', source_position)]
+            self.assertIn('Выбранный магазин B', html)
+            self.assertIn('account_id=' + str(account_id), html)
+            self.assertIn('Подготовить Ozon', source_row)
+            self.assertIn('action="/marketplaces/ozon/uploads/"', source_row)
+            self.assertIn('name="account_id" value="' + str(account_id) + '"', source_row)
+            self.assertIn('name="imported_product_ids" value="' + str(source_id) + '"', source_row)
+            self.assertIn('name="confirm_prepare" value="1"', source_row)
+            self.assertIn('name="request_key"', source_row)
+        finally:
+            with self.app.app_context():
+                self.db.session.delete(self.db.session.get(ImportedProduct, source_id))
+                self.db.session.delete(self.db.session.get(SellerMarketplaceAccount, account_id))
+                self.db.session.commit()
 
 
 if __name__ == '__main__':

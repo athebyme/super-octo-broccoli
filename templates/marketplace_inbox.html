@@ -1,250 +1,42 @@
-{% extends "base.html" %}
-{% from "macros/icons.html" import icon %}
-{% from "macros/components.html" import channel_bar %}
-
-{% block title %}Отзывы Ozon — Seller Hub{% endblock %}
-
-{% block topbar_left %}
-<nav class="sh-crumbs" aria-label="Хлебные крошки">
-  <a href="{{ url_for('marketplace_listings.index') }}">Ozon</a>
-  <span aria-hidden="true">/</span>
-  <span>Отзывы и вопросы</span>
-</nav>
-{% endblock %}
-
+{% extends 'base.html' %}
+{% from 'macros/icons.html' import icon %}
+{% from 'macros/components.html' import channel_bar %}
+{% block title %}Отзывы и вопросы Ozon — Seller Hub{% endblock %}
+{% block topbar_left %}<nav class="sh-crumbs" aria-label="Хлебные крошки"><a href="{{ url_for('marketplace_listings.index', account_id=selected_account.id) }}">Ozon</a><span aria-hidden="true">/</span><span>Отзывы и вопросы</span></nav>{% endblock %}
 {% block content %}
-<div x-data="ozonInboxPage()" x-init="init()">
-  <div class="sh-page-header">
-    <div class="sh-page-header-content">
-      <div>
-        <h1 class="sh-page-title">Отзывы и вопросы Ozon</h1>
-        <p class="sh-page-subtitle">Входящие выбранного кабинета и локальные черновики для проверки</p>
-      </div>
-      <div class="sh-page-actions" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="sync()" :disabled="loading || syncing || (capability && (!capability.available || !capability.account_ready))">
-          <span x-text="syncing ? 'Читаем Ozon…' : (syncState && syncState.status==='running' ? 'Продолжить sync' : 'Обновить из Ozon')"></span>
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <div style="max-width:1320px;margin:0 auto;padding:0 24px 40px">
-    <div class="sh-card" style="padding:16px;margin-bottom:20px">
-      {{ channel_bar(
-          active='ozon',
-          account_id=selected_account.id,
-          wb_href=url_for('reviews_page'),
-          ozon_href=url_for('marketplace_inbox.page'),
-          carry='source_kind'
-      ) }}
-      <div style="margin-top:12px;display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border:1px solid var(--info-border);border-radius:var(--r-md);background:var(--info-bg);color:var(--info);font-size:13px;line-height:1.5">
-        <span aria-hidden="true">{{ icon('shield', size=18) }}</span>
-        <span><strong>Ничего не отправляется в Ozon.</strong> Синхронизация вызывает только read endpoints. AI и быстрый шаблон сохраняют локальный черновик для проверки человеком; кнопки публикации в этом контуре нет.</span>
-      </div>
-      <div style="margin-top:9px;color:var(--text-muted);font-size:12px;line-height:1.5">
-        «Черновик с ИИ» передаёт текст входящего и ограниченные факты карточки настроенному AI-провайдеру. «Быстрый шаблон» работает полностью локально и не вызывает AI.
-      </div>
-    </div>
-
-    <template x-if="error">
-      <div style="padding:14px 16px;margin-bottom:20px;border:1px solid var(--danger-border);background:var(--danger-bg);border-radius:var(--r-md);color:var(--danger)" x-text="error"></div>
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-inbox.css') }}">
+<div id="oin-fallback" class="oin-page" role="status"><h1>Отзывы и вопросы</h1><p>Открываем входящие Ozon… Если раздел не открылся, обновите страницу.</p><noscript>Для работы с входящими включите JavaScript.</noscript><a href="https://seller.ozon.ru/" target="_blank" rel="noopener noreferrer">Открыть Ozon Seller</a></div>
+<div id="oin-app" class="oin-page" x-ignore v-cloak>
+  <header class="oin-header"><div><h1>Отзывы и вопросы</h1><p>Обращения покупателей и ответы, которые стоит проверить перед отправкой</p></div><button type="button" class="sh-btn sh-btn--primary" :disabled="!canSync" @click="syncNow()">{{ icon('refresh', size=17) }}<span v-text="refreshing?'Обновляем в фоне…':'Обновить из Ozon'"></span></button></header>
+  {{ channel_bar(active='ozon', account_id=selected_account.id, wb_href=url_for('reviews_page'), ozon_href=url_for('marketplace_inbox.page'), carry='source_kind') }}
+  <div class="oin-intro"><span>{{ icon('chat', size=19) }}<span>Подготовьте ответ здесь, затем отправьте его в кабинете Ozon. <strong>Ничего не отправляется в Ozon автоматически.</strong></span></span><a href="https://seller.ozon.ru/" target="_blank" rel="noopener noreferrer">Ozon Seller {{ icon('external', size=15) }}</a></div>
+  <div class="oin-tabs" role="group" aria-label="Тип обращений"><button type="button" :aria-pressed="filters.kind==='review'" @click="changeKind('review')">Отзывы</button><button type="button" :aria-pressed="filters.kind==='question'" @click="changeKind('question')">Вопросы</button></div>
+  <section v-if="capability && (!capability.available || !capability.account_ready || capability.live_access_denied)" class="oin-notice oin-warning" role="status"><div><h2 v-text="!capability.account_ready?'Подключение требует внимания':'Ozon пока не предоставил доступ к разделу'"></h2><p v-text="!capability.account_ready?'Проверьте подключение выбранного магазина. Сохранённые обращения остаются доступны.':capability.live_access_denied?'Последний запрос был отклонён Ozon. Причина доступа пока не подтверждена; автоматические попытки временно приостановлены. После изменения прав или тарифа можно проверить доступ вручную.':'В правах ключа не подтверждён доступ к этому разделу. Проверьте подключение и условия тарифа: для API отзывов и вопросов может требоваться Premium Plus.'"></p></div><a :href="config.accounts+'?account_id='+config.accountId" class="sh-btn sh-btn--secondary">Настройки магазина</a></section>
+  <div v-if="error" class="oin-notice oin-error" role="alert"><span v-text="error"></span><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" :disabled="loading" @click="load()">Проверить сохранённые данные</button></div>
+  <section v-if="refreshState && refreshState.status!=='idle'" class="oin-notice" role="status" aria-live="polite" :data-state="refreshState.status"><div><strong v-text="refreshTitle()"></strong><p v-text="refreshState.message"></p><small v-if="refreshState.active">Можно закрыть страницу или работать с сохранёнными обращениями.</small><p v-if="refreshDueLabel()" v-text="refreshDueLabel()"></p></div></section>
+  <div v-if="refreshStatusError" class="oin-notice oin-warning" role="alert"><span v-text="refreshStatusError"></span><a v-if="refreshSessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" @click="loadRefreshStatus()">Проверить состояние</button></div>
+  <div v-if="staleScope" class="oin-notice oin-warning" role="status">Пока показана предыдущая выборка. Новые фильтры появятся после успешной загрузки.</div>
+  <section class="oin-inbox" aria-label="Входящие" :aria-busy="loading">
+    <div class="oin-filter-bar"><form role="search" @submit.prevent="applySearch()"><label for="oin-search">Текст, название, артикул или SKU</label><div><input id="oin-search" name="search" type="search" v-model="searchDraft" maxlength="200" autocomplete="off" placeholder="Найти обращение…"><button type="submit" class="sh-btn sh-btn--secondary" aria-label="Найти обращения">{{ icon('search', size=18) }}</button></div></form><div class="oin-freshness"><span v-text="syncLabel"></span><small>Сохраняем обращения за последние 90 дней</small></div></div>
+    <div class="oin-statuses" role="group" aria-label="Статус в Ozon"><button v-for="s in ['', 'NEW', 'VIEWED', 'PROCESSED']" :key="s" type="button" :aria-pressed="filters.status===s" @click="navigate({status:s,page:1})"><span v-text="{'':'Все',NEW:'Новые',VIEWED:'Просмотренные',PROCESSED:'Обработанные'}[s]"></span><small v-text="stats ? (stats[s||'total']??'—').toLocaleString('ru-RU') : '—'"></small></button><button v-if="filters.search || filters.status || filters.listingId" type="button" class="oin-text-button" @click="resetFilters()">Сбросить фильтры</button></div>
+    <p class="oin-count-note">Числа относятся к сохранённым обращениям. Открытие обращения здесь не меняет его статус в Ozon.</p>
+    <p v-if="loading" class="oin-loading" role="status" aria-live="polite">Загружаем входящие…</p>
+    <section v-if="loaded && !items.length && !loading" class="oin-empty"><span class="oin-empty-icon">{{ icon('chat', size=32) }}</span><h2 v-text="pagination.total?'Эта страница пуста':emptyTitle"></h2><p v-text="filters.search || filters.status || filters.listingId?'Попробуйте другой запрос или вернитесь ко всем обращениям.':capability?.live_access_denied || !capability?.available?'После подтверждения доступа здесь появятся отзывы и вопросы покупателей. Другие разделы магазина продолжают работать.':'Обновите раздел из Ozon. Пока нет завершённой загрузки, пустой список не означает, что покупатели ничего не написали.'"></p><button v-if="pagination.total" type="button" class="sh-btn sh-btn--secondary" @click="navigate({page:1})">К первой странице</button><button v-else-if="filters.search || filters.status || filters.listingId" type="button" class="sh-btn sh-btn--secondary" @click="resetFilters()">Показать все обращения</button><button v-else-if="canSync" type="button" class="sh-btn sh-btn--primary" @click="syncNow()">Получить обращения</button></section>
+    <div v-if="items.length" class="oin-list"><article v-for="item in items" :key="item.id" class="oin-row"><header><div class="oin-product"><span class="oin-photo"><img v-if="imageURL(item.listing?.image) && !failedImages[item.id]" :src="imageURL(item.listing.image)" alt="" width="48" height="58" loading="lazy" v-image-deadline @error="failedImages[item.id]=true">{{ icon('image', size=20) }}</span><div><a v-if="item.listing" :href="item.listing.url" v-text="title(item)"></a><strong v-else v-text="title(item)"></strong><small v-text="item.listing?.offer_id?'Артикул '+item.listing.offer_id:'SKU '+item.external_sku"></small><small v-if="matchLabel(item)" v-text="matchLabel(item)"></small></div></div><div class="oin-row-meta"><span class="oin-state" :data-state="item.provider_status" v-text="statusLabel(item.provider_status)"></span><span v-if="item.source_kind==='review'" class="oin-rating" v-text="'Оценка '+item.rating+' из 5'"></span><time :datetime="item.published_at" v-text="instant(item.published_at)"></time></div></header><p class="oin-preview" v-text="item.text || 'Отзыв без текста'"></p><footer><span class="oin-muted"><span v-if="item.photos_count" v-text="item.photos_count+' фото. '"></span><span v-if="item.videos_count" v-text="item.videos_count+' видео. '"></span><span v-text="item.source_kind==='review'?'Комментариев в Ozon: '+item.comments_count:'Ответов в Ozon: '+item.answers_count"></span></span><a class="sh-btn sh-btn--secondary sh-btn--sm" :href="url({...filters,itemId:item.id})" @click="openItem(item,$event)"><span v-text="item.draft?'Открыть черновик':item.reply_eligible?'Подготовить ответ':'Открыть обращение'"></span>{{ icon('chevron-right', size=16) }}</a></footer></article></div>
+    <nav v-if="pagination.pages>1" class="oin-pagination" aria-label="Страницы обращений"><a v-if="pagination.page>1" :href="url({...filters,page:pagination.page-1})" @click="pageLink($event,pagination.page-1)">Назад</a><span v-else aria-disabled="true">Назад</span><span v-text="'Страница '+pagination.page+' из '+pagination.pages"></span><a v-if="pagination.page<pagination.pages" :href="url({...filters,page:pagination.page+1})" @click="pageLink($event,pagination.page+1)">Далее</a><span v-else aria-disabled="true">Далее</span></nav>
+    <button v-if="Object.keys(failedImages).length" type="button" class="oin-text-button" @click="failedImages={}">Повторить загрузку фото</button>
+  </section>
+  <dialog ref="detail" class="oin-dialog" aria-labelledby="oin-detail-title" @cancel.prevent="closeDialog()"><header><div><span class="oin-muted">Обращение покупателя</span><h2 id="oin-detail-title" v-text="selected?.source_kind==='question'?'Подготовить ответ на вопрос':'Подготовить ответ на отзыв'"></h2></div><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" aria-label="Закрыть обращение" @click="closeDialog()">{{ icon('close', size=18) }}</button></header><div class="oin-dialog-body">
+    <p v-if="detailLoading" role="status">Загружаем обращение…</p><div v-if="detailError" class="oin-notice oin-error" role="alert"><span v-text="detailError"></span><button type="button" class="sh-btn sh-btn--secondary" :disabled="detailLoading || sessionEnded" @click="readItem()">Повторить загрузку</button></div>
+    <template v-if="selected"><div class="oin-product"><span class="oin-photo"><img v-if="imageURL(selected.listing?.image) && !failedImages[selected.id]" :src="imageURL(selected.listing.image)" alt="" width="48" height="58" v-image-deadline @error="failedImages[selected.id]=true">{{ icon('image', size=20) }}</span><div><a v-if="selected.listing" :href="selected.listing.url" v-text="title(selected)"></a><strong v-else v-text="title(selected)"></strong><small v-text="'SKU '+selected.external_sku"></small></div></div><div class="oin-detail-meta"><span class="oin-state" :data-state="selected.provider_status" v-text="statusLabel(selected.provider_status)"></span><span v-if="selected.source_kind==='review'" v-text="'Оценка '+selected.rating+' из 5'"></span><time :datetime="selected.published_at" v-text="instant(selected.published_at)"></time></div><blockquote class="oin-message" v-text="selected.text || 'Отзыв без текста'"></blockquote><p class="oin-muted" v-text="'Данные Ozon на '+instant(selected.last_seen_at)"></p>
+      <div class="oin-reply"><h3>Ваш ответ</h3><p class="oin-muted">Сохраняется только в Seller Hub. Отправьте проверенный ответ в Ozon Seller.</p><p v-if="!selected.reply_eligible" class="oin-notice">К отзыву без текста, фото и видео Ozon не принимает комментарий.</p><template v-else><div class="oin-draft-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!canDraft" @click="writeDraft('template')">Быстрый шаблон</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="!canDraft" @click="writeDraft('ai')">{{ icon('sparkles', size=16) }}Черновик с ИИ</button></div><p class="oin-ai-note">«Черновик с ИИ» передаёт текст обращения и ограниченные факты карточки настроенному AI-провайдеру. Проверьте результат. Быстрый шаблон работает без ИИ.</p><template v-if="selected.draft || editor"><label for="oin-editor">Текст ответа</label><textarea id="oin-editor" ref="editor" name="reply" v-model="editor" rows="7" maxlength="3000" autocomplete="off" :readonly="saving || !!uncertainDraft" aria-describedby="oin-editor-hint"></textarea><div class="oin-editor-meta"><span id="oin-editor-hint" v-text="dirty?'Есть несохранённые изменения':'Сохранённый черновик'"></span><span v-text="editor.length+' / 3000'"></span></div><div class="oin-draft-actions"><button type="button" class="sh-btn sh-btn--primary" :disabled="!canDraft || !dirty" @click="writeDraft('save')">Сохранить изменения</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="saving || dirty || !!uncertainDraft" @click="copyDraft()">{{ icon('copy', size=16) }}Копировать</button><button v-if="dirty" type="button" class="oin-text-button" :disabled="saving || !!uncertainDraft" @click="useSaved()">Вернуть сохранённый текст</button></div></template></template></div>
     </template>
-
-    <template x-if="capability && (!capability.available || !capability.account_ready)">
-      <div style="padding:15px 17px;margin-bottom:20px;border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:var(--r-md);color:var(--warn);line-height:1.5">
-        <strong x-text="!capability.account_ready ? 'Кабинет не готов к синхронизации.' : 'Метод недоступен для этого API key.'"></strong>
-        <span x-text="!capability.account_ready ? ' Активируйте кабинет, сохраните credentials и повторно проверьте подключение.' : (sourceKind==='review' ? ' Перепроверьте подключение кабинета: Ozon Reviews API может требовать Premium Plus.' : ' Перепроверьте подключение кабинета: Ozon Questions API может требовать Premium Plus.')"></span>
-      </div>
-    </template>
-
-    <template x-if="capability && capability.live_access_denied">
-      <div style="padding:15px 17px;margin-bottom:20px;border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:var(--r-md);color:var(--warn);line-height:1.5">
-        <strong>Ozon отклонил доступ к разделу для текущей подписки.</strong>
-        <span> Автоматические попытки временно приостановлены, чтобы не повторять заведомо отклоняемый запрос. После изменения подписки нажмите «Обновить из Ozon» для ручной перепроверки.</span>
-      </div>
-    </template>
-
-    <div class="sh-card" style="padding:16px;margin-bottom:20px">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-        <button class="sh-btn sh-btn--sm" :class="sourceKind==='review'?'sh-btn--primary':'sh-btn--secondary'" @click="changeKind('review')">Отзывы</button>
-        <button class="sh-btn sh-btn--sm" :class="sourceKind==='question'?'sh-btn--primary':'sh-btn--secondary'" @click="changeKind('question')">Вопросы</button>
-        <span style="margin-left:auto;color:var(--text-muted);font-size:12px" x-text="syncLabel"></span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
-        <input class="sh-input" x-model="search" @keyup.enter="applyFilters()" placeholder="Текст, ID, SKU или карточка">
-        <select class="sh-input" x-model="status" @change="applyFilters()">
-          <option value="">Все статусы</option>
-          <option value="NEW">Новые</option>
-          <option value="VIEWED">Просмотренные</option>
-          <option value="PROCESSED">Обработанные</option>
-        </select>
-        <button class="sh-btn sh-btn--secondary" @click="applyFilters()">Найти</button>
-      </div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px">
-      <div class="sh-card" style="padding:17px;border-left:4px solid var(--info)">
-        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Новые</div>
-        <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.NEW||0"></div>
-      </div>
-      <div class="sh-card" style="padding:17px;border-left:4px solid var(--warn)">
-        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Просмотренные</div>
-        <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.VIEWED||0"></div>
-      </div>
-      <div class="sh-card" style="padding:17px;border-left:4px solid var(--ok)">
-        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">Обработанные</div>
-        <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.PROCESSED||0"></div>
-      </div>
-      <div class="sh-card" style="padding:17px">
-        <div style="font-size:12px;color:var(--text-muted);text-transform:uppercase">За 90 дней</div>
-        <div style="font-size:26px;font-weight:800;margin-top:5px" x-text="stats.total||0"></div>
-      </div>
-    </div>
-
-    <div x-show="loading" class="sh-card" style="padding:54px;text-align:center;color:var(--text-muted)">Загрузка…</div>
-
-    <div x-show="!loading && !items.length" class="sh-card" style="padding:54px 24px;text-align:center">
-      <div style="font-size:18px;font-weight:700;margin-bottom:7px" x-text="capability && (!capability.available || !capability.account_ready) ? 'Нет подтверждённого доступа' : 'Входящих пока нет'"></div>
-      <div style="color:var(--text-muted);font-size:14px;margin-bottom:18px" x-text="capability && !capability.account_ready ? 'Сначала восстановите подключение выбранного кабинета.' : (capability && !capability.available ? 'Проверка кабинета должна увидеть точный read-метод в роли API key.' : 'Запустите безопасную read-only синхронизацию выбранного раздела.')"></div>
-      <button class="sh-btn sh-btn--primary" @click="sync()" :disabled="loading || syncing || (capability && (!capability.available || !capability.account_ready))">Получить из Ozon</button>
-    </div>
-
-    <div x-show="!loading && items.length" style="display:flex;flex-direction:column;gap:12px">
-      <template x-for="item in items" :key="item.id">
-        <article class="sh-card" style="padding:18px">
-          <div style="display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
-            <div style="min-width:0;flex:1">
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-                <strong x-text="item.listing ? (item.listing.title || item.listing.offer_id) : ('SKU '+item.external_sku)"></strong>
-                <span class="sh-badge" x-text="statusLabel(item.provider_status)"></span>
-                <span x-show="item.match_status!=='matched'" class="sh-badge" style="background:var(--warn-bg);color:var(--warn)" x-text="matchLabel(item.match_status)"></span>
-                <span x-show="item.source_kind==='review'" style="color:var(--warn);font-size:14px" x-text="'★'.repeat(item.rating||0)+'☆'.repeat(5-(item.rating||0))"></span>
-              </div>
-              <div style="font-size:12px;color:var(--text-muted)">
-                <span x-text="dateTime(item.published_at)"></span>
-                <span> · SKU </span><span x-text="item.external_sku"></span>
-                <span x-show="item.order_status"> · </span><span x-show="item.order_status" x-text="item.order_status"></span>
-              </div>
-            </div>
-            <div style="font-size:12px;color:var(--text-muted);white-space:nowrap">
-              <span x-show="item.photos_count" x-text="item.photos_count+' фото · '"></span>
-              <span x-show="item.videos_count" x-text="item.videos_count+' видео · '"></span>
-              <span x-text="item.source_kind==='review' ? item.comments_count+' комментариев' : item.answers_count+' ответов'"></span>
-            </div>
-          </div>
-
-          <div style="margin-top:14px;white-space:pre-wrap;line-height:1.55;color:var(--text)" x-text="item.text || 'Отзыв без текста'"></div>
-
-          <template x-if="!item.reply_eligible">
-            <div style="margin-top:14px;padding:10px 12px;border-radius:var(--r-md);background:var(--bg-hover);color:var(--text-muted);font-size:12px">Ozon не принимает комментарий к отзыву без текста, фото или видео.</div>
-          </template>
-
-          <template x-if="item.draft">
-            <div style="margin-top:16px;padding:14px;border:1px solid var(--ok-border);border-radius:var(--r-md);background:var(--ok-bg)">
-              <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:7px">
-                <strong style="font-size:13px;color:var(--ok)" x-text="item.draft.generation_mode==='ai' ? 'AI-черновик · требует проверки' : 'Безопасный шаблон · требует проверки'"></strong>
-                <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="copyDraft(item.draft.text)">Копировать</button>
-              </div>
-              <div style="white-space:pre-wrap;line-height:1.5;font-size:14px" x-text="item.draft.text"></div>
-            </div>
-          </template>
-
-          <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:15px">
-            <button class="sh-btn sh-btn--primary sh-btn--sm" @click="draft(item,'ai')" :disabled="item._drafting || !item.reply_eligible">
-              <span x-text="item._drafting ? 'Готовим…' : (item.draft ? 'Перегенерировать с ИИ' : 'Черновик с ИИ')"></span>
-            </button>
-            <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="draft(item,'template')" :disabled="item._drafting || !item.reply_eligible">Быстрый шаблон</button>
-            <span style="font-size:11px;color:var(--text-muted)">Только локально — отправка отключена</span>
-          </div>
-        </article>
-      </template>
-    </div>
-
-    <div x-show="pages>1" style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:18px">
-      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="page--;load()">Назад</button>
-      <span style="font-size:13px;color:var(--text-muted)" x-text="page+' / '+pages"></span>
-      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="page++;load()">Далее</button>
-    </div>
-  </div>
+    <p v-if="saving" class="oin-loading" role="status" aria-live="polite">Готовим и сохраняем черновик…</p><div v-if="actionError" class="oin-notice oin-error" role="alert"><span v-text="actionError"></span><a v-if="sessionEnded" :href="loginUrl">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" :disabled="detailLoading || saving" @click="readItem()">Проверить сохранённый ответ</button></div><div v-if="uncertainDraft" class="oin-notice oin-warning" role="status"><span>Результат пока не подтверждён. Если сохранённая версия ещё не изменилась, проверьте её позже. Повторная подготовка остановлена.</span><button type="button" class="sh-btn sh-btn--secondary" :disabled="detailLoading || saving || sessionEnded" @click="readItem()">Проверить состояние</button></div><p v-if="notice" class="oin-notice" role="status" aria-live="polite" v-text="notice"></p>
+  </div><footer><span>Черновик не меняет статус обращения в Ozon.</span><a href="https://seller.ozon.ru/" target="_blank" rel="noopener noreferrer" class="sh-btn sh-btn--secondary">Открыть Ozon Seller {{ icon('external', size=15) }}</a></footer></dialog>
 </div>
-
-<script>
-function ozonInboxPage() {
-  const accountId={{ selected_account.id|tojson }};
-  return {
-    accountId, sourceKind:'review', status:'', search:'', page:1, pages:0,
-    items:[], stats:{NEW:0,VIEWED:0,PROCESSED:0,total:0}, capability:null,
-    syncState:null, loading:true, syncing:false, error:'',
-    get syncLabel() {
-      if (!this.syncState) return 'Ещё не синхронизировано';
-      if (this.syncState.status==='running') return 'Продолжаем '+this.syncState.current_status+' · '+this.syncState.page_count+' стр.';
-      if (this.syncState.status==='failed') return 'Последняя попытка завершилась ошибкой';
-      return this.syncState.completed_at ? 'Обновлено '+new Date(this.syncState.completed_at).toLocaleString('ru-RU') : 'Синхронизировано';
-    },
-    async init() {
-      const q=new URLSearchParams(location.search);
-      if(['review','question'].includes(q.get('source_kind'))) this.sourceKind=q.get('source_kind');
-      await this.load();
-    },
-    changeKind(kind) {
-      this.sourceKind=kind; this.status=''; this.search=''; this.page=1;
-      const u=new URL(location); u.searchParams.set('source_kind',kind); history.replaceState(null,'',u);
-      this.load();
-    },
-    applyFilters() { this.page=1; this.load(); },
-    async load() {
-      this.loading=true; this.error='';
-      try {
-        let u='/marketplaces/api/reviews?account_id='+this.accountId+'&source_kind='+this.sourceKind+'&page='+this.page+'&per_page=30';
-        if(this.status) u+='&status='+encodeURIComponent(this.status);
-        if(this.search.trim()) u+='&search='+encodeURIComponent(this.search.trim());
-        const r=await fetch(u); const d=await r.json();
-        if(!r.ok) throw new Error(d.error||'Не удалось загрузить входящие Ozon');
-        const data=d.data||{}; this.items=(data.items||[]).map(i=>({...i,_drafting:false}));
-        this.stats=data.stats||this.stats; this.pages=(data.pagination&&data.pagination.pages)||0;
-        this.syncState=data.sync||null; this.capability=data.capability||null;
-      } catch(e) { this.error=e.message; }
-      finally { this.loading=false; }
-    },
-    async sync() {
-      this.syncing=true; this.error='';
-      try {
-        let force=!(this.syncState&&this.syncState.status==='running');
-        for(let attempt=0;attempt<2;attempt++) {
-          const r=await fetch('/marketplaces/api/reviews/sync?account_id='+this.accountId,{
-            method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
-            body:JSON.stringify({source_kind:this.sourceKind,force:force,max_pages:5})
-          });
-          const d=await r.json(); if(!r.ok) throw new Error(d.error||'Ошибка синхронизации');
-          this.syncState=d.data; force=false;
-          if(this.syncState.status!=='running') break;
-        }
-        await this.load();
-        if(this.syncState&&this.syncState.status==='running') this.$store.toasts.info('Большая лента сохранена и продолжится с текущего места');
-        else this.$store.toasts.success('Входящие Ozon обновлены');
-      } catch(e) { this.error=e.message; }
-      finally { this.syncing=false; }
-    },
-    async draft(item,mode) {
-      item._drafting=true; this.error='';
-      try {
-        const r=await fetch('/marketplaces/api/reviews/'+item.id+'/draft?account_id='+this.accountId,{
-          method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
-          body:JSON.stringify({generation_mode:mode})
-        });
-        const d=await r.json(); if(!r.ok) throw new Error(d.error||'Не удалось создать черновик');
-        item.draft=d.data; this.$store.toasts.success('Черновик сохранён локально');
-      } catch(e) { this.error=e.message; }
-      finally { item._drafting=false; }
-    },
-    async copyDraft(text) {
-      try { await navigator.clipboard.writeText(text); this.$store.toasts.success('Черновик скопирован'); }
-      catch(e) { this.error='Браузер не разрешил копирование'; }
-    },
-    dateTime(value) { return value ? new Date(value+'Z').toLocaleString('ru-RU') : '—'; },
-    statusLabel(value) { return {NEW:'Новый',VIEWED:'Просмотрен',PROCESSED:'Обработан'}[value]||value; },
-    matchLabel(value) { return {unmatched:'Карточка не найдена',ambiguous:'SKU неоднозначен'}[value]||value; }
-  };
-}
-</script>
+<script type="application/json" id="oin-bootstrap">{{ {'accountId':selected_account.id,'csrfToken':csrf_token(),'page':url_for('marketplace_inbox.page'),'api':url_for('marketplace_inbox.list_api'),'accounts':url_for('marketplace_accounts.index')}|tojson }}</script>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-read-refresh.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-inbox.js') }}" defer></script>
 {% endblock %}

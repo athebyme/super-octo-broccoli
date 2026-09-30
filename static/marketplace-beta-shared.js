@@ -53,8 +53,10 @@
     var LENGTH_UNITS = { mm: 0.1, cm: 1, m: 100 };
 
     function numberOrNull(value) {
-        var num = parseFloat(value);
-        return isFinite(num) ? num : null;
+        if (typeof value !== 'number' && typeof value !== 'string') return null;
+        if (typeof value === 'string' && (value.length > 40 || !/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim()))) return null;
+        var num = Number(value);
+        return Number.isFinite(num) && num >= 0 && num <= 1e15 ? num : null;
     }
 
     function fmtInt(value) {
@@ -70,21 +72,40 @@
         var summary = (listing && listing.price_summary) || {};
         var result = {
             available: summary.available !== false,
-            currency: summary.currency || 'RUB',
+            currency: typeof summary.currency === 'string' && /^[a-z]{3}$/i.test(summary.currency)
+                ? summary.currency.toUpperCase() : (summary.source === 'legacy_wb_projection' ? 'RUB' : null),
             current: null,
             before: null,
-            min: null
+            min: null,
+            base: null,
+            seller: null,
+            sellerPromotion: null,
+            buyer: null,
+            marketplaceDiscount: null,
+            observedAt: listing && listing.prices_synced_at || null,
+            source: null
         };
+        if (!result.available) return result;
         var values = summary.values;
         if (values && typeof values === 'object') {
-            result.current = numberOrNull(values.marketing_seller_price);
-            if (result.current === null) result.current = numberOrNull(values.price);
-            result.before = numberOrNull(values.old_price);
+            // `price` is the seller-controlled amount. A missing/zero promotion
+            // never replaces it, and neither field proves the buyer's price.
+            result.source = 'ozon_seller_prices';
+            result.seller = numberOrNull(values.price);
+            result.current = result.seller;
+            var basePrice = numberOrNull(values.old_price);
+            result.base = basePrice !== null && basePrice > 0 ? basePrice : null;
+            result.before = result.base;
+            var promotion = numberOrNull(values.marketing_seller_price);
+            result.sellerPromotion = promotion !== null && promotion > 0 ? promotion : null;
             result.min = numberOrNull(values.min_price);
         } else {
-            // WB-проекция: price — цена до скидки, discount_price — к оплате
+            // WB seller projection excludes the marketplace's buyer discounts.
+            result.source = summary.source || null;
             var discounted = numberOrNull(summary.discount_price);
             var base = numberOrNull(summary.price);
+            result.base = base;
+            result.seller = discounted;
             result.current = discounted !== null ? discounted : base;
             result.before = discounted !== null ? base : null;
         }
@@ -98,8 +119,8 @@
     function fmtMoney(value, currency) {
         var num = numberOrNull(value);
         if (num === null) return null;
-        var suffix = !currency || currency === 'RUB' ? ' ₽' : ' ' + currency;
-        return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 })
+        var suffix = !currency ? '' : currency === 'RUB' ? ' ₽' : ' ' + currency;
+        return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
             .format(num) + suffix;
     }
 
@@ -120,6 +141,8 @@
 
     function discountPercent(listing) {
         var facts = priceFacts(listing);
+        // No generic Ozon percentage badge: old -> seller is not Ozon's subsidy.
+        if (facts.source === 'ozon_seller_prices') return null;
         if (facts.before === null || facts.current === null || facts.before <= 0) {
             return null;
         }
@@ -127,17 +150,46 @@
         return pct >= 5 ? pct : null;
     }
 
+    // Shared by tile, table, drawer and detail; never perform a provider read.
+    var ozonPrices = {
+        props: {listing: {type: Object, required: true}, compact: Boolean},
+        computed: {
+            facts: function () { return priceFacts(this.listing); },
+            rows: function () {
+                var rows = [
+                    {key:'base', label:'До скидок', value:this.facts.base},
+                    {key:'seller', label:'Цена продавца', value:this.facts.seller}
+                ];
+                if (!this.compact || this.facts.sellerPromotion !== null) rows.push({key:'sellerPromotion', label:'С вашими акциями', value:this.facts.sellerPromotion});
+                rows.push({key:'buyer', label:'Для покупателя', value:null},
+                    {key:'marketplaceDiscount', label:'Скидка Ozon', value:null});
+                return rows;
+            },
+            observed: function () { return this.facts.observedAt ? relTime(this.facts.observedAt) : 'дата неизвестна'; }
+        },
+        methods: {
+            amount: function (value) { return fmtMoney(value, this.facts.currency) || '—'; }
+        },
+        template: '<div class="mcat-prices" :class="{\'mcat-prices--compact\':compact}" role="group" aria-label="Цены Ozon">' +
+            '<dl><div v-for="row in rows" :key="row.key" :data-price-lane="row.key" :class="{\'is-primary\':row.key===\'base\',\'is-unknown\':row.value===null}">' +
+            '<dt>{{ row.label }}</dt><dd><span v-if="row.value===null" class="sr-only">Нет данных</span><span :aria-hidden="row.value===null ? \'true\' : undefined">{{ amount(row.value) }}</span></dd></div></dl>' +
+            '<p v-if="!facts.currency" class="mcat-price-observed">Валюта не указана</p>' +
+            '<p v-if="!facts.available" class="mcat-price-observed">Цены пока не получены</p>' +
+            '<p v-if="!compact" class="mcat-price-help">Цена для покупателя и скидка Ozon пока не подтверждены. Суммы продавца показаны отдельно; цена с вашими акциями не включает дополнительную скидку площадки.</p>' +
+            '<p v-if="!compact" class="mcat-price-observed">Цены обновлены: {{ observed }}</p></div>'
+    };
+
     /* --- Остатки --------------------------------------------------------- */
     function stockNumber(listing) {
         var summary = (listing && listing.stock_summary) || null;
         if (!summary || summary.available === false) return null;
-        return typeof summary.present === 'number' ? summary.present : null;
+        return Number.isSafeInteger(summary.present) && summary.present >= 0 ? summary.present : null;
     }
 
     function stockLabel(listing) {
         var num = stockNumber(listing);
         if (num === null) return '—';
-        if (num === 0) return 'нет';
+        if (num === 0) return '0 шт';
         return fmtInt(num) + ' шт';
     }
 
@@ -147,8 +199,9 @@
         var rows = [];
         Object.keys(byType).forEach(function (key) {
             var entry = byType[key] || {};
-            var value = fmtInt(entry.present || 0);
-            if (entry.reserved) value += ' (резерв ' + entry.reserved + ')';
+            var present = stockNumber({stock_summary: entry});
+            var value = present === null ? '—' : fmtInt(present);
+            if (Number.isSafeInteger(entry.reserved) && entry.reserved > 0) value += ' (резерв ' + fmtInt(entry.reserved) + ')';
             rows.push({ label: String(key).toUpperCase(), value: value });
         });
         return rows;
@@ -276,7 +329,7 @@
             }
         }
         return response.json().catch(function () {
-            return {};
+            throw new Error('Сервер вернул непонятный ответ. Данные не обновлены — повторите загрузку.');
         }).then(function (data) {
             if (!response.ok || data.success === false) {
                 throw new Error(
@@ -287,9 +340,56 @@
         });
     }
 
+    // A stalled upstream image must eventually use the existing error fallback.
+    // Lazy images get their deadline only when near the viewport.
+    var imageStates = new WeakMap();
+    function stopImageDeadline(el) {
+        var state = imageStates.get(el);
+        if (!state) return;
+        clearTimeout(state.timer);
+        if (state.observer) state.observer.disconnect();
+        el.removeEventListener('load', state.done);
+        el.removeEventListener('error', state.done);
+        imageStates.delete(el);
+    }
+    function watchImage(el) {
+        var src = el.getAttribute('src');
+        var previous = imageStates.get(el);
+        if (previous && previous.src === src) return;
+        stopImageDeadline(el);
+        if (!src || (el.complete && el.naturalWidth > 0)) return;
+        var state = {src: src, timer: null, observer: null};
+        state.done = function () { stopImageDeadline(el); };
+        imageStates.set(el, state);
+        el.addEventListener('load', state.done);
+        el.addEventListener('error', state.done);
+        var start = function () {
+            if (state.observer) state.observer.disconnect();
+            if (imageStates.get(el) !== state || state.timer !== null) return;
+            state.timer = setTimeout(function () {
+                if (imageStates.get(el) !== state || el.getAttribute('src') !== src) return;
+                stopImageDeadline(el);
+                if (el.complete && el.naturalWidth > 0) return;
+                el.removeAttribute('src');
+                el.dispatchEvent(new Event('error'));
+            }, 12000);
+        };
+        if (el.loading === 'lazy' && typeof global.IntersectionObserver === 'function') {
+            state.observer = new global.IntersectionObserver(function (entries) {
+                if (entries.some(function (entry) { return entry.isIntersecting; })) start();
+            }, {rootMargin: '300px'});
+            state.observer.observe(el);
+        } else start();
+    }
+
     global.mcatShared = {
+        imageDeadline: {mounted: watchImage, updated: watchImage, beforeUnmount: function (el) {
+            stopImageDeadline(el);
+            el.removeAttribute('src');
+        }},
         STATUS_META: STATUS_META,
         priceFacts: priceFacts,
+        ozonPrices: ozonPrices,
         fmtMoney: fmtMoney,
         fmtInt: fmtInt,
         priceLabel: priceLabel,

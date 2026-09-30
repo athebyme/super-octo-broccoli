@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 
-from sqlalchemy import asc, desc, func, or_
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.exc import IntegrityError
 
 from models import (
@@ -326,6 +326,7 @@ class MarketplaceFulfillmentService:
         seller_id: int,
         account_id: int,
         now: datetime,
+        recover_abandoned: bool = False,
     ) -> Optional[MarketplaceFulfillmentSync]:
         run = MarketplaceFulfillmentSync.query.filter(
             MarketplaceFulfillmentSync.seller_id == seller_id,
@@ -336,7 +337,11 @@ class MarketplaceFulfillmentService:
             return None
         heartbeat = run.last_page_at or run.started_at
         expected = cls._run_fingerprint(run.period_start, run.period_end)
-        if heartbeat and heartbeat < now - cls.STALE_RUNNING_AFTER:
+        if (
+            not recover_abandoned
+            and heartbeat
+            and heartbeat < now - cls.STALE_RUNNING_AFTER
+        ):
             run.status = "failed"
             run.error_code = "fulfillment_sync_interrupted"
             run.error_message = "Синхронизация прервана до завершения страницы"
@@ -727,6 +732,8 @@ class MarketplaceFulfillmentService:
         run.matched_item_count += matched
         run.unmatched_item_count += unmatched
         run.last_page_at = now
+        run.error_code = None
+        run.error_message = None
         db.session.commit()
 
     @staticmethod
@@ -843,6 +850,7 @@ class MarketplaceFulfillmentService:
         account_id: int,
         period_code: str = "30d",
         force: bool = False,
+        recover_abandoned: bool = False,
         max_pages: int = 5,
         adapter=None,
         credentials: Optional[MarketplaceCredentials] = None,
@@ -851,6 +859,8 @@ class MarketplaceFulfillmentService:
     ) -> MarketplaceFulfillmentSync:
         if not isinstance(force, bool):
             raise MarketplaceFulfillmentValidationError("force должен быть boolean")
+        if not isinstance(recover_abandoned, bool):
+            raise MarketplaceFulfillmentValidationError("recover_abandoned должен быть boolean")
         max_pages = cls._positive_integer(
             max_pages, "max_pages", maximum=cls.MAX_PAGES_PER_CALL
         )
@@ -899,6 +909,7 @@ class MarketplaceFulfillmentService:
                 seller_id=account.seller_id,
                 account_id=account.id,
                 now=current_time,
+                recover_abandoned=recover_abandoned,
             )
             if run is not None and (
                 run.period_code != period_code
@@ -950,10 +961,19 @@ class MarketplaceFulfillmentService:
                 ).first()
                 if persisted is not None and persisted.status == "running":
                     code, message = cls._safe_error(exc)
-                    persisted.status = "failed"
+                    # The durable worker owns the retry due time. Keep its
+                    # committed page checkpoint on transient provider errors;
+                    # malformed responses still terminate the snapshot.
+                    retryable = (
+                        recover_abandoned
+                        and isinstance(exc, OzonAPIError)
+                        and exc.retriable
+                    )
+                    if not retryable:
+                        persisted.status = "failed"
+                        persisted.completed_at = current_time
                     persisted.error_code = code
                     persisted.error_message = message
-                    persisted.completed_at = current_time
                     db.session.commit()
             if isinstance(exc, MarketplaceFulfillmentError):
                 raise
@@ -990,6 +1010,20 @@ class MarketplaceFulfillmentService:
             raise MarketplaceFulfillmentValidationError("search слишком длинный")
         return value
 
+    @staticmethod
+    def _search_match(search, *columns):
+        # Display navigation only; never change identity/equality semantics.
+        if db.engine.dialect.name == "sqlite":
+            connection = db.session.connection().connection.driver_connection
+            connection.create_function(
+                "sh_fulfillment_casefold", 1,
+                lambda value: str(value or "").casefold(), deterministic=True,
+            )
+            lower = func.sh_fulfillment_casefold
+        else:
+            lower = func.lower
+        return or_(*(lower(column).contains(search.casefold(), autoescape=True) for column in columns))
+
     @classmethod
     def list_postings(
         cls,
@@ -1003,6 +1037,7 @@ class MarketplaceFulfillmentService:
         status: Optional[str] = None,
         search: str = "",
         today: Optional[date] = None,
+        compact: bool = False,
     ) -> Dict[str, Any]:
         account = cls._owned_account(seller_id=seller_id, account_id=account_id)
         page, per_page = cls._page_args(page=page, per_page=per_page)
@@ -1012,6 +1047,7 @@ class MarketplaceFulfillmentService:
         period_floor = datetime.combine(period_start, datetime.min.time())
         query = MarketplacePosting.query.filter(
             MarketplacePosting.seller_id == account.seller_id,
+            MarketplacePosting.marketplace_id == account.marketplace_id,
             MarketplacePosting.account_id == account.id,
             func.coalesce(
                 MarketplacePosting.upstream_created_at,
@@ -1022,24 +1058,25 @@ class MarketplaceFulfillmentService:
             if fulfillment_kind not in {"fbo", "fbs"}:
                 raise MarketplaceFulfillmentValidationError("Неизвестная схема заказа")
             query = query.filter(MarketplacePosting.fulfillment_kind == fulfillment_kind)
+        search = cls._search(search)
+        if search:
+            query = query.filter(or_(
+                cls._search_match(search, MarketplacePosting.posting_number, MarketplacePosting.external_order_number),
+                MarketplacePosting.items.any(and_(
+                    MarketplacePostingItem.seller_id == account.seller_id,
+                    MarketplacePostingItem.account_id == account.id,
+                    cls._search_match(search, MarketplacePostingItem.offer_id, MarketplacePostingItem.external_sku, MarketplacePostingItem.name),
+                )),
+            ))
+        status_counts = {}
+        if compact:
+            status_counts = dict(query.with_entities(
+                MarketplacePosting.status, func.count(MarketplacePosting.id),
+            ).group_by(MarketplacePosting.status).all())
         if status:
             if not isinstance(status, str) or len(status) > 120:
                 raise MarketplaceFulfillmentValidationError("Некорректный статус")
             query = query.filter(MarketplacePosting.status == status)
-        search = cls._search(search)
-        if search:
-            pattern = f"%{search}%"
-            query = query.filter(or_(
-                MarketplacePosting.posting_number.ilike(pattern),
-                MarketplacePosting.external_order_number.ilike(pattern),
-                MarketplacePosting.items.any(
-                    or_(
-                        MarketplacePostingItem.offer_id.ilike(pattern),
-                        MarketplacePostingItem.external_sku.ilike(pattern),
-                        MarketplacePostingItem.name.ilike(pattern),
-                    )
-                ),
-            ))
         pagination = query.order_by(
             func.coalesce(
                 MarketplacePosting.upstream_created_at,
@@ -1047,6 +1084,15 @@ class MarketplaceFulfillmentService:
             ).desc(),
             MarketplacePosting.id.desc(),
         ).paginate(page=page, per_page=per_page, error_out=False)
+        if compact:
+            from services.marketplace_fulfillment_display import posting_previews, sync_context
+            return {
+                "items": posting_previews(pagination.items, account=account),
+                "pagination": {"page": page, "per_page": per_page, "total": pagination.total, "pages": pagination.pages},
+                "status_counts": status_counts,
+                "scope": {"account_id": account.id, "marketplace": "ozon"},
+                **sync_context(account=account, period_code=period_code),
+            }
         status_rows = db.session.query(
             MarketplacePosting.status,
             func.count(MarketplacePosting.id),
@@ -1087,6 +1133,7 @@ class MarketplaceFulfillmentService:
         posting = MarketplacePosting.query.filter(
             MarketplacePosting.id == cls._positive_integer(posting_id, "posting_id"),
             MarketplacePosting.seller_id == account.seller_id,
+            MarketplacePosting.marketplace_id == account.marketplace_id,
             MarketplacePosting.account_id == account.id,
         ).first()
         if posting is None:
@@ -1106,6 +1153,7 @@ class MarketplaceFulfillmentService:
         status: Optional[str] = None,
         search: str = "",
         today: Optional[date] = None,
+        compact: bool = False,
     ) -> Dict[str, Any]:
         account = cls._owned_account(seller_id=seller_id, account_id=account_id)
         page, per_page = cls._page_args(page=page, per_page=per_page)
@@ -1113,6 +1161,7 @@ class MarketplaceFulfillmentService:
         period_floor = datetime.combine(period_start, datetime.min.time())
         query = MarketplaceReturn.query.filter(
             MarketplaceReturn.seller_id == account.seller_id,
+            MarketplaceReturn.marketplace_id == account.marketplace_id,
             MarketplaceReturn.account_id == account.id,
             func.coalesce(
                 MarketplaceReturn.status_changed_at,
@@ -1124,20 +1173,20 @@ class MarketplaceFulfillmentService:
             if source_kind not in {"fbo_fbs", "rfbs"}:
                 raise MarketplaceFulfillmentValidationError("Неизвестный источник возврата")
             query = query.filter(MarketplaceReturn.source_kind == source_kind)
+        search = cls._search(search)
+        if search:
+            query = query.filter(cls._search_match(
+                search, MarketplaceReturn.posting_number, MarketplaceReturn.external_return_id, MarketplaceReturn.offer_id, MarketplaceReturn.external_sku, MarketplaceReturn.product_name,
+            ))
+        status_counts = {}
+        if compact:
+            status_counts = dict(query.with_entities(
+                MarketplaceReturn.status, func.count(MarketplaceReturn.id),
+            ).group_by(MarketplaceReturn.status).all())
         if status:
             if not isinstance(status, str) or len(status) > 120:
                 raise MarketplaceFulfillmentValidationError("Некорректный статус")
             query = query.filter(MarketplaceReturn.status == status)
-        search = cls._search(search)
-        if search:
-            pattern = f"%{search}%"
-            query = query.filter(or_(
-                MarketplaceReturn.posting_number.ilike(pattern),
-                MarketplaceReturn.external_return_id.ilike(pattern),
-                MarketplaceReturn.offer_id.ilike(pattern),
-                MarketplaceReturn.external_sku.ilike(pattern),
-                MarketplaceReturn.product_name.ilike(pattern),
-            ))
         pagination = query.order_by(
             func.coalesce(
                 MarketplaceReturn.status_changed_at,
@@ -1145,8 +1194,17 @@ class MarketplaceFulfillmentService:
             ).desc(),
             MarketplaceReturn.id.desc(),
         ).paginate(page=page, per_page=per_page, error_out=False)
+        documents = [item.to_public_dict() for item in pagination.items]
+        context = {}
+        if compact:
+            from services.marketplace_fulfillment_display import listing_previews, related_postings, sync_context
+            listing_previews(documents, account=account)
+            related_postings(documents, pagination.items, account=account)
+            context = sync_context(account=account, period_code=period_code)
+            context['status_counts'] = status_counts
         return {
-            "items": [item.to_public_dict() for item in pagination.items],
+            "items": documents,
+            **context,
             "pagination": {
                 "page": page,
                 "per_page": per_page,
@@ -1169,6 +1227,7 @@ class MarketplaceFulfillmentService:
         status: Optional[str] = None,
         search: str = "",
         today: Optional[date] = None,
+        compact: bool = False,
     ) -> Dict[str, Any]:
         account = cls._owned_account(seller_id=seller_id, account_id=account_id)
         page, per_page = cls._page_args(page=page, per_page=per_page)
@@ -1176,6 +1235,7 @@ class MarketplaceFulfillmentService:
         period_floor = datetime.combine(period_start, datetime.min.time())
         query = MarketplaceCancellation.query.filter(
             MarketplaceCancellation.seller_id == account.seller_id,
+            MarketplaceCancellation.marketplace_id == account.marketplace_id,
             MarketplaceCancellation.account_id == account.id,
             func.coalesce(
                 MarketplaceCancellation.requested_at,
@@ -1187,24 +1247,35 @@ class MarketplaceFulfillmentService:
             if source_kind not in allowed:
                 raise MarketplaceFulfillmentValidationError("Неизвестный источник отмены")
             query = query.filter(MarketplaceCancellation.source_kind == source_kind)
+        search = cls._search(search)
+        if search:
+            query = query.filter(cls._search_match(
+                search, MarketplaceCancellation.posting_number, MarketplaceCancellation.external_cancellation_id, MarketplaceCancellation.reason,
+            ))
+        status_counts = {}
+        if compact:
+            status_counts = dict(query.with_entities(
+                MarketplaceCancellation.status, func.count(MarketplaceCancellation.id),
+            ).group_by(MarketplaceCancellation.status).all())
         if status:
             if not isinstance(status, str) or len(status) > 120:
                 raise MarketplaceFulfillmentValidationError("Некорректный статус")
             query = query.filter(MarketplaceCancellation.status == status)
-        search = cls._search(search)
-        if search:
-            pattern = f"%{search}%"
-            query = query.filter(or_(
-                MarketplaceCancellation.posting_number.ilike(pattern),
-                MarketplaceCancellation.external_cancellation_id.ilike(pattern),
-                MarketplaceCancellation.reason.ilike(pattern),
-            ))
         pagination = query.order_by(
             MarketplaceCancellation.requested_at.desc(),
             MarketplaceCancellation.id.desc(),
         ).paginate(page=page, per_page=per_page, error_out=False)
+        documents = [item.to_public_dict() for item in pagination.items]
+        context = {}
+        if compact:
+            from services.marketplace_fulfillment_display import listing_previews, related_postings, sync_context
+            listing_previews(documents, account=account)
+            related_postings(documents, pagination.items, account=account)
+            context = sync_context(account=account, period_code=period_code)
+            context['status_counts'] = status_counts
         return {
-            "items": [item.to_public_dict() for item in pagination.items],
+            "items": documents,
+            **context,
             "pagination": {
                 "page": page,
                 "per_page": per_page,

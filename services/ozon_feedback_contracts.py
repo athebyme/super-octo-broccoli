@@ -16,6 +16,7 @@ class OzonFeedbackContractError(ValueError):
 
 INBOX_STATUSES = ("NEW", "VIEWED", "PROCESSED")
 MAX_PAGE_SIZE = 100
+MIN_REVIEW_PAGE_SIZE = 20
 MAX_ROWS_PER_PAGE = 100
 MAX_TEXT_LENGTH = 10_000
 RFC3339_TIMESTAMP = re.compile(
@@ -73,14 +74,14 @@ def _identifier(value: Any, field_name: str, *, maximum: int = 200) -> str:
     return _text(value, field_name, maximum=maximum)
 
 
-def _positive_integer(value: Any, field_name: str, *, maximum: int) -> int:
+def _positive_integer(value: Any, field_name: str, *, maximum: int, minimum: int = 1) -> int:
     if (
         not isinstance(value, int)
         or isinstance(value, bool)
-        or not 1 <= value <= maximum
+        or not minimum <= value <= maximum
     ):
         raise OzonFeedbackContractError(
-            f"{field_name} must be a positive integer not greater than {maximum}"
+            f"{field_name} must be an integer between {minimum} and {maximum}"
         )
     return value
 
@@ -176,7 +177,9 @@ def build_review_list_request(
     """Build one bounded page for ``/v2/review/list``."""
     start_at, end_at = _window(date_from, date_to)
     payload: Dict[str, Any] = {
-        "limit": _positive_integer(limit, "limit", maximum=MAX_PAGE_SIZE),
+        "limit": _positive_integer(
+            limit, "limit", minimum=MIN_REVIEW_PAGE_SIZE, maximum=MAX_PAGE_SIZE,
+        ),
         "sort_dir": "DESC",
         "filters": {
             "status": _status(status, "status"),

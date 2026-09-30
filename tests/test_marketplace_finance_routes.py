@@ -206,28 +206,23 @@ class MarketplaceFinanceRoutesTest(unittest.TestCase):
         sync.assert_not_called()
 
     def test_sync_passes_only_authenticated_query_scope(self):
-        run = SimpleNamespace(to_public_dict=lambda: {
-            "id": 900,
-            "account_id": self.own_account_id,
-            "status": "running",
-        })
+        result = {"id": 900, "status": "pending", "active": True}
         user_patch, login_patch = self._auth()
-        with user_patch, login_patch, patch.object(
-            MarketplaceFinanceService,
-            "sync_account",
-            return_value=run,
+        with user_patch, login_patch, patch(
+            "routes.marketplace_finance.enqueue_read",
+            return_value=result,
         ) as sync:
             response = self.client.post(
                 f"/marketplaces/api/finance/sync?account_id={self.own_account_id}",
                 json={"period": "7d", "force": True, "max_pages": 4},
             )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         sync.assert_called_once_with(
             seller_id=self.seller1_id,
             account_id=self.own_account_id,
             period_code="7d",
             force=True,
-            max_pages=4,
+            domain="finance",
         )
 
     def test_feature_flag_blocks_api(self):

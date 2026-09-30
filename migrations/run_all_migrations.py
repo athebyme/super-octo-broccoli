@@ -1212,9 +1212,17 @@ def migrate(db_path):
 def main():
     """Главная функция"""
 
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('database_path', nargs='?')
+    parser.add_argument(
+        '--base-only', action='store_true',
+        help='Run only legacy schema additions; Docker runs post-schema scripts separately',
+    )
+    args = parser.parse_args()
     # Проверяем аргументы командной строки
-    if len(sys.argv) > 1:
-        db_path = sys.argv[1]
+    if args.database_path:
+        db_path = args.database_path
         if not os.path.exists(db_path):
             print(f"❌ Файл базы данных не найден: {db_path}")
             sys.exit(1)
@@ -1232,12 +1240,16 @@ def main():
             sys.exit(1)
 
     success = migrate(db_path)
-    if success:
+    if success and not args.base_only:
         try:
             from migrate_add_marketplace_accounts import (
                 migrate as migrate_marketplace_accounts,
             )
             migrate_marketplace_accounts(db_path)
+            from migrate_add_marketplace_credential_notices import migrate as migrate_credential_notices
+            migrate_credential_notices(db_path)
+            from migrate_add_marketplace_account_events import migrate as migrate_account_events
+            migrate_account_events(db_path)
             from migrate_add_ozon_references import (
                 migrate as migrate_ozon_references,
             )
@@ -1258,6 +1270,8 @@ def main():
                 db_path,
                 backfill_limit=STARTUP_BACKFILL_LIMIT,
             )
+            from migrate_add_ozon_catalog_checkpoints import migrate as migrate_catalog_checkpoints
+            migrate_catalog_checkpoints(db_path)
             from migrate_add_marketplace_product_links import (
                 migrate as migrate_marketplace_product_links,
             )
@@ -1282,10 +1296,18 @@ def main():
                 migrate as migrate_marketplace_operations,
             )
             migrate_marketplace_operations(db_path)
+            from migrate_add_ozon_upload_queue import migrate as migrate_ozon_upload_queue
+            migrate_ozon_upload_queue(db_path)
+            from migrate_add_ozon_draft_ai_completion import (
+                migrate as migrate_ozon_draft_ai_completion,
+            )
+            migrate_ozon_draft_ai_completion(db_path)
             from migrate_add_marketplace_commercial import (
                 migrate as migrate_marketplace_commercial,
             )
             migrate_marketplace_commercial(db_path)
+            from migrate_add_ozon_warehouse_reads import migrate as migrate_warehouse_reads
+            migrate_warehouse_reads(db_path)
             from migrate_add_marketplace_product_updates import (
                 migrate as migrate_marketplace_product_updates,
             )
@@ -1310,6 +1332,20 @@ def main():
                 migrate as migrate_marketplace_inbox,
             )
             migrate_marketplace_inbox(db_path)
+            from migrate_add_marketplace_read_schedules import (
+                migrate as migrate_marketplace_read_schedules,
+            )
+            migrate_marketplace_read_schedules(db_path)
+            from migrate_add_marketplace_read_requests import (
+                migrate as migrate_marketplace_read_requests,
+            )
+            migrate_marketplace_read_requests(db_path)
+            from migrate_add_inbox_read_queue import migrate as migrate_inbox_read_queue
+            migrate_inbox_read_queue(db_path)
+            from migrate_add_marketplace_read_credential_identity import migrate as migrate_read_credential_identity
+            migrate_read_credential_identity(db_path)
+            from migrate_add_ozon_reference_reviews import migrate as migrate_ozon_reference_reviews
+            migrate_ozon_reference_reviews(db_path)
             from migrate_add_image_generation_lab import migrate as migrate_image_lab
             migrate_image_lab(db_path)
             from migrate_add_image_lab_reference_watermark import (
@@ -1332,6 +1368,10 @@ def main():
                 migrate as migrate_marketplace_media_publications,
             )
             migrate_marketplace_media_publications(db_path)
+            from migrate_add_marketplace_write_quarantine import (
+                migrate as migrate_marketplace_write_quarantine,
+            )
+            migrate_marketplace_write_quarantine(db_path)
             from migrate_add_bestseller_image_recommendations import (
                 migrate as migrate_bestseller_image_recommendations,
             )

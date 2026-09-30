@@ -1,44 +1,21 @@
 #!/bin/bash
-# Скрипт для восстановления базы данных в Docker volume
+# Stage a verified recovery in a new directory; never overwrite/restart production.
+set -euo pipefail
 
-set -e
-
-if [ -z "$1" ]; then
-  echo "❌ Использование: ./restore_database.sh <путь_к_файлу_бэкапа>"
-  echo ""
-  echo "Доступные бэкапы:"
-  ls -lh backups/*.db 2>/dev/null || echo "  (бэкапов не найдено)"
+if [ "$#" -lt 2 ]; then
+  echo 'Usage: bash scripts/restore_database.sh <manifest.json> <new-directory/seller_platform.db> [limits]' >&2
+  echo 'Paths are inside Docker. Existing directories are rejected. No production cutover is performed.' >&2
+  exit 2
+fi
+manifest_path=$1
+destination_path=$2
+shift 2
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+container_name=${SELLER_BACKUP_CONTAINER:-seller-platform}
+if [ "$(docker inspect --format '{{.State.Running}}' "$container_name")" != true ]; then
+  echo 'Restore refused: container is not running. Run the stdlib helper in an isolated recovery environment.' >&2
   exit 1
 fi
-
-BACKUP_FILE="$1"
-
-if [ ! -f "$BACKUP_FILE" ]; then
-  echo "❌ Файл не найден: $BACKUP_FILE"
-  exit 1
-fi
-
-echo "⚠️  ВНИМАНИЕ: Это перезапишет текущую базу данных!"
-echo "   Файл: $BACKUP_FILE"
-read -p "Продолжить? (yes/no): " confirm
-
-if [ "$confirm" != "yes" ]; then
-  echo "Отменено"
-  exit 0
-fi
-
-echo "🔄 Восстановление базы данных..."
-
-# Копируем бэкап в Docker volume
-docker run --rm \
-  -v super-octo-broccoli_seller_platform_data:/data \
-  -v "$(pwd)/$(dirname "$BACKUP_FILE"):/backup" \
-  alpine \
-  cp "/backup/$(basename "$BACKUP_FILE")" /data/seller_platform.db
-
-echo "✅ База данных восстановлена"
-echo "🔄 Перезапуск контейнера..."
-
-docker compose restart seller-platform
-
-echo "✅ Готово!"
+exec docker exec --interactive --user app "$container_name" python - \
+  --restore-manifest "$manifest_path" --destination "$destination_path" "$@" \
+  < "$script_dir/verified_sqlite_backup.py"

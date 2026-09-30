@@ -16,8 +16,10 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
+from flask_wtf.csrf import generate_csrf
 
 from models import db
+from services.ozon_write_quarantine import draft_hold, hold_document
 from services.marketplace_accounts import MarketplaceAccountService
 from services.marketplace_drafts import (
     MarketplaceDraftError,
@@ -111,6 +113,12 @@ def _feature_enabled() -> bool:
     return bool(current_app.config.get("MARKETPLACE_OZON_ENABLED", False))
 
 
+def _draft_detail_url(draft_id: int) -> str:
+    endpoint = ('marketplace_drafts.classic_detail' if request.args.get('view') == 'classic'
+                else 'marketplace_drafts.detail')
+    return url_for(endpoint, draft_id=draft_id)
+
+
 def _publication_enabled() -> bool:
     return bool(
         _feature_enabled()
@@ -180,6 +188,7 @@ def _list_filters() -> dict:
 
 
 @marketplace_drafts_bp.route("/", methods=["GET"])
+@marketplace_drafts_bp.route("/classic", methods=["GET"], endpoint="classic_index")
 @login_required
 def index():
     seller_id = _seller_id()
@@ -210,20 +219,50 @@ def index():
                 )
             )
         }
-        sources = MarketplaceDraftService.recent_sources(seller_id=seller_id)
+        from services.marketplace_source_search import search_sources
+        source_search = search_sources(seller_id=seller_id)
+        sources = source_search['items']
     except MarketplaceDraftError as exc:
         return _error_response(exc)
+    from services.marketplace_draft_editor import MarketplaceDraftEditor
     return render_template(
-        "marketplace_drafts.html",
+        'marketplace_drafts_classic.html' if request.endpoint == 'marketplace_drafts.classic_index'
+        else 'marketplace_drafts.html',
         pagination=pagination,
         drafts=pagination.items,
         accounts=accounts,
         sources=sources,
+        source_search=source_search,
         filters=filters,
         ozon_enabled=_feature_enabled(),
         publication_enabled=_publication_enabled(),
         upload_ready_account_ids=upload_ready_account_ids,
+        draft_cards=[MarketplaceDraftEditor.card(item) for item in pagination.items],
+        account_options=[{
+            'id': account.id, 'label': account.label,
+            'connection_status': account.connection_status,
+            'can_publish': account.id in upload_ready_account_ids,
+            'credential_expires_at': account.credential_expires_at.isoformat()
+            if account.credential_expires_at else None,
+        } for account in accounts],
     )
+
+
+@marketplace_drafts_bp.route("/sources", methods=["GET"])
+@login_required
+def source_search_api():
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({'error': 'Seller account required'}), 403
+    if not _feature_enabled():
+        return jsonify({'error': 'Черновики Ozon отключены', 'code': 'ozon_feature_disabled'}), 404
+    if set(request.args) - {'q'} or len(request.args.getlist('q')) > 1:
+        return jsonify({'error': 'Допустим только один параметр q'}), 400
+    from services.marketplace_source_search import search_sources
+    try:
+        return jsonify(search_sources(seller_id=seller_id, query=request.args.get('q', '')))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
 
 @marketplace_drafts_bp.route("/api", methods=["GET"])
@@ -239,9 +278,10 @@ def list_api():
         )
     except MarketplaceDraftError as exc:
         return _error_response(exc)
+    from services.marketplace_draft_editor import MarketplaceDraftEditor
     return jsonify({
         "success": True,
-        "items": [item.to_public_dict() for item in pagination.items],
+        "items": [MarketplaceDraftEditor.card(item) for item in pagination.items],
         "pagination": {
             "page": pagination.page,
             "per_page": pagination.per_page,
@@ -342,7 +382,7 @@ def create():
         )
     else:
         flash("Черновик Ozon создан", "success")
-    return redirect(url_for("marketplace_drafts.detail", draft_id=draft.id))
+    return redirect(_draft_detail_url(draft.id))
 
 
 @marketplace_drafts_bp.route("/bulk-prepare", methods=["POST"])
@@ -490,6 +530,7 @@ def bulk_publish():
 
 
 @marketplace_drafts_bp.route("/<int:draft_id>", methods=["GET"])
+@marketplace_drafts_bp.route("/classic/<int:draft_id>", methods=["GET"], endpoint="classic_detail")
 @login_required
 def detail(draft_id: int):
     seller_id = _seller_id()
@@ -500,6 +541,12 @@ def detail(draft_id: int):
             seller_id=seller_id,
             draft_id=draft_id,
         )
+        if not _wants_json() and request.endpoint != 'marketplace_drafts.classic_detail':
+            return render_template(
+                'marketplace_draft_detail.html', draft=draft,
+                ozon_enabled=_feature_enabled(), publication_enabled=_publication_enabled(),
+                publication_idempotency_key=secrets.token_urlsafe(24),
+            )
         type_query = request.args.get("type_query", "")
         type_options = (
             MarketplaceDraftService.search_product_types(
@@ -563,7 +610,7 @@ def detail(draft_id: int):
             ).all()
         }
     return render_template(
-        "marketplace_draft_detail.html",
+        "marketplace_draft_detail_classic.html",
         draft=draft,
         draft_data=draft.to_public_dict(detail=True),
         attribute_names=attribute_names,
@@ -576,7 +623,85 @@ def detail(draft_id: int):
         operations=operations,
         active_operation=active_operation,
         mapping_readiness=mapping_readiness,
+        write_quarantine=hold_document(draft_hold(draft)),
     )
+
+
+@marketplace_drafts_bp.route('/<int:draft_id>/editor', methods=['GET'])
+@login_required
+def editor_data(draft_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify(success=False, error='Seller account required'), 403
+    from services.marketplace_draft_editor import MarketplaceDraftEditor
+    try:
+        document = MarketplaceDraftEditor.document(seller_id=seller_id, draft_id=draft_id)
+    except MarketplaceDraftError as exc:
+        return jsonify(success=False, error=str(exc), code=exc.code), exc.status_code
+    response = jsonify(success=True, csrf=generate_csrf(), **document)
+    response.headers['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@marketplace_drafts_bp.route('/<int:draft_id>/dictionary/<attribute_id>', methods=['GET'])
+@login_required
+def editor_dictionary(draft_id: int, attribute_id: str):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify(success=False, error='Seller account required'), 403
+    from services.marketplace_draft_editor import MarketplaceDraftEditor
+    try:
+        if set(request.args) - {'q', 'product_type_id'} or any(
+            len(request.args.getlist(key)) != 1 for key in request.args
+        ):
+            raise MarketplaceDraftValidationError('Недопустимые параметры поиска')
+        document = MarketplaceDraftEditor.dictionary(
+            seller_id=seller_id, draft_id=draft_id, attribute_id=attribute_id,
+            product_type_id=_integer(request.args.get('product_type_id'), 'product_type_id'),
+            query=request.args.get('q', ''),
+        )
+    except MarketplaceDraftError as exc:
+        return jsonify(success=False, error=str(exc), code=exc.code), exc.status_code
+    return jsonify(success=True, **document)
+
+
+@marketplace_drafts_bp.route('/<int:draft_id>/category-impact', methods=['GET'])
+@login_required
+def category_impact(draft_id: int):
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify(success=False, error='Seller account required'), 403
+    try:
+        allowed = {'expected_version', 'target_product_type_id', 'clear', 'save_mapping', 'page'}
+        if set(request.args) - allowed or any(
+            len(request.args.getlist(key)) != 1 for key in request.args
+        ):
+            raise MarketplaceDraftValidationError('Недопустимые параметры проверки категории')
+        def positive_arg(name, *, default=None):
+            raw = request.args.get(name)
+            if raw is None and default is not None:
+                return default
+            if not isinstance(raw, str) or len(raw) > 19 or not raw.isascii() or not raw.isdigit():
+                raise MarketplaceDraftValidationError(f'{name} должен быть положительным целым числом')
+            return _integer(int(raw), name)
+        has_target = 'target_product_type_id' in request.args
+        has_clear = 'clear' in request.args
+        if has_target == has_clear or (has_clear and request.args.get('clear') != 'true'):
+            raise MarketplaceDraftValidationError('Укажите один целевой тип либо clear=true')
+        raw_mapping = request.args.get('save_mapping', 'false')
+        if raw_mapping not in ('true', 'false') or (has_clear and raw_mapping == 'true'):
+            raise MarketplaceDraftValidationError('save_mapping должен быть true или false')
+        document = MarketplaceDraftService.category_impact(
+            seller_id=seller_id, draft_id=draft_id,
+            expected_version=positive_arg('expected_version'),
+            target_product_type_id=positive_arg('target_product_type_id') if has_target else None,
+            save_mapping=raw_mapping == 'true',
+            actor_user_id=getattr(current_user, 'id', None),
+            page=positive_arg('page', default=1),
+        )
+    except MarketplaceDraftError as exc:
+        return jsonify(success=False, error=str(exc), code=exc.code), exc.status_code
+    return jsonify(success=True, **document)
 
 
 def _form_patch(data: Dict[str, Any]) -> dict:
@@ -626,9 +751,9 @@ def update(draft_id: int):
     try:
         data = _payload()
         if request.is_json:
-            if set(data) - {"expected_version", "patch"}:
+            if set(data) - {"expected_version", "patch", "category_review_token"}:
                 raise MarketplaceDraftValidationError(
-                    "JSON update принимает только expected_version и patch"
+                    "JSON update принимает только expected_version, patch и category_review_token"
                 )
             patch = data.get("patch")
         else:
@@ -642,6 +767,8 @@ def update(draft_id: int):
             ),
             patch=patch,
             corrected_by_user_id=getattr(current_user, "id", None),
+            category_review_token=data.get("category_review_token"),
+            category_review_required=True,
         )
     except Exception as exc:
         return _write_failure(exc, seller_id=seller_id, action="update")
@@ -662,7 +789,7 @@ def update(draft_id: int):
         )
     else:
         flash("Черновик сохранён; выполните повторную валидацию", "success")
-    return redirect(url_for("marketplace_drafts.detail", draft_id=draft.id))
+    return redirect(_draft_detail_url(draft.id))
 
 
 def _expected_version_payload() -> int:
@@ -697,7 +824,7 @@ def validate(draft_id: int):
         flash("Черновик полностью прошёл deterministic validation", "success")
     else:
         flash("Черновик заблокирован: исправьте структурированные ошибки", "warning")
-    return redirect(url_for("marketplace_drafts.detail", draft_id=draft.id))
+    return redirect(_draft_detail_url(draft.id))
 
 
 @marketplace_drafts_bp.route("/<int:draft_id>/refresh-facts", methods=["POST"])
@@ -725,7 +852,7 @@ def refresh_facts(draft_id: int):
         "Fact snapshot обновлён; пользовательские поля не перезаписаны",
         "success",
     )
-    return redirect(url_for("marketplace_drafts.detail", draft_id=draft.id))
+    return redirect(_draft_detail_url(draft.id))
 
 
 def register_marketplace_draft_routes(app) -> None:

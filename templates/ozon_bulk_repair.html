@@ -1,527 +1,161 @@
-{% extends "base.html" %}
-
-{% block title %}Массовое исправление Ozon — Seller Hub{% endblock %}
-
+{% extends 'base.html' %}
+{% from 'macros/icons.html' import icon %}
+{% block title %}Исправление карточек Ozon — Seller Hub{% endblock %}
 {% block extra_head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-bulk-repair-vue.css') }}">
 {% endblock %}
-
 {% block content %}
-<div class="sh-page-header">
-    <div class="sh-page-header-content">
-        <div>
-            <h1 class="sh-page-title">Массовое исправление карточек Ozon</h1>
-            <p class="sh-page-subtitle">
-                {{ editor.account_label or ('Кабинет #' ~ editor.account_id) }}
-                · {{ editor.total }} карточек · всё редактируется прямо в Seller Hub
-            </p>
-        </div>
-        <div class="sh-page-actions">
-            <a class="sh-btn sh-btn--white-outline sh-btn--md"
-               href="{{ url_for('ozon_bulk_uploads.detail', job_uid=editor.job_uid) }}">
-                Вернуться к итогу
-            </a>
-        </div>
-    </div>
-</div>
-
-<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6"
-     data-ozon-repair-root
-     data-type-search-url="{{ url_for('ozon_bulk_uploads.repair_type_search', job_uid=editor.job_uid) }}">
-    <div class="sh-alert sh-alert--info mb-5" role="status">
-        <div class="sh-alert-content">
-            <strong>Это локальный редактор.</strong>
-            «Сохранить и проверить» обновляет только ваши черновики и сразу
-            пересчитывает готовность каждой строки. В Ozon ничего не отправляется.
-            Готовые карточки затем запускаются отдельной подтверждённой кнопкой
-            на экране итога.
-        </div>
-    </div>
-
-    <form method="post"
-          action="{{ url_for('ozon_bulk_uploads.apply_repair_editor', job_uid=editor.job_uid) }}"
-          data-repair-form>
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-        <section class="sh-card p-4 mb-5" aria-labelledby="bulk-fill-heading">
-            <div class="flex flex-col gap-3 lg:flex-row lg:items-end">
-                <div class="flex-1">
-                    <h2 id="bulk-fill-heading" class="font-semibold" style="color:var(--text)">
-                        Заполнить выбранные карточки одним значением
-                    </h2>
-                    <p class="mt-1 text-xs" style="color:var(--text-muted)">
-                        Сначала отметьте строки. Значение попадёт только в те
-                        карточки, где такое поле доступно; каждая строка всё равно
-                        пройдёт свою точную проверку схемы Ozon. Для справочника
-                        можно выбрать точное значение в одной строке, оставить
-                        поле «Значение» пустым и скопировать его во все выбранные.
-                    </p>
-                </div>
-                <label class="min-w-0 lg:w-72">
-                    <span class="ozr-label">Поле</span>
-                    <select class="ozr-input" data-bulk-field>
-                        {% for field in editor.bulk_fields %}
-                        <option value="{{ field.key }}">{{ field.label }}</option>
-                        {% endfor %}
-                    </select>
-                </label>
-                <label class="min-w-0 lg:w-72">
-                    <span class="ozr-label">Значение</span>
-                    <input class="ozr-input" type="text" data-bulk-value
-                           autocomplete="off" maxlength="10000"
-                           placeholder="Или оставить пустым и взять из строки">
-                </label>
-                <button class="sh-btn sh-btn--secondary sh-btn--md"
-                        type="button" data-bulk-apply>
-                    Заполнить выбранные
-                </button>
-            </div>
-            <div class="mt-3 flex flex-wrap items-center gap-3 text-xs"
-                 style="color:var(--text-muted)">
-                <button class="sh-btn sh-btn--ghost sh-btn--sm"
-                        type="button" data-select-all>Выбрать все</button>
-                <button class="sh-btn sh-btn--ghost sh-btn--sm"
-                        type="button" data-select-none>Снять выбор</button>
-                <span data-selection-count aria-live="polite"></span>
-                <span data-bulk-message aria-live="polite"></span>
-            </div>
-        </section>
-
-        <div class="space-y-5">
-            {% for group in editor.groups %}
-            <section class="sh-card overflow-visible"
-                     data-repair-group="{{ group.id }}">
-                <div class="ozr-group-head">
-                    <div class="min-w-0">
-                        <div class="text-xs font-medium uppercase tracking-wide"
-                             style="color:var(--text-muted)">Исходная категория</div>
-                        <h2 class="mt-1 font-semibold" style="color:var(--text)">
-                            {{ group.source_category }}
-                        </h2>
-                        <p class="mt-1 text-xs" style="color:var(--text-secondary)">
-                            {{ group.rows | length }} карточек.
-                            Выбранный здесь тип применяется ко всем отмеченным
-                            строкам этой точной категории.
-                        </p>
-                    </div>
-                    <button class="sh-btn sh-btn--ghost sh-btn--sm"
-                            type="button" data-group-toggle>
-                        Выбрать группу
-                    </button>
-                </div>
-
-                <div class="ozr-type-panel" data-type-picker>
-                    <div class="min-w-0 flex-1">
-                        <div class="ozr-label">Тип товара Ozon</div>
-                        <div class="mt-1 text-sm" data-selected-type
-                             style="color:var(--text)">
-                            {% if group.mixed_product_types %}
-                            В группе выбраны разные типы — укажите один точный тип
-                            {% elif group.product_type %}
-                            {{ group.product_type.name }} · {{ group.product_type.category_path }}
-                            {% else %}
-                            Тип ещё не выбран
-                            {% endif %}
-                        </div>
-                        {% if group.product_type and not group.product_type.schema_fresh %}
-                        <p class="mt-1 text-xs" style="color:var(--warn)">
-                            Официальная схема загружается автоматически.
-                        </p>
-                        {% endif %}
-                    </div>
-                    <div class="ozr-search-wrap">
-                        <label class="ozr-label" for="type-search-{{ group.id }}">
-                            Найти другой тип
-                        </label>
-                        <input id="type-search-{{ group.id }}"
-                               class="ozr-input"
-                               type="search"
-                               data-type-search
-                               autocomplete="off"
-                               maxlength="200"
-                               placeholder="Название типа или категории"
-                               role="combobox"
-                               aria-autocomplete="list"
-                               aria-expanded="false">
-                        <div class="ozr-results" data-type-results hidden></div>
-                    </div>
-                    <label class="ozr-check">
-                        <input type="checkbox" data-group-save-mapping>
-                        <span>Запомнить выбор для этой точной категории</span>
-                    </label>
-                </div>
-
-                <div>
-                    {% for row in group.rows %}
-                    <article class="ozr-row" data-repair-row="{{ row.draft_id }}">
-                        <input type="hidden"
-                               name="row_{{ row.draft_id }}_draft_version"
-                               value="{{ row.draft_version }}">
-                        <input type="hidden"
-                               name="row_{{ row.draft_id }}_imported_product_id"
-                               value="{{ row.imported_product_id }}">
-                        <input type="hidden"
-                               name="row_{{ row.draft_id }}_product_type_id"
-                               value="{{ row.product_type_id or '' }}"
-                               data-product-type-id>
-                        <input type="hidden"
-                               name="row_{{ row.draft_id }}_save_mapping"
-                               value="0"
-                               data-save-mapping>
-
-                        <div class="ozr-row-summary">
-                            <label class="ozr-check ozr-row-select">
-                                <input type="checkbox"
-                                       name="selected_draft_id"
-                                       value="{{ row.draft_id }}"
-                                       data-row-select
-                                       checked>
-                                <span class="sr-only">Выбрать карточку</span>
-                            </label>
-                            <div class="min-w-0 flex-1">
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <span class="sh-badge sh-badge--sm
-                                        {% if row.status == 'ready_to_retry' %}sh-badge--green
-                                        {% elif row.status == 'excluded' %}sh-badge--gray
-                                        {% else %}sh-badge--yellow{% endif %}">
-                                        {% if row.status == 'ready_to_retry' %}Готова к синхронизации
-                                        {% elif row.status == 'excluded' %}Исключена
-                                        {% else %}Нужно исправить{% endif %}
-                                    </span>
-                                    {% if row.offer_id %}
-                                    <span class="text-xs break-all"
-                                          style="color:var(--text-muted)">
-                                        {{ row.offer_id }}
-                                    </span>
-                                    {% endif %}
-                                </div>
-                                <h3 class="mt-1 font-medium" style="color:var(--text)">
-                                    {{ row.title }}
-                                </h3>
-                                {% if row.message %}
-                                <p class="mt-1 text-xs" style="color:var(--text-secondary)">
-                                    {{ row.message }}
-                                </p>
-                                {% endif %}
-                            </div>
-                            <label class="w-full sm:w-44">
-                                <span class="ozr-label">Действие</span>
-                                <select class="ozr-input"
-                                        name="row_{{ row.draft_id }}_action">
-                                    <option value="ИСПРАВИТЬ"
-                                            {{ 'selected' if row.action == 'ИСПРАВИТЬ' else '' }}>
-                                        Исправить
-                                    </option>
-                                    <option value="ИСКЛЮЧИТЬ"
-                                            {{ 'selected' if row.action == 'ИСКЛЮЧИТЬ' else '' }}>
-                                        Исключить из повтора
-                                    </option>
-                                </select>
-                            </label>
-                        </div>
-
-                        {% if row.repair_error %}
-                        <div class="sh-alert sh-alert--danger mx-4 mb-3" role="alert">
-                            <div class="sh-alert-content">
-                                <strong>Не сохранено:</strong> {{ row.repair_error }}
-                            </div>
-                        </div>
-                        {% endif %}
-
-                        <details class="ozr-fields"
-                                 {% if editor.total <= 10 or row.repair_error %}open{% endif %}>
-                            <summary>
-                                Поля карточки и точные причины
-                                <span>({{ row.validation_error_count }})</span>
-                            </summary>
-
-                            {% if row.validation_errors %}
-                            <ul class="ozr-errors">
-                                {% for error in row.validation_errors %}
-                                <li>
-                                    <strong>{{ error.field }}:</strong>
-                                    {{ error.message }}
-                                </li>
-                                {% endfor %}
-                            </ul>
-                            {% if row.validation_errors_truncated %}
-                            <p class="mt-2 text-xs" style="color:var(--text-muted)">
-                                Показаны первые {{ row.validation_errors | length }}
-                                из {{ row.validation_error_count }} причин.
-                                Полный набор учтён при сохранении и проверке.
-                            </p>
-                            {% endif %}
-                            {% endif %}
-
-                            {% if row.cleanup_candidates %}
-                            <div class="ozr-cleanup">
-                                <label class="ozr-check items-start">
-                                    <input type="checkbox"
-                                           name="row_{{ row.draft_id }}_schema_cleanup"
-                                           value="1"
-                                           data-field-key="schema_cleanup"
-                                           {{ 'checked' if row.schema_cleanup else '' }}>
-                                    <span>
-                                        <strong>
-                                            Убрать {{ row.cleanup_candidates | length }}
-                                            несовместимых атрибутов из полного
-                                            обновления
-                                        </strong>
-                                        <span class="ozr-help">
-                                            Без этой галочки live-атрибуты не
-                                            удаляются. Перед отправкой платформа
-                                            ещё раз сверит точную карточку Ozon;
-                                            при любом изменении запись остановится.
-                                        </span>
-                                    </span>
-                                </label>
-                                <ul class="ozr-cleanup-list">
-                                    {% for candidate in row.cleanup_candidates[:10] %}
-                                    <li>
-                                        <strong>{{ candidate.name }}</strong>
-                                        · {{ candidate.attribute_id }}
-                                        {% if candidate.complex_id != '0' %}
-                                        / complex {{ candidate.complex_id }}
-                                        {% endif %}
-                                        {% if candidate.issues %}
-                                        — {{ candidate.issues[0] }}
-                                        {% endif %}
-                                    </li>
-                                    {% endfor %}
-                                </ul>
-                                {% if row.cleanup_candidates | length > 10 %}
-                                <span class="ozr-help">
-                                    И ещё {{ row.cleanup_candidates | length - 10 }}.
-                                </span>
-                                {% endif %}
-                            </div>
-                            {% endif %}
-
-                            <div class="ozr-field-grid">
-                                <label>
-                                    <span class="ozr-label">Цена, ₽</span>
-                                    <input class="ozr-input"
-                                           type="text"
-                                           inputmode="decimal"
-                                           maxlength="80"
-                                           name="row_{{ row.draft_id }}_price_rub"
-                                           value="{{ row.price_rub }}"
-                                           data-field-key="price_rub">
-                                </label>
-                                <label>
-                                    <span class="ozr-label">Ширина упаковки, мм</span>
-                                    <input class="ozr-input"
-                                           type="text"
-                                           inputmode="numeric"
-                                           maxlength="80"
-                                           name="row_{{ row.draft_id }}_package_width_mm"
-                                           value="{{ row.package_width_mm }}"
-                                           data-field-key="package_width_mm">
-                                </label>
-                                <label>
-                                    <span class="ozr-label">Высота упаковки, мм</span>
-                                    <input class="ozr-input"
-                                           type="text"
-                                           inputmode="numeric"
-                                           maxlength="80"
-                                           name="row_{{ row.draft_id }}_package_height_mm"
-                                           value="{{ row.package_height_mm }}"
-                                           data-field-key="package_height_mm">
-                                </label>
-                                <label>
-                                    <span class="ozr-label">Длина упаковки, мм</span>
-                                    <input class="ozr-input"
-                                           type="text"
-                                           inputmode="numeric"
-                                           maxlength="80"
-                                           name="row_{{ row.draft_id }}_package_depth_mm"
-                                           value="{{ row.package_depth_mm }}"
-                                           data-field-key="package_depth_mm">
-                                </label>
-                                <label>
-                                    <span class="ozr-label">Вес с упаковкой, г</span>
-                                    <input class="ozr-input"
-                                           type="text"
-                                           inputmode="numeric"
-                                           maxlength="80"
-                                           name="row_{{ row.draft_id }}_package_weight_g"
-                                           value="{{ row.package_weight_g }}"
-                                           data-field-key="package_weight_g">
-                                </label>
-                                <label class="ozr-wide">
-                                    <span class="ozr-label">Описание</span>
-                                    <textarea class="ozr-input"
-                                              rows="3"
-                                              maxlength="100000"
-                                              name="row_{{ row.draft_id }}_description"
-                                              data-field-key="description">{{ row.description }}</textarea>
-                                </label>
-
-                                {% for attribute in row.attributes %}
-                                <div class="{{ 'ozr-wide' if attribute.is_collection else '' }}"
-                                     data-attribute-field>
-                                    <label>
-                                        <span class="ozr-label">
-                                            {{ attribute.name }}
-                                            <span>· Ozon {{ attribute.external_id }}</span>
-                                        </span>
-                                        {% if attribute.editable %}
-                                            {% if attribute.replaces_invalid %}
-                                            <span class="ozr-help" style="color:var(--warn)">
-                                                Старое значение несовместимо с
-                                                текущей схемой. Выберите новое
-                                                одновременно с очисткой.
-                                            </span>
-                                            {% endif %}
-                                            {% if attribute.is_collection %}
-                                            <textarea class="ozr-input"
-                                                      rows="3"
-                                                      name="row_{{ row.draft_id }}_attribute_{{ attribute.external_id }}"
-                                                      data-field-key="attribute:{{ attribute.external_id }}"
-                                                      maxlength="10000"
-                                                      placeholder="Каждое значение с новой строки">{{ attribute.value }}</textarea>
-                                            {% elif attribute.data_type | lower == 'boolean' and not attribute.dictionary %}
-                                            <select class="ozr-input"
-                                                    name="row_{{ row.draft_id }}_attribute_{{ attribute.external_id }}"
-                                                    data-field-key="attribute:{{ attribute.external_id }}">
-                                                <option value="">Выберите</option>
-                                                <option value="true"
-                                                        {{ 'selected' if attribute.value == 'true' else '' }}>
-                                                    Да
-                                                </option>
-                                                <option value="false"
-                                                        {{ 'selected' if attribute.value == 'false' else '' }}>
-                                                    Нет
-                                                </option>
-                                            </select>
-                                            {% else %}
-                                            <div class="ozr-search-wrap">
-                                                <input class="ozr-input"
-                                                       type="text"
-                                                       name="row_{{ row.draft_id }}_attribute_{{ attribute.external_id }}"
-                                                       value="{{ attribute.value }}"
-                                                       data-field-key="attribute:{{ attribute.external_id }}"
-                                                       {% if attribute.dictionary %}
-                                                       data-dictionary-input
-                                                       data-dictionary-url="{{ url_for('ozon_bulk_uploads.repair_dictionary_search', job_uid=editor.job_uid, draft_id=row.draft_id, external_attribute_id=attribute.external_id) }}"
-                                                       role="combobox"
-                                                       aria-autocomplete="list"
-                                                       aria-expanded="false"
-                                                       autocomplete="off"
-                                                       {{ 'disabled' if not attribute.dictionary_fresh else '' }}
-                                                       {% endif %}
-                                                       maxlength="10000">
-                                                {% if attribute.dictionary %}
-                                                <input type="hidden"
-                                                       name="row_{{ row.draft_id }}_attribute_value_id_{{ attribute.external_id }}"
-                                                       value="{{ attribute.dictionary_value_id }}"
-                                                       data-dictionary-value-id>
-                                                <div class="ozr-results"
-                                                     data-dictionary-results hidden></div>
-                                                {% endif %}
-                                            </div>
-                                            {% endif %}
-                                            {% if attribute.dictionary and not attribute.dictionary_fresh %}
-                                            <span class="ozr-help" style="color:var(--warn)">
-                                                Справочник ещё загружается.
-                                            </span>
-                                            {% elif attribute.dictionary %}
-                                            <span class="ozr-help">
-                                                Начните вводить и выберите точное официальное значение.
-                                            </span>
-                                            {% endif %}
-                                            {% if attribute.suggestions %}
-                                            <div class="ozr-suggestions">
-                                                <strong>
-                                                    Рекомендации по категории и фактам товара
-                                                </strong>
-                                                <span class="ozr-help">
-                                                    Ничего не выбрано автоматически.
-                                                    Нажмите вариант только после проверки:
-                                                    категория сужает поиск, но окончательный
-                                                    код зависит от функции, конструкции и
-                                                    точного материала.
-                                                </span>
-                                                <div class="ozr-suggestion-list">
-                                                    {% for suggestion in attribute.suggestions %}
-                                                    <button type="button"
-                                                            class="ozr-suggestion"
-                                                            data-attribute-suggestion
-                                                            data-suggestion-value="{{ suggestion.value }}"
-                                                            data-suggestion-id="{{ suggestion.dictionary_value_id }}"
-                                                            aria-pressed="false">
-                                                        <span>
-                                                            {{ suggestion.code }}
-                                                            · {{ suggestion.confidence_label }}
-                                                        </span>
-                                                        <small>{{ suggestion.reason }}</small>
-                                                    </button>
-                                                    {% endfor %}
-                                                </div>
-                                            </div>
-                                            {% endif %}
-                                        {% else %}
-                                        <span class="ozr-help" style="color:var(--warn)">
-                                            Это составное поле. Откройте индивидуальный
-                                            черновик для его заполнения.
-                                        </span>
-                                        {% endif %}
-                                    </label>
-                                </div>
-                                {% endfor %}
-                            </div>
-
-                            <div class="mt-4">
-                                <a class="sh-btn sh-btn--ghost sh-btn--sm"
-                                   href="{{ url_for('marketplace_drafts.detail', draft_id=row.draft_id) }}">
-                                    Открыть индивидуальный черновик
-                                </a>
-                            </div>
-                        </details>
-                    </article>
-                    {% endfor %}
-                </div>
-            </section>
-            {% endfor %}
-        </div>
-
-        <div class="ozr-submit-bar">
-            <div>
-                <strong data-submit-selection style="color:var(--text)"></strong>
-                <div class="text-xs" style="color:var(--text-muted)">
-                    Сначала локальная проверка; отправка в Ozon здесь невозможна.
-                </div>
-            </div>
-            <div class="ozr-submit-actions">
-                <a class="sh-btn sh-btn--secondary sh-btn--md"
-                   href="{{ url_for('ozon_bulk_uploads.detail', job_uid=editor.job_uid) }}">
-                    К итогу запуска
-                </a>
-                <button class="sh-btn sh-btn--primary sh-btn--md"
-                        type="submit"
-                        data-repair-submit>
-                    Сохранить и проверить
-                </button>
-            </div>
-        </div>
+<script id="orb-bootstrap" type="application/json">{{ {
+    'editor': editor, 'enabled': ozon_enabled, 'csrf': csrf_token(),
+    'urls': {
+        'read': url_for('ozon_bulk_uploads.repair_editor', job_uid=editor.job_uid),
+        'apply': url_for('ozon_bulk_uploads.apply_repair_editor', job_uid=editor.job_uid),
+        'types': url_for('ozon_bulk_uploads.repair_type_search', job_uid=editor.job_uid),
+        'dictionaries': url_for('ozon_bulk_uploads.repair_editor', job_uid=editor.job_uid) + '/dictionaries/',
+        'drafts': url_for('marketplace_drafts.detail', draft_id=123456789).replace('123456789',''),
+        'result': url_for('ozon_bulk_uploads.detail', job_uid=editor.job_uid)
+    }
+}|tojson }}</script>
+<p id="orb-fallback" class="orb-fallback" role="status">Загружаем редактор… Если он не открылся, <a href="{{ url_for('ozon_bulk_uploads.repair_editor_classic', job_uid=editor.job_uid) }}">перейдите к простой форме</a>.</p>
+<div id="ozon-bulk-repair" class="orb" v-cloak x-ignore>
+    <header class="orb-header">
+        <a class="orb-back" href="{{ url_for('ozon_bulk_uploads.detail', job_uid=editor.job_uid) }}">{{ icon('arrow-left', size=16) }} К результатам загрузки</a>
+        <h1>Исправление карточек</h1>
+        <p>{{ editor.account_label or 'Магазин Ozon' }}. Подготовьте нужные значения и сохраните черновики.</p>
+        <button type="button" class="orb-link" :disabled="busy || sessionExpired" @click="reload({manual:true})">Прочитать текущее состояние</button>
+    </header>
+{% raw %}
+    <section v-if="!enabled" class="orb-banner" role="status">Редактирование временно выключено. Сохранённые карточки доступны для просмотра.</section>
+    <section v-if="sessionExpired" class="orb-banner" role="alert">Сессия закончилась. Введённые данные остаются здесь. <a :href="loginUrl" target="_blank" rel="noopener">Войти снова в новой вкладке</a><button type="button" class="orb-link" @click="sessionExpired=false; reload({manual:true})">Проверить вход</button></section>
+    <section v-if="uncertain" class="orb-banner orb-banner--warning" role="status">
+        <strong>Сначала нужно сверить сохранение</strong>
+        <p>Часть изменений могла сохраниться. Повтор заблокирован до чтения текущего состояния; данные не отправляются автоматически.</p>
+        <button type="button" class="sh-btn sh-btn--secondary" :disabled="busy || sessionExpired" @click="reload({manual:true})">{{ busy ? 'Проверяем…' : 'Сверить сохранение' }}</button>
+    </section>
+    <p v-if="error" ref="error" class="orb-banner orb-banner--warning" role="alert" tabindex="-1">{{ error }} <button v-if="!uncertain && !busy && !sessionExpired" type="button" class="orb-link" @click="reload({manual:true})">Прочитать текущее состояние</button></p>
+    <p v-if="notice" class="orb-notice" role="status">{{ notice }}</p>
+    <section v-if="report" class="orb-receipt" aria-label="Результат сохранения">
+        <strong>Проверено карточек: {{ report.total }}</strong>
+        <span>Готовы к повторной проверке отправки: {{ report.ready_to_retry }}</span><span>Нужны данные: {{ report.needs_input }}</span>
+        <span>Исключены из повтора: {{ report.excluded }}</span><span v-if="report.failed">Не удалось сохранить: {{ report.failed }}</span>
+        <p>Сохранение изменяет черновики. Отправка в Ozon подтверждается отдельно на странице результатов.</p>
+        <a :href="urls.result">Открыть результаты загрузки</a>
+    </section>
+    <form class="orb-filters" @submit.prevent="setFilters" role="search" aria-label="Поиск карточек для исправления">
+        <label class="orb-search"><span>Поиск по названию или артикулу</span><input class="sh-input" type="search" name="q" maxlength="200" autocomplete="off" v-model="query" @input="setFilters" placeholder="Название или артикул…"></label>
+        <label><span>Исходная категория</span><select class="sh-input" name="group" v-model="group" @change="setFilters"><option value="">Все категории</option><option v-for="item in groups" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+        <label><span>Состояние</span><select class="sh-input" name="state" v-model="state" @change="setFilters"><option value="">Все карточки</option><option value="needs_input">Нужны данные</option><option value="ready_to_retry">Проверены локально</option><option value="excluded">Исключены</option><option value="changed">Есть мои изменения</option><option value="error">Ошибки и конфликты</option></select></label>
     </form>
-
-    <details class="mt-5 text-sm">
-        <summary class="cursor-pointer font-medium" style="color:var(--text-secondary)">
-            Дополнительный экспорт в XLSX
-        </summary>
-        <p class="mt-2 text-xs" style="color:var(--text-muted)">
-            Таблица нужна только для офлайн-работы. Основной массовый сценарий
-            полностью доступен выше на платформе.
-        </p>
-        <a class="sh-btn sh-btn--secondary sh-btn--sm mt-3"
-           href="{{ url_for('ozon_bulk_uploads.export_repair', job_uid=editor.job_uid) }}">
-            Скачать XLSX
-        </a>
-    </details>
+    <div class="orb-list-heading"><label><input type="checkbox" :checked="pageSelected" :disabled="busy || !visible.length" @change="selectPage"> Выбрать страницу</label><button type="button" class="orb-link" :disabled="busy || !filtered.length" @click="selectFiltered">Выбрать все по фильтру ({{ filtered.length }})</button></div>
+    <section class="orb-list" aria-label="Карточки для исправления" :aria-busy="busy">
+        <article v-for="row in visible" :key="row.draft_id" class="orb-row" :class="{'is-selected':row.selected}" :data-draft="row.draft_id">
+            <div class="orb-row-head">
+                <label class="orb-select"><input type="checkbox" :checked="row.selected" :disabled="busy || row.unavailable" @change="selectRow(row)"><span class="sr-only">Выбрать {{ row.title }}</span></label>
+                <div class="orb-photo"><ozon-photo v-if="row.photo_url" :src="row.photo_url" :source-id="row.imported_product_id" :alt="row.title" :compact="true" :retryable-compact="true"></ozon-photo><span v-else class="orb-photo-empty" aria-label="Нет фотографии">Нет фото</span></div>
+                <div class="orb-product"><h2>{{ row.title || 'Карточка без названия' }}</h2><p translate="no">{{ row.offer_id }}</p><span class="orb-state" :class="{'orb-state--attention':row.server || row.error || row.repair_error}">{{ status(row) }}</span><p v-if="row.message" class="orb-reason">{{ row.message }}</p></div>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :aria-expanded="row.expanded" :aria-controls="'orb-fields-'+row.draft_id" @click="row.expanded=!row.expanded">{{ row.expanded ? 'Свернуть' : 'Изменить' }}</button>
+            </div>
+            <p v-if="row.error || row.repair_error" class="orb-row-error" role="alert">{{ row.error || row.repair_error }}</p>
+            <div v-if="row.server" class="orb-row-conflict"><p>Сохранённая версия изменилась. Ваш ввод сохранён отдельно.</p><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="busy" @click="openConflict(row)">Сравнить значения</button></div>
+            <div v-if="row.expanded" :id="'orb-fields-'+row.draft_id" class="orb-editor">
+                <fieldset :disabled="locked || !!row.server || row.unavailable">
+                    <legend class="sr-only">Поля {{ row.title }}</legend>
+                    <div class="orb-editor-heading"><div><span class="orb-label">Тип товара Ozon</span><strong>{{ row.product_type_name || 'Ещё не выбран' }}</strong></div><button type="button" class="orb-link" @click="openType([row])">Выбрать тип</button></div>
+                    <p v-if="changedType(row)" class="orb-inline-warning">Тип изменён только в форме. Сохраните его, затем заполните требования новой категории. Прежние характеристики будут заменены данными новой схемы.</p>
+                    <label class="orb-check"><input type="checkbox" v-model="row.save_mapping" @change="noteChange(row)">Запомнить этот тип для исходной категории «{{ row.group_name }}»</label>
+                    <label class="orb-action"><span class="orb-label">Действие с карточкой</span><select class="sh-input" v-model="row.action" @change="noteChange(row)"><option value="ИСПРАВИТЬ">Исправить черновик</option><option value="ИСКЛЮЧИТЬ">Исключить из повтора этой загрузки</option></select></label>
+                    <p v-if="row.action==='ИСКЛЮЧИТЬ'" class="orb-help">Товар и черновик сохранятся. Остальные правки этой строки не будут записаны при исключении.</p>
+                    <template v-else>
+                        <div class="orb-fixed-grid">
+                            <label><span class="orb-label">Цена продавца, ₽</span><input class="sh-input" type="text" inputmode="decimal" :name="'price-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.price_rub" @input="noteChange(row)"></label>
+                            <label><span class="orb-label">Ширина упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'width-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_width_mm" @input="noteChange(row)"></label>
+                            <label><span class="orb-label">Высота упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'height-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_height_mm" @input="noteChange(row)"></label>
+                            <label><span class="orb-label">Длина упаковки, мм</span><input class="sh-input" type="text" inputmode="decimal" :name="'depth-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_depth_mm" @input="noteChange(row)"></label>
+                            <label><span class="orb-label">Вес с упаковкой, г</span><input class="sh-input" type="text" inputmode="decimal" :name="'weight-'+row.draft_id" maxlength="80" autocomplete="off" v-model="row.package_weight_g" @input="noteChange(row)"></label>
+                        </div>
+                        <p class="orb-help">Габариты и вес указывайте полным комплектом. Пустое поле не удаляет уже сохранённое значение.</p>
+                        <label><span class="orb-label">Описание</span><textarea class="sh-input" :name="'description-'+row.draft_id" maxlength="100000" rows="4" v-model="row.description" @input="noteChange(row)"></textarea></label>
+                        <section v-if="row.validation_errors.length" class="orb-validation" aria-label="Что нужно исправить"><h3>Требует внимания</h3><ul><li v-for="(issue,index) in row.validation_errors" :key="index">{{ issue.message }}</li></ul><p v-if="row.validation_errors_truncated">Остальные причины доступны в индивидуальном редакторе.</p></section>
+                        <template v-if="!changedType(row)">
+                            <section v-if="row.cleanup_candidates.length" class="orb-cleanup">
+                                <label class="orb-check"><input type="checkbox" v-model="row.schema_cleanup"><span>Убрать {{ row.cleanup_candidates.length }} несовместимых характеристик при полном обновлении</span></label>
+                                <ul><li v-for="(item,index) in row.cleanup_candidates" :key="index">{{ item.name }}<small v-if="item.issues?.length"> — {{ item.issues[0] }}</small></li></ul>
+                                <p class="orb-help">Сохранение готовит удаление. Перед отдельной отправкой ещё раз проверяется текущее состояние карточки Ozon.</p>
+                            </section>
+                            <p v-if="row.dictionaryCopied" class="orb-help">Скопированное значение справочника будет заново проверено именно для этой категории при сохранении.</p>
+                            <div v-for="field in row.attributes" :key="field.external_id" class="orb-attribute">
+                                <ozon-field v-if="field.editable" :definition="definition(field)" :values="field.values" :locked="locked || !!row.server" @change="changeField(row,field,$event)" @remove="changeField(row,field,[])" @dictionary="openDictionary(row,field)"></ozon-field>
+                                <p v-else class="orb-help">{{ field.name }} — составное поле. Заполните его в индивидуальном редакторе.</p>
+                                <p v-if="field.replaces_invalid" class="orb-help">Несовместимое значение нужно заменить одновременно с подтверждённой очисткой.</p>
+                                <details v-if="field.suggestions?.length" class="orb-suggestions"><summary>Варианты по исходным сведениям</summary><p class="orb-help">Это предложения для проверки. ТН ВЭД и маркировка не выбираются автоматически; точную классификацию подтверждает продавец.</p><button v-for="item in field.suggestions" :key="item.dictionary_value_id" type="button" class="orb-suggestion" @click="suggest(row,field,item)"><strong>{{ item.code }}</strong><span>{{ item.confidence_label }}. {{ item.reason }}</span></button></details>
+                            </div>
+                        </template>
+                    </template>
+                </fieldset>
+                <footer class="orb-editor-footer"><a :href="urls.drafts+row.draft_id" target="_blank" rel="noopener">Все поля в индивидуальном редакторе</a><button v-if="!row.selected" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="busy" @click="selectRow(row)">Выбрать для сохранения</button></footer>
+            </div>
+        </article>
+        <div v-if="!visible.length" class="orb-empty"><h2>Нет карточек по этим условиям</h2><p>Измените поиск или состояние. Ваши правки других строк остаются в форме.</p><button type="button" class="sh-btn sh-btn--secondary" @click="query='';group='';state='';setFilters()">Сбросить фильтры</button></div>
+    </section>
+    <nav v-if="pages>1" class="orb-pagination" aria-label="Страницы исправления"><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="goPage(page-1)">Назад</button><span>{{ page }} из {{ pages }}</span><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="goPage(page+1)">Далее</button></nav>
+    <footer v-if="selected.length" class="orb-toolbar"><div><strong>Выбрано {{ selected.length }}</strong><button type="button" class="orb-link" :disabled="busy" @click="clearSelection">Снять выбор</button></div><div class="orb-toolbar-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openType(selected)">Тип товара</button><button type="button" class="sh-btn sh-btn--secondary" :disabled="locked" @click="openBulk">Заполнить поле</button><button type="button" class="sh-btn sh-btn--primary" :disabled="locked" @click="reviewSave">{{ busy ? 'Проверяем…' : 'Проверить изменения' }}</button></div></footer>
+    <dialog ref="modal" class="orb-dialog" aria-labelledby="orb-dialog-title" @cancel.prevent="close">
+        <div class="orb-dialog-head"><h2 id="orb-dialog-title">{{ dialog==='bulk' ? 'Заполнение выбранных карточек' : dialog==='review' ? 'Сохранение черновиков' : dialog==='conflict' ? 'Сравнение изменений' : picker.kind==='type' ? 'Тип товара Ozon' : 'Значения справочника' }}</h2><button type="button" class="orb-close" :disabled="busy" aria-label="Закрыть диалог" @click="close">×</button></div>
+        <p v-if="error" class="orb-inline-warning" role="alert">{{ error }}</p>
+        <template v-if="dialog==='bulk'">
+            <template v-if="!bulkPlan">
+                <label for="orb-bulk-field" class="orb-label">Поле</label><select id="orb-bulk-field" class="sh-input" v-model="bulkKey" @change="resetBulk"><option v-for="field in fields" :key="field.key" :value="field.key">{{ field.label }}</option></select>
+                <div class="orb-modes"><label><input type="radio" name="bulk-mode" value="value" v-model="bulkMode">Задать значение</label><label><input type="radio" name="bulk-mode" value="copy" v-model="bulkMode">Взять из карточки</label></div>
+                <div v-if="bulkMode==='copy'"><label for="orb-bulk-source" class="orb-label">Карточка с нужным значением</label><select id="orb-bulk-source" class="sh-input" v-model="bulkSource"><option v-for="row in selected" :key="row.draft_id" :value="row.draft_id">{{ row.title }} — {{ row.offer_id }}</option></select></div>
+                <template v-else-if="bulkField">
+                    <ozon-field :definition="definition(bulkField)" :values="bulkValues" :locked="false" @change="bulkValues=$event" @remove="bulkValues=[]" @dictionary="openBulkDictionary"></ozon-field>
+                    <section v-if="picker.kind==='bulkDictionary'" class="orb-inline-picker"><label><span class="orb-label">Поиск значения</span><input class="sh-input" type="search" maxlength="200" v-model="picker.query" @input="search" placeholder="Название значения…"></label><p v-if="picker.loading" role="status">Ищем…</p><p v-if="picker.error" role="alert">{{ picker.error }}</p><div class="orb-picker-results"><button v-for="item in picker.items" :key="item.id" type="button" @click="choose(item)">{{ item.value }}</button></div></section>
+                </template>
+                <label v-else-if="bulkKey==='schema_cleanup'"><span class="orb-label">Подтверждённая очистка</span><select class="sh-input" v-model="bulkValue"><option value="">Выберите действие</option><option value="true">Подготовить удаление несовместимых характеристик</option><option value="false">Отменить подготовленную очистку</option></select></label>
+                <label v-else><span class="orb-label">Новое значение</span><textarea v-if="bulkKey==='description'" class="sh-input" maxlength="100000" rows="5" v-model="bulkValue"></textarea><input v-else class="sh-input" type="text" inputmode="decimal" maxlength="80" autocomplete="off" v-model="bulkValue"></label>
+                <p class="orb-help">Следующий шаг покажет изменяемые карточки и исключения. Значения справочника проверяются отдельно для каждого типа товара.</p>
+                <button type="button" class="sh-btn sh-btn--primary" @click="previewBulk">Посмотреть изменения</button>
+            </template>
+            <template v-else>
+                <p><strong>Будет заполнено: {{ bulkPlan.items.length }}</strong> из {{ selected.length }} выбранных карточек.</p>
+                <ul class="orb-review-list"><li v-for="item in bulkPlan.items" :key="item.id"><strong>{{ item.title }}</strong><div class="orb-diff"><span><small>Сейчас в форме</small>{{ display(item.before) }}</span><span><small>После заполнения</small>{{ display(item.after) }}</span></div></li></ul>
+                <details v-if="bulkPlan.skipped.length"><summary>Без изменений: {{ bulkPlan.skipped.length }}</summary><ul class="orb-skipped"><li v-for="item in bulkPlan.skipped" :key="item.id"><strong>{{ item.title }}</strong> — {{ item.reason }}</li></ul></details>
+                <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" @click="bulkPlan=null">Изменить значение</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!bulkPlan.items.length || locked" @click="applyBulk">Заполнить в форме</button></div>
+            </template>
+        </template>
+        <template v-else-if="dialog==='picker'">
+            <template v-if="typeChoice">
+                <p>Новый тип: <strong>{{ typeChoice.name }}</strong></p><p class="orb-help">{{ typeChoice.category_path }}</p>
+                <p class="orb-inline-warning">Будут заменены характеристики прежней схемы и очищены составные группы выбранных карточек. Доступные значения нового типа подставляются только из подтверждённых исходных сведений.</p>
+                <ul class="orb-review-list"><li v-for="row in rows.filter(r=>typeIds.includes(r.draft_id))" :key="row.draft_id"><strong>{{ row.title }}</strong><span>{{ row.product_type_name || 'Без типа' }} → {{ typeChoice.name }}</span><small>В сохранённом черновике: {{ row.type_change_impact.attributes }} характеристик, {{ row.type_change_impact.complex_groups }} составных групп.</small></li></ul>
+                <label class="orb-check"><input type="checkbox" v-model="rememberType">Запомнить тип для исходных категорий показанных карточек</label>
+                <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" @click="typeChoice=null;search()">Выбрать другой</button><button type="button" class="sh-btn sh-btn--primary" :disabled="locked || !typeIds.length" @click="applyType">Применить тип в форме</button></div>
+            </template>
+            <template v-else>
+                <label><span class="orb-label">{{ picker.kind==='type' ? 'Поиск типа товара' : 'Поиск значения' }}</span><input class="sh-input" type="search" name="reference-search" maxlength="200" autocomplete="off" v-model="picker.query" @input="search" placeholder="Начните вводить название…"></label>
+                <p v-if="picker.loading" role="status">Ищем…</p><p v-if="picker.error" role="alert" class="orb-inline-warning">{{ picker.error }} <button type="button" class="orb-link" @click="search">Повторить поиск</button></p>
+                <div class="orb-picker-results"><button v-for="item in picker.items" :key="item.id" type="button" @click="choose(item)"><strong>{{ picker.kind==='type' ? item.name : item.value }}</strong><small v-if="item.category_path">{{ item.category_path }}</small></button></div>
+                <p v-if="!picker.loading && !picker.error && !picker.items.length" class="orb-help">{{ picker.kind==='type' && !picker.query ? 'Введите тип товара или название категории.' : 'Значений не найдено. Попробуйте другой запрос.' }}</p>
+                <p v-if="picker.more" class="orb-help">Показаны первые значения. Уточните поиск.</p>
+            </template>
+        </template>
+        <template v-else-if="dialog==='review'">
+            <p>Будут сохранены и проверены <strong>{{ review.length }}</strong> карточек. Публикация в Ozon выполняется отдельным действием.</p>
+            <ul class="orb-review-list"><li v-for="item in review" :key="item.id"><strong>{{ item.title }}</strong><p v-if="item.action==='ИСКЛЮЧИТЬ'">Исключить только из повторов этой загрузки. Товар и черновик сохранятся; остальные правки строки не записываются.</p><template v-else><p v-if="item.typeChanged" class="orb-inline-warning">Смена типа заменит {{ item.impact.attributes }} характеристик и очистит {{ item.impact.complex_groups }} составных групп.</p><p v-if="!item.changes.length" class="orb-help">Повторная локальная проверка сохранённых значений.</p><div v-for="change in item.changes" :key="change.key" class="orb-review-field"><strong>{{ change.label }}</strong><div class="orb-diff"><span><small>Было</small>{{ change.beforeLabel }}</span><span><small>Будет</small>{{ change.afterLabel }}</span></div><p v-if="change.after==='' || Array.isArray(change.after) && !change.after.length" class="orb-help">Пустое значение в массовой форме не удаляет сохранённые данные.</p></div></template></li></ul>
+            <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy" @click="close">Вернуться к форме</button><button type="button" class="sh-btn sh-btn--primary" :disabled="locked" @click="save">Сохранить и проверить</button></div>
+        </template>
+        <template v-else-if="dialog==='conflict' && conflictRow?.server">
+            <p><strong>{{ conflictRow.title }}</strong></p><p>Сравните ваши правки с текущей версией. Поля, которые вы не меняли, при переносе берутся из текущей версии.</p>
+            <ul class="orb-review-list"><li v-for="change in changes(conflictRow)" :key="change.key"><strong>{{ change.label }}</strong><div class="orb-diff"><span><small>Мой ввод</small>{{ change.afterLabel }}</span><span><small>Сохранено сейчас</small>{{ change.key==='product_type_id' ? conflictRow.server.product_type_name : display(conflictRow.server.base[change.key]) }}</span></div></li></ul>
+            <p v-if="!canKeep(conflictRow)" class="orb-inline-warning">Тип или набор полей изменился. Примите текущую версию и заново внесите нужные значения; ввод старой схемы автоматически не переносится.</p>
+            <div class="orb-dialog-actions"><button type="button" class="sh-btn sh-btn--secondary" @click="resolveConflict(false)">Принять сохранённое</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!canKeep(conflictRow)" @click="resolveConflict(true)">Перенести мои правки</button></div>
+        </template>
+    </dialog>
+{% endraw %}
 </div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script src="{{ url_for('static', filename='ozon-bulk-repair.js') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-bulk-repair-vue.js') }}" defer></script>
 {% endblock %}

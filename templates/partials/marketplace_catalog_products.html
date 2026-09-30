@@ -1,0 +1,125 @@
+<form method="get" class="sh-card catalog-filters" aria-label="Фильтры каталога">
+    {% if filters.marketplace_code %}<input type="hidden" name="marketplace" value="{{ filters.marketplace_code }}">{% endif %}
+    {% if filters.account_id %}<input type="hidden" name="account_id" value="{{ filters.account_id }}">{% endif %}
+    <div class="catalog-filter-fields">
+        <label class="catalog-field">
+            <span class="catalog-field-label">Поиск по товарам</span>
+            <div class="catalog-search">
+                {{ icon('search', 18) }}
+                <input type="search" name="search" maxlength="200" value="{{ filters.search or '' }}"
+                       placeholder="Название, артикул или ID товара" class="sh-input">
+            </div>
+        </label>
+        <label class="catalog-field">
+            <span class="catalog-field-label">Статус на площадке</span>
+            <select name="status" class="sh-input">
+                <option value="">Все статусы</option>
+                {% for status in ['active', 'moderation', 'creating', 'error', 'archived', 'inactive', 'unknown'] %}
+                <option value="{{ status }}" {% if filters.normalized_status == status %}selected{% endif %}>{{ normalized_status_labels.get(status, status) }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="catalog-field">
+            <span class="catalog-field-label">Связь с моими товарами</span>
+            <select name="link_status" class="sh-input">
+                <option value="">Любая</option>
+                <option value="linked" {% if filters.link_status == 'linked' %}selected{% endif %}>Общая карточка связана</option>
+                <option value="unlinked" {% if filters.link_status == 'unlinked' %}selected{% endif %}>Без общей карточки</option>
+                <option value="ambiguous" {% if filters.link_status == 'ambiguous' %}selected{% endif %}>Нужно выбрать связь</option>
+            </select>
+        </label>
+        <div class="catalog-filter-actions">
+            {% if filtered %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', marketplace=filters.marketplace_code, account_id=filters.account_id) }}">Сбросить</a>{% endif %}
+            <button class="sh-btn sh-btn--primary" type="submit">{{ icon('filter', 15) }} Найти</button>
+        </div>
+    </div>
+    <label class="catalog-check">
+        <input type="checkbox" name="include_unavailable" value="1" {% if filters.include_unavailable %}checked{% endif %}>
+        Также показать товары, не найденные при последней полной загрузке
+    </label>
+</form>
+
+<section x-data="marketplaceCatalogView()" aria-labelledby="catalog-results-title">
+    <div class="catalog-results-head">
+        <h2 id="catalog-results-title" class="catalog-results-title">{{ 'Результаты поиска' if filtered else 'Товары' }} <span class="catalog-results-count">{{ '{:,}'.format(pagination.total).replace(',', ' ') }}</span></h2>
+        <div class="catalog-results-tools">
+            <span class="catalog-page-note">{{ icon('eye', 14) }} Просмотр данных площадки</span>
+            {% if listings %}
+            <div class="sh-segmented catalog-view" role="group" aria-label="Вид каталога" x-cloak>
+                <button type="button" class="sh-segmented-item" :class="{'sh-segmented-item--active': view === 'list'}"
+                        :aria-pressed="view === 'list'" @click="setView('list')">{{ icon('menu', 15) }} Список</button>
+                <button type="button" class="sh-segmented-item" :class="{'sh-segmented-item--active': view === 'grid'}"
+                        :aria-pressed="view === 'grid'" @click="setView('grid')">{{ icon('image', 15) }} Плитка</button>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% if listings %}
+    <div class="catalog-columns" x-show="view === 'list'" aria-hidden="true">
+        <span>Товар и статус</span><span>Цены</span><span>Остаток</span><span></span>
+    </div>
+    <div class="catalog-products" :class="{'catalog-products--grid': view === 'grid'}">
+        {% for listing in listings %}
+        {% set preview = listing_previews.get(listing.id) %}
+        {% set status = listing.normalized_status %}
+        <a href="{{ url_for('marketplace_listings.detail', listing_id=listing.id) }}" class="catalog-product"
+           aria-labelledby="catalog-product-{{ listing.id }}">
+            <div class="catalog-product-main">
+                <div class="catalog-photo">
+                    {% if preview.image %}<img src="{{ preview.image }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"
+                         onerror="this.hidden=true;this.nextElementSibling.hidden=false">{% endif %}
+                    <span class="catalog-photo-fallback" {% if preview.image %}hidden{% endif %}>{{ icon('image', 24, stroke=1.5) }}<span>Нет фото</span></span>
+                </div>
+                <div class="catalog-product-info">
+                    <div class="catalog-product-channel"><span class="sh-mp-dot sh-mp-dot--{{ listing.marketplace.code }}" aria-hidden="true"></span><span>{{ 'Wildberries' if listing.marketplace.code == 'wb' else 'Ozon' }}{% if listing.account %} · {{ listing.account.label }}{% endif %}</span></div>
+                    <h3 class="catalog-product-title" id="catalog-product-{{ listing.id }}">{{ listing.title or 'Без названия' }}</h3>
+                    <p class="catalog-product-ident" title="Артикул: {{ listing.offer_id }} · ID: {{ listing.external_product_id }}">Арт. {{ listing.offer_id }} · ID {{ listing.external_product_id }}</p>
+                    <div class="catalog-product-statuses">
+                        <span class="catalog-product-status catalog-status--{{ status_tones.get(status, 'muted') }}">{{ icon(status_icons.get(status, 'info-circle'), 13) }} {{ normalized_status_labels.get(status, 'Статус неизвестен') }}</span>
+                        <span class="catalog-link-note catalog-link-note--{{ listing.canonical_link_status }}">{{ icon('check' if listing.canonical_link_status == 'linked' else ('warning' if listing.canonical_link_status == 'ambiguous' else 'document'), 12) }} {{ 'Общая карточка' if listing.canonical_link_status == 'linked' else ('Выберите связь' if listing.canonical_link_status == 'ambiguous' else 'Без общей карточки') }}</span>
+                        {% if not listing.is_available %}<span class="catalog-product-status catalog-status--warn">{{ icon('info-circle', 13) }} Не найден при последней загрузке</span>{% endif %}
+                    </div>
+                    {% if listing.last_seen_at %}
+                    <time class="catalog-product-observed" datetime="{{ listing.last_seen_at.isoformat() }}Z">Наблюдалось {{ listing.last_seen_at.strftime('%d.%m.%Y %H:%M') }} UTC</time>
+                    {% else %}<span class="catalog-product-observed">Дата наблюдения неизвестна</span>{% endif %}
+                </div>
+            </div>
+            <div class="catalog-product-metric catalog-product-metric--prices">
+                {% if listing.marketplace.code == 'ozon' %}<span class="catalog-metric-label">До скидок</span><span class="catalog-metric-value catalog-metric-value--base">{{ preview.base_price }}</span>{% endif %}
+                <span class="catalog-metric-label">Цена продавца</span><span class="catalog-metric-value">{{ preview.price }}</span>
+                {% if listing.marketplace.code == 'ozon' %}
+                {% if preview.has_promotion_price %}<span class="catalog-metric-label">С вашими акциями</span><span>{{ preview.promotion_price }}</span>{% endif %}
+                <span class="catalog-metric-label">Для покупателя: нет данных</span><span class="catalog-metric-label">Скидка Ozon: нет данных</span>
+                {% endif %}
+            </div>
+            <div class="catalog-product-metric"><span class="catalog-metric-label">Остаток</span><span class="catalog-metric-value{% if preview.stock == 0 %} catalog-metric-value--zero{% endif %}">{{ (preview.stock ~ ' шт.') if preview.stock is not none else '—' }}</span></div>
+            <span class="catalog-product-open">{{ icon('chevron-right', 18) }}</span>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="sh-card catalog-empty">
+        {% if filtered %}<span class="catalog-empty-symbol">{{ icon('search', 32, stroke=1.5) }}</span>
+        {% else %}<img class="catalog-empty-art" src="{{ url_for('static', filename='images/ozon-shop-start.webp') }}" width="190" height="190" alt="" decoding="async">{% endif %}
+        <div class="catalog-empty-copy">
+            {% if filtered %}
+            <h2>Ничего не нашлось</h2>
+            <p>Попробуйте другой запрос или сбросьте фильтры. Выбранный магазин сохранится.</p>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', marketplace=filters.marketplace_code, account_id=filters.account_id) }}">{{ icon('refresh', 16) }} Сбросить фильтры</a>
+            {% elif filters.marketplace_code == 'wb' or not ozon_enabled %}
+            <h2>Каталог Wildberries пока пуст</h2>
+            <p>Загрузите карточки на странице товаров WB. Они появятся и в общем каталоге.</p>
+            <a class="sh-btn sh-btn--primary" href="{{ url_for('products_list') }}">{{ icon('package', 16) }} Товары Wildberries</a>
+            {% else %}
+            <h2 x-text="anyActive() ? 'Загружаем ваш каталог' : 'Начните с вашего магазина'">Начните с вашего магазина</h2>
+            <p x-show="anyActive()" x-cloak>Товары появятся после завершения загрузки. Страницу можно закрыть — прогресс сохранится.</p>
+            <p x-show="!anyActive()">Если товары уже есть на Ozon, подключите магазин и загрузите каталог. Для нового магазина начните с подготовки карточек.</p>
+            <div class="catalog-empty-actions">
+                <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_accounts.index') }}">{{ icon('office', 16) }} Подключение Ozon</a>
+                <a class="sh-btn sh-btn--primary" href="{{ url_for('marketplace_drafts.index', account_id=filters.account_id) }}">{{ icon('plus', 16) }} Подготовить товар</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+</section>

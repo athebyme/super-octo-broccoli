@@ -176,6 +176,11 @@ class InferenceModeTest(unittest.TestCase):
             'content_revision': 1,
         }
         values.update(overrides)
+        values.setdefault('original_data_json', json.dumps({
+            'title': values['title'],
+            'description': values['description'],
+            'category': values['category'],
+        }, ensure_ascii=False))
         product = SupplierProduct(**values)
         db.session.add(product)
         db.session.commit()
@@ -350,6 +355,11 @@ class InferenceModeTest(unittest.TestCase):
             run_id=run.id,
         ).one()
         product.title = 'Совсем другой товар'
+        product.original_data_json = json.dumps({
+            'title': 'Совсем другой товар',
+            'description': 'Описание без явных фактов о поле.',
+            'category': 'Вибраторы',
+        }, ensure_ascii=False)
         db.session.commit()
         with self.assertRaises(SupplierCatalogEnrichmentError) as ctx:
             SupplierCatalogEnrichmentService.apply_inference_selection(
@@ -362,6 +372,62 @@ class InferenceModeTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 'source_changed')
         db.session.refresh(product)
         self.assertIsNone(product.ai_marketplace_json)
+
+    def test_historical_review_needs_new_source_contract(self):
+        product = self._product()
+        response = self._response(product.id, [{
+            'name': 'Пол', 'value': ['Унисекс'],
+            'rationale': 'x', 'confidence': 0.9,
+        }])
+        run, client = self._run([product], [response])
+        item = SupplierCatalogEnrichmentItem.query.filter_by(run_id=run.id).one()
+        self.assertEqual(item.status, 'needs_review')
+        run.selection_json = '{}'
+        db.session.commit()
+        with self.assertRaises(SupplierCatalogEnrichmentError) as raised:
+            SupplierCatalogEnrichmentService.apply_inference_selection(
+                run_id=run.id,
+                item_id=item.id,
+                supplier_id=self.supplier_id,
+                admin_user_id=self.admin_id,
+                field_names=['Пол'],
+            )
+        self.assertEqual(raised.exception.code, 'legacy_review_required')
+        self.assertIsNone(product.ai_marketplace_json)
+
+    def test_ai_poisoned_current_subject_needs_review_before_inference(self):
+        product = self._product(wb_subject_id=self.SUBJECT_ID)
+        product.original_data_json = json.dumps({
+            'title': 'Анальная пробка',
+            'description': 'Материал изделия: силикон.',
+            'category': 'Анальные пробки',
+        }, ensure_ascii=False)
+        product.title = 'Вибратор классический'
+        db.session.commit()
+        client = _FakeClient([])
+
+        def fake_service(*args, **kwargs):
+            service = _FakeAIService(client)
+            service.config = SimpleNamespace(
+                provider='deepseek', model='deepseek-flash',
+                api_base_url='https://api.deepseek.com/v1',
+                api_key='test-secret', max_retries=1,
+                proxy_enabled=False, task_profile='supplier_parsing_flash',
+            )
+            return service
+
+        with patch.object(SupplierService, '_get_ai_service', side_effect=fake_service):
+            run = SupplierCatalogEnrichmentService.create_run(
+                supplier_id=self.supplier_id,
+                admin_user_id=self.admin_id,
+                product_ids=[product.id],
+                mode=MODE_INFERENCE,
+            )
+            SupplierCatalogEnrichmentService.process_run(run.id)
+        item = SupplierCatalogEnrichmentItem.query.filter_by(run_id=run.id).one()
+        self.assertEqual(client.calls, 0)
+        self.assertEqual(item.status, 'needs_review')
+        self.assertEqual(item.error_code, 'category_source_unverified')
 
 
 if __name__ == '__main__':

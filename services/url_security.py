@@ -10,7 +10,7 @@ URL security helpers — защита от SSRF, open-redirect и NaN-injection.
 import ipaddress
 import math
 import socket
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 
 def validate_external_url(url: str) -> str | None:
@@ -73,8 +73,18 @@ def is_safe_local_path(url: str) -> bool:
     # `//evil.com/path` — protocol-relative URL: парсер вытащит netloc
     if url.startswith('//'):
         return False
-    parsed = urlparse(url)
+    # Browsers normalize a backslash in a special-scheme URL to a slash;
+    # /\host can otherwise become an external redirect after passing urlparse.
+    if any(ord(char) < 32 or ord(char) == 127 for char in url):
+        return False
+    try:
+        parsed = urlparse(url)
+        path = unquote(parsed.path, errors='strict')
+    except (ValueError, UnicodeError):
+        return False
     if parsed.scheme or parsed.netloc:
+        return False
+    if path.startswith('//') or '\\' in path or any(ord(char) < 32 or ord(char) == 127 for char in path):
         return False
     return True
 

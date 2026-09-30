@@ -4,6 +4,17 @@
 {% from "macros/icons.html" import icon %}
 
 {% block content %}
+{% if stock_sync %}
+<div class="sh-alert {{ 'sh-alert--warning' if stock_sync.status == 'failed' else 'sh-alert--info' }} mx-4 mt-4" role="status">
+    {% if stock_sync.status == 'failed' %}
+    <span>{{ stock_sync.message }} <a class="underline" href="{{ url_for('api_settings') }}">Настройки API</a></span>
+    {% elif stock_sync.status in ['pending', 'running'] %}
+    <span>Остатки WB обновляются в фоне: {{ stock_sync.processed }} из {{ stock_sync.total }} товаров. До подтверждения ответа по товару сохраняются последние данные.</span>
+    {% else %}
+    <span>Последнее обновление остатков WB: {{ stock_sync.processed }} товаров. Дата: {{ stock_sync.updated_at[:16] | replace('T', ' ') }} UTC.</span>
+    {% endif %}
+</div>
+{% endif %}
 <div class="sh-page">
     <!-- Заголовок -->
     <div class="sh-page-header">

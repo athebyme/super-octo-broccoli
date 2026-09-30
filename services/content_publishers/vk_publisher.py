@@ -13,15 +13,17 @@ Credentials формат:
     "access_token": "vk1.a.xxx...",
     "group_id": "123456789",    # ID сообщества (положительное число, без минуса)
     "api_version": "5.199",     # (опционально)
-    "user_token": "vk1.a.yyy..."  # Пользовательский токен (для загрузки фото)
-                                   # Групповой токен НЕ поддерживает photos.getWallUploadServer
-                                   # Получить: https://vk.cc/1mYRMQ (scope: photos,wall,offline)
+    "user_token": "vk1.a.yyy..."  # Опциональный legacy-токен с правами на фото.
+                                   # Ключ сообщества без него пригоден только
+                                   # для текстовых постов без товара и фото.
 }
 """
 import io
+import hashlib
 import logging
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from PIL import Image
@@ -35,14 +37,26 @@ VK_API_BASE = 'https://api.vk.com/method'
 VK_API_VERSION = '5.199'
 
 
+def _group_id(value) -> Optional[str]:
+    raw = str(value or '').strip().removeprefix('-')
+    if (not raw.isascii() or not raw.isdigit() or len(raw) > 20
+            or int(raw) <= 0):
+        return None
+    return raw
+
+
 def _vk_provider_error(method: str, payload) -> tuple[str, str, bool]:
     """Normalize a VK error without relying on provider free text."""
     error = payload if isinstance(payload, dict) else {}
     raw_code = error.get('error_code')
     provider_code = raw_code if type(raw_code) is int else None
     if provider_code == 5:
+        token_name = (
+            'Пользовательский токен VK'
+            if method.startswith('photos.') else 'Токен VK'
+        )
         return (
-            'Токен VK недействителен или отозван (код 5). '
+            f'{token_name} недействителен или отозван (код 5). '
             'Обновите credentials аккаунта.',
             'vk_auth_failed',
             True,
@@ -259,9 +273,10 @@ class VKPublisher(BasePublisher):
         """Публикует пост на стене сообщества ВКонтакте."""
         creds = account.get_credentials_dict()
         access_token = creds.get('access_token', '')
-        # user_token нужен для загрузки фото (photos.getWallUploadServer не работает с group token)
+        # Native photo upload requires separately granted user-scoped VK API
+        # access. Product posts must not silently lose their images.
         user_token = creds.get('user_token', '')
-        group_id = creds.get('group_id', '') or account.account_id
+        group_id = _group_id(creds.get('group_id') or account.account_id)
         api_version = creds.get('api_version', VK_API_VERSION)
 
         if not access_token or not group_id:
@@ -272,14 +287,34 @@ class VKPublisher(BasePublisher):
                 terminal=True,
             )
 
-        # group_id ВСЕГДА положительное число (по доке VK API)
-        group_id = str(group_id).lstrip('-').strip()
+        # A stale credential must never redirect a seller's post to another wall.
+        if _group_id(account.account_id) != group_id:
+            return PublishResult(
+                success=False,
+                error='ID сообщества в настройках аккаунта VK не совпадает.',
+                error_code='vk_credentials_missing',
+                terminal=True,
+            )
 
         text = self.format_text(item)
-        media_urls = item.get_media_urls()
+        item_media_urls = item.get_media_urls()
+        if not user_token and (
+            item_media_urls or item.get_product_ids() or item.get_entity_refs()
+        ):
+            return PublishResult(
+                success=False,
+                error=(
+                    'Для товарного поста VK нужен доступ к загрузке фото. '
+                    'Пост без изображения не опубликован.'
+                ),
+                error_code='vk_user_token_required',
+                terminal=True,
+            )
+        media_urls = item_media_urls if user_token else []
+        link_only = not user_token
 
         # Если media_urls пустой — пробуем скачать и закэшировать фото из WB CDN
-        if not media_urls:
+        if user_token and not media_urls:
             media_urls = self._recover_photos(item)
 
         # Относительные URL → абсолютные (для скачивания с нашего сервера)
@@ -294,11 +329,6 @@ class VKPublisher(BasePublisher):
         except RuntimeError:
             pass  # Нет app context
 
-        if media_urls and not user_token:
-            logger.warning(f"VK publish: no user_token in credentials — photo upload may fail "
-                           f"(group tokens can't use photos.getWallUploadServer). "
-                           f"Add user_token to VK account credentials.")
-
         logger.info(f"VK publish item={item.id}: group_id={group_id}, media_urls={len(media_urls)}, "
                     f"has_user_token={bool(user_token)}")
 
@@ -311,7 +341,7 @@ class VKPublisher(BasePublisher):
                 if i > 0:
                     time.sleep(1.0)  # VK rate limit + запас на обработку
                 # Для фото используем user_token (group token не поддерживает photos.getWallUploadServer)
-                photo_token = user_token or access_token
+                photo_token = user_token
 
                 # До 2 попыток на каждое фото (ретрай при vk_upload_empty_photo)
                 attachment, error_reason = None, None
@@ -335,17 +365,6 @@ class VKPublisher(BasePublisher):
                         break
 
                 if upload_terminal:
-                    if (
-                        not user_token
-                        and upload_error_code in {
-                            'vk_auth_failed', 'vk_user_token_required',
-                        }
-                    ):
-                        error_reason = (
-                            'Для загрузки фото VK нужен действующий '
-                            'пользовательский user_token с доступом к фото.'
-                        )
-                        upload_error_code = 'vk_user_token_required'
                     logger.warning(
                         'VK publish stopped after terminal upload failure: %s',
                         upload_error_code,
@@ -378,6 +397,23 @@ class VKPublisher(BasePublisher):
             if attachments:
                 time.sleep(3)
 
+            if link_only:
+                # A live community-token probe rejected an external URL in
+                # `attachments` (VK code 100), while the same URL in `message`
+                # was accepted. This path is only for non-product text posts.
+                metadata = item.get_platform_specific()
+                metadata = metadata if isinstance(metadata, dict) else {}
+                product_url = metadata.get('product_url') or metadata.get('wb_url')
+                if isinstance(product_url, str):
+                    parsed = urlparse(product_url)
+                    hostname = (parsed.hostname or '').lower()
+                    if parsed.scheme == 'https' and hostname in {
+                        'wildberries.ru', 'www.wildberries.ru',
+                        'ozon.ru', 'www.ozon.ru',
+                    } and not parsed.username and not parsed.password:
+                        if product_url not in text:
+                            text = f'{text}\n\n{product_url}'
+
             # wall.post: owner_id отрицательный для сообщества
             params = {
                 'access_token': access_token,
@@ -385,6 +421,10 @@ class VKPublisher(BasePublisher):
                 'owner_id': f'-{group_id}',
                 'from_group': 1,
                 'message': text,
+                # Stable for a retry of this exact item and destination.
+                'guid': hashlib.sha256(
+                    f'sellerhub:vk:{group_id}:{item.id}'.encode()
+                ).hexdigest()[:32],
             }
 
             if attachments:
@@ -393,9 +433,12 @@ class VKPublisher(BasePublisher):
             resp = requests.post(
                 f'{VK_API_BASE}/wall.post',
                 data=params,
-                timeout=30,
+                timeout=(3, 30),
+                allow_redirects=False,
             )
             data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError('malformed VK response')
             logger.info(
                 "VK wall.post response: success=%s error_code=%s",
                 'error' not in data,
@@ -414,7 +457,17 @@ class VKPublisher(BasePublisher):
                     terminal=terminal,
                 )
 
-            post_id = data.get('response', {}).get('post_id')
+            response = data.get('response')
+            post_id = response.get('post_id') if isinstance(response, dict) else None
+            if type(post_id) is not int or post_id <= 0:
+                return PublishResult(
+                    success=False,
+                    error=(
+                        'VK не подтвердил ID поста. Проверьте стену сообщества '
+                        'перед ручным повтором.'
+                    ),
+                    error_code='vk_outcome_unknown',
+                )
             post_url = f"https://vk.com/wall-{group_id}_{post_id}" if post_id else None
 
             # Сообщаем об ошибках фото даже при успешной публикации
@@ -427,20 +480,35 @@ class VKPublisher(BasePublisher):
                 success=True,
                 external_post_id=str(post_id) if post_id else None,
                 external_post_url=post_url,
-                error=error_detail,  # ошибки фото видны в UI
+                error=error_detail,
             )
 
         except requests.exceptions.Timeout:
             return PublishResult(
                 success=False,
-                error="Таймаут при отправке в VK",
-                error_code='vk_timeout',
+                error=(
+                    'VK не подтвердил результат публикации из-за таймаута. '
+                    'Проверьте стену сообщества перед ручным повтором.'
+                ),
+                error_code='vk_outcome_unknown',
             )
         except requests.exceptions.ConnectionError:
             return PublishResult(
                 success=False,
-                error="Ошибка подключения к VK API",
-                error_code='vk_connection_error',
+                error=(
+                    'Соединение с VK прервалось при публикации. '
+                    'Проверьте стену сообщества перед ручным повтором.'
+                ),
+                error_code='vk_outcome_unknown',
+            )
+        except ValueError:
+            return PublishResult(
+                success=False,
+                error=(
+                    'VK вернул некорректный ответ на публикацию. '
+                    'Проверьте стену сообщества перед ручным повтором.'
+                ),
+                error_code='vk_outcome_unknown',
             )
         except Exception as e:
             logger.error(
@@ -453,37 +521,71 @@ class VKPublisher(BasePublisher):
             )
 
     def validate_account(self, account: SocialAccount) -> tuple[bool, Optional[str]]:
-        """Проверяет валидность VK токена."""
+        """Check the community token without publishing a test post."""
         creds = account.get_credentials_dict()
         access_token = creds.get('access_token', '')
 
         if not access_token:
             return False, "Не указан токен доступа (access_token)"
 
-        group_id = creds.get('group_id', '') or account.account_id
-        if not group_id:
-            return False, "Не указан ID сообщества (group_id)"
-
+        group_id = _group_id(creds.get('group_id') or account.account_id)
+        if group_id is None:
+            return False, 'Укажите положительный числовой ID сообщества VK.'
+        if _group_id(account.account_id) != group_id:
+            return False, 'ID сообщества в настройках аккаунта VK не совпадает.'
         try:
-            resp = requests.get(
+            resp = requests.post(
                 f'{VK_API_BASE}/groups.getById',
-                params={
+                data={
                     'access_token': access_token,
-                    'group_id': str(group_id).lstrip('-'),
                     'v': VK_API_VERSION,
                 },
-                timeout=10,
+                timeout=(3, 10),
+                allow_redirects=False,
             )
             data = resp.json()
 
+            if not isinstance(data, dict):
+                return False, 'VK вернул некорректный ответ.'
             if 'error' in data:
-                error_msg = data['error'].get('error_msg', 'unknown')
-                return False, f"VK API ошибка: {error_msg}"
+                return False, _vk_provider_error('groups.getById', data['error'])[0]
+            response = data.get('response')
+            groups = response.get('groups') if isinstance(response, dict) else None
+            if (not isinstance(groups, list) or len(groups) != 1
+                    or not isinstance(groups[0], dict)
+                    or groups[0].get('id') != int(group_id)):
+                return False, 'VK не подтвердил доступ к сообществу.'
+
+            resp = requests.post(
+                f'{VK_API_BASE}/groups.getTokenPermissions',
+                data={
+                    'access_token': access_token,
+                    'v': VK_API_VERSION,
+                },
+                timeout=(3, 10),
+                allow_redirects=False,
+            )
+            data = resp.json()
+            if not isinstance(data, dict):
+                return False, 'VK вернул некорректный ответ.'
+            if 'error' in data:
+                return False, _vk_provider_error(
+                    'groups.getTokenPermissions', data['error'],
+                )[0]
+            response = data.get('response')
+            permissions = response.get('permissions', []) if isinstance(response, dict) else []
+            if not any(
+                isinstance(permission, dict) and permission.get('name') == 'wall'
+                and type(permission.get('setting')) is int
+                and permission['setting'] > 0
+                for permission in permissions
+            ):
+                return False, 'Ключ сообщества VK не имеет доступа к стене.'
 
             return True, None
 
-        except requests.exceptions.RequestException as e:
-            return False, f"Ошибка подключения к VK API: {e}"
+        except (requests.exceptions.RequestException, ValueError, TypeError):
+            return False, 'Не удалось проверить подключение к VK API.'
 
     @staticmethod
     def _recover_photos(item: ContentItem) -> list:
@@ -545,14 +647,15 @@ class VKPublisher(BasePublisher):
 
         try:
             # === ШАГ 1: photos.getWallUploadServer ===
-            resp = requests.get(
+            resp = requests.post(
                 f'{VK_API_BASE}/photos.getWallUploadServer',
-                params={
+                data={
                     'access_token': access_token,
                     'group_id': group_id,
                     'v': api_version,
                 },
-                timeout=10,
+                timeout=(3, 10),
+                allow_redirects=False,
             )
             srv = resp.json()
             logger.debug(
@@ -582,14 +685,15 @@ class VKPublisher(BasePublisher):
                     # Получаем новый upload_url перед ретраем
                     logger.info(f"VK upload retry: requesting new upload_url (attempt {upload_attempt + 1})")
                     time.sleep(2)
-                    retry_resp = requests.get(
+                    retry_resp = requests.post(
                         f'{VK_API_BASE}/photos.getWallUploadServer',
-                        params={
+                        data={
                             'access_token': access_token,
                             'group_id': group_id,
                             'v': api_version,
                         },
-                        timeout=10,
+                        timeout=(3, 10),
+                        allow_redirects=False,
                     )
                     retry_srv = retry_resp.json()
                     if 'error' in retry_srv:
@@ -603,6 +707,7 @@ class VKPublisher(BasePublisher):
                     upload_url,
                     files={'photo': (filename, jpeg_bytes, 'image/jpeg')},
                     timeout=30,
+                    allow_redirects=False,
                 )
                 upload_data = upload_resp.json()
                 logger.info(
@@ -643,6 +748,7 @@ class VKPublisher(BasePublisher):
                     'v': api_version,
                 },
                 timeout=10,
+                allow_redirects=False,
             )
             save_data = save_resp.json()
             logger.debug(

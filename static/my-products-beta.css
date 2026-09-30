@@ -218,6 +218,23 @@
 }
 .mp-foot-info { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
+/* Local-only Ozon preparation, separate from the WB bulk confirmation. */
+.mp-ozon-message { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin:12px 0; padding:13px 16px; border:1px solid var(--border); border-left:3px solid var(--warn); border-radius:7px; background:var(--bg-card); color:var(--text-secondary); font-size:13px; line-height:1.5; }
+.mp-ozon-message--error { border-left-color:var(--danger); }
+.mp-ozon-message p { margin:4px 0 0; }
+.mp-ozon-dialog { width:min(94vw,560px); max-height:90vh; padding:25px; border:1px solid var(--border); border-radius:10px; background:var(--bg-card); color:var(--text); box-shadow:0 25px 75px #0005; }
+.mp-ozon-dialog::backdrop { background:#171a1dcc; }
+.mp-ozon-dialog-head { display:flex; justify-content:space-between; align-items:start; gap:12px; }
+.mp-ozon-dialog h2 { margin:0; font-size:24px; line-height:1.2; }
+.mp-ozon-dialog p { margin:15px 0; color:var(--text-secondary); font-size:13px; line-height:1.55; }
+.mp-ozon-eyebrow { margin:0 0 5px !important; color:var(--accent) !important; font-size:11px !important; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
+.mp-ozon-close { width:32px; height:32px; flex:0 0 32px; border:1px solid var(--border); border-radius:5px; background:var(--bg-card); color:var(--text); font-size:21px; }
+.mp-ozon-label { display:block; margin:20px 0 7px; font-size:12px; font-weight:600; }
+.mp-ozon-dialog .sh-input { width:100%; }
+.mp-ozon-confirm { display:flex; align-items:start; gap:9px; margin:18px 0; font-size:12px; line-height:1.45; }
+.mp-ozon-confirm input { width:18px; height:18px; flex:0 0 18px; margin:0; accent-color:var(--accent); }
+.mp-ozon-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:9px; }
+
 /* ---------- Мобильный ---------- */
 @media (max-width: 1000px) {
     .mp-row { grid-template-columns: 24px 48px minmax(0, 1fr) auto 24px; }
@@ -227,4 +244,6 @@
     .mp-row { grid-template-columns: 24px 44px minmax(0, 1fr) 24px; gap: 10px; padding: 10px; }
     .mp-channels { display: none; }
     .mp-select { max-width: 140px; }
+    .mp-ozon-dialog { padding:17px; }
+    .mp-ozon-actions .sh-btn { flex:1; }
 }

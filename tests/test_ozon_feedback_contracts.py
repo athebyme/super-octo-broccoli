@@ -91,6 +91,8 @@ def test_builders_keep_current_versions_distinct_and_bounded():
         {"status": "UNKNOWN", "date_from": "2026-07-01", "date_to": "2026-07-15"},
         {"status": "new", "date_from": "2026-07-01", "date_to": "2026-07-15"},
         {"status": "NEW", "date_from": "2026-07-01", "date_to": "2026-07-15", "limit": True},
+        {"status": "NEW", "date_from": "2026-07-01", "date_to": "2026-07-15", "limit": 1},
+        {"status": "NEW", "date_from": "2026-07-01", "date_to": "2026-07-15", "limit": 19},
         {"status": "NEW", "date_from": "2026-07-01", "date_to": "2026-07-15", "limit": 101},
         {"status": "NEW", "date_from": "2026-07-15", "date_to": "2026-07-01"},
         {"status": "NEW", "date_from": "2026-01-01", "date_to": "2026-07-15"},
@@ -100,6 +102,12 @@ def test_builders_keep_current_versions_distinct_and_bounded():
 def test_builder_rejects_loose_or_unbounded_input(kwargs):
     with pytest.raises(OzonFeedbackContractError):
         build_review_list_request(**kwargs)
+
+
+def test_review_minimum_does_not_change_question_limit_contract():
+    common = {"status": "NEW", "date_from": "2026-07-01", "date_to": "2026-07-15"}
+    assert build_review_list_request(**common, limit=20)["limit"] == 20
+    assert build_question_list_request(**common, limit=1)["limit"] == 1
 
 
 def test_review_normalization_is_pii_minimized_and_tracks_reply_eligibility():

@@ -133,6 +133,38 @@
             </section>
             {% endif %}
 
+            {% for result in product_fact_groups.marketplace_results %}
+            <details class="mb-4 rounded-lg border overflow-hidden" open
+                     style="background: var(--bg-card); border-color: var(--border);">
+                <summary class="cursor-pointer px-4 py-3">
+                    <span class="text-sm font-semibold">{{ result.label }} · {{ result.category }}</span>
+                    <span class="block mt-1 text-xs" style="color: var(--text-secondary);">
+                        Общий разбор каталога: {{ result.confirmed|length }} полей по исходным данным,
+                        {{ result.approved|length }} принятых после проверки предложений,
+                        {{ result.inferred|length }} непроверенных предположений.
+                        Не заполнено обязательных полей: {{ result.missing_required_count }}.
+                        Не опубликовано.
+                    </span>
+                    {% if not result.source_current %}
+                    <span class="block mt-1 text-xs">Исходные данные изменились — требуется повторный разбор.</span>
+                    {% endif %}
+                </summary>
+                {% for label, facts in [('Проверенные поля', result.confirmed), ('Предложения, принятые после проверки', result.approved), ('Предположения — требуют проверки', result.inferred)] %}
+                {% if facts %}
+                <div class="px-4 py-2 text-xs font-semibold" style="border-top: 1px solid var(--border);">{{ label }}</div>
+                <dl class="grid grid-cols-1 sm:grid-cols-2 px-4 pb-3 gap-3">
+                    {% for fact in facts %}
+                    <div>
+                        <dt class="text-xs" style="color: var(--text-secondary);">{{ fact.name }}</dt>
+                        <dd class="mt-1 text-sm break-words">{{ fact.value }}</dd>
+                    </div>
+                    {% endfor %}
+                </dl>
+                {% endif %}
+                {% endfor %}
+            </details>
+            {% endfor %}
+
             <div class="mb-6" x-data="categoryEditor()" x-init="init()">
                 <h3 class="text-sm font-semibold text-gray-700 mb-2">Категория WB</h3>
                 <!-- Отображение текущей категории -->

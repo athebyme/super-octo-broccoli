@@ -42,6 +42,8 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         LoginManager(self.app)
         CSRFProtect(self.app)
         register_marketplace_listing_routes(self.app)
+        from routes.marketplace_accounts import register_marketplace_account_routes
+        register_marketplace_account_routes(self.app)
         self._register_template_stubs()
         self.client = self.app.test_client()
         with self.app.app_context():
@@ -162,6 +164,8 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
             "templates/base.html",
             "templates/marketplace_listing_detail.html",
             "templates/marketplace_listings_beta.html",
+            "templates/marketplace_listings.html",
+            "templates/partials/marketplace_catalog_products.html",
             "templates/marketplace_listing_beta_detail.html",
         ):
             endpoint_names.update(re.findall(
@@ -209,6 +213,25 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
             "marketplace-catalog-app",
             response.get_data(as_text=True),
         )
+
+    def test_primary_catalog_is_vue_with_compatible_alias_and_no_js_fallback(self):
+        user_patch, login_patch = self._auth(self.seller1_id)
+        with user_patch, login_patch:
+            primary = self.client.get('/marketplaces/listings/?marketplace=ozon')
+            alias = self.client.get('/marketplaces/listings/beta?marketplace=ozon')
+            classic = self.client.get('/marketplaces/listings/classic?marketplace=ozon')
+        for response in (primary, alias, classic):
+            self.assertEqual(response.status_code, 200)
+        html = primary.get_data(as_text=True)
+        self.assertIn('marketplace-catalog-app', html)
+        self.assertIn('vendor/vue-3.4.38.global.prod.js', html)
+        self.assertNotIn('cdn.jsdelivr.net/npm/vue', html)
+        self.assertNotIn('Классическая версия', html)
+        self.assertIn('"classic": "/marketplaces/listings/classic"', html)
+        self.assertIn('"base": "/marketplaces/listings/"', html)
+        self.assertIn('marketplace-catalog-app', alias.get_data(as_text=True))
+        self.assertIn('catalog-products', classic.get_data(as_text=True))
+        self.assertNotIn('Foreign Ozon title', html)
 
     def test_beta_page_requires_seller_profile(self):
         user_patch, login_patch = self._auth(None)
@@ -332,10 +355,14 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         user_patch, login_patch = self._auth(self.seller1_id)
         with user_patch, login_patch:
             own = self.client.get(f"/marketplaces/listings/beta/{self.own_id}")
+            canonical = self.client.get(f"/marketplaces/listings/view/{self.own_id}")
+            canonical_foreign = self.client.get(f"/marketplaces/listings/view/{self.foreign_id}")
             foreign = self.client.get(
                 f"/marketplaces/listings/beta/{self.foreign_id}",
             )
         self.assertEqual(own.status_code, 200)
+        self.assertEqual(canonical.status_code, 200)
+        self.assertEqual(canonical_foreign.status_code, 404)
         self.assertIn(
             "marketplace-detail-app",
             own.get_data(as_text=True),
@@ -489,16 +516,11 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
         )
 
     def test_sync_json_is_strict_and_passes_authenticated_seller_scope(self):
-        run = SimpleNamespace(
-            status="paused",
-            to_public_dict=lambda: {"id": 9, "status": "paused"},
-        )
+        job = {'job_uid': 'synthetic-job', 'status': 'pending', 'message': 'Загружаем в фоне'}
         user_patch, login_patch = self._auth(self.seller1_id)
-        with user_patch, login_patch, patch.object(
-            MarketplaceListingService,
-            "sync_ozon_account",
-            return_value=run,
-        ) as sync:
+        with user_patch, login_patch, patch(
+            'routes.marketplace_listings.enqueue_account_sync', return_value=job,
+        ) as enqueue, patch.object(MarketplaceListingService, 'sync_ozon_account') as sync:
             loose = self.client.post(
                 f"/marketplaces/listings/accounts/{self.account1_id}/sync",
                 json={"max_pages": "1", "force_restart": "false"},
@@ -508,11 +530,13 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
                 json={"max_pages": 1, "force_restart": False},
             )
         self.assertEqual(loose.status_code, 400)
-        self.assertEqual(valid.status_code, 200)
-        sync.assert_called_once_with(
+        self.assertEqual(valid.status_code, 202)
+        self.assertEqual(valid.get_json()['job']['status'], 'pending')
+        self.assertIn('/setup', valid.get_json()['status_url'])
+        sync.assert_not_called()
+        enqueue.assert_called_once_with(
             seller_id=self.seller1_id,
             account_id=self.account1_id,
-            max_pages=1,
             force_restart=False,
         )
 

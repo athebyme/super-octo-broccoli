@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Склад и возвраты WB{% endblock %}
 {% block content %}
-<div x-data="inventoryApp()" x-init="init()" class="p-6 max-w-7xl mx-auto">
-    <div class="flex items-center justify-between mb-6">
+<div x-data="inventoryApp()" class="p-4 sm:p-6 max-w-7xl mx-auto">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
         <h1 class="text-2xl font-bold" style="color:var(--text)">Склад и возвраты WB</h1>
         <div class="flex items-center gap-3">
             <span x-show="autoRefreshActive" x-cloak class="text-xs px-2 py-1 rounded-full flex items-center gap-1" style="background:var(--ok-bg);color:var(--ok)">
@@ -16,6 +16,9 @@
     </div>
 
     <!-- Tabs -->
+    <div x-show="wh.sync || wh.observationAvailable === false" x-cloak class="sh-alert sh-alert--info mb-4" role="status">
+        <span x-text="wh.sync?.message || (wh.sync && ['pending', 'running'].includes(wh.sync.status) ? 'Остатки обновляются в фоне: ' + wh.sync.processed + ' из ' + wh.sync.total + ' товаров. Показываются последние подтверждённые данные.' : wh.observationAvailable === false ? 'Остатки ещё не получены от WB. Ноль в сводке пока не означает отсутствие товара на складе.' : 'Последнее обновление остатков завершено.')"></span>
+    </div>
     <div class="flex gap-1 mb-6 p-1 rounded-xl" style="background:var(--bg-card);border:1px solid var(--border);display:inline-flex">
         <button @click="tab = 'stock'" class="px-5 py-2 rounded-lg text-sm font-medium transition-colors"
                 :style="tab === 'stock' ? 'background:var(--accent);color:#fff' : 'color:var(--text-secondary)'">
@@ -52,13 +55,13 @@
     <div x-show="tab === 'stock'" x-cloak>
         <div x-show="hasStockData">
             <!-- Controls bar -->
-            <div class="flex items-center justify-between mb-4">
-                <div class="flex items-center gap-3">
-                    <span class="text-xs" style="color:var(--text-muted)" x-show="lastStockUpdate" x-text="'Обновлено: ' + lastStockUpdate"></span>
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span class="text-xs" style="color:var(--text-muted)" x-show="lastStockUpdate" x-text="'Самые ранние данные: ' + lastStockUpdate"></span>
                     <span class="text-xs" style="color:var(--text-muted)" x-text="'Следующее через ' + nextRefreshIn + ' мин'"></span>
                 </div>
                 <button @click="refreshStock()" :disabled="refreshing"
-                        class="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                        class="sh-btn sh-btn--primary shrink-0"
                         style="background:var(--accent);color:#fff">
                     <svg class="w-4 h-4" :class="{'animate-spin': refreshing}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
@@ -101,9 +104,9 @@
                     <span class="px-2 py-0.5 rounded-full text-xs font-medium" style="background:var(--danger-bg);color:var(--danger)"
                           x-text="wh.lowStockCount + ' позиций'"></span>
                 </div>
-                <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                     <template x-for="(item, idx) in (wh.lowStockAlerts || [])" :key="'alert-'+idx">
-                        <a :href="'/products/' + item.id" class="flex items-center justify-between p-3 rounded-lg hover:shadow-sm transition-shadow" style="background:#fff;border:1px solid var(--danger-border);text-decoration:none">
+                        <a :href="'/products/' + item.id" class="flex min-w-0 items-center justify-between p-3 rounded-lg hover:shadow-sm transition-shadow" style="background:var(--bg-card);border:1px solid var(--danger-border);text-decoration:none">
                             <div class="min-w-0 flex-1">
                                 <div class="text-sm font-medium truncate" style="color:var(--text)" x-text="item.title"></div>
                                 <div class="text-xs" style="color:var(--text-muted)">
@@ -140,7 +143,7 @@
                         </div>
                     </template>
                     <div x-show="wh.warehouses && wh.warehouses.length > 15" class="text-center py-2 text-xs" style="color:var(--text-muted)"
-                         x-text="'и ещё ' + (wh.warehouses.length - 15) + ' складов'"></div>
+                         x-text="'и ещё ' + ((wh.warehouses || []).length - 15) + ' складов'"></div>
                     <div x-show="!wh.warehouses || wh.warehouses.length === 0" class="text-center py-4" style="color:var(--text-muted)">
                         Нет данных по складам
                     </div>
@@ -148,9 +151,9 @@
             </div>
 
             <!-- Tables grid -->
-            <div class="grid md:grid-cols-2 gap-6 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 <!-- Warehouse breakdown table -->
-                <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="min-w-0 rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
                     <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Склады</h2>
                     <div class="overflow-x-auto">
                         <table class="w-full text-sm">
@@ -187,7 +190,7 @@
                 </div>
 
                 <!-- Top stocked products -->
-                <div class="rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
+                <div class="min-w-0 rounded-xl p-5" style="background:var(--bg-card);border:1px solid var(--border)">
                     <h2 class="text-lg font-semibold mb-4" style="color:var(--text)">Топ товаров по остаткам</h2>
                     <div class="space-y-2 max-h-96 overflow-y-auto">
                         <template x-for="(item, idx) in (wh.topProducts || [])" :key="'top-'+idx">
@@ -382,9 +385,11 @@ function inventoryApp() {
         toastError: false,
 
         // Stock data
-        wh: {},
+        wh: {warehouses: [], topProducts: [], lowStockAlerts: []},
         hasStockData: false,
         lastStockUpdate: '',
+        stockPollTimer: null,
+        visibilityHandler: null,
         autoRefreshActive: true,
         autoRefreshTimer: null,
         nextRefreshIn: 30,
@@ -413,9 +418,22 @@ function inventoryApp() {
         refreshIntervalMin: 30,
 
         async init() {
+            // Alpine invokes init() once automatically; no duplicate x-init.
+            this.visibilityHandler = () => {
+                if (!document.hidden && ['pending', 'running'].includes(this.wh.sync?.status)) this.loadStock();
+            };
+            document.addEventListener('visibilitychange', this.visibilityHandler);
             await this.loadStock();
             await this.loadRefreshInterval();
             this.startAutoRefresh();
+        },
+
+        destroy() {
+            clearTimeout(this.stockPollTimer);
+            clearTimeout(this.retPollTimer);
+            clearInterval(this.autoRefreshTimer);
+            clearInterval(this.countdownTimer);
+            document.removeEventListener('visibilitychange', this.visibilityHandler);
         },
 
         async loadRefreshInterval() {
@@ -431,6 +449,7 @@ function inventoryApp() {
 
         // --- Stock ---
         async loadStock() {
+            clearTimeout(this.stockPollTimer);
             this.loading = true;
             this.error = null;
             try {
@@ -438,7 +457,10 @@ function inventoryApp() {
                 if (resp.ok) {
                     this.wh = await resp.json();
                     this.hasStockData = true;
-                    this.lastStockUpdate = new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'});
+                    this.lastStockUpdate = this.wh.observedAt ? new Date(this.wh.observedAt + 'Z').toLocaleString('ru-RU') : '';
+                    if (['pending', 'running'].includes(this.wh.sync?.status)) {
+                        this.stockPollTimer = setTimeout(() => { if (!document.hidden) this.loadStock(); }, 15000);
+                    }
                 } else {
                     const err = await resp.json().catch(() => ({}));
                     this.error = err.error || 'Ошибка загрузки данных';
@@ -471,9 +493,11 @@ function inventoryApp() {
         },
 
         startAutoRefresh() {
+            clearInterval(this.autoRefreshTimer);
+            clearInterval(this.countdownTimer);
             const intervalMs = this.refreshIntervalMin * 60 * 1000;
             this.autoRefreshTimer = setInterval(() => {
-                this.refreshStock();
+                if (!document.hidden && !['pending', 'running'].includes(this.wh.sync?.status)) this.refreshStock();
             }, intervalMs);
             this.autoRefreshActive = true;
             this.nextRefreshIn = this.refreshIntervalMin;

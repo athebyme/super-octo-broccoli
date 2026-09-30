@@ -162,6 +162,11 @@ class ParallelCharacteristicsTest(unittest.TestCase):
             title=f'{subject_name} из силикона',
             description='Материал изделия: силикон.',
             category=subject_name,
+            original_data_json=json.dumps({
+                'title': f'{subject_name} из силикона',
+                'description': 'Материал изделия: силикон.',
+                'category': subject_name,
+            }, ensure_ascii=False),
             wb_category_name=subject_name,
             wb_subject_id=subject_id,
             wb_subject_name=subject_name,

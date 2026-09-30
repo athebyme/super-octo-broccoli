@@ -1,0 +1,31 @@
+/* A price ledger, shared by each Ozon surface. The baseline leads, while
+   seller, promotion and unobserved buyer amounts retain explicit labels. */
+.mcat-prices { position:relative; min-width:0; margin:10px 0; text-align:left; font-variant-numeric:tabular-nums; }
+.mcat-prices dl { display:grid; gap:9px; margin:0; }
+.mcat-prices dl > div { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:baseline; gap:8px; }
+.mcat-prices dt { color:var(--text-secondary); font-size:12px; font-weight:400; line-height:1.4; }
+.mcat-prices dd { margin:0; color:var(--text); font-size:15px; font-weight:500; text-align:right; overflow-wrap:anywhere; white-space:normal; }
+.mcat-prices .is-primary { padding-bottom:10px; border-bottom:1px solid var(--border-light); }
+.mcat-prices .is-primary dd { font-size:25px; font-weight:600; line-height:1.2; }
+.mcat-prices .is-unknown dd { color:var(--text-secondary); font-weight:400; }
+.mcat-prices .mcat-price-help { margin:14px 0 8px; font-size:12px; line-height:1.6; color:var(--text-secondary); max-width:64ch; }
+.mcat-prices .mcat-price-observed { margin:8px 0; font-size:11px; color:var(--text-secondary); }
+.mcat-prices--compact { margin:12px 0 4px; }
+.mcat-prices--compact dl { gap:5px; }
+.mcat-prices--compact dl > div { grid-template-columns:minmax(0,1fr) auto; }
+.mcat-prices--compact dt { font-size:11px; }
+.mcat-prices--compact dd { font-size:12px; max-width:16ch; }
+.mcat-prices--compact .is-primary { display:block; border:0; padding-bottom:6px; }
+.mcat-prices--compact .is-primary dd { text-align:left; font-size:20px; margin-top:2px; }
+.mcat-prices .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.mcat-table .mcat-prices { min-width:180px; margin:0; }
+.mcat-chan-price--ozon { display:flex; flex-direction:column; align-items:flex-end; gap:3px; min-width:0; white-space:normal; overflow-wrap:anywhere; }
+.mcat-chan-price--ozon small { font-size:11px; font-weight:600; }
+.mcat-chan-price--ozon > span { font-size:11px; font-weight:400; color:var(--text-secondary); }
+.oc-price-lanes { margin:12px 0 16px; }
+.oc-price-lanes > summary { cursor:pointer; padding:8px 0; font-size:13px; color:var(--text-secondary); }
+.oc-price-lanes > summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+@media (max-width:720px) {
+    .mcat-grid .mcat-prices--compact dl > div { display:block; }
+    .mcat-grid .mcat-prices--compact dd { text-align:left; }
+}

@@ -1,60 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, status_icon %}
 
-{% macro ozon_account_form() -%}
-<form method="post" action="{{ url_for('marketplace_accounts.create_ozon') }}"
-      class="grid grid-cols-1 gap-4 md:grid-cols-2">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="return_to" value="api_settings">
-    <label class="block">
-        <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Название подключения</span>
-        <input name="label" required maxlength="120" autocomplete="organization"
-               placeholder="Основной кабинет"
-               class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-               style="border-color:var(--border);color:var(--text)">
-    </label>
-    <label class="block">
-        <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Client-Id</span>
-        <input name="client_id" required maxlength="200" inputmode="numeric" autocomplete="off"
-               placeholder="123456"
-               class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-               style="border-color:var(--border);color:var(--text)">
-    </label>
-    <label class="block md:col-span-2">
-        <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">API key</span>
-        <input type="password" name="api_key" required maxlength="2000" autocomplete="new-password"
-               placeholder="Ключ нельзя будет посмотреть после сохранения"
-               class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-               style="border-color:var(--border);color:var(--text)">
-    </label>
-    <label class="block md:col-span-2">
-        <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">НДС для новых карточек</span>
-        <select name="default_vat" required
-                class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                style="border-color:var(--border);color:var(--text)">
-            <option value="">Выберите один раз для кабинета</option>
-            <option value="0">Без НДС</option>
-            <option value="0.05">5%</option>
-            <option value="0.07">7%</option>
-            <option value="0.1">10%</option>
-            <option value="0.2">20%</option>
-            <option value="0.22">22%</option>
-        </select>
-        <span class="block mt-1 text-xs" style="color:var(--text-muted)">Seller Hub заполнит ставку и валюту RUB автоматически; цену возьмёт из рассчитанной цены товара.</span>
-    </label>
-    <div class="md:col-span-2 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <label class="inline-flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
-            <input type="checkbox" name="is_default" value="1" class="rounded">
-            Сделать основным кабинетом Ozon
-        </label>
-        <button type="submit" class="sh-btn sh-btn--primary">
-            {{ icon('key', size=16) }}
-            Сохранить Ozon
-        </button>
-    </div>
-</form>
-{%- endmacro %}
-
 {% block title %}Настройки API - Seller Hub{% endblock %}
 
 {% block content %}
@@ -78,19 +24,14 @@
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h2 id="ozon-api-settings-title" class="text-lg font-semibold" style="color:var(--text)">Ozon</h2>
-                        {% if ozon_publication_enabled %}
-                        <span class="sh-badge sh-badge--green">Загрузка карточек включена</span>
-                        {% else %}
-                        <span class="sh-badge sh-badge--gray">Запись выключена</span>
-                        {% endif %}
                     </div>
                     <p class="mt-1 text-sm" style="color:var(--text-secondary)">
-                        Подключите кабинет для массовой загрузки карточек, каталога, аналитики, заказов и финансов.
+                        Подключите магазин одним действием. Проверка ключа и загрузка каталога продолжатся в фоне.
                     </p>
                 </div>
             </div>
             <a href="{{ url_for('marketplace_accounts.index') }}" class="sh-btn sh-btn--secondary self-start">
-                Управление кабинетами
+                {{ 'Мои подключения' if ozon_accounts else 'Подключить Ozon' }}
                 {{ icon('arrow-right', size=16) }}
             </a>
         </div>
@@ -151,30 +92,14 @@
                         <p class="mt-1 text-xs" style="color:var(--danger)">{{ account.last_error_message }}</p>
                         {% endif %}
                     </div>
-                    {% if account.has_credentials %}
-                    <form method="post" action="{{ url_for('marketplace_accounts.check', account_id=account.id) }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <input type="hidden" name="return_to" value="api_settings">
-                        <button type="submit" class="sh-btn sh-btn--secondary">
-                            {{ icon('refresh', size=16) }}
-                            Проверить доступ
-                        </button>
-                    </form>
-                    {% endif %}
+                    <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_accounts.index', account_id=account.id, _anchor='ozon-account-' ~ account.id) }}">Статус и настройки</a>
                 </div>
                 {% endfor %}
             </div>
 
-            {% if ozon_accounts|length < 10 %}
-            <details class="mt-5">
-                <summary class="cursor-pointer text-sm font-medium" style="color:var(--accent)">Добавить ещё один кабинет Ozon</summary>
-                <div class="mt-4">{{ ozon_account_form() }}</div>
-            </details>
-            {% endif %}
             {% else %}
             <div class="mt-5">
-                <h3 class="text-sm font-semibold mb-3" style="color:var(--text)">Подключить кабинет Ozon</h3>
-                {{ ozon_account_form() }}
+                <p class="text-sm" style="color:var(--text-secondary)">Понадобятся Client-Id и API key из Ozon Seller. НДС и настройки публикации можно выбрать позже.</p>
             </div>
             {% endif %}
         {% endif %}
@@ -189,8 +114,16 @@
     </div>
 
     <!-- Статус API -->
-    {% if seller.wb_api_key %}
-    <div class="p-4 bg-green-50 border border-green-200 rounded-xl">
+    {% if wb_credential.expired %}
+    <div class="sh-alert sh-alert--warning" role="status">
+        <div>
+            <h3 class="font-semibold">Срок действия ключа Wildberries истёк</h3>
+            <p class="text-sm mt-1">Замените ключ ниже, чтобы возобновить синхронизацию. Сохранённые данные остаются доступны.</p>
+            <p class="text-xs mt-1">Срок действия: {{ wb_credential.expires_at }}</p>
+        </div>
+    </div>
+    {% elif seller.wb_api_key %}
+    <div class="p-4 border rounded-xl" style="background:var(--bg-secondary);border-color:var(--border)">
         <div class="flex items-center gap-3">
             <div class="w-10 h-10 bg-gradient-to-br from-green-400 to-emerald-500 rounded-lg flex items-center justify-center flex-shrink-0">
                 <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -198,8 +131,9 @@
                 </svg>
             </div>
             <div>
-                <h3 class="font-semibold text-green-900">API ключ настроен</h3>
-                <p class="text-sm text-green-700">Вы можете синхронизировать данные с Wildberries</p>
+                <h3 class="font-semibold" style="color:var(--text)">API ключ сохранён</h3>
+                <p class="text-sm" style="color:var(--text-secondary)">Доступ к разделам проверяется при синхронизации с Wildberries.</p>
+                {% if wb_credential.expires_at %}<p class="text-xs mt-1" style="color:var(--text-muted)">Срок действия по данным ключа: {{ wb_credential.expires_at }}</p>{% endif %}
             </div>
         </div>
     </div>
@@ -255,6 +189,7 @@
     <!-- Форма настройки -->
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
         <form method="POST" action="{{ url_for('api_settings') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="mb-5">
                 <label for="wb_api_key" class="block text-sm font-medium text-gray-700 mb-2">
                     API ключ Wildberries
@@ -263,12 +198,14 @@
                 <input type="password"
                        id="wb_api_key"
                        name="wb_api_key"
-                       value="{{ seller.wb_api_key if seller.wb_api_key else '' }}"
+                       autocomplete="new-password"
+                       maxlength="16384"
                        required
-                       placeholder="Вставьте ваш API ключ..."
+                       placeholder="{{ 'Вставьте новый ключ для замены сохранённого' if seller.wb_api_key else 'Вставьте ваш API ключ' }}"
                        class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors text-sm">
                 <p class="mt-1.5 text-xs text-gray-500">
-                    Ключ хранится в зашифрованном виде и используется только для работы с API Wildberries
+                    Сохранённый ключ не отображается и не передаётся в страницу. Новое значение заменит его только после отправки формы.
+                    Для остатков WB нужен персональный или сервисный ключ с категорией «Аналитика»; базовый ключ этого метода не поддерживает.
                 </p>
             </div>
 

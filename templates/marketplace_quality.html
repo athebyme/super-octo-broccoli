@@ -1,241 +1,70 @@
-{% extends "base.html" %}
-{% from "macros/components.html" import channel_bar %}
-
-{% block title %}Качество Ozon — Seller Hub{% endblock %}
-
+{% extends 'base.html' %}
+{% from 'macros/icons.html' import icon %}
+{% from 'macros/components.html' import channel_bar %}
+{% block title %}Качество карточек Ozon — Seller Hub{% endblock %}
 {% block content %}
-<div x-data="ozonQualityPage()" x-init="init()">
-  <div class="sh-page-header">
-    <div class="sh-page-header-content">
-      <div>
-        <h1 class="sh-page-title">Качество карточек Ozon</h1>
-        <p class="sh-page-subtitle">Контент по свежей схеме категории и метрики только выбранного кабинета</p>
-      </div>
-      <div class="sh-page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="refreshAll()" :disabled="refreshing">
-          <span x-text="refreshing ? 'Пересчитываю…' : 'Пересчитать'"></span>
-        </button>
-        <a class="sh-btn sh-btn--white-outline sh-btn--sm" href="{{ url_for('marketplace_analytics_page', account_id=selected_account.id) }}">Аналитика Ozon</a>
-        <a class="sh-btn sh-btn--white-outline sh-btn--sm" href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}">Отзывы</a>
-      </div>
+<link rel="stylesheet" href="{{ url_for('static',filename='ozon-quality.css') }}">
+<div id="oqw-fallback" class="oqw-page" role="status"><h1>Качество карточек</h1><p>Открываем сохранённые оценки…</p><noscript>Включите JavaScript для рабочего списка.</noscript><a href="{{ url_for('marketplace_listings.index',account_id=selected_account.id) }}">Открыть каталог</a></div>
+<div id="oqw-app" class="oqw-page" x-ignore v-cloak>
+  <header class="oqw-header"><div><h1>Качество карточек</h1><p>{{ selected_account.label }} · Ozon</p></div><div class="oqw-actions"><a :href="catalogURL" class="sh-btn sh-btn--secondary">{{ icon('package',size=17) }} Каталог</a><button type="button" class="sh-btn sh-btn--primary" :disabled="!canRefresh" @click="startRefresh()">{{ icon('refresh',size=17) }}<span v-text="jobSending?'Ставим в очередь…':job?.active?'Идёт пересчёт…':'Пересчитать оценки'"></span></button></div></header>
+  {{ channel_bar(active='ozon',account_id=selected_account.id,wb_href=url_for('card_quality_page'),ozon_href=url_for('marketplace_quality_page')) }}
+  <p class="oqw-intro">Проверка Seller Hub по сохранённым данным, не официальный балл Ozon. Пересчёт не изменяет товары на площадке.</p>
+  <section v-if="job || jobLoading || jobError || jobUncertain" class="oqw-job" aria-label="Пересчёт оценок" aria-live="polite">
+    <div><strong v-text="jobUncertain?'Проверяем, принят ли запрос':job?.message||'Проверяем состояние пересчёта…'"></strong><p v-if="job"><span v-text="'Обработано: '+number(job.processed)+' карточек'"></span><span v-if="job.active" v-text="' · В начале было: '+number(job.initial_total)"></span><span v-if="job.updated_at" v-text="' · '+instant(job.updated_at)"></span></p><p v-if="jobUncertain">До проверки состояния повторная отправка отключена.</p></div>
+    <button v-if="jobCompleted" type="button" class="sh-btn sh-btn--secondary" :disabled="loading" @click="load()">Показать новые оценки</button>
+    <p v-if="jobError" role="alert" v-text="jobError"></p><button v-if="(jobError || jobUncertain) && !sessionEnded" type="button" class="sh-btn sh-btn--secondary" :disabled="jobLoading || jobSending" @click="loadJob()">Проверить состояние</button>
+  </section>
+  <div v-if="sessionEnded" role="alert" class="oqw-notice"><p>Сессия завершилась или доступ изменился. Сохранённые на экране данные могут быть неактуальны.</p><a :href="loginURL" class="sh-btn sh-btn--secondary">Войти снова</a></div>
+  <dl v-if="summary" class="oqw-overview"><div><dt>Активных карточек</dt><dd v-text="number(summary.total)"></dd></div><div><dt>Есть сохранённая проверка</dt><dd v-text="number(summary.assessed)"></dd></div><div><dt>Ещё не проверены</dt><dd v-text="number(summary.unassessed)"></dd></div><div><dt>Средняя сохранённых оценок</dt><dd><span v-text="number(summary.average_saved_score)"></span><small v-if="summary.average_saved_score!==null"> / 100</small></dd></div></dl>
+  <p v-if="summary && summary.changed+summary.outdated>0" class="oqw-muted" v-text="'Для '+number(summary.changed+summary.outdated)+' карточек стоит обновить проверку: данные изменились или оценка старше суток.'"></p>
+  <form class="oqw-filters" aria-label="Фильтры качества" @submit.prevent="applySearch()">
+    <div class="oqw-filters-main">
+    <label class="oqw-search">Поиск<div><input type="search" name="search" autocomplete="off" maxlength="200" v-model="searchDraft" placeholder="Название, артикул или SKU…"><button type="submit" class="sh-btn sh-btn--secondary">Найти</button></div></label>
+    <label>Состояние проверки<select name="state" :value="filters.state" @change="navigate({state:$event.target.value,page:1})"><option value="">Все карточки</option><option value="unassessed">Ещё не проверены</option><option value="changed">Карточка изменилась</option><option value="outdated">Пора пересчитать</option><option value="observed">Есть недавняя проверка</option></select></label>
+    <button type="button" class="sh-btn sh-btn--secondary" @click="reset()">Сбросить фильтры</button>
     </div>
-  </div>
-
-  <div style="max-width:1280px;margin:0 auto;padding:0 24px 40px">
-    {{ channel_bar(active='ozon', account_id=selected_account.id, wb_href=url_for('card_quality_page'), ozon_href=url_for('marketplace_quality_page'), class='mb-4') }}
-
-    <div class="sh-alert sh-alert--info" role="note">
-      Баллы Ozon не сравниваются с WB напрямую. Каждая причина хранит собственный Ozon-код, общую severity и impact; устаревшая схема показывает «нет оценки», а не приблизительный балл.
+    <details class="oqw-filter-more" :open="Boolean(filters.severity || filters.reason || filters.sort_by!=='priority' || filters.sort_dir!=='desc')"><summary>Уровень, причины и сортировка</summary><div>
+    <label>Уровень<select name="severity" :value="filters.severity" @change="navigate({severity:$event.target.value,page:1})"><option value="">Все уровни</option><option value="critical">Требует внимания</option><option value="warning">Можно улучшить</option><option value="good">Хорошо</option><option value="excellent">Отлично</option></select></label>
+    <label>Причина<select name="reason" :value="filters.reason" @change="navigate({reason:$event.target.value,page:1})"><option value="">Любая причина</option><option v-if="filters.reason && !reasonOptions.some(r=>r.code===filters.reason)" :value="filters.reason">Выбранная причина · 0</option><option v-for="r in reasonOptions" :key="r.code" :value="r.code" v-text="r.label+' · '+number(r.count)"></option></select></label>
+    <label>Порядок<select name="sort_by" :value="filters.sort_by" @change="navigate({sort_by:$event.target.value,page:1})"><option value="priority">Приоритет исправления</option><option value="score">Сохранённая оценка</option><option value="evaluated_at">Дата проверки</option><option value="title">Название</option></select></label>
+    <label>Направление<select name="sort_dir" :value="filters.sort_dir" @change="navigate({sort_dir:$event.target.value,page:1})"><option value="desc">По убыванию</option><option value="asc">По возрастанию</option></select></label>
+    </div></details>
+  </form>
+  <div v-if="error" role="alert" class="oqw-notice"><p v-text="error"></p><p v-if="loaded">На экране остаётся предыдущая выборка.</p><button v-if="!sessionEnded" type="button" class="sh-btn sh-btn--secondary" :disabled="loading" @click="load()">Повторить загрузку</button></div>
+  <p v-if="loading" role="status" class="oqw-muted">Загружаем карточки…</p><p v-if="loaded && stale" role="status" class="oqw-notice">Показана предыдущая выборка. Новые условия ещё не загружены; выбор карточек временно отключён.</p>
+  <section v-if="loaded" aria-label="Карточки и оценки" :aria-busy="loading">
+    <div class="oqw-toolbar"><label class="oqw-checkbox"><input type="checkbox" :checked="allSelected" :indeterminate="someSelected" :disabled="loading || stale || !items.length" @change="togglePage()">Выбрать страницу</label><span v-text="'Найдено: '+number(pagination.total)"></span><button v-if="Object.keys(failedImages).length" type="button" class="oqw-text-button" @click="retryImages()">Повторить загрузку фото</button></div>
+    <div v-if="selected.length" class="oqw-selection"><strong v-text="'Выбрано '+number(selected.length)+' из 200' "></strong><span>Выбор сохраняется между страницами.</span><button type="button" class="sh-btn sh-btn--primary" :disabled="stale || sessionEnded" @click="saveCollection()">{{ icon('sparkles',size=16) }} Открыть в ИИ-помощнике</button><button type="button" class="oqw-text-button" @click="clearSelection()">Снять выбор</button></div>
+    <p v-if="selectionMessage" role="status" class="oqw-muted" v-text="selectionMessage"></p>
+    <div v-if="!items.length" class="oqw-empty"><h2 v-text="summary?.total?'Нет карточек по этим условиям':'Каталог пока пуст'"></h2><p v-if="summary?.total">Измените поиск или снимите фильтры. Ещё не проверенные карточки доступны в отдельном состоянии.</p><p v-else>Откройте каталог и загрузите товары из подключённого магазина.</p><button v-if="summary?.total" type="button" class="sh-btn sh-btn--secondary" @click="reset()">Показать все карточки</button><a v-else :href="catalogURL" class="sh-btn sh-btn--secondary">Открыть каталог</a><a v-if="pagination.page>1" :href="url({...filters,page:1},null)" @click="pageLink($event,1)">На первую страницу</a></div>
+    <div v-else class="oqw-list">
+      <div class="oqw-row oqw-row-head" aria-hidden="true"><span></span><span>Карточка</span><span>Последняя оценка</span><span>Что можно улучшить</span><span></span></div>
+      <article v-for="item in items" :key="item.listing_id" class="oqw-row">
+        <label class="oqw-checkbox"><input type="checkbox" :checked="selected.includes(item.listing_id)" :disabled="loading || stale" @change="toggle(item.listing_id)"><span class="sr-only" v-text="'Выбрать '+(item.title||item.offer_id)"></span></label>
+        <div class="oqw-product"><span class="oqw-photo"><img v-if="imageURL(item.image) && !failedImages[item.listing_id]" :src="imageURL(item.image)" alt="" width="56" height="70" loading="lazy" v-image-deadline @error="failedImages[item.listing_id]=true">{{ icon('image',size=21) }}</span><div><a :href="item.url" v-text="item.title || 'Товар без названия'"></a><small v-text="'Артикул '+item.offer_id"></small><small v-if="item.primary_sku" v-text="'SKU '+item.primary_sku"></small></div></div>
+        <div class="oqw-score"><strong v-text="number(item.score)"></strong><small v-if="item.score!==null">из 100</small><span :class="'oqw-state-'+item.state" v-text="stateLabel(item)"></span><small v-if="item.evaluated_at" v-text="instant(item.evaluated_at)"></small></div>
+        <div class="oqw-reasons"><span v-if="item.assessment_id" class="oqw-severity" :class="'oqw-'+item.severity" v-text="severityLabel(item.severity)"></span><ul v-if="item.reasons.length"><li v-for="r in item.reasons.slice(0,3)" :key="r.code" v-text="r.label"></li></ul><p v-else class="oqw-muted" v-text="item.assessment_id?'В сохранённой проверке причин нет.':'Оценка появится после фонового пересчёта.'"></p><small v-if="item.reasons.length>3" v-text="'Ещё причин: '+number(item.reasons.length-3)"></small></div>
+        <button type="button" class="sh-btn sh-btn--secondary oqw-detail-button" :aria-label="'Подробнее о качестве: '+(item.title || item.offer_id)" @click="openDetail(item.listing_id)">Подробнее</button>
+      </article>
     </div>
-
-    <template x-if="error">
-      <div class="sh-alert sh-alert--error" role="alert" x-text="error"></div>
-    </template>
-
-    <div class="sh-stat-grid sh-stat-grid--4" style="margin-bottom:24px">
-      <div class="sh-stat-card">
-        <div class="sh-stat-label">Средний Quality</div>
-        <div class="sh-stat-value" x-text="summary.avg_quality == null ? '—' : Math.round(summary.avg_quality)"></div>
-      </div>
-      <div class="sh-stat-card">
-        <div class="sh-stat-label">Карточек</div>
-        <div class="sh-stat-value" x-text="summary.total || 0"></div>
-        <div class="sh-stat-footnote" x-text="'Оценено: ' + (summary.assessed || 0)"></div>
-      </div>
-      <div class="sh-stat-card">
-        <div class="sh-stat-label">Требуют внимания</div>
-        <div class="sh-stat-value" style="color:var(--danger)" x-text="summary.need_attention || 0"></div>
-      </div>
-      <div class="sh-stat-card">
-        <div class="sh-stat-label">Выбрано</div>
-        <div class="sh-stat-value" x-text="selectedIds.length"></div>
-        <button x-show="selectedIds.length" @click="saveCollection()" class="sh-btn sh-btn--secondary sh-btn--sm" style="margin-top:8px">Открыть выбранное в ИИ-помощнике</button>
-      </div>
+    <nav v-if="pagination.pages>1" class="oqw-pagination" aria-label="Страницы качества"><a v-if="pagination.page>1" :href="url({...filters,page:pagination.page-1},null)" @click="pageLink($event,pagination.page-1)">Назад</a><span v-else aria-disabled="true">Назад</span><span v-text="'Страница '+pagination.page+' из '+pagination.pages"></span><a v-if="pagination.page<pagination.pages" :href="url({...filters,page:pagination.page+1},null)" @click="pageLink($event,pagination.page+1)">Далее</a><span v-else aria-disabled="true">Далее</span></nav>
+    <details class="oqw-explanation"><summary>Как понимать оценки и приоритет</summary><p>Оценка отражает последнюю проверку заполнения карточки: характеристики, фотографии, описание, название, штрихкоды, наличие цены и состояние публикации. Она не гарантирует продажи, прохождение модерации или готовность отправки.</p><p>Приоритет — локальный порядок исправления по серьёзности сохранённых причин. Это не прогноз выручки. Среднее относится к сохранённым числовым оценкам; карточки без балла в него не входят. При изменении данных или проверке старше суток предложен пересчёт.</p><p>Пересчёт использует сохранённый каталог и справочники. Если они устарели, сначала обновите каталог или справочник. Новые товары, добавленные во время пересчёта, обработаются при следующем запуске или плановой проверке.</p></details>
+  </section>
+  <dialog ref="dialog" class="oqw-dialog" aria-labelledby="oqw-detail-title" @cancel.prevent="closeDetail()" @click="$event.target===$refs.dialog && closeDetail()">
+    <header><h2 id="oqw-detail-title">Проверка карточки</h2><button type="button" class="sh-btn sh-btn--secondary" @click="closeDetail()" autofocus>Закрыть</button></header>
+    <div class="oqw-dialog-body"><p v-if="detailLoading" role="status">Загружаем оценку…</p><div v-if="detailError" class="oqw-notice" role="alert"><p v-text="detailError"></p><button v-if="!sessionEnded" type="button" class="sh-btn sh-btn--secondary" @click="loadDetail()">Повторить</button><a v-else :href="loginURL">Войти снова</a></div>
+      <template v-if="detail"><div class="oqw-detail-product oqw-product"><span class="oqw-photo"><img v-if="imageURL(detail.image) && !failedImages[detail.listing_id]" :src="imageURL(detail.image)" alt="" width="56" height="70" v-image-deadline @error="failedImages[detail.listing_id]=true">{{ icon('image',size=21) }}</span><div><a :href="detail.url" v-text="detail.title || 'Товар без названия'"></a><small v-text="'Артикул '+detail.offer_id"></small></div></div>
+        <div class="oqw-detail-score"><strong v-text="number(detail.score)"></strong><div><span v-text="stateLabel(detail)"></span><small v-if="detail.evaluated_at" v-text="instant(detail.evaluated_at)"></small><small>Оценка Seller Hub по сохранённым данным</small></div></div>
+        <p v-if="detail.state!=='observed'" class="oqw-notice">Запустите пересчёт оценок, чтобы проверить последние сохранённые данные. Обновление каталога и справочников выполняется отдельно.</p>
+        <h3>Причины и следующий шаг</h3><ul v-if="detail.reasons.length" class="oqw-detail-reasons"><li v-for="r in detail.reasons" :key="r.code"><strong v-text="r.label"></strong><span v-text="r.code==='ozon_no_analytics_signal'?'Откройте аналитику и проверьте наличие завершённой загрузки.':r.code.includes('schema')?'Проверьте тип товара и актуальность справочника в карточке.':'Откройте карточку, проверьте данные и подготовьте исправления.'"></span></li></ul><p v-else v-text="detail.assessment_id?'В сохранённой проверке причин нет.':'Карточка ещё не оценена. Пересчёт выполняется в фоне.'"></p><div class="oqw-actions"><a :href="detail.url" class="sh-btn sh-btn--primary">Открыть карточку</a><a :href="analyticsURL" class="sh-btn sh-btn--secondary">Аналитика магазина</a></div>
+        <h3 v-if="Object.keys(detail.breakdown).length">Составляющие оценки</h3><div v-for="(part,code) in detail.breakdown" :key="code" class="oqw-dimension"><div><strong v-text="dimensionLabel(code)"></strong><span v-text="number(part.score)+' / 100'"></span></div><meter min="0" max="100" :value="part.score" :aria-label="dimensionLabel(code)"></meter><small v-text="part.hint"></small></div>
+        <h3>Контекст аналитики</h3><p v-if="detail.analytics_snapshot" class="oqw-muted" v-text="'Сохранённая загрузка: '+day(detail.analytics_snapshot.period_start)+' — '+day(detail.analytics_snapshot.period_end)+' · '+instant(detail.analytics_snapshot.completed_at)"></p><p v-else class="oqw-muted">Для этой оценки нет подтверждённой загрузки аналитики.</p><dl class="oqw-metrics"><div v-for="metric in detail.metrics" :key="metric.code"><dt v-text="metric.label"></dt><dd v-text="number(metric.value)+(metric.value!==null && metric.unit==='percent'?' %':'')"></dd></div></dl><p class="oqw-muted">«—» означает отсутствие подтверждённых данных. Ноль показывается только при наблюдённом нулевом значении. Метрики Wildberries сюда не входят.</p>
+      </template>
     </div>
-
-    <div class="sh-card" style="padding:16px;margin-bottom:20px">
-      <div style="display:grid;grid-template-columns:minmax(220px,1fr) 180px 240px auto;gap:10px;align-items:end" class="max-md:grid-cols-1">
-        <label style="font-size:13px;color:var(--text-secondary)">Поиск
-          <input class="sh-input" style="width:100%;margin-top:5px" x-model="search" @keyup.enter="applyFilters()" placeholder="Название, offer ID или SKU">
-        </label>
-        <label style="font-size:13px;color:var(--text-secondary)">Severity
-          <select class="sh-input" style="width:100%;margin-top:5px" x-model="severity" @change="applyFilters()">
-            <option value="">Все</option>
-            <option value="critical">Критично</option>
-            <option value="warning">Нужно улучшить</option>
-            <option value="good">Хорошо</option>
-            <option value="excellent">Отлично</option>
-          </select>
-        </label>
-        <label style="font-size:13px;color:var(--text-secondary)">Причина
-          <select class="sh-input" style="width:100%;margin-top:5px" x-model="reason" @change="applyFilters()">
-            <option value="">Все причины</option>
-            <template x-for="item in reasonOptions" :key="item.code">
-              <option :value="item.code" x-text="item.label + ' · ' + item.count"></option>
-            </template>
-          </select>
-        </label>
-        <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="resetFilters()">Сбросить</button>
-      </div>
-    </div>
-
-    <div class="sh-table-wrap">
-      <div x-show="loading" style="padding:48px;text-align:center;color:var(--text-muted)">Загрузка оценок…</div>
-      <div x-show="!loading && !items.length" class="sh-empty" style="padding:48px 24px">
-        <p class="sh-empty-title">Нет карточек по выбранным условиям</p>
-        <p class="sh-empty-desc">Если каталог только что синхронизирован — нажмите «Пересчитать».</p>
-      </div>
-      <table class="sh-table" x-show="!loading && items.length">
-        <thead>
-          <tr>
-            <th style="width:36px"><input type="checkbox" @change="togglePage($event.target.checked)" aria-label="Выбрать все на странице"></th>
-            <th>Карточка</th>
-            <th>Quality</th>
-            <th>Причины</th>
-            <th>Impact</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="item in items" :key="item.listing_id">
-            <tr>
-              <td><input type="checkbox" :checked="!!selected[item.listing_id]" @change="toggle(item.listing_id)"></td>
-              <td style="min-width:260px">
-                <div style="font-weight:600;color:var(--text)" x-text="item.title || 'Без названия'"></div>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:4px" x-text="'Offer: ' + item.offer_id + (item.primary_sku ? ' · SKU ' + item.primary_sku : '')"></div>
-              </td>
-              <td>
-                <div style="font-size:22px;font-weight:700" :style="'color:' + severityColor(item.severity)" x-text="item.score == null ? '—' : Math.round(item.score)"></div>
-                <div style="font-size:11px;color:var(--text-muted)" x-text="statusLabel(item.status)"></div>
-              </td>
-              <td style="min-width:300px">
-                <div style="display:flex;gap:5px;flex-wrap:wrap">
-                  <template x-for="r in (item.reasons || []).slice(0,3)" :key="r.code">
-                    <span class="sh-chip" x-text="r.label"></span>
-                  </template>
-                  <span x-show="(item.reasons || []).length > 3" style="font-size:11px;color:var(--text-muted)" x-text="'+' + (item.reasons.length - 3)"></span>
-                </div>
-              </td>
-              <td style="font-weight:600" x-text="item.impact"></td>
-              <td><button class="sh-btn sh-btn--secondary sh-btn--sm" @click="openDetail(item.listing_id)">Подробнее</button></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-      <div x-show="pages > 1" style="padding:14px;display:flex;justify-content:center;align-items:center;gap:10px;border-top:1px solid var(--border)">
-        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page <= 1" @click="goPage(page-1)">Назад</button>
-        <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="page + ' / ' + pages"></span>
-        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page >= pages" @click="goPage(page+1)">Далее</button>
-      </div>
-    </div>
-  </div>
-
-  <template x-if="detail">
-    <div class="sh-slideover sh-slideover--lg" x-trap.noscroll.inert="!!detail" @keydown.escape.window="detail=null" role="dialog" aria-modal="true" aria-label="Детали качества карточки">
-      <div class="sh-slideover-backdrop" @click="detail=null"></div>
-      <div class="sh-slideover-panel">
-        <div class="sh-slideover-header">
-          <div style="min-width:0">
-            <h2 class="sh-slideover-title" x-text="detail.title || 'Карточка Ozon'"></h2>
-            <div style="font-size:12px;color:var(--text-muted);margin-top:4px" x-text="'Offer ' + detail.offer_id + ' · кабинет ' + detail.account_label"></div>
-          </div>
-          <button class="sh-btn sh-btn--secondary sh-btn--sm" @click="detail=null">Закрыть</button>
-        </div>
-        <div class="sh-slideover-body">
-          <div style="display:flex;gap:18px;align-items:center;margin-bottom:8px">
-            <div style="font-size:48px;font-weight:800" :style="'color:' + severityColor(detail.severity)" x-text="detail.score == null ? '—' : Math.round(detail.score)"></div>
-            <div><div style="font-weight:600" x-text="statusLabel(detail.status)"></div><div style="font-size:12px;color:var(--text-muted)" x-text="'Impact: ' + detail.impact"></div></div>
-          </div>
-          <h3 style="font-weight:700;margin:18px 0 10px">Измерения</h3>
-          <template x-for="(dim, code) in (detail.breakdown || {})" :key="code">
-            <div style="margin-bottom:12px">
-              <div style="display:flex;justify-content:space-between;font-size:13px"><span x-text="dimensionLabel(code)"></span><strong x-text="Math.round(dim.score) + ' / 100'"></strong></div>
-              <div class="sh-progress" :class="dim.score>=70 ? 'sh-progress--ok' : (dim.score>=50 ? 'sh-progress--warn' : 'sh-progress--danger')" style="margin:5px 0" role="progressbar" :aria-valuenow="Math.round(dim.score)" aria-valuemin="0" aria-valuemax="100">
-                <div class="sh-progress-bar" :style="'width:' + Math.max(0, Math.min(100, dim.score)) + '%'"></div>
-              </div>
-              <div style="font-size:12px;color:var(--text-muted)" x-text="dim.hint"></div>
-            </div>
-          </template>
-          <h3 style="font-weight:700;margin:22px 0 10px">Причины</h3>
-          <template x-for="r in (detail.reasons || [])" :key="r.code">
-            <div style="padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
-              <div style="display:flex;justify-content:space-between;gap:8px"><strong x-text="r.label"></strong><span style="font-size:12px" :style="'color:' + severityColor(r.severity)" x-text="r.severity + ' · +' + r.impact"></span></div>
-              <div style="font-size:11px;color:var(--text-muted);margin-top:3px" x-text="r.code"></div>
-            </div>
-          </template>
-          <h3 style="font-weight:700;margin:22px 0 10px">Контекст аналитики</h3>
-          <pre style="white-space:pre-wrap;font-size:12px;background:var(--bg-hover);color:var(--text-secondary);border-radius:8px;padding:12px" x-text="JSON.stringify((detail.metrics || {}).values || {}, null, 2)"></pre>
-        </div>
-      </div>
-    </div>
-  </template>
+  </dialog>
 </div>
-
-<script>
-function ozonQualityPage() {
-  const accountId = {{ selected_account.id|tojson }};
-  return {
-    accountId, items: [], summary: {}, page: 1, pages: 0, loading: true,
-    refreshing: false, error: '', severity: '', reason: '', search: '', detail: null,
-    selected: {},
-    get selectedIds() { return Object.keys(this.selected).filter(k => this.selected[k]).map(Number); },
-    get reasonOptions() {
-      const counts = this.summary.reason_counts || {};
-      const labels = this.summary.reason_labels || {};
-      return Object.entries(counts).filter(([, count]) => count > 0)
-        .sort((a,b) => b[1]-a[1]).map(([code,count]) => ({code,count,label:labels[code]||code}));
-    },
-    async init() { await this.load(); },
-    query(extra='') {
-      let url = '/marketplaces/api/quality?account_id=' + this.accountId + '&page=' + this.page + '&per_page=50&sort_by=impact&sort_dir=desc';
-      if (this.severity) url += '&severity=' + encodeURIComponent(this.severity);
-      if (this.reason) url += '&reason=' + encodeURIComponent(this.reason);
-      if (this.search.trim()) url += '&search=' + encodeURIComponent(this.search.trim());
-      return url + extra;
-    },
-    async load() {
-      this.loading = true; this.error = '';
-      try {
-        const r = await fetch(this.query()); const d = await r.json();
-        if (!r.ok) throw new Error(d.error || 'Не удалось загрузить данные');
-        this.items = d.items || []; this.summary = d.summary || {}; this.pages = d.pages || 0;
-      } catch (e) { this.error = e.message; }
-      finally { this.loading = false; }
-    },
-    applyFilters() { this.page = 1; this.selected = {}; this.load(); },
-    resetFilters() { this.severity=''; this.reason=''; this.search=''; this.applyFilters(); },
-    goPage(page) { this.page = page; this.load(); },
-    toggle(id) { this.selected[id] = !this.selected[id]; },
-    togglePage(on) { this.items.forEach(item => { this.selected[item.listing_id] = on; }); },
-    saveCollection() {
-      const value = {entity_kind:'marketplace_listing', marketplace_code:'ozon', account_id:this.accountId, listing_ids:this.selectedIds};
-      sessionStorage.setItem('seller_hub_marketplace_collection', JSON.stringify(value));
-      window.location.href = '/agents?new=1';
-    },
-    async refreshAll() {
-      this.refreshing = true; this.error = ''; let offset = 0; let loops = 0;
-      try {
-        while (offset !== null && loops < 50) {
-          const r = await fetch('/marketplaces/api/quality/recompute?account_id=' + this.accountId, {
-            method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
-            body:JSON.stringify({limit:200, offset:offset}),
-          });
-          const d = await r.json(); if (!r.ok) throw new Error(d.error || 'Ошибка пересчёта');
-          offset = d.data.next_offset; loops += 1;
-        }
-        this.$store.toasts.success('Оценки Ozon пересчитаны'); await this.load();
-      } catch(e) { this.error=e.message; }
-      finally { this.refreshing=false; }
-    },
-    async openDetail(id) {
-      this.error='';
-      try { const r=await fetch('/marketplaces/api/quality/'+id+'?account_id='+this.accountId); const d=await r.json(); if(!r.ok) throw new Error(d.error||'Ошибка'); this.detail=d.data; }
-      catch(e){ this.error=e.message; }
-    },
-    statusLabel(v) { return ({scored:'Оценка рассчитана',schema_stale:'Схема устарела',unscorable:'Нельзя оценить'})[v] || v; },
-    severityColor(v) { return ({critical:'var(--danger)',warning:'var(--warn)',good:'var(--ok)',excellent:'var(--ok)',info:'var(--text-secondary)'})[v] || 'var(--text-secondary)'; },
-    dimensionLabel(v) { return ({attributes:'Характеристики',media:'Медиа',description:'Описание',title:'Заголовок',barcodes:'Штрихкоды',price:'Цена',publication_health:'Публикация'})[v] || v; },
-  };
-}
-</script>
+<script id="oqw-bootstrap" type="application/json">{{ {'accountId':selected_account.id,'csrfToken':csrf_token(),'page':url_for('marketplace_quality_page'),'api':url_for('marketplace_quality_workspace_api'),'refresh':url_for('marketplace_quality_refresh_api')}|tojson }}</script>
+<script src="{{ url_for('static',filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static',filename='marketplace-beta-shared.js') }}" defer></script>
+<script src="{{ url_for('static',filename='ozon-quality.js') }}" defer></script>
 {% endblock %}

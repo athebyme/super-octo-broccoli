@@ -221,7 +221,11 @@ class MarketplaceAnalyticsService:
         account_id: int,
         period_code: str,
     ):
-        return MarketplaceAnalyticsSync.query.filter(
+        return MarketplaceAnalyticsSync.query.join(SellerMarketplaceAccount, (
+            (SellerMarketplaceAccount.id == MarketplaceAnalyticsSync.account_id)
+            & (SellerMarketplaceAccount.seller_id == MarketplaceAnalyticsSync.seller_id)
+            & (SellerMarketplaceAccount.marketplace_id == MarketplaceAnalyticsSync.marketplace_id)
+        )).filter(
             MarketplaceAnalyticsSync.seller_id == seller_id,
             MarketplaceAnalyticsSync.account_id == account_id,
             MarketplaceAnalyticsSync.period_code == period_code,
@@ -391,6 +395,7 @@ class MarketplaceAnalyticsService:
         account_id: int,
         period_code: str,
         now: datetime,
+        recover_abandoned: bool = False,
     ) -> Optional[MarketplaceAnalyticsSync]:
         run = MarketplaceAnalyticsSync.query.filter(
             MarketplaceAnalyticsSync.seller_id == seller_id,
@@ -401,7 +406,11 @@ class MarketplaceAnalyticsService:
         if run is None:
             return None
         heartbeat = run.last_page_at or run.started_at
-        if heartbeat and heartbeat < now - cls.STALE_RUNNING_AFTER:
+        if (
+            not recover_abandoned
+            and heartbeat
+            and heartbeat < now - cls.STALE_RUNNING_AFTER
+        ):
             run.status = "failed"
             run.error_code = "analytics_sync_interrupted"
             run.error_message = "Синхронизация прервана до завершения страницы"
@@ -515,6 +524,8 @@ class MarketplaceAnalyticsService:
             len(normalized["rows"]) * len(REQUEST_METRIC_DEFINITIONS)
         )
         run.last_page_at = now
+        run.error_code = None
+        run.error_message = None
         run.response_timestamp = normalized["timestamp"]
 
         if normalized["has_more"]:
@@ -541,6 +552,7 @@ class MarketplaceAnalyticsService:
         account_id: int,
         period_code: str = "30d",
         force: bool = False,
+        recover_abandoned: bool = False,
         max_pages: int = 2,
         adapter=None,
         credentials: Optional[MarketplaceCredentials] = None,
@@ -549,6 +561,8 @@ class MarketplaceAnalyticsService:
     ) -> MarketplaceAnalyticsSync:
         if not isinstance(force, bool):
             raise MarketplaceAnalyticsValidationError("force должен быть boolean")
+        if not isinstance(recover_abandoned, bool):
+            raise MarketplaceAnalyticsValidationError("recover_abandoned должен быть boolean")
         max_pages = cls._positive_integer(
             max_pages,
             "max_pages",
@@ -596,6 +610,7 @@ class MarketplaceAnalyticsService:
                 account_id=account.id,
                 period_code=period_code,
                 now=current_time,
+                recover_abandoned=recover_abandoned,
             )
             if run is None:
                 run = cls._create_run(
@@ -648,10 +663,19 @@ class MarketplaceAnalyticsService:
                 ).first()
                 if persisted is not None and persisted.status == "running":
                     code, message = cls._safe_error(exc)
-                    persisted.status = "failed"
+                    # The durable worker owns the retry due time. Keep its
+                    # committed page checkpoint on transient provider errors;
+                    # malformed responses still terminate the snapshot.
+                    retryable = (
+                        recover_abandoned
+                        and isinstance(exc, OzonAPIError)
+                        and exc.retriable
+                    )
+                    if not retryable:
+                        persisted.status = "failed"
+                        persisted.completed_at = current_time
                     persisted.error_code = code
                     persisted.error_message = message
-                    persisted.completed_at = current_time
                     db.session.commit()
             if isinstance(exc, MarketplaceAnalyticsError):
                 raise
@@ -675,7 +699,11 @@ class MarketplaceAnalyticsService:
         sync = MarketplaceAnalyticsSync.query.options(
             joinedload(MarketplaceAnalyticsSync.account),
             joinedload(MarketplaceAnalyticsSync.marketplace),
-        ).filter(
+        ).join(SellerMarketplaceAccount, (
+            (SellerMarketplaceAccount.id == MarketplaceAnalyticsSync.account_id)
+            & (SellerMarketplaceAccount.seller_id == MarketplaceAnalyticsSync.seller_id)
+            & (SellerMarketplaceAccount.marketplace_id == MarketplaceAnalyticsSync.marketplace_id)
+        )).filter(
             MarketplaceAnalyticsSync.id == sync_id,
             MarketplaceAnalyticsSync.seller_id == seller_id,
             MarketplaceAnalyticsSync.account_id == account_id,
@@ -716,6 +744,7 @@ class MarketplaceAnalyticsService:
             MarketplaceMetricFact.sync_id == sync.id,
             MarketplaceMetricFact.seller_id == sync.seller_id,
             MarketplaceMetricFact.account_id == sync.account_id,
+            MarketplaceMetricFact.marketplace_id == sync.marketplace_id,
             MarketplaceMetricFact.dimension_kind == "day",
         ).order_by(
             MarketplaceMetricFact.fact_date.asc(),
@@ -731,22 +760,27 @@ class MarketplaceAnalyticsService:
     @classmethod
     def _product_rows(cls, sync: MarketplaceAnalyticsSync) -> list:
         facts = MarketplaceMetricFact.query.options(
-            joinedload(MarketplaceMetricFact.listing),
+            joinedload(MarketplaceMetricFact.listing.and_(
+                MarketplaceListing.seller_id == sync.seller_id,
+                MarketplaceListing.account_id == sync.account_id,
+                MarketplaceListing.marketplace_id == sync.marketplace_id,
+            )),
         ).filter(
             MarketplaceMetricFact.sync_id == sync.id,
             MarketplaceMetricFact.seller_id == sync.seller_id,
             MarketplaceMetricFact.account_id == sync.account_id,
+            MarketplaceMetricFact.marketplace_id == sync.marketplace_id,
             MarketplaceMetricFact.dimension_kind == "listing",
         ).order_by(
             MarketplaceMetricFact.dimension_id.asc(),
             MarketplaceMetricFact.metric_code.asc(),
-        ).all()
+        ).populate_existing().all()
         by_dimension: Dict[str, Dict[str, Any]] = {}
         for fact in facts:
             listing = fact.listing
             row = by_dimension.setdefault(fact.dimension_id, {
                 "entity_kind": "marketplace_listing",
-                "listing_id": fact.listing_id,
+                "listing_id": listing.id if listing is not None else None,
                 "sku": fact.dimension_id,
                 "title": (
                     listing.title if listing is not None else fact.dimension_name

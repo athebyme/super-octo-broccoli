@@ -301,10 +301,12 @@ class MarketplaceFinanceService:
         account_id: int,
         period_start: date,
         period_end: date,
+        marketplace_id: Optional[int] = None,
     ) -> Optional[MarketplaceFinanceSync]:
         return MarketplaceFinanceSync.query.filter(
             MarketplaceFinanceSync.seller_id == seller_id,
             MarketplaceFinanceSync.account_id == account_id,
+            MarketplaceFinanceSync.marketplace_id == marketplace_id if marketplace_id is not None else True,
             MarketplaceFinanceSync.status == "completed",
             MarketplaceFinanceSync.contract_version == cls.CONTRACT_VERSION,
             MarketplaceFinanceSync.period_start <= period_start,
@@ -322,6 +324,7 @@ class MarketplaceFinanceService:
         account_id: int,
         period_start: date,
         period_end: date,
+        marketplace_id: Optional[int] = None,
     ) -> Optional[MarketplaceFinanceSync]:
         """Return last-good data while a new calendar window is rebuilding.
 
@@ -333,6 +336,7 @@ class MarketplaceFinanceService:
         return MarketplaceFinanceSync.query.filter(
             MarketplaceFinanceSync.seller_id == seller_id,
             MarketplaceFinanceSync.account_id == account_id,
+            MarketplaceFinanceSync.marketplace_id == marketplace_id if marketplace_id is not None else True,
             MarketplaceFinanceSync.status == "completed",
             MarketplaceFinanceSync.contract_version == cls.CONTRACT_VERSION,
             MarketplaceFinanceSync.period_start <= period_end,
@@ -378,6 +382,7 @@ class MarketplaceFinanceService:
         seller_id: int,
         account_id: int,
         now: datetime,
+        recover_abandoned: bool = False,
     ) -> Optional[MarketplaceFinanceSync]:
         run = MarketplaceFinanceSync.query.filter(
             MarketplaceFinanceSync.seller_id == seller_id,
@@ -387,7 +392,11 @@ class MarketplaceFinanceService:
         if run is None:
             return None
         heartbeat = run.last_page_at or run.started_at
-        if heartbeat and heartbeat < now - cls.STALE_RUNNING_AFTER:
+        if (
+            not recover_abandoned
+            and heartbeat
+            and heartbeat < now - cls.STALE_RUNNING_AFTER
+        ):
             run.status = "failed"
             run.error_code = "finance_sync_interrupted"
             run.error_message = "Синхронизация прервана до завершения страницы"
@@ -481,6 +490,8 @@ class MarketplaceFinanceService:
         run.next_cursor = None
         run.page_count += 1
         run.last_page_at = now
+        run.error_code = None
+        run.error_message = None
         db.session.commit()
 
     @staticmethod
@@ -616,6 +627,8 @@ class MarketplaceFinanceService:
             run.completed_at = now
         run.page_count += 1
         run.last_page_at = now
+        run.error_code = None
+        run.error_message = None
         db.session.commit()
 
     @classmethod
@@ -654,6 +667,7 @@ class MarketplaceFinanceService:
         account_id: int,
         period_code: str = "30d",
         force: bool = False,
+        recover_abandoned: bool = False,
         max_pages: int = 5,
         adapter=None,
         credentials: Optional[MarketplaceCredentials] = None,
@@ -662,6 +676,8 @@ class MarketplaceFinanceService:
     ) -> MarketplaceFinanceSync:
         if not isinstance(force, bool):
             raise MarketplaceFinanceValidationError("force должен быть boolean")
+        if not isinstance(recover_abandoned, bool):
+            raise MarketplaceFinanceValidationError("recover_abandoned должен быть boolean")
         max_pages = cls._positive_integer(
             max_pages,
             "max_pages",
@@ -713,6 +729,7 @@ class MarketplaceFinanceService:
                 seller_id=account.seller_id,
                 account_id=account.id,
                 now=current_time,
+                recover_abandoned=recover_abandoned,
             )
             if run is not None and (
                 run.period_code != period_code
@@ -804,10 +821,19 @@ class MarketplaceFinanceService:
                 ).first()
                 if persisted is not None and persisted.status == "running":
                     code, message = cls._safe_error(exc)
-                    persisted.status = "failed"
+                    # The durable worker owns the retry due time. Keep its
+                    # committed page checkpoint on transient provider errors;
+                    # malformed responses still terminate the snapshot.
+                    retryable = (
+                        recover_abandoned
+                        and isinstance(exc, OzonAPIError)
+                        and exc.retriable
+                    )
+                    if not retryable:
+                        persisted.status = "failed"
+                        persisted.completed_at = current_time
                     persisted.error_code = code
                     persisted.error_message = message
-                    persisted.completed_at = current_time
                     db.session.commit()
             if isinstance(exc, MarketplaceFinanceError):
                 raise
@@ -856,15 +882,57 @@ class MarketplaceFinanceService:
         seller_id: int,
         account_id: int,
         period_code: str,
+        marketplace_id: Optional[int] = None,
     ) -> Optional[MarketplaceFinanceSync]:
         return MarketplaceFinanceSync.query.filter(
             MarketplaceFinanceSync.seller_id == seller_id,
             MarketplaceFinanceSync.account_id == account_id,
+            MarketplaceFinanceSync.marketplace_id == marketplace_id if marketplace_id is not None else True,
             MarketplaceFinanceSync.period_code == period_code,
         ).order_by(
             MarketplaceFinanceSync.created_at.desc(),
             MarketplaceFinanceSync.id.desc(),
         ).first()
+
+    @classmethod
+    def _filtered_facts(cls, *, account, snapshot_id, period_start, period_end,
+                        category=None, amount_sign=None, type_id=None, search=""):
+        """One scoped filter contract for the ledger and its exact snapshot export."""
+        search = cls._search(search)
+        query = MarketplaceFinanceFact.query.filter(
+            MarketplaceFinanceFact.sync_id == snapshot_id,
+            MarketplaceFinanceFact.seller_id == account.seller_id,
+            MarketplaceFinanceFact.account_id == account.id,
+            MarketplaceFinanceFact.marketplace_id == account.marketplace_id,
+            MarketplaceFinanceFact.fact_date >= period_start,
+            MarketplaceFinanceFact.fact_date <= period_end,
+        )
+        if category:
+            query = query.filter(MarketplaceFinanceFact.accrued_category == category)
+        if amount_sign:
+            query = query.filter(MarketplaceFinanceFact.amount_sign == amount_sign)
+        if type_id is not None:
+            query = query.filter(
+                MarketplaceFinanceFact.components.any(db.and_(
+                    MarketplaceFinanceComponent.external_type_id == type_id,
+                    MarketplaceFinanceComponent.seller_id == account.seller_id,
+                    MarketplaceFinanceComponent.account_id == account.id,
+                ))
+            )
+        if search:
+            escaped = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            pattern = f"%{escaped}%"
+            query = query.filter(or_(
+                MarketplaceFinanceFact.accrual_id.ilike(pattern, escape='\\'),
+                MarketplaceFinanceFact.unit_number.ilike(pattern, escape='\\'),
+                MarketplaceFinanceFact.items.any(db.and_(
+                    MarketplaceFinanceFactItem.external_sku.ilike(pattern, escape='\\'),
+                    MarketplaceFinanceFactItem.seller_id == account.seller_id,
+                    MarketplaceFinanceFactItem.account_id == account.id,
+                )),
+            ))
+
+        return query
 
     @classmethod
     def list_facts(
@@ -880,30 +948,63 @@ class MarketplaceFinanceService:
         type_id: Optional[int] = None,
         search: str = "",
         today: Optional[date] = None,
+        compact: bool = False,
+        snapshot_id: Optional[int] = None,
+        as_of: Optional[str] = None,
     ) -> Dict[str, Any]:
         account = cls._owned_account(seller_id=seller_id, account_id=account_id)
         page, per_page = cls._page_args(page=page, per_page=per_page)
+        anchor = today or date.today()
+        if as_of is not None:
+            try:
+                parsed_anchor = date.fromisoformat(as_of)
+            except (TypeError, ValueError):
+                raise MarketplaceFinanceValidationError('Дата просмотра должна быть в формате YYYY-MM-DD')
+            if (not snapshot_id or parsed_anchor.isoformat() != as_of
+                    or parsed_anchor > anchor or parsed_anchor < date.min + timedelta(days=29)):
+                raise MarketplaceFinanceValidationError('Дата просмотра требует готовый снимок и не может быть в будущем')
+            anchor = parsed_anchor
         period_code, period_start, period_end = cls._period(
             period_code,
-            today=today or date.today(),
+            today=anchor,
         )
-        snapshot = cls._latest_covering_completed(
-            seller_id=account.seller_id,
-            account_id=account.id,
-            period_start=period_start,
-            period_end=period_end,
-        )
-        if snapshot is None:
-            snapshot = cls._latest_overlapping_completed(
+        # Validate even before the first completed snapshot exists.
+        if category and category not in {"UNSPECIFIED", "POSTING", "ITEM", "NON_ITEM"}:
+            raise MarketplaceFinanceValidationError("Неизвестная категория начисления")
+        if amount_sign and amount_sign not in {"positive", "negative", "zero"}:
+            raise MarketplaceFinanceValidationError("Неизвестный знак суммы")
+        if type_id is not None:
+            type_id = cls._positive_integer(type_id, "type_id")
+        search = cls._search(search)
+        if snapshot_id is not None:
+            snapshot = MarketplaceFinanceSync.query.filter_by(
+                id=cls._positive_integer(snapshot_id, 'snapshot_id'),
+                seller_id=account.seller_id, account_id=account.id,
+                marketplace_id=account.marketplace_id, status='completed',
+                contract_version=cls.CONTRACT_VERSION,
+            ).filter(MarketplaceFinanceSync.period_start <= period_end,
+                     MarketplaceFinanceSync.period_end >= period_start).first()
+            if snapshot is None:
+                raise MarketplaceFinanceNotFound('Этот снимок начислений недоступен. Откройте актуальные данные.')
+        else:
+            snapshot = cls._latest_covering_completed(
                 seller_id=account.seller_id,
                 account_id=account.id,
                 period_start=period_start,
                 period_end=period_end,
+                marketplace_id=account.marketplace_id,
             )
+            if snapshot is None:
+                snapshot = cls._latest_overlapping_completed(
+                    seller_id=account.seller_id, account_id=account.id,
+                    period_start=period_start, period_end=period_end,
+                    marketplace_id=account.marketplace_id,
+                )
         latest_attempt = cls._latest_attempt(
             seller_id=account.seller_id,
             account_id=account.id,
             period_code=period_code,
+            marketplace_id=account.marketplace_id,
         )
         if snapshot is None:
             return {
@@ -924,39 +1025,11 @@ class MarketplaceFinanceService:
                 "definitions": cls._definitions(),
                 "scope": {"account_id": account.id, "marketplace": "ozon"},
             }
-        query = MarketplaceFinanceFact.query.filter(
-            MarketplaceFinanceFact.sync_id == snapshot.id,
-            MarketplaceFinanceFact.seller_id == account.seller_id,
-            MarketplaceFinanceFact.account_id == account.id,
-            MarketplaceFinanceFact.fact_date >= period_start,
-            MarketplaceFinanceFact.fact_date <= period_end,
+        query = cls._filtered_facts(
+            account=account, snapshot_id=snapshot.id, period_start=period_start,
+            period_end=period_end, category=category, amount_sign=amount_sign,
+            type_id=type_id, search=search,
         )
-        if category:
-            if category not in {"UNSPECIFIED", "POSTING", "ITEM", "NON_ITEM"}:
-                raise MarketplaceFinanceValidationError("Неизвестная категория начисления")
-            query = query.filter(MarketplaceFinanceFact.accrued_category == category)
-        if amount_sign:
-            if amount_sign not in {"positive", "negative", "zero"}:
-                raise MarketplaceFinanceValidationError("Неизвестный знак суммы")
-            query = query.filter(MarketplaceFinanceFact.amount_sign == amount_sign)
-        if type_id is not None:
-            type_id = cls._positive_integer(type_id, "type_id")
-            query = query.filter(
-                MarketplaceFinanceFact.components.any(
-                    MarketplaceFinanceComponent.external_type_id == type_id
-                )
-            )
-        search = cls._search(search)
-        if search:
-            pattern = f"%{search}%"
-            query = query.filter(or_(
-                MarketplaceFinanceFact.accrual_id.ilike(pattern),
-                MarketplaceFinanceFact.unit_number.ilike(pattern),
-                MarketplaceFinanceFact.items.any(
-                    MarketplaceFinanceFactItem.external_sku.ilike(pattern)
-                ),
-            ))
-
         totals = []
         for currency, count_value, positive, negative, net in query.with_entities(
             MarketplaceFinanceFact.currency,
@@ -1010,6 +1083,9 @@ class MarketplaceFinanceService:
             MarketplaceFinanceFact.sync_id == snapshot.id,
             MarketplaceFinanceFact.seller_id == account.seller_id,
             MarketplaceFinanceFact.account_id == account.id,
+            MarketplaceFinanceFact.marketplace_id == account.marketplace_id,
+            MarketplaceFinanceComponent.seller_id == account.seller_id,
+            MarketplaceFinanceComponent.account_id == account.id,
             MarketplaceFinanceFact.fact_date >= period_start,
             MarketplaceFinanceFact.fact_date <= period_end,
         ).group_by(
@@ -1018,19 +1094,20 @@ class MarketplaceFinanceService:
         ).order_by(
             func.count(MarketplaceFinanceComponent.id).desc(),
             MarketplaceFinanceComponent.external_type_id.asc(),
-        ).limit(50).all()
+        ).limit(51).all()
         type_counts = [{
             "external_type_id": row[0],
             "name": row[1],
             "occurrence_count": row[2],
-        } for row in type_rows]
+        } for row in type_rows[:50]]
 
         pagination = query.order_by(
             MarketplaceFinanceFact.fact_date.desc(),
             MarketplaceFinanceFact.id.desc(),
         ).paginate(page=page, per_page=per_page, error_out=False)
+        from services.marketplace_finance_display import fact_previews
         return {
-            "items": [item.to_public_dict(detail=True) for item in pagination.items],
+            "items": fact_previews(pagination.items, account=account, compact=compact),
             "pagination": {
                 "page": page,
                 "per_page": per_page,
@@ -1040,6 +1117,7 @@ class MarketplaceFinanceService:
             "totals": totals,
             "category_totals": category_totals,
             "type_counts": type_counts,
+            "type_counts_truncated": len(type_rows) > 50,
             "sync": latest_attempt.to_public_dict() if latest_attempt else None,
             "snapshot_sync": snapshot.to_public_dict(),
             "coverage": {
@@ -1072,6 +1150,10 @@ class MarketplaceFinanceService:
             MarketplaceFinanceFact.id == cls._positive_integer(fact_id, "fact_id"),
             MarketplaceFinanceFact.seller_id == account.seller_id,
             MarketplaceFinanceFact.account_id == account.id,
+            MarketplaceFinanceFact.marketplace_id == account.marketplace_id,
+            MarketplaceFinanceSync.seller_id == account.seller_id,
+            MarketplaceFinanceSync.account_id == account.id,
+            MarketplaceFinanceSync.marketplace_id == account.marketplace_id,
             MarketplaceFinanceSync.status == "completed",
         ).first()
         if fact is None:

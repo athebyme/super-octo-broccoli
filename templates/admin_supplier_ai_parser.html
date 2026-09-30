@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}AI Парсер — {{ supplier.name }}{% endblock %}
+{% block title %}История AI-парсера — {{ supplier.name }}{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -16,10 +16,14 @@
     <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-6">
         <div class="relative flex justify-between items-start">
             <div>
-                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">AI Парсер данных</h1>
-                <p class="text-sm text-gray-400 mt-1">Извлечение характеристик товаров для маркетплейсов</p>
+                <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">История AI-парсера</h1>
+                <p class="text-sm text-gray-400 mt-1">Выбор товаров для нового Flash-обогащения и просмотр старых задач</p>
             </div>
             <div class="flex gap-2">
+                <a href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id) }}"
+                    class="px-4 py-2 bg-white text-[#1a1a1a] rounded-md text-sm font-medium hover:bg-gray-100">
+                    Открыть Flash-обогащение
+                </a>
                 {% if supplier.description_file_url %}
                 <button onclick="startDescSync()" id="descSyncBtn"
                     class="px-4 py-2 bg-white text-[#1a1a1a] rounded-md text-sm font-medium hover:bg-gray-100">
@@ -41,15 +45,15 @@
             <p class="text-2xl font-bold text-gray-900">{{ stats.total }}</p>
         </div>
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
-            <p class="text-xs text-gray-500">AI спарсено</p>
+            <p class="text-xs text-gray-500">Старый AI-парсер: есть данные</p>
             <p class="text-2xl font-bold text-indigo-600" id="statParsed">{{ parsed_count }}</p>
         </div>
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
-            <p class="text-xs text-gray-500">Не спарсено</p>
+            <p class="text-xs text-gray-500">Старый AI-парсер: нет данных</p>
             <p class="text-2xl font-bold text-orange-500">{{ stats.total - parsed_count }}</p>
         </div>
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 text-center">
-            <p class="text-xs text-gray-500">AI покрытие</p>
+            <p class="text-xs text-gray-500">Покрытие старым парсером</p>
             <p class="text-2xl font-bold text-green-600">{{ '%.0f'|format(parsed_count / stats.total * 100) if
                 stats.total > 0 else 0 }}%</p>
         </div>
@@ -165,13 +169,13 @@
 
     <!-- Инструкция -->
     <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-4 mb-6">
-        <h3 class="text-indigo-900 font-semibold text-sm mb-2">Как работает</h3>
+        <h3 class="text-indigo-900 font-semibold text-sm mb-2">Новый запуск</h3>
         <ol class="text-indigo-700 text-sm space-y-1 list-decimal list-inside">
             <li>Выберите товары галочками или настройте фильтры</li>
-            <li>Нажмите "AI Парсинг" — выбранные товары обработаются, или все по фильтру</li>
-            <li>AI извлечёт характеристики, замаппит на схему WB и провалидирует</li>
-            <li>Прогресс отобразится в панели вверху — страница не зависает</li>
+            <li>Откройте предварительный выбор; там показаны точное количество, режим и состояние справочника WB</li>
+            <li>Запуск использует профиль DeepSeek V4.1 Flash; результат и проверки доступны на странице запуска</li>
         </ol>
+        <p class="text-indigo-700 text-sm mt-2">Фильтры «спарсено» и «заполнение» относятся к старому парсеру. Они не подтверждают актуальные характеристики Ozon.</p>
     </div>
 
     <!-- Фильтры и быстрый выбор -->
@@ -315,36 +319,10 @@
                 </span>
             </div>
             <div class="flex gap-2 items-center">
-                <label class="flex items-center gap-1.5 text-xs text-gray-500"
-                    title="AI модель для парсинга">
-                    <span>Модель:</span>
-                    <select id="modelOverride"
-                        class="rounded border-gray-300 text-xs border px-2 py-1.5 max-w-[200px] focus:border-indigo-500 focus:ring-indigo-500">
-                        <option value="">{{ supplier.ai_model or 'по умолчанию' }}</option>
-                        {% for model_id, model_info in available_models.items() %}
-                        {% if model_id != supplier.ai_model %}
-                        <option value="{{ model_id }}">{{ model_info.name }}{% if model_info.recommended %} ★{% endif %}</option>
-                        {% endif %}
-                        {% endfor %}
-                    </select>
-                </label>
-                <label class="flex items-center gap-1.5 text-xs text-gray-500"
-                    title="Количество параллельных потоков AI-запросов">
-                    <span>Потоки:</span>
-                    <select id="maxWorkers"
-                        class="rounded border-gray-300 text-xs border px-2 py-1.5 w-16 focus:border-indigo-500 focus:ring-indigo-500">
-                        <option value="1">1</option>
-                        <option value="2">2</option>
-                        <option value="4">4</option>
-                        <option value="8" selected>8</option>
-                        <option value="12">12</option>
-                        <option value="16">16</option>
-                    </select>
-                </label>
                 <button type="button" id="smartParseBtn" onclick="startSmartParse()"
                     class="px-4 py-2 bg-[#0a0a0a] text-white rounded-lg text-sm font-medium hover:bg-[#1a1a1a] transition-all"
-                    title="Выбраны товары → парсит их. Не выбраны → парсит все по текущим фильтрам.">
-                    <span id="smartParseBtnLabel">AI Парсинг по фильтру</span>
+                    title="Выбранные товары или весь текущий фильтр откроются для проверки перед запуском.">
+                    <span id="smartParseBtnLabel">Проверить выбор по фильтру</span>
                 </button>
             </div>
         </div>
@@ -360,7 +338,7 @@
                         <th class="px-4 py-3 text-right font-medium text-gray-500">Цена</th>
                         <th class="px-4 py-3 text-center font-medium text-gray-500">Наличие</th>
                         <th class="px-4 py-3 text-center font-medium text-gray-500">Описание</th>
-                        <th class="px-4 py-3 text-center font-medium text-gray-500">AI парсинг</th>
+                        <th class="px-4 py-3 text-center font-medium text-gray-500">Старый AI-парсер</th>
                         <th class="px-4 py-3 text-center font-medium text-gray-500">Действия</th>
                     </tr>
                 </thead>
@@ -405,17 +383,12 @@
                         </td>
                         <td class="px-4 py-3 text-center" id="parse-status-{{ product.id }}">
                             {% if product.ai_parsed_at %}
-                            {% set fill_val = product.ai_fill_pct or 0 %}
                             <div class="flex flex-col items-center gap-0.5">
                                 <span
-                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium {% if fill_val >= 70 %}bg-green-100 text-green-700{% elif fill_val >= 40 %}bg-yellow-100 text-yellow-700{% else %}bg-red-100 text-red-600{% endif %}"
+                                    class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600"
                                     title="{{ product.ai_parsed_at.strftime('%d.%m.%Y %H:%M') }}">
-                                    {{ '%.0f'|format(fill_val) }}%
+                                    История
                                 </span>
-                                {% if product.ai_model_used %}
-                                <span class="text-[10px] text-gray-400 truncate max-w-[120px]"
-                                    title="{{ product.ai_model_used }}">{{ product.ai_model_used.split('/')[-1][:20] }}</span>
-                                {% endif %}
                             </div>
                             {% else %}
                             <span
@@ -424,10 +397,10 @@
                         </td>
                         <td class="px-4 py-3 text-center">
                             <div class="flex justify-center gap-1">
-                                <button type="button" onclick="startSingleParse({{ product.id }})"
+                                <a href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, handoff='ids', product_ids=product.id) }}"
                                     class="px-2 py-1 text-xs bg-indigo-50 text-indigo-700 rounded hover:bg-indigo-100 transition-colors">
-                                    Парсинг
-                                </button>
+                                    Проверить Flash
+                                </a>
                                 <a href="{{ url_for('admin_supplier_product_raw_json', supplier_id=supplier.id, product_id=product.id) }}"
                                     class="px-2 py-1 text-xs bg-gray-50 text-gray-600 rounded hover:bg-gray-100 transition-colors">
                                     JSON
@@ -463,8 +436,11 @@
 
 <script>
     const SUPPLIER_ID = {{ supplier.id }};
-    const PARSE_URL = '{{ url_for("admin_supplier_ai_parse", supplier_id=supplier.id) }}';
-    const PARSE_BY_FILTER_URL = '{{ url_for("admin_supplier_ai_parse_by_filter", supplier_id=supplier.id) }}';
+    const FLASH_REVIEW_URL = '{{ url_for("admin_supplier_catalog_enrichment", supplier_id=supplier.id) }}';
+    const LEGACY_FILTER_KEYS = [
+        'search', 'stock_status', 'parse_status', 'fill_max', 'category',
+        'brand', 'ai_model', 'has_description', 'price_min', 'price_max'
+    ];
     const DESC_SYNC_URL = '{{ url_for("admin_supplier_sync_descriptions", supplier_id=supplier.id) }}';
 
     // ===== Чекбоксы =====
@@ -480,10 +456,10 @@
         if (checked > 0) {
             selectedCount.classList.remove('hidden');
             selectedCount.querySelector('span').textContent = checked;
-            smartLabel.textContent = `AI Парсинг (${checked} шт.)`;
+            smartLabel.textContent = `Проверить ${checked} товаров`;
         } else {
             selectedCount.classList.add('hidden');
-            smartLabel.textContent = 'AI Парсинг по фильтру';
+            smartLabel.textContent = 'Проверить выбор по фильтру';
         }
     }
 
@@ -628,138 +604,23 @@
         renderAllJobs();
     }
 
-    // ===== Запуск задач =====
-
+    // ===== Передача выбора на проверку Flash =====
     function startSmartParse() {
-        const ids = Array.from(document.querySelectorAll('.product-checkbox:checked')).map(cb => cb.dataset.productId);
-        const hasSelected = ids.length > 0;
-
-        let url, form;
-
-        if (hasSelected) {
-            // Режим: парсинг выбранных
-            if (!confirm(`Запустить AI парсинг для ${ids.length} товаров?\n(включая маппинг и валидацию)`)) return;
-
-            form = new FormData();
-            ids.forEach(id => form.append('product_ids', id));
-            form.append('max_workers', document.getElementById('maxWorkers').value);
-            const modelVal = document.getElementById('modelOverride').value;
-            if (modelVal) form.append('model_override', modelVal);
-            url = PARSE_URL;
+        const ids = Array.from(document.querySelectorAll('.product-checkbox:checked'))
+            .map(cb => cb.dataset.productId);
+        const target = new URL(FLASH_REVIEW_URL, window.location.origin);
+        if (ids.length) {
+            target.searchParams.set('handoff', 'ids');
+            target.searchParams.set('product_ids', ids.join(','));
         } else {
-            // Режим: парсинг по фильтру
-            const params = new URLSearchParams(window.location.search);
-            const search = params.get('search') || '';
-            const stockStatus = params.get('stock_status') || '';
-            const parseStatus = params.get('parse_status') || '';
-            const fillMax = params.get('fill_max') || '';
-            const category = params.get('category') || '';
-            const brand = params.get('brand') || '';
-            const aiModel = params.get('ai_model') || '';
-            const hasDesc = params.get('has_description') || '';
-            const priceMin = params.get('price_min') || '';
-            const priceMax = params.get('price_max') || '';
-
-            const filterParts = [];
-            if (search) filterParts.push(`поиск: "${search}"`);
-            if (stockStatus) filterParts.push(`наличие: ${stockStatus}`);
-            if (parseStatus) filterParts.push(`AI: ${parseStatus}`);
-            if (fillMax) filterParts.push(`заполнение < ${fillMax}%`);
-            if (category) filterParts.push(`категория: ${category}`);
-            if (brand) filterParts.push(`бренд: ${brand}`);
-            if (aiModel) filterParts.push(`модель: ${aiModel}`);
-            if (hasDesc) filterParts.push(`описание: ${hasDesc === 'yes' ? 'есть' : 'нет'}`);
-            if (priceMin || priceMax) filterParts.push(`цена: ${priceMin || '0'}-${priceMax || '...'}`);
-            const filterDesc = filterParts.length > 0 ? filterParts.join(', ') : 'без фильтров (ВСЕ товары!)';
-
-            const limitStr = prompt(
-                `Фильтры: ${filterDesc}\n\nСколько товаров обработать?\n(0 или пустое = все подходящие, макс. 10000)`,
-                '0'
-            );
-            if (limitStr === null) return;
-            const limit = parseInt(limitStr) || 0;
-
-            if (!confirm(`AI парсинг + маппинг + валидация для ${limit > 0 ? limit : 'ВСЕХ'} товаров по фильтру?\n${filterDesc}`)) return;
-
-            form = new FormData();
-            form.append('search', search);
-            form.append('stock_status', stockStatus);
-            form.append('parse_status', parseStatus);
-            form.append('fill_max', fillMax);
-            if (category) form.append('category', category);
-            if (brand) form.append('brand', brand);
-            if (aiModel) form.append('ai_model', aiModel);
-            if (hasDesc) form.append('has_description', hasDesc);
-            if (priceMin) form.append('price_min', priceMin);
-            if (priceMax) form.append('price_max', priceMax);
-            if (limit > 0) form.append('limit', limit);
-            form.append('max_workers', document.getElementById('maxWorkers').value);
-            const modelVal = document.getElementById('modelOverride').value;
-            if (modelVal) form.append('model_override', modelVal);
-            url = PARSE_BY_FILTER_URL;
+            target.searchParams.set('handoff', 'filter');
+            const current = new URLSearchParams(window.location.search);
+            for (const key of LEGACY_FILTER_KEYS) {
+                const value = current.get(key);
+                if (value) target.searchParams.set('legacy_' + key, value);
+            }
         }
-
-        smartBtn.disabled = true;
-        smartLabel.textContent = 'Запуск...';
-
-        fetch(url, {
-            method: 'POST',
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            body: form
-        })
-            .then(r => r.json())
-            .then(data => {
-                smartBtn.disabled = false;
-                updateSelection();
-
-                if (data.error) {
-                    alert('Ошибка: ' + data.error);
-                    return;
-                }
-                if (data.job_id) {
-                    activeJobIds.add(data.job_id);
-                    pollJob(data.job_id);
-                    if (hasSelected) {
-                        getCheckboxes().forEach(cb => cb.checked = false);
-                        if (selectAll) selectAll.checked = false;
-                        updateSelection();
-                    }
-                }
-            })
-            .catch(err => {
-                smartBtn.disabled = false;
-                updateSelection();
-                alert('Ошибка сети: ' + err.message);
-            });
-    }
-
-    function startSingleParse(productId) {
-        const form = new FormData();
-        form.append('product_id', productId);
-        const modelVal = document.getElementById('modelOverride').value;
-        if (modelVal) form.append('model_override', modelVal);
-
-        // Обновляем ячейку статуса на спиннер
-        const cell = document.getElementById('parse-status-' + productId);
-        if (cell) cell.innerHTML = '<span class="inline-block animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full"></span>';
-
-        fetch(PARSE_URL, {
-            method: 'POST',
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            body: form
-        })
-            .then(r => r.json())
-            .then(data => {
-                if (data.job_id) {
-                    activeJobIds.add(data.job_id);
-                    pollJob(data.job_id);
-                } else if (data.error) {
-                    if (cell) cell.innerHTML = '<span class="text-xs text-red-500">err</span>';
-                }
-            })
-            .catch(() => {
-                if (cell) cell.innerHTML = '<span class="text-xs text-red-500">err</span>';
-            });
+        window.location.assign(target.toString());
     }
 
     function startDescSync() {

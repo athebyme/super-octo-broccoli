@@ -321,6 +321,81 @@ class MarketplaceQualityServiceTest(unittest.TestCase):
                 now=self.now,
             )
 
+    def test_rotating_batch_prioritizes_unassessed_then_oldest(self):
+        older_listing = self.listing
+        newer_listing = MarketplaceListing(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account.id,
+            offer_id="offer-2",
+            external_product_id="102",
+            normalized_status="active",
+            is_available=True,
+            is_archived=False,
+            sync_fingerprint="b" * 64,
+        )
+        unassessed_listing = MarketplaceListing(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account.id,
+            offer_id="offer-3",
+            external_product_id="103",
+            normalized_status="active",
+            is_available=True,
+            is_archived=False,
+            sync_fingerprint="d" * 64,
+        )
+        db.session.add_all([newer_listing, unassessed_listing])
+        db.session.flush()
+        db.session.add_all([
+            MarketplaceQualityAssessment(
+                seller_id=self.seller.id,
+                marketplace_id=self.marketplace.id,
+                account_id=self.account.id,
+                listing_id=older_listing.id,
+                listing_fingerprint=older_listing.sync_fingerprint,
+                status="unscorable",
+                severity="critical",
+                impact=1,
+                evaluated_at=self.now - timedelta(days=2),
+            ),
+            MarketplaceQualityAssessment(
+                seller_id=self.seller.id,
+                marketplace_id=self.marketplace.id,
+                account_id=self.account.id,
+                listing_id=newer_listing.id,
+                listing_fingerprint=newer_listing.sync_fingerprint,
+                status="unscorable",
+                severity="critical",
+                impact=1,
+                evaluated_at=self.now - timedelta(days=1),
+            ),
+        ])
+        db.session.commit()
+
+        result = MarketplaceQualityService.recompute_next_account_batch(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            limit=2,
+            now=self.now,
+        )
+
+        self.assertEqual(result["processed"], 2)
+        self.assertEqual(result["selection"], "unassessed_then_oldest")
+        assessments = {
+            item.listing_id: item
+            for item in MarketplaceQualityAssessment.query.all()
+        }
+        self.assertEqual(
+            assessments[unassessed_listing.id].evaluated_at,
+            self.now,
+        )
+        self.assertEqual(assessments[older_listing.id].evaluated_at, self.now)
+        self.assertEqual(
+            assessments[newer_listing.id].evaluated_at,
+            self.now - timedelta(days=1),
+        )
+
     def test_exact_set_rejects_foreign_listing_without_partial_assessment(self):
         foreign = MarketplaceListing(
             seller_id=self.other_seller.id,
@@ -362,6 +437,48 @@ class MarketplaceQualityServiceTest(unittest.TestCase):
         self.assertEqual(data["items"][0]["listing_id"], self.listing.id)
         self.assertEqual(data["summary"]["entity_kind"], "marketplace_listing")
         self.assertEqual(data["summary"]["account_id"], self.account.id)
+
+    def test_summary_excludes_assessments_for_archived_listings(self):
+        MarketplaceQualityService.recompute_account(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+            listing_ids=[self.listing.id],
+            limit=1,
+            now=self.now,
+        )
+        archived = MarketplaceListing(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account.id,
+            offer_id="archived-offer",
+            external_product_id="archived-product",
+            normalized_status="archived",
+            is_available=True,
+            is_archived=True,
+            sync_fingerprint="r" * 64,
+        )
+        db.session.add(archived)
+        db.session.flush()
+        db.session.add(MarketplaceQualityAssessment(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account.id,
+            listing_id=archived.id,
+            listing_fingerprint=archived.sync_fingerprint,
+            status="unscorable",
+            severity="critical",
+            impact=100,
+            evaluated_at=self.now,
+        ))
+        db.session.commit()
+
+        summary = MarketplaceQualityService._summary(
+            seller_id=self.seller.id,
+            account_id=self.account.id,
+        )
+
+        self.assertEqual(summary["total"], 1)
+        self.assertEqual(summary["assessed"], 1)
 
 
 if __name__ == "__main__":

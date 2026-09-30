@@ -229,13 +229,13 @@ class RefreshFromSupplierRouteTest(unittest.TestCase):
 
 
 class MyProductsSupplierUpdatesViewContractTest(unittest.TestCase):
-    def test_updates_view_uses_full_bulk_budget(self):
+    def test_regular_view_is_small_but_updates_keep_full_bulk_budget(self):
         from routes.suppliers import (
             MY_PRODUCTS_PAGE_SIZE,
             MY_PRODUCTS_UPDATES_PAGE_SIZE,
         )
 
-        self.assertEqual(MY_PRODUCTS_PAGE_SIZE, 200)
+        self.assertEqual(MY_PRODUCTS_PAGE_SIZE, 50)
         self.assertEqual(MY_PRODUCTS_UPDATES_PAGE_SIZE, 200)
 
     def test_return_args_make_updates_and_status_mutually_exclusive(self):
@@ -268,7 +268,7 @@ class MyProductsSupplierUpdatesViewContractTest(unittest.TestCase):
         self.assertIn('{% if not updates_filter %}', template)
         self.assertIn('WB и Ozon на этом шаге не меняются', template)
 
-    def test_my_products_uses_one_click_ozon_upload_journal(self):
+    def test_my_products_starts_local_ozon_preparation_before_reviewed_send(self):
         template = (
             Path(__file__).resolve().parents[1]
             / 'templates'
@@ -277,9 +277,11 @@ class MyProductsSupplierUpdatesViewContractTest(unittest.TestCase):
 
         self.assertIn("url_for('ozon_bulk_uploads.create')", template)
         self.assertIn('name="imported_product_ids"', template)
-        self.assertIn('Синхронизировать Ozon', template)
-        self.assertIn('Обновить Ozon', template)
-        self.assertIn('name="confirm_write"', template)
+        self.assertIn('Подготовить для Ozon', template)
+        self.assertIn('Проверить Ozon', template)
+        self.assertIn('name="confirm_prepare"', template)
+        self.assertIn('name="request_key"', template)
+        self.assertNotIn('name="confirm_write"', template)
         self.assertIn('Подключить Ozon', template)
 
     def test_characteristics_handoff_is_explicit_and_keeps_photos_off(self):

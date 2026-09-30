@@ -15,9 +15,11 @@ import threading
 import queue
 import logging
 import time
-from typing import Optional, Dict, List, Tuple
+import shutil
+from dataclasses import dataclass
+from typing import Callable, Optional, Dict, List, Tuple
 from io import BytesIO
-from datetime import datetime
+from urllib.parse import urljoin
 import requests
 from PIL import Image
 
@@ -28,17 +30,68 @@ logger = logging.getLogger(__name__)
 # КОНФИГУРАЦИЯ
 # ============================================================================
 
+def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    """Читает целочисленный runtime-бюджет и удерживает его в safe range."""
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 # Базовая директория для кэша фото
 PHOTO_CACHE_DIR = os.environ.get('PHOTO_CACHE_DIR', 'data/photo_cache')
 
-# Максимальный размер очереди загрузки
-MAX_DOWNLOAD_QUEUE_SIZE = 1000
+# Фоновый photo transport намеренно мал: он не конкурирует с web request pool
+# за внешние соединения и не создаёт тысячный хвост после открытия каталога.
+MAX_DOWNLOAD_QUEUE_SIZE = _bounded_env_int(
+    'PHOTO_DOWNLOAD_QUEUE_SIZE', 256, 32, 2000,
+)
+NUM_DOWNLOAD_WORKERS = _bounded_env_int(
+    'PHOTO_DOWNLOAD_WORKERS', 2, 1, 4,
+)
+DOWNLOAD_TOTAL_BUDGET = _bounded_env_int(
+    'PHOTO_DOWNLOAD_TOTAL_SECONDS', 12, 3, 30,
+)
+DOWNLOAD_CONNECT_TIMEOUT = 3
+DOWNLOAD_READ_TIMEOUT = 5
+DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024
+DOWNLOAD_MAX_PIXELS = 50_000_000
 
-# Количество воркеров для фоновой загрузки
-NUM_DOWNLOAD_WORKERS = 5
+# Дисковый кэш восстанавливаем из source URL, поэтому он обязан иметь cap.
+# При достижении cap старые JPEG удаляются до low-water mark в отдельном
+# daemon thread. Это не выполняется внутри HTTP request.
+PHOTO_CACHE_MAX_BYTES = _bounded_env_int(
+    'PHOTO_CACHE_MAX_BYTES', 15 * 1024 ** 3, 1024 ** 3, 100 * 1024 ** 3,
+)
+PHOTO_CACHE_PRUNE_TO_BYTES = min(
+    PHOTO_CACHE_MAX_BYTES,
+    _bounded_env_int(
+        'PHOTO_CACHE_PRUNE_TO_BYTES', 12 * 1024 ** 3,
+        512 * 1024 ** 2, 100 * 1024 ** 3,
+    ),
+)
+PHOTO_CACHE_MIN_FREE_BYTES = _bounded_env_int(
+    'PHOTO_CACHE_MIN_FREE_BYTES', 5 * 1024 ** 3,
+    512 * 1024 ** 2, 100 * 1024 ** 3,
+)
+PHOTO_CACHE_MAINTENANCE_INTERVAL = _bounded_env_int(
+    'PHOTO_CACHE_MAINTENANCE_INTERVAL_SECONDS', 1800, 60, 86400,
+)
+PHOTO_CACHE_HARD_MIN_FREE_BYTES = 256 * 1024 ** 2
 
-# Таймаут для загрузки одного фото
-DOWNLOAD_TIMEOUT = 15
+
+@dataclass
+class _PhotoDownloadTask:
+    supplier_type: str
+    external_id: str
+    url: str
+    auth_cookies: Optional[dict]
+    target_size: Tuple[int, int]
+    background_color: str
+    fallback_urls: List[str]
+    auth_cookies_provider: Optional[Callable[[], dict]]
+    dedupe_key: Tuple[str, str, str]
 
 
 # ============================================================================
@@ -75,13 +128,21 @@ class PhotoCacheManager:
         self._download_queue = queue.Queue(maxsize=MAX_DOWNLOAD_QUEUE_SIZE)
         self._workers = []
         self._running = False
-        self._session = requests.Session()
+        self._pending_downloads = set()
+        self._pending_lock = threading.Lock()
+        self._maintenance_lock = threading.Lock()
+        self._last_maintenance_started = 0.0
         self._stats = {
             'cache_hits': 0,
             'cache_misses': 0,
             'downloads_queued': 0,
             'downloads_completed': 0,
-            'downloads_failed': 0
+            'downloads_failed': 0,
+            'downloads_deduplicated': 0,
+            'queue_rejected': 0,
+            'maintenance_runs': 0,
+            'maintenance_deleted_files': 0,
+            'maintenance_deleted_bytes': 0,
         }
 
         # Создаем базовую директорию
@@ -123,21 +184,42 @@ class PhotoCacheManager:
             try:
                 task = self._download_queue.get(timeout=1)
                 if task is None:
+                    self._download_queue.task_done()
                     break
-
-                supplier_type, external_id, url, auth_cookies, target_size, bg_color, fallbacks = task
-
                 try:
-                    self._download_and_save(
-                        supplier_type, external_id, url,
-                        auth_cookies, target_size, bg_color, fallbacks
-                    )
-                    self._stats['downloads_completed'] += 1
-                except Exception as e:
-                    logger.debug(f"Ошибка загрузки фото {url[:50]}: {e}")
-                    self._stats['downloads_failed'] += 1
+                    auth_cookies = task.auth_cookies
+                    if task.auth_cookies_provider is not None:
+                        try:
+                            auth_cookies = task.auth_cookies_provider() or {}
+                        except Exception as exc:
+                            logger.debug(
+                                "Не удалось подготовить auth cookies для %s: %s",
+                                task.supplier_type, exc,
+                            )
+                            auth_cookies = {}
 
-                self._download_queue.task_done()
+                    downloaded = self._download_and_save(
+                        task.supplier_type,
+                        task.external_id,
+                        task.url,
+                        auth_cookies,
+                        task.target_size,
+                        task.background_color,
+                        task.fallback_urls,
+                    )
+                    if downloaded:
+                        self._stats['downloads_completed'] += 1
+                    else:
+                        self._stats['downloads_failed'] += 1
+                except Exception as e:
+                    logger.debug(
+                        "Ошибка загрузки фото %s: %s", task.url[:50], e,
+                    )
+                    self._stats['downloads_failed'] += 1
+                finally:
+                    with self._pending_lock:
+                        self._pending_downloads.discard(task.dedupe_key)
+                    self._download_queue.task_done()
 
             except queue.Empty:
                 continue
@@ -152,11 +234,14 @@ class PhotoCacheManager:
     def get_cache_path(self, supplier_type: str, external_id: str, url: str) -> str:
         """Возвращает путь к кэшированному файлу"""
         photo_hash = self.get_photo_hash(url)
-        # Безопасный external_id для имени файла
+        safe_supplier_type = "".join(
+            c if c.isalnum() or c in '-_' else '_'
+            for c in str(supplier_type)
+        ) or 'unknown'
         safe_ext_id = "".join(c if c.isalnum() or c in '-_' else '_' for c in str(external_id))
         return os.path.join(
             PHOTO_CACHE_DIR,
-            supplier_type,
+            safe_supplier_type,
             safe_ext_id,
             f"{photo_hash}.jpg"
         )
@@ -187,18 +272,112 @@ class PhotoCacheManager:
         self._stats['cache_misses'] += 1
         return None
 
-    def save_to_cache(self, supplier_type: str, external_id: str, url: str, image_bytes: bytes):
-        """Сохраняет фото в кэш"""
+    def save_to_cache(
+        self,
+        supplier_type: str,
+        external_id: str,
+        url: str,
+        image_bytes: bytes,
+    ) -> bool:
+        """Атомарно сохраняет фото и запускает async maintenance кэша."""
         cache_path = self.get_cache_path(supplier_type, external_id, url)
-
-        # Создаем директорию если нужно
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        cache_dir = os.path.dirname(cache_path)
+        os.makedirs(cache_dir, exist_ok=True)
 
         try:
-            with open(cache_path, 'wb') as f:
+            free_bytes = shutil.disk_usage(PHOTO_CACHE_DIR).free
+        except OSError:
+            free_bytes = PHOTO_CACHE_HARD_MIN_FREE_BYTES
+        if free_bytes < PHOTO_CACHE_HARD_MIN_FREE_BYTES:
+            logger.warning(
+                "Photo cache write skipped: свободно только %s bytes",
+                free_bytes,
+            )
+            self._schedule_cache_maintenance()
+            return False
+
+        temp_path = (
+            f"{cache_path}.tmp-{os.getpid()}-{threading.get_ident()}"
+        )
+
+        try:
+            with open(temp_path, 'wb') as f:
                 f.write(image_bytes)
+                f.flush()
+            os.replace(temp_path, cache_path)
+            self._schedule_cache_maintenance()
+            return True
         except Exception as e:
             logger.error(f"Ошибка сохранения в кэш: {e}")
+            return False
+        finally:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except OSError:
+                pass
+
+    def _download_key(
+        self, supplier_type: str, external_id: str, url: str,
+    ) -> Tuple[str, str, str]:
+        return (
+            str(supplier_type),
+            str(external_id),
+            self.get_photo_hash(url),
+        )
+
+    def _build_download_task(
+        self,
+        supplier_type: str,
+        external_id: str,
+        url: str,
+        auth_cookies: Optional[dict],
+        target_size: Tuple[int, int],
+        background_color: str,
+        fallback_urls: Optional[List[str]],
+        auth_cookies_provider: Optional[Callable[[], dict]],
+    ) -> _PhotoDownloadTask:
+        return _PhotoDownloadTask(
+            supplier_type=str(supplier_type),
+            external_id=str(external_id),
+            url=url,
+            auth_cookies=dict(auth_cookies or {}),
+            target_size=target_size,
+            background_color=background_color,
+            fallback_urls=list(fallback_urls or []),
+            auth_cookies_provider=auth_cookies_provider,
+            dedupe_key=self._download_key(supplier_type, external_id, url),
+        )
+
+    def _enqueue_task(
+        self,
+        task: _PhotoDownloadTask,
+        *,
+        block: bool = False,
+        timeout: Optional[float] = None,
+    ) -> bool:
+        if self.is_cached(task.supplier_type, task.external_id, task.url):
+            return False
+
+        with self._pending_lock:
+            if task.dedupe_key in self._pending_downloads:
+                self._stats['downloads_deduplicated'] += 1
+                return False
+            self._pending_downloads.add(task.dedupe_key)
+
+        try:
+            if block:
+                self._download_queue.put(task, block=True, timeout=timeout)
+            else:
+                self._download_queue.put_nowait(task)
+            self._stats['downloads_queued'] += 1
+            return True
+        except queue.Full:
+            with self._pending_lock:
+                self._pending_downloads.discard(task.dedupe_key)
+            self._stats['queue_rejected'] += 1
+            logger.warning("Очередь загрузки фото переполнена")
+            return False
 
     def queue_download(
         self,
@@ -208,7 +387,8 @@ class PhotoCacheManager:
         auth_cookies: Optional[dict] = None,
         target_size: Tuple[int, int] = (1200, 1200),
         background_color: str = 'white',
-        fallback_urls: Optional[List[str]] = None
+        fallback_urls: Optional[List[str]] = None,
+        auth_cookies_provider: Optional[Callable[[], dict]] = None,
     ) -> bool:
         """
         Ставит загрузку фото в очередь
@@ -216,25 +396,17 @@ class PhotoCacheManager:
         Returns:
             True если добавлено в очередь, False если очередь полна или фото уже есть
         """
-        # Если уже в кэше - не качаем
-        if self.is_cached(supplier_type, external_id, url):
-            return False
-
-        try:
-            self._download_queue.put_nowait((
-                supplier_type,
-                external_id,
-                url,
-                auth_cookies,
-                target_size,
-                background_color,
-                fallback_urls or []
-            ))
-            self._stats['downloads_queued'] += 1
-            return True
-        except queue.Full:
-            logger.warning("Очередь загрузки фото переполнена")
-            return False
+        task = self._build_download_task(
+            supplier_type,
+            external_id,
+            url,
+            auth_cookies,
+            target_size,
+            background_color,
+            fallback_urls,
+            auth_cookies_provider,
+        )
+        return self._enqueue_task(task)
 
     def _download_and_save(
         self,
@@ -245,8 +417,11 @@ class PhotoCacheManager:
         target_size: Tuple[int, int],
         background_color: str,
         fallback_urls: List[str]
-    ):
-        """Скачивает и сохраняет фото"""
+    ) -> bool:
+        """Скачивает и сохраняет фото в общем wall-clock/size бюджете."""
+        if self.is_cached(supplier_type, external_id, url):
+            return True
+
         urls_to_try = [url] + fallback_urls
 
         headers = {
@@ -257,41 +432,228 @@ class PhotoCacheManager:
         if 'sexoptovik.ru' in url:
             headers['Referer'] = 'https://sexoptovik.ru/admin/'
 
-        for current_url in urls_to_try:
-            try:
-                response = self._session.get(
-                    current_url,
-                    headers=headers,
-                    cookies=auth_cookies,
-                    timeout=DOWNLOAD_TIMEOUT,
-                    allow_redirects=True
-                )
-                response.raise_for_status()
+        deadline = time.monotonic() + DOWNLOAD_TOTAL_BUDGET
+        with requests.Session() as session:
+            for current_url in urls_to_try:
+                try:
+                    content = self._download_image_bytes(
+                        session,
+                        current_url,
+                        headers,
+                        auth_cookies or {},
+                        deadline,
+                    )
+                    if content is None:
+                        continue
 
-                # Проверяем что это изображение
-                content_type = response.headers.get('Content-Type', '')
-                if not content_type.startswith('image/') and len(response.content) < 1024:
+                    img = Image.open(BytesIO(content))
+                    try:
+                        if img.width * img.height > DOWNLOAD_MAX_PIXELS:
+                            raise ValueError('image_pixel_limit_exceeded')
+                        img.load()
+                        if img.size != target_size:
+                            processed = self._resize_with_padding(
+                                img, target_size, background_color,
+                            )
+                        elif img.mode != 'RGB':
+                            processed = img.convert('RGB')
+                        else:
+                            processed = img
+
+                        output = BytesIO()
+                        processed.save(output, format='JPEG', quality=95)
+                        if processed is not img:
+                            processed.close()
+                    finally:
+                        img.close()
+
+                    return self.save_to_cache(
+                        supplier_type, external_id, url, output.getvalue(),
+                    )
+                except Exception as e:
+                    logger.debug(
+                        "Ошибка загрузки %s: %s", current_url[:50], e,
+                    )
+                    continue
+        return False
+
+    @staticmethod
+    def _download_image_bytes(
+        session: requests.Session,
+        url: str,
+        headers: dict,
+        auth_cookies: dict,
+        deadline: float,
+    ) -> Optional[bytes]:
+        """SSRF-safe download с ручными redirect и bounded body."""
+        from services.url_security import validate_external_url
+
+        current_url = url
+        for _ in range(5):
+            if validate_external_url(current_url) is not None:
+                return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.5:
+                return None
+
+            response = session.get(
+                current_url,
+                headers=headers,
+                cookies=auth_cookies,
+                timeout=(
+                    min(DOWNLOAD_CONNECT_TIMEOUT, remaining),
+                    min(DOWNLOAD_READ_TIMEOUT, remaining),
+                ),
+                allow_redirects=False,
+                stream=True,
+            )
+            try:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get('Location')
+                    if not location:
+                        return None
+                    current_url = urljoin(current_url, location)
                     continue
 
-                # Открываем и обрабатываем
-                img = Image.open(BytesIO(response.content))
+                response.raise_for_status()
+                content_length = response.headers.get('Content-Length')
+                if content_length:
+                    try:
+                        if int(content_length) > DOWNLOAD_MAX_BYTES:
+                            return None
+                    except ValueError:
+                        pass
 
-                # Resize с padding если нужно
-                if img.size != target_size:
-                    img = self._resize_with_padding(img, target_size, background_color)
+                chunks = []
+                total = 0
+                for chunk in response.iter_content(chunk_size=65536):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if (
+                        total > DOWNLOAD_MAX_BYTES
+                        or time.monotonic() > deadline
+                    ):
+                        return None
+                    chunks.append(chunk)
+                content = b''.join(chunks)
+                content_type = response.headers.get('Content-Type', '')
+                if not content_type.startswith('image/') and len(content) < 1024:
+                    return None
+                return content
+            finally:
+                response.close()
+        return None
 
-                # Сохраняем в кэш
-                output = BytesIO()
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                img.save(output, format='JPEG', quality=95)
-
-                self.save_to_cache(supplier_type, external_id, url, output.getvalue())
+    def _schedule_cache_maintenance(self) -> None:
+        """Запускает не более одного low-frequency prune вне caller thread."""
+        now = time.monotonic()
+        with self._maintenance_lock:
+            if (
+                now - self._last_maintenance_started
+                < PHOTO_CACHE_MAINTENANCE_INTERVAL
+            ):
                 return
+            self._last_maintenance_started = now
 
-            except Exception as e:
-                logger.debug(f"Ошибка загрузки {current_url[:50]}: {e}")
+        thread = threading.Thread(
+            target=self._run_cache_maintenance,
+            name='PhotoCacheMaintenance',
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_cache_maintenance(self) -> None:
+        """Удаляет самые старые восстанавливаемые JPEG до low-water mark."""
+        try:
+            import fcntl
+
+            os.makedirs(PHOTO_CACHE_DIR, exist_ok=True)
+            lock_path = os.path.join(PHOTO_CACHE_DIR, '.maintenance.lock')
+            with open(lock_path, 'a+b') as lock_file:
+                try:
+                    fcntl.flock(
+                        lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                except BlockingIOError:
+                    return
+                self._prune_cache_files()
+        except Exception as exc:
+            logger.warning("Photo cache maintenance failed: %s", exc)
+
+    def _prune_cache_files(self) -> None:
+        files = []
+        total_bytes = 0
+        now = time.time()
+
+        for directory, _subdirs, names in os.walk(PHOTO_CACHE_DIR):
+            for name in names:
+                path = os.path.join(directory, name)
+                if '.tmp-' in name:
+                    try:
+                        stat = os.stat(path, follow_symlinks=False)
+                        if now - stat.st_mtime > 3600:
+                            os.unlink(path)
+                    except OSError:
+                        pass
+                    continue
+                if not name.endswith('.jpg'):
+                    continue
+                try:
+                    stat = os.stat(path, follow_symlinks=False)
+                except OSError:
+                    continue
+                if not os.path.isfile(path):
+                    continue
+                files.append((stat.st_mtime, stat.st_size, path))
+                total_bytes += stat.st_size
+
+        try:
+            free_bytes = shutil.disk_usage(PHOTO_CACHE_DIR).free
+        except OSError:
+            free_bytes = PHOTO_CACHE_MIN_FREE_BYTES
+
+        target_bytes = total_bytes
+        if total_bytes > PHOTO_CACHE_MAX_BYTES:
+            target_bytes = min(target_bytes, PHOTO_CACHE_PRUNE_TO_BYTES)
+        if free_bytes < PHOTO_CACHE_MIN_FREE_BYTES:
+            target_bytes = min(
+                target_bytes,
+                max(
+                    0,
+                    total_bytes
+                    - (PHOTO_CACHE_MIN_FREE_BYTES - free_bytes),
+                ),
+            )
+
+        self._stats['maintenance_runs'] += 1
+        if target_bytes >= total_bytes:
+            return
+
+        deleted_files = 0
+        deleted_bytes = 0
+        for _mtime, size, path in sorted(files):
+            if total_bytes - deleted_bytes <= target_bytes:
+                break
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
                 continue
+            except OSError as exc:
+                logger.debug("Не удалось удалить cache file %s: %s", path, exc)
+                continue
+            deleted_files += 1
+            deleted_bytes += size
+
+        self._stats['maintenance_deleted_files'] += deleted_files
+        self._stats['maintenance_deleted_bytes'] += deleted_bytes
+        logger.info(
+            "Photo cache maintenance: total=%s target=%s deleted=%s files/%s bytes",
+            total_bytes,
+            target_bytes,
+            deleted_files,
+            deleted_bytes,
+        )
 
     @staticmethod
     def _resize_with_padding(
@@ -487,14 +849,15 @@ class PhotoCacheManager:
                     if ph.get('original') and ph['original'] != url:
                         fallbacks.append(ph['original'])
 
-                    download_tasks.append((
+                    download_tasks.append(self._build_download_task(
                         supplier_type,
                         external_id,
                         url,
                         None,  # auth_cookies
                         (1200, 1200),  # target_size
                         'white',  # background_color
-                        fallbacks
+                        fallbacks,
+                        None,  # auth_cookies_provider
                     ))
 
             page += 1
@@ -513,10 +876,11 @@ class PhotoCacheManager:
                 fed = 0
                 for task in download_tasks:
                     try:
-                        # Блокирующий put — ждёт пока освободится место в очереди
-                        self._download_queue.put(task, block=True, timeout=300)
-                        fed += 1
-                        if fed % 500 == 0:
+                        if self._enqueue_task(
+                            task, block=True, timeout=300,
+                        ):
+                            fed += 1
+                        if fed and fed % 500 == 0:
                             logger.info(f"Фидер {supplier_type}: подано {fed}/{to_queue} в очередь")
                     except Exception as e:
                         logger.warning(f"Фидер: ошибка постановки в очередь: {e}")

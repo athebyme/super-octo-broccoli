@@ -23,6 +23,7 @@ from models import (
     MarketplaceProductType,
     MarketplaceReferenceAccount,
     MarketplaceTaxonomyCategory,
+    OzonReferenceValueReview,
     db,
 )
 from services.marketplace_adapters import (
@@ -1078,19 +1079,27 @@ class OzonReferenceService:
                 "skipped": True,
                 "error": "Ozon attribute value sync is already running",
             }
-        synced_at = now or datetime.utcnow()
-        attribute.values_sync_status = "running"
-        attribute.values_sync_error = None
-        # This is an observational durable checkpoint only. Values are kept in
-        # memory and every retry restarts at cursor 0; resuming from this cursor
-        # without a staging table would create an incomplete snapshot.
-        attribute.values_sync_checkpoint = cls._stable_json({
-            "page": 0,
-            "cursor": 0,
-            "fetched": 0,
-        })
-        db.session.commit()
+        # Schema mutation uses this same process-shared claim. Never hold an
+        # SQLite write transaction while reading the provider.
+        schema_lock = cls._try_claim("attributes", attribute.product_type_id)
+        if schema_lock is None:
+            cls._release_claim(lock_file)
+            return {"success": False, "skipped": True, "error": "Ozon attribute schema sync is running"}
+        from services.ozon_reference_reviews import OzonReferenceReviewService as Reviews
         try:
+            original_scope = Reviews.scope(attribute)
+            synced_at = now or datetime.utcnow()
+            attribute.values_sync_status = "running"
+            attribute.values_sync_error = None
+            # This is an observational durable checkpoint only. Values are kept in
+            # memory and every retry restarts at cursor 0; resuming from this cursor
+            # without a staging table would create an incomplete snapshot.
+            attribute.values_sync_checkpoint = cls._stable_json({
+                "page": 0,
+                "cursor": 0,
+                "fetched": 0,
+            })
+            db.session.commit()
             adapter, credentials = cls._adapter_credentials(
                 attribute.marketplace,
                 adapter=adapter,
@@ -1147,9 +1156,21 @@ class OzonReferenceService:
                         )
                 if not page["values"]:
                     if not all_values:
-                        raise OzonReferenceValidationError(
-                            "Ozon dictionary snapshot is empty"
+                        # Some optional dictionaries exist in the official
+                        # schema but currently have no values for this type.
+                        # Observe that exact empty set only when completion is
+                        # explicit and no last-good active value would be lost.
+                        empty_optional = (
+                            page["has_next"] is False
+                            and not attribute.is_required
+                            and not MarketplaceAttributeValue.query.filter_by(
+                                attribute_id=attribute.id, is_available=True,
+                            ).with_entities(MarketplaceAttributeValue.id).first()
                         )
+                        if not empty_optional:
+                            raise OzonReferenceValidationError(
+                                "Ozon dictionary snapshot is empty"
+                            )
                     if page["has_next"] is True:
                         raise OzonReferenceValidationError(
                             "Ozon dictionary returned an empty page before completion"
@@ -1179,6 +1200,9 @@ class OzonReferenceService:
                     "Ozon dictionary pagination exceeded the page safety limit"
                 )
 
+            db.session.expire_all()
+            if Reviews.scope(attribute) != original_scope:
+                raise OzonReferenceValidationError("Ozon dictionary scope changed during synchronization")
             canonical = {"values": all_values}
             snapshot_hash = cls._hash(canonical)
             existing = {
@@ -1190,13 +1214,19 @@ class OzonReferenceService:
             previous_available = sum(
                 1 for item in existing.values() if item.is_available
             )
-            cls._guard_shrink(
-                "dictionary value",
-                previous_available,
-                len(all_values),
-                cls.VALUE_SHRINK_GUARD_MIN,
-                cls.VALUE_SHRINK_GUARD_RATIO,
-            )
+            approved_review = None
+            try:
+                cls._guard_shrink(
+                    "dictionary value", previous_available, len(all_values),
+                    cls.VALUE_SHRINK_GUARD_MIN, cls.VALUE_SHRINK_GUARD_RATIO,
+                )
+            except OzonReferenceValidationError:
+                if page["has_next"] is not False:
+                    raise OzonReferenceValidationError("Ozon dictionary review requires explicit pagination completion")
+                approved_review = Reviews.admit_or_stage(
+                    attribute, canonical, snapshot_hash, previous_available, synced_at,
+                    existing=existing,
+                )
             added = 0
             updated = 0
             for item in all_values:
@@ -1239,6 +1269,7 @@ class OzonReferenceService:
                     value.is_available = False
                     value.updated_at = synced_at
                     updated += 1
+            Reviews.finish(attribute, approved_review, synced_at)
             changed_snapshot = attribute.values_snapshot_hash != snapshot_hash
             attribute.values_snapshot_hash = snapshot_hash
             attribute.values_synced_at = synced_at
@@ -1268,6 +1299,7 @@ class OzonReferenceService:
                 db.session.commit()
             return {"success": False, "error": cls._safe_error(exc)}
         finally:
+            cls._release_claim(schema_lock)
             cls._release_claim(lock_file)
 
     @classmethod
@@ -1298,6 +1330,7 @@ class OzonReferenceService:
         *,
         now: Optional[datetime] = None,
     ) -> bool:
+        from services.ozon_reference_reviews import OzonReferenceReviewService as Reviews
         current_time = now or datetime.utcnow()
         return bool(
             attribute.is_available
@@ -1307,6 +1340,7 @@ class OzonReferenceService:
             and attribute.values_synced_at
             >= current_time - timedelta(hours=cls.HARD_TTL_HOURS)
             and attribute.values_snapshot_hash
+            and not Reviews.blocks(attribute)
         )
 
     @classmethod
@@ -1364,6 +1398,10 @@ class OzonReferenceService:
         )
 
         demanded = or_(
+            exists().where(and_(
+                OzonReferenceValueReview.product_type_id == MarketplaceProductType.id,
+                OzonReferenceValueReview.status == "approved",
+            )),
             exists().where(and_(
                 MarketplaceProductDraft.product_type_id
                 == MarketplaceProductType.id,
@@ -1452,17 +1490,42 @@ class OzonReferenceService:
                 MarketplaceProductType.attributes_sync_status != "success",
             ),
         )
-        dictionary_attempt_allowed = or_(
+        awaiting_review = exists().where(and_(
+            OzonReferenceValueReview.attribute_id == MarketplaceAttributeDefinition.id,
+            OzonReferenceValueReview.status == "pending_review",
+            OzonReferenceValueReview.baseline_hash == MarketplaceAttributeDefinition.values_snapshot_hash,
+            OzonReferenceValueReview.baseline_version == MarketplaceAttributeDefinition.values_version,
+            OzonReferenceValueReview.schema_hash == MarketplaceProductType.attributes_schema_hash,
+        )).correlate(MarketplaceAttributeDefinition, MarketplaceProductType)
+        dictionary_attempt_allowed = and_(~awaiting_review, or_(
             MarketplaceAttributeDefinition.values_sync_status.is_(None),
             MarketplaceAttributeDefinition.values_sync_status != "failed",
             MarketplaceAttributeDefinition.updated_at.is_(None),
             MarketplaceAttributeDefinition.updated_at <= retry_before,
-        )
+        ))
         dictionary_due = exists().where(and_(
             MarketplaceAttributeDefinition.product_type_id
             == MarketplaceProductType.id,
             MarketplaceAttributeDefinition.is_available.is_(True),
             MarketplaceAttributeDefinition.is_enabled.is_(True),
+            MarketplaceAttributeDefinition.dictionary_id.isnot(None),
+            dictionary_attempt_allowed,
+            or_(
+                MarketplaceAttributeDefinition.values_synced_at.is_(None),
+                MarketplaceAttributeDefinition.values_synced_at
+                < refresh_before,
+                MarketplaceAttributeDefinition.values_snapshot_hash.is_(None),
+                MarketplaceAttributeDefinition.values_sync_status.is_(None),
+                MarketplaceAttributeDefinition.values_sync_status
+                != "success",
+            ),
+        ))
+        required_dictionary_due = exists().where(and_(
+            MarketplaceAttributeDefinition.product_type_id
+            == MarketplaceProductType.id,
+            MarketplaceAttributeDefinition.is_available.is_(True),
+            MarketplaceAttributeDefinition.is_enabled.is_(True),
+            MarketplaceAttributeDefinition.is_required.is_(True),
             MarketplaceAttributeDefinition.dictionary_id.isnot(None),
             dictionary_attempt_allowed,
             or_(
@@ -1494,6 +1557,8 @@ class OzonReferenceService:
             demanded,
             or_(schema_due, dictionary_due_with_fresh_schema),
         ).order_by(
+            schema_due.desc(),
+            required_dictionary_due.desc(),
             MarketplaceProductType.attributes_synced_at.asc(),
             MarketplaceProductType.id.asc(),
         ).limit(limit).all()
@@ -1517,6 +1582,7 @@ class OzonReferenceService:
         failed = 0
         dictionaries_synced = 0
         dictionaries_failed = 0
+        ready_product_types = []
         for selected in product_types:
             product_type = MarketplaceProductType.query.filter_by(
                 id=selected.id,
@@ -1548,28 +1614,34 @@ class OzonReferenceService:
                 else:
                     failed += 1
                     continue
+            ready_product_types.append(product_type)
 
-            remaining = (
-                dictionary_limit
-                - dictionaries_synced
-                - dictionaries_failed
-            )
-            if remaining <= 0:
-                continue
-            demanded_dictionaries = (
+        # One type can expose dozens of large optional dictionaries.  Letting
+        # the first selected type consume the whole global budget delays
+        # required dictionaries of every other demanded type for many ticks.
+        # Build bounded per-type queues, drain required queues round-robin,
+        # then use any remaining budget for optional enrichment.
+        dictionary_queues = {}
+        for product_type in ready_product_types:
+            dictionary_queues[product_type.id] = (
                 MarketplaceAttributeDefinition.query.filter(
                     MarketplaceAttributeDefinition.product_type_id
                     == product_type.id,
                     MarketplaceAttributeDefinition.is_available.is_(True),
                     MarketplaceAttributeDefinition.is_enabled.is_(True),
                     MarketplaceAttributeDefinition.dictionary_id.isnot(None),
+                    ~exists().where(and_(
+                        OzonReferenceValueReview.attribute_id == MarketplaceAttributeDefinition.id,
+                        OzonReferenceValueReview.status == "pending_review",
+                        OzonReferenceValueReview.baseline_hash == MarketplaceAttributeDefinition.values_snapshot_hash,
+                        OzonReferenceValueReview.baseline_version == MarketplaceAttributeDefinition.values_version,
+                        OzonReferenceValueReview.schema_hash == product_type.attributes_schema_hash,
+                    )),
                     or_(
                         MarketplaceAttributeDefinition.values_sync_status.is_(None),
-                        MarketplaceAttributeDefinition.values_sync_status
-                        != "failed",
+                        MarketplaceAttributeDefinition.values_sync_status != "failed",
                         MarketplaceAttributeDefinition.updated_at.is_(None),
-                        MarketplaceAttributeDefinition.updated_at
-                        <= retry_before,
+                        MarketplaceAttributeDefinition.updated_at <= retry_before,
                     ),
                     or_(
                         MarketplaceAttributeDefinition.values_synced_at.is_(None),
@@ -1584,19 +1656,43 @@ class OzonReferenceService:
                     MarketplaceAttributeDefinition.is_required.desc(),
                     MarketplaceAttributeDefinition.values_synced_at.asc(),
                     MarketplaceAttributeDefinition.id.asc(),
-                ).limit(remaining).all()
+                ).limit(dictionary_limit).all()
             )
-            for attribute in demanded_dictionaries:
-                value_result = cls.sync_attribute_values(
-                    attribute.id,
-                    adapter=adapter,
-                    credentials=credentials,
-                    now=current_time,
-                )
-                if value_result.get("success"):
-                    dictionaries_synced += 1
-                else:
-                    dictionaries_failed += 1
+
+        for required in (True, False):
+            while (
+                dictionaries_synced + dictionaries_failed
+                < dictionary_limit
+            ):
+                progressed = False
+                for product_type in ready_product_types:
+                    queue = dictionary_queues.get(product_type.id, [])
+                    position = next((
+                        index
+                        for index, attribute in enumerate(queue)
+                        if bool(attribute.is_required) is required
+                    ), None)
+                    if position is None:
+                        continue
+                    attribute = queue.pop(position)
+                    value_result = cls.sync_attribute_values(
+                        attribute.id,
+                        adapter=adapter,
+                        credentials=credentials,
+                        now=current_time,
+                    )
+                    if value_result.get("success"):
+                        dictionaries_synced += 1
+                    else:
+                        dictionaries_failed += 1
+                    progressed = True
+                    if (
+                        dictionaries_synced + dictionaries_failed
+                        >= dictionary_limit
+                    ):
+                        break
+                if not progressed:
+                    break
         return {
             "success": failed == 0 and dictionaries_failed == 0,
             "selected": len(product_types),

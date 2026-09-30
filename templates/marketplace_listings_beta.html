@@ -1,50 +1,63 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
 
-{% block title %}Каталог маркетплейсов · beta — Seller Hub{% endblock %}
+{% block title %}Каталог маркетплейсов — Seller Hub{% endblock %}
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog.css') }}">
 
 <script type="application/json" id="mcat-bootstrap">{{ {
     'ozonEnabled': ozon_enabled,
     'accounts': accounts_payload,
+    'filters': initial_filters,
     'urls': {
         'api': url_for('marketplace_listings.list_api'),
         'groups': url_for('marketplace_listings.groups_api'),
         'facets': url_for('marketplace_listings.facets_api'),
         'base': url_for('marketplace_listings.index'),
-        'classic': url_for('marketplace_listings.index'),
+        'classic': url_for('marketplace_listings.classic'),
+        'drafts': url_for('marketplace_drafts.index'),
         'accountsPage': url_for('marketplace_accounts.index'),
+        'accountsStatus': url_for('marketplace_accounts.list_api'),
         'myProducts': url_for('seller_my_products'),
     },
     'perPage': 60,
+    'illustration': url_for('static', filename='images/ozon-shop-start.webp'),
 } | tojson }}</script>
 
+<noscript><div class="sh-alert sh-alert--warning">Для интерактивного каталога нужен JavaScript. <a href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0) }}">Открыть упрощённый каталог</a></div></noscript>
+<div id="mcat-bootstrap-fallback" class="mcat-bootstrap-fallback" role="status">
+    <p>Открываем каталог…</p>
+    <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0) }}">Открыть упрощённый каталог</a>
+</div>
 <div id="marketplace-catalog-app" v-cloak>
 {% raw %}
     <header class="mcat-head">
         <div>
             <h1 class="mcat-title">Каталог маркетплейсов</h1>
-            <p class="mcat-sub">
-                <span class="mcat-count">{{ displayTotalFormatted }}</span>
-                <span>{{ totalNoun }} на витрине · только просмотр, цены и остатки не меняются</span>
-            </p>
+            <p class="mcat-sub">Товары, цены и остатки ваших магазинов — в одном месте.</p>
         </div>
         <div class="mcat-head-actions">
-            <a class="sh-btn sh-btn--secondary" :href="urls.classic">Классическая версия</a>
+            <a class="sh-btn sh-btn--secondary" :href="myProductsUrl">{% endraw %}{{ icon('package', 16) }}{% raw %} Мои товары</a>
+            <a class="sh-btn sh-btn--secondary" :href="urls.accountsPage">{% endraw %}{{ icon('settings', 16) }}{% raw %} Кабинеты</a>
+            <a v-if="ozonEnabled" class="sh-btn sh-btn--primary" :href="draftsUrl">{% endraw %}{{ icon('plus', 16) }}{% raw %} Подготовить для Ozon</a>
         </div>
     </header>
 
-    <div class="mcat-strip">
+    <div class="mcat-channels">
         <div class="mcat-strip-row">
             <nav class="sh-channel-bar" aria-label="Каналы продаж">
                 <button type="button" class="sh-channel-tab"
                         :class="{'sh-channel-tab--active': channelKey === 'all'}"
+                        :aria-pressed="channelKey === 'all'"
                         @click="setChannel('all')">Все каналы
                     <span class="mcat-tab-n" v-if="channelCounts.all !== undefined">{{ channelCounts.all }}</span>
                 </button>
                 <button type="button" class="sh-channel-tab"
                         :class="{'sh-channel-tab--active': channelKey === 'wb'}"
+                        :aria-pressed="channelKey === 'wb'"
                         @click="setChannel('wb')">
                     <span class="sh-mp-dot sh-mp-dot--wb"></span>Wildberries
                     <span class="mcat-tab-n" v-if="channelCounts.wb !== undefined">{{ channelCounts.wb }}</span>
@@ -53,6 +66,7 @@
                     <button v-for="acc in accounts" :key="acc.id" type="button"
                             class="sh-channel-tab"
                             :class="{'sh-channel-tab--active': channelKey === 'ozon:' + acc.id}"
+                            :aria-pressed="channelKey === 'ozon:' + acc.id"
                             @click="setChannel('ozon:' + acc.id)">
                         <span class="sh-mp-dot sh-mp-dot--ozon"></span>{{ accountTabLabel(acc) }}
                         <span class="mcat-tab-n" v-if="channelCounts['ozon:' + acc.id] !== undefined">{{ channelCounts['ozon:' + acc.id] }}</span>
@@ -61,33 +75,41 @@
                 <button v-else-if="ozonEnabled" type="button"
                         class="sh-channel-tab"
                         :class="{'sh-channel-tab--active': channelKey === 'ozon'}"
+                        :aria-pressed="channelKey === 'ozon'"
                         @click="setChannel('ozon')">
                     <span class="sh-mp-dot sh-mp-dot--ozon"></span>Ozon
                     <span class="mcat-tab-n" v-if="channelCounts.ozon !== undefined">{{ channelCounts.ozon }}</span>
                 </button>
             </nav>
 
-            <div class="mcat-sync" v-if="ozonEnabled && accounts.length">
-                <div v-for="acc in accounts" :key="'sync-' + acc.id" class="mcat-sync-pill"
-                     :class="syncTone(acc)">
-                    <span class="mcat-sync-label" :title="syncHint(acc)">{{ acc.label }}</span>
-                    <span v-if="acc._syncing" class="sh-spinner sh-spinner--sm" aria-hidden="true"></span>
-                    <template v-else>
-                        <button v-if="canSync(acc)" type="button" class="mcat-sync-btn"
-                                @click="syncAccount(acc)"
-                                :title="'Синхронизировать каталог ' + acc.label">
-                            {{ syncActionLabel(acc) }}
-                        </button>
-                        <button v-if="canSync(acc) && acc.last_sync && acc.last_sync.status === 'failed'"
-                                type="button" class="mcat-sync-btn mcat-sync-btn--danger"
-                                @click="syncAccount(acc, true)"
-                                title="Начать синхронизацию с первой страницы">заново</button>
-                        <span v-if="!canSync(acc)" class="mcat-sync-note">нет подключения</span>
-                    </template>
-                </div>
-            </div>
         </div>
+    </div>
 
+    <section v-if="visibleAccounts.length" class="mcat-accounts" :class="{'mcat-accounts--single': visibleAccounts.length === 1}" aria-label="Ваши магазины Ozon">
+        <article v-for="acc in visibleAccounts" :key="acc.id" class="mcat-account" :class="{'mcat-account--error': syncFailed(acc)}">
+            <div class="mcat-account-top">
+                <span class="mcat-account-icon">{% endraw %}{{ icon('office', 22, stroke=1.5) }}{% raw %}</span>
+                <div class="mcat-account-name"><h2>{{ acc.label }}</h2><span>Ozon{{ acc.is_default ? ' · Основной' : '' }}</span></div>
+                <span class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + accountState(acc).tone">{{ accountState(acc).label }}</span>
+            </div>
+            <p class="mcat-account-message" role="status">{{ syncHint(acc) }}</p>
+            <p v-if="syncDate(acc)" class="mcat-account-date">{{ syncDate(acc) }}</p>
+            <p v-if="canSync(acc) && !syncFailed(acc)" class="mcat-account-date">Автообновление включено · примерно раз в час, с учётом пауз Ozon</p>
+            <div class="mcat-account-actions">
+                <button v-if="canSync(acc)" type="button" class="sh-btn sh-btn--secondary" :disabled="syncActive(acc)" @click="syncAccount(acc)">
+                    <span v-if="syncActive(acc)" class="sh-spinner sh-spinner--sm" aria-hidden="true"></span>
+                    <template v-else>{% endraw %}{{ icon('refresh', 15) }}{% raw %}</template>
+                    {{ syncActive(acc) ? 'Загрузка идёт…' : 'Обновить каталог' }}
+                </button>
+                <a v-else class="sh-btn sh-btn--secondary" :href="accountSettingsUrl(acc)">{% endraw %}{{ icon('key', 15) }}{% raw %} Настроить подключение</a>
+                <button v-if="canSync(acc) && !syncActive(acc) && syncFailed(acc)" type="button" class="sh-btn sh-btn--secondary" @click="syncAccount(acc, true)">Загрузить заново</button>
+                <a v-if="canSync(acc)" class="mcat-account-settings" :href="accountSettingsUrl(acc)">Настройки {% endraw %}{{ icon('chevron-right', 13) }}{% raw %}</a>
+            </div>
+        </article>
+    </section>
+    <div v-if="syncError" role="status" class="sh-alert sh-alert--warning mcat-sync-warning"><span>{{ syncError }}</span><button type="button" class="sh-btn sh-btn--secondary" @click="pollSync">Проверить статус</button></div>
+
+    <div class="mcat-strip">
         <div class="mcat-strip-row">
             <label class="mcat-search">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -101,43 +123,49 @@
             <div class="mcat-chips" role="group" aria-label="Фильтр по статусу">
                 <button v-for="chip in statusChips" :key="chip.key" type="button"
                         class="sh-chip sh-chip--clickable"
-                        :class="{'sh-chip--active': filters.status === chip.value, 'mcat-chip--alarm': chip.key === 'error' && counts.error > 0}"
+                        title="Количество карточек площадок с этим статусом"
+                        :class="{'sh-chip--active': filters.status === chip.value, 'mcat-chip--alarm': chip.key === 'error' && counts.error > 0}" :aria-pressed="filters.status === chip.value"
                         @click="setStatus(chip.value)">
                     {{ chip.label }}
                     <span class="mcat-chip-n" v-if="counts[chip.key] !== null">{{ counts[chip.key] }}</span>
                 </button>
             </div>
 
-            <div class="mcat-tools">
+            <div class="mcat-tools" :class="{'mcat-tools--expanded': advancedFiltersOpen}">
+                <button type="button" class="sh-btn sh-btn--secondary mcat-filters-toggle" :aria-expanded="advancedFiltersOpen" @click="advancedFiltersOpen = !advancedFiltersOpen">
+                    {% endraw %}{{ icon('filter', 14) }}{% raw %} Фильтры <span v-if="filters.link_status || filters.include_unavailable">{{ Number(!!filters.link_status) + Number(filters.include_unavailable) }}</span>
+                </button>
                 <select v-model="filters.link_status" class="mcat-select" aria-label="Связь с общей карточкой">
                     <option value="">Связь: любая</option>
                     <option value="linked">Связаны</option>
                     <option value="unlinked">Без связи</option>
                     <option value="ambiguous">Конфликт связи</option>
                 </select>
-                <label class="mcat-check">
+                <label class="mcat-check" title="Товары, не найденные при последней полной загрузке">
                     <input type="checkbox" v-model="filters.include_unavailable">
-                    <span>недоступные</span>
+                    <span>не найденные на площадке</span>
                 </label>
                 <div class="sh-segmented mcat-mode" role="group" aria-label="Группировка">
                     <button type="button" class="sh-segmented-item"
                             :class="{'sh-segmented-item--active': mode === 'products'}"
+                            :aria-pressed="mode === 'products'"
                             @click="setMode('products')"
                             title="Один товар — одна карточка, каналы внутри">Товары</button>
                     <button type="button" class="sh-segmented-item"
                             :class="{'sh-segmented-item--active': mode === 'listings'}"
+                            :aria-pressed="mode === 'listings'"
                             @click="setMode('listings')"
-                            title="Каждый канальный листинг отдельной строкой">Листинги</button>
+                            title="Каждая карточка площадки отдельно">По площадкам</button>
                 </div>
                 <div class="sh-segmented mcat-view" role="group" aria-label="Вид списка">
                     <button type="button" class="sh-segmented-item"
                             :class="{'sh-segmented-item--active': view === 'grid'}"
-                            @click="setView('grid')" title="Витрина">
+                            @click="setView('grid')" title="Плитка" aria-label="Плитка" :aria-pressed="view === 'grid'">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
                     </button>
                     <button type="button" class="sh-segmented-item"
                             :class="{'sh-segmented-item--active': view === 'table'}"
-                            @click="setView('table')" title="Таблица">
+                            @click="setView('table')" title="Таблица" aria-label="Таблица" :aria-pressed="view === 'table'">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
                     </button>
                 </div>
@@ -145,6 +173,12 @@
         </div>
     </div>
 
+    <div class="mcat-results-head">
+        <h2>{{ hasSearchFilters ? 'Результаты поиска' : 'Товары' }} <span class="mcat-count">{{ loading && !items.length ? '…' : displayTotalFormatted }}</span></h2>
+        <span class="mcat-read-note">{% endraw %}{{ icon('eye', 14) }}{% raw %} Просмотр данных площадки</span>
+        <button v-if="hasSearchFilters" type="button" class="mcat-reset" @click="resetFilters">Сбросить фильтры {% endraw %}{{ icon('close', 13) }}{% raw %}</button>
+        <span v-if="loading && items.length" class="mcat-refresh-indicator" role="status"><span class="sh-spinner sh-spinner--sm" aria-hidden="true"></span> Обновляем список…</span>
+    </div>
     <div v-if="error" class="mcat-error" role="alert">
         <span>{{ error }}</span>
         <button type="button" class="sh-btn sh-btn--secondary" @click="refresh">Повторить</button>
@@ -163,6 +197,8 @@
 
     <!-- Пустые состояния -->
     <div v-else-if="!loading && !items.length && !error" class="mcat-empty">
+        <img v-image-deadline v-if="emptyState.action !== 'reset'" class="mcat-empty-art" :src="illustration" width="180" height="180" alt="">
+        <span v-else class="mcat-empty-symbol">{% endraw %}{{ icon('search', 32, stroke=1.5) }}{% raw %}</span>
         <p class="mcat-empty-title">{{ emptyState.title }}</p>
         <p class="mcat-empty-text">{{ emptyState.text }}</p>
         <button v-if="emptyState.action === 'reset'" type="button"
@@ -170,8 +206,9 @@
         <a v-else-if="emptyState.action === 'accounts'" class="sh-btn sh-btn--primary"
            :href="urls.accountsPage">Подключить кабинет</a>
         <button v-else-if="emptyState.action === 'sync' && syncableAccount" type="button"
-                class="sh-btn sh-btn--primary" :disabled="syncableAccount._syncing"
-                @click="syncAccount(syncableAccount)">Синхронизировать {{ syncableAccount.label }}</button>
+                class="sh-btn sh-btn--primary" :disabled="syncActive(syncableAccount)"
+                @click="syncAccount(syncableAccount)">{{ syncActive(syncableAccount) ? 'Каталог загружается…' : 'Загрузить каталог ' + syncableAccount.label }}</button>
+        <a v-if="ozonEnabled && !hasSearchFilters && emptyState.action !== 'reset'" class="sh-btn sh-btn--secondary" :href="draftsUrl">{% endraw %}{{ icon('plus', 15) }}{% raw %} Подготовить первый товар</a>
     </div>
 
     <!-- Витрина -->
@@ -183,18 +220,19 @@
                  tabindex="0" role="button"
                  :aria-label="g._p.title || g._p.offer_id"
                  @click="openDrawer(i)"
-                 @keydown.enter.prevent="openDrawer(i)"
+                 @keydown.enter.self.prevent="openDrawer(i)"
+                 @keydown.space.self.prevent="openDrawer(i)"
                  @focus="selectedIndex = i">
             <span class="mcat-rail" :class="railClass(g)"></span>
             <div class="mcat-photo" @mouseenter="hoverItem(g._p)">
                 <template v-if="g._p.primary_image && !imgFailed[g._p.id]">
-                    <img :src="g._p.primary_image" loading="lazy" alt=""
+                    <img v-image-deadline :src="g._p.primary_image" loading="lazy" decoding="async" referrerpolicy="no-referrer" alt=""
                          @error="imgFailed[g._p.id] = true">
-                    <img v-if="g._p.hover_image && hovered[g._p.id]"
-                         class="mcat-photo-alt" :src="g._p.hover_image" alt="">
+                    <img v-image-deadline v-if="g._p.hover_image && hovered[g._p.id] && !hoverFailed[g._p.id]"
+                         class="mcat-photo-alt" :src="g._p.hover_image" alt="" @error="hoverFailed[g._p.id] = true">
                 </template>
                 <div v-else class="mcat-fallback" :class="fallbackClass(g._p)">
-                    <span>{{ letterOf(g._p) }}</span>
+                    <span class="mcat-missing-photo">{% endraw %}{{ icon('image', 30, stroke=1.5) }}{% raw %}<small>Нет фото</small></span>
                 </div>
                 <span v-if="groupBadge(g)" class="mcat-badge" :class="'mcat-badge--' + groupBadge(g).tone">{{ groupBadge(g).label }}</span>
                 <span v-if="discountOf(g._p)" class="mcat-disc">−{{ discountOf(g._p) }}%</span>
@@ -213,7 +251,8 @@
                                 @click.stop="openDrawer(i, mi)">
                             <i class="mcat-dot" :class="'mcat-dot--' + (l.marketplace_code || 'wb')" aria-hidden="true"></i>
                             <span class="mcat-chan-name">{{ chanLabel(l) }}</span>
-                            <span class="mcat-chan-price">{{ priceOf(l) }}</span>
+                            <span v-if="l.marketplace_code === 'ozon'" class="mcat-chan-price mcat-chan-price--ozon"><small>До скидок {{ basePriceOf(l) }}</small><span>Продавца {{ priceOf(l) }}</span></span>
+                            <span v-else class="mcat-chan-price">{{ priceOf(l) }}</span>
                             <span class="mcat-chan-stock" :class="{'is-zero': stockNum(l) === 0}">{{ stockOf(l) }}</span>
                         </button>
                         <div v-if="(g.listing_count || g.listings.length) > 3" class="mcat-chan-more">и ещё {{ (g.listing_count || g.listings.length) - 3 }}</div>
@@ -227,8 +266,9 @@
                             {{ channelShort(g._p) }}
                         </span>
                     </div>
+                    <ozon-prices v-if="g._p.marketplace_code === 'ozon'" :listing="g._p" compact></ozon-prices>
                     <div class="mcat-nums">
-                        <span class="mcat-price">
+                        <span v-if="g._p.marketplace_code !== 'ozon'" class="mcat-price" title="Цена продавца из API площадки">
                             {{ priceOf(g._p) }}
                             <s v-if="oldPriceOf(g._p)" class="mcat-oldprice">{{ oldPriceOf(g._p) }}</s>
                         </span>
@@ -248,9 +288,9 @@
                     <th>Канал</th>
                     <th>Статус</th>
                     <th>Связь</th>
-                    <th class="mcat-th-num">Цена</th>
+                    <th class="mcat-th-num">Цены</th>
                     <th class="mcat-th-num">Остаток</th>
-                    <th>Синк</th>
+                    <th>Обновлено</th>
                 </tr>
             </thead>
             <tbody ref="rows">
@@ -263,7 +303,7 @@
                     <td>
                         <div class="mcat-row-product">
                             <div class="mcat-thumb">
-                                <img v-if="g._p.primary_image && !imgFailed[g._p.id]"
+                                <img v-image-deadline v-if="g._p.primary_image && !imgFailed[g._p.id]"
                                      :src="g._p.primary_image" loading="lazy" alt=""
                                      @error="imgFailed[g._p.id] = true">
                                 <div v-else class="mcat-fallback mcat-fallback--sm" :class="'mcat-fallback--' + (g._p.marketplace_code || 'wb')">
@@ -287,7 +327,7 @@
                         <span v-else class="mcat-badge mcat-badge--flat mcat-badge--ok">Активен</span>
                     </td>
                     <td><span class="mcat-link" :class="'mcat-link--' + g._p.link_status">{{ linkLabel(g._p) }}</span></td>
-                    <td class="mcat-td-num">{{ priceOf(g._p) }}</td>
+                    <td class="mcat-td-num"><ozon-prices v-if="g._p.marketplace_code === 'ozon'" :listing="g._p" compact></ozon-prices><span v-else>{{ priceOf(g._p) }}</span></td>
                     <td class="mcat-td-num" :class="{'mcat-td-zero': stockNum(g._p) === 0}">{{ stockOf(g._p) }}</td>
                     <td class="mcat-td-time">{{ relTime(g._p.last_seen_at || g._p.list_synced_at) }}</td>
                 </tr>
@@ -308,7 +348,7 @@
     </transition>
     <transition name="mcat-slide">
         <aside v-if="drawer.open" class="mcat-drawer" role="dialog" aria-modal="true"
-               aria-label="Карточка листинга" ref="drawerEl" tabindex="-1">
+               aria-label="Быстрый просмотр товара" ref="drawerEl" tabindex="-1">
             <header class="mcat-drawer-head">
                 <div class="mcat-drawer-nav">
                     <button type="button" class="sh-icon-btn" @click="stepDrawer(-1)" :disabled="selectedIndex <= 0" title="Предыдущий (←)">
@@ -339,7 +379,7 @@
             <div class="mcat-drawer-body" v-if="current">
                 <div class="mcat-drawer-hero">
                     <div class="mcat-drawer-photo">
-                        <img v-if="drawerImageSrc" :src="drawerImageSrc" alt="">
+                        <img v-image-deadline v-if="drawerImageSrc" :src="drawerImageSrc" alt="" @error="failedImages[drawerImageSrc] = true">
                         <div v-else class="mcat-fallback" :class="fallbackClass(current)">
                             <span>{{ letterOf(current) }}</span>
                         </div>
@@ -361,15 +401,16 @@
                             :class="{'is-active': drawerImageSrc === url}"
                             @click="drawer.image = url"
                             :aria-label="'Фото ' + (gi + 1)">
-                        <img :src="url" loading="lazy" alt="">
+                        <img v-image-deadline :src="url" loading="lazy" alt="" @error="failedImages[url] = true">
                     </button>
                 </div>
 
                 <section class="mcat-sect">
                     <h4>Цена и остатки</h4>
+                    <ozon-prices v-if="current.marketplace_code === 'ozon'" :listing="detail || current"></ozon-prices>
                     <div class="mcat-kv">
-                        <div><dt>Цена</dt><dd class="mcat-kv-strong">{{ priceOf(current) }}</dd></div>
-                        <div v-if="oldPriceOf(current)"><dt>До скидки</dt><dd><s>{{ oldPriceOf(current) }}</s></dd></div>
+                        <div v-if="current.marketplace_code !== 'ozon'"><dt>Цена продавца</dt><dd class="mcat-kv-strong">{{ priceOf(current) }}</dd></div>
+                        <div v-if="current.marketplace_code !== 'ozon' && oldPriceOf(current)"><dt>До скидки</dt><dd><s>{{ oldPriceOf(current) }}</s></dd></div>
                         <div v-if="minPriceOf(current)"><dt>Мин. цена</dt><dd>{{ minPriceOf(current) }}</dd></div>
                         <div><dt>Остаток</dt><dd :class="{'mcat-td-zero': stockNum(current) === 0}">{{ stockOf(current) }}</dd></div>
                         <div v-for="row in stockRows(detail)" :key="row.label"><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div>
@@ -404,7 +445,7 @@
                     <a v-if="canonicalCard" class="mlink-card"
                        :href="urls.myProducts + '/' + canonicalCard.id + '/wb-preview'">
                         <span class="mlink-thumb">
-                            <img v-if="drawerImageSrc" :src="drawerImageSrc" alt="">
+                            <img v-image-deadline v-if="drawerImageSrc" :src="drawerImageSrc" alt="" @error="failedImages[drawerImageSrc] = true">
                             <span v-else class="mlink-letter">{{ letterOf(current) }}</span>
                         </span>
                         <span class="mlink-body">
@@ -441,7 +482,7 @@
 {% endraw %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js"></script>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}"></script>
 <script src="{{ url_for('static', filename='marketplace-catalog-beta.js') }}"></script>
 {% endblock %}

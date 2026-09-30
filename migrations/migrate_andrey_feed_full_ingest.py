@@ -25,6 +25,11 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from .migrate_add_sexopt_supplier import SEXOPT_CSV_COLUMN_MAPPING
+except ImportError:  # Direct script entrypoint.
+    from migrate_add_sexopt_supplier import SEXOPT_CSV_COLUMN_MAPPING
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -157,9 +162,19 @@ def run_migration():
 
         # Обновление маппинга поставщика andrey
         if 'suppliers' in tables:
-            cursor.execute("SELECT id FROM suppliers WHERE code = ?", (SUPPLIER_CODE,))
+            cursor.execute("SELECT id, csv_column_mapping FROM suppliers WHERE code = ?", (SUPPLIER_CODE,))
             row = cursor.fetchone()
             if row:
+                try:
+                    current_mapping = json.loads(row['csv_column_mapping']) if row['csv_column_mapping'] else None
+                except (ValueError, TypeError):
+                    current_mapping = 'unrecognized'
+                # Upgrade only the exact known legacy seed. Custom/reviewed
+                # configuration is not migration-owned; a restart preserves it.
+                if current_mapping not in (None, SEXOPT_CSV_COLUMN_MAPPING):
+                    logger.info("Маппинг '%s' уже актуален либо настроен администратором; сохранён", SUPPLIER_CODE)
+                    conn.commit()
+                    return
                 cursor.execute(
                     "UPDATE suppliers SET csv_column_mapping = ?, updated_at = ? WHERE id = ?",
                     (

@@ -730,6 +730,126 @@ class OzonReferenceServiceTest(unittest.TestCase):
         self.assertIsNone(unused.attributes_synced_at)
         self.assertFalse(product_type.is_enabled)
 
+    def test_demand_refresh_prioritizes_and_fairly_spreads_required_dictionaries(
+        self,
+    ):
+        now = datetime(2026, 7, 26, 12, 0, 0)
+        _, result = self._sync_tree({
+            "result": [_category(
+                10,
+                "Категория A",
+                [
+                    _product_type(701, "Тип 1"),
+                    _product_type(702, "Тип 2"),
+                    _product_type(703, "Тип 3"),
+                    _product_type(704, "Тип 4"),
+                ],
+            )],
+        }, now=now)
+        self.assertTrue(result["success"])
+        product_types = MarketplaceProductType.query.filter_by(
+            marketplace_id=self.marketplace_id,
+            is_available=True,
+        ).order_by(MarketplaceProductType.external_type_id.asc()).all()
+        self.assertEqual(len(product_types), 4)
+
+        user = User(
+            username="ozon-demand-fairness",
+            email="ozon-demand-fairness@test.local",
+            is_active=True,
+        )
+        user.set_password("synthetic-password")
+        seller = Seller(user=user, company_name="Demand fairness")
+        db.session.add(seller)
+        db.session.flush()
+
+        required_attribute_ids = set()
+        required_type_ids = set()
+        for index, product_type in enumerate(product_types):
+            product_type.attributes_synced_at = now
+            product_type.attributes_sync_status = "success"
+            product_type.attributes_schema_hash = f"schema-{index}"
+            product_type.attributes_count = 2
+            product_type.required_attributes_count = 0 if index == 0 else 1
+            db.session.add(MarketplaceCategoryMapping(
+                seller_id=seller.id,
+                marketplace_id=self.marketplace_id,
+                product_type_id=product_type.id,
+                scope_key=f"source:fairness-{index}",
+                source_type="synthetic",
+                source_category=f"Категория {index}",
+                source_category_normalized=f"категория {index}",
+                external_category_id=(
+                    product_type.category.external_category_id
+                ),
+                external_type_id=product_type.external_type_id,
+                mapping_source="manual",
+                mapping_status="active",
+                confidence=1.0,
+            ))
+            if index > 0:
+                required = MarketplaceAttributeDefinition(
+                    marketplace_id=self.marketplace_id,
+                    product_type_id=product_type.id,
+                    external_attribute_id=f"required-{index}",
+                    name=f"Обязательный {index}",
+                    data_type="String",
+                    is_required=True,
+                    dictionary_id=f"required-dictionary-{index}",
+                    is_available=True,
+                    is_enabled=True,
+                    last_seen_at=now,
+                )
+                db.session.add(required)
+                db.session.flush()
+                required_attribute_ids.add(required.id)
+                required_type_ids.add(product_type.id)
+            db.session.add(MarketplaceAttributeDefinition(
+                marketplace_id=self.marketplace_id,
+                product_type_id=product_type.id,
+                external_attribute_id=f"optional-{index}",
+                name=f"Необязательный {index}",
+                data_type="String",
+                is_required=False,
+                dictionary_id=f"optional-dictionary-{index}",
+                is_available=True,
+                is_enabled=True,
+                last_seen_at=now,
+            ))
+        db.session.commit()
+
+        with patch.object(
+            OzonReferenceService,
+            "_adapter_credentials",
+            return_value=(SyntheticOzonAdapter(), SYNTHETIC_CREDENTIALS),
+        ), patch.object(
+            OzonReferenceService,
+            "sync_attribute_values",
+            return_value={"success": True},
+        ) as sync_values:
+            refreshed = OzonReferenceService.sync_demanded_types(
+                self.marketplace_id,
+                limit=3,
+                dictionary_limit=3,
+                now=now,
+            )
+
+        called_attribute_ids = {
+            item.args[0] for item in sync_values.call_args_list
+        }
+        called_type_ids = {
+            db.session.get(
+                MarketplaceAttributeDefinition,
+                attribute_id,
+            ).product_type_id
+            for attribute_id in called_attribute_ids
+        }
+        self.assertTrue(refreshed["success"])
+        self.assertEqual(refreshed["selected"], 3)
+        self.assertEqual(refreshed["dictionaries_synced"], 3)
+        self.assertEqual(called_attribute_ids, required_attribute_ids)
+        self.assertEqual(called_type_ids, required_type_ids)
+
     def test_demand_refresh_cools_down_failed_schema_without_provider_call(self):
         product_type = self._create_type_with_schema()
         user = User(
@@ -799,6 +919,34 @@ class OzonReferenceServiceTest(unittest.TestCase):
             product_type,
             now=now,
         ))
+
+    def test_empty_optional_dictionary_needs_explicit_completion_and_no_previous_values(self):
+        product_type = self._create_type_with_schema()
+        result = OzonReferenceService.sync_attributes(product_type.id,
+            adapter=SyntheticOzonAdapter(attributes={"result": [_attribute(31, "Состав", dictionary_id=900)]}),
+            credentials=SYNTHETIC_CREDENTIALS)
+        self.assertTrue(result["success"])
+        attribute = MarketplaceAttributeDefinition.query.filter_by(product_type_id=product_type.id).one()
+        def sync(page):
+            return OzonReferenceService.sync_attribute_values(attribute.id,
+                adapter=SyntheticOzonAdapter(value_pages=[page]), credentials=SYNTHETIC_CREDENTIALS)
+        for page in ({"result": []}, {"result": [], "has_next": True}):
+            self.assertFalse(sync(page)["success"])
+            self.assertIsNone(attribute.values_synced_at)
+        result = sync({"result": [], "has_next": False})
+        self.assertTrue(result["success"])
+        self.assertEqual(result["total"], 0)
+        self.assertTrue(OzonReferenceService.dictionary_is_fresh(attribute))
+        attribute.is_required = True
+        db.session.commit()
+        self.assertFalse(sync({"result": [], "has_next": False})["success"])
+        attribute.is_required = False
+        db.session.commit()
+        self.assertTrue(sync({"result": [{"id": 1, "value": "Без спирта"}], "has_next": False})["success"])
+        before = (attribute.values_version, attribute.values_snapshot_hash, attribute.values_synced_at)
+        self.assertFalse(sync({"result": [], "has_next": False})["success"])
+        self.assertEqual((attribute.values_version, attribute.values_snapshot_hash, attribute.values_synced_at), before)
+        self.assertTrue(MarketplaceAttributeValue.query.filter_by(attribute_id=attribute.id).one().is_available)
 
 
 if __name__ == "__main__":

@@ -51,6 +51,8 @@ uploads/*
 processed/*
 !processed/.gitkeep
 data/global_media/
+# Source snapshots and model proposals from supervised catalog parsing
+data/luna_parsing_runs/
 
 # OS
 .DS_Store

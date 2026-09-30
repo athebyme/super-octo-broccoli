@@ -30,6 +30,7 @@ from services.marketplace_operation_locks import (
     release_account_operation_lock,
     try_account_operation_lock,
 )
+from services.marketplace_operation_retry import provider_read_deferred, read_retry_at
 from services.marketplace_warehouses import (
     MarketplaceWarehouseError,
     MarketplaceWarehouseService,
@@ -44,6 +45,7 @@ from services.ozon_commercial_contracts import (
     OzonPriceContract,
     OzonStockContract,
 )
+from services import ozon_write_quarantine as write_quarantine
 
 
 class MarketplaceCommercialError(RuntimeError):
@@ -66,6 +68,14 @@ class MarketplaceCommercialConflict(MarketplaceCommercialError):
     code = "marketplace_commercial_conflict"
 
 
+class QuarantinedCommercialConflict(MarketplaceCommercialConflict):
+    code = "ozon_write_quarantined"
+
+    def __init__(self, hold):
+        super().__init__(write_quarantine.hold_message(hold))
+        self.write_quarantine = write_quarantine.hold_document(hold)
+
+
 class MarketplaceCommercialBusy(MarketplaceCommercialError):
     status_code = 409
     code = "marketplace_commercial_busy"
@@ -80,12 +90,71 @@ class MarketplaceCommercialUpstreamError(MarketplaceCommercialError):
     status_code = 502
     code = "marketplace_commercial_upstream_error"
 
+    def __init__(self, message, *, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
 
 class MarketplaceCommercialService:
     MAX_JSON_BYTES = 65_536
     MAX_PRICE_READ_PAGES = 10
     MAX_PRICE_CHANGE_PCT = Decimal("50")
     MAX_BATCH_APPROVAL = 100
+
+    @staticmethod
+    def target_unavailable_reason(proposal) -> Optional[str]:
+        """Negative local gate for NEW writes, never for attempted reconciliation."""
+        listing = proposal.listing
+        if listing is None or not listing.is_available or listing.is_archived:
+            return "Товар недоступен или находится в архиве. Обновите каталог перед новым изменением."
+        if proposal.proposal_kind == "stock" and (
+            proposal.warehouse is None or not proposal.warehouse.is_available
+        ):
+            return "Склад больше недоступен. Обновите список складов и подготовьте новую заявку."
+        if proposal.proposal_kind == "price":
+            try:
+                proposed = json.loads(proposal.proposed_state_json or "{}")
+                OzonPriceContract.whole_rub_price(proposed.get("price"))
+            except (ValueError, AttributeError, OzonCommercialContractError):
+                return (
+                    "В этой заявке нет подтверждённой цены в целых рублях. "
+                    "Закройте её без отправки и подготовьте новое сравнение."
+                )
+        return None
+
+    @classmethod
+    def _require_available_target(cls, proposal) -> None:
+        reason = cls.target_unavailable_reason(proposal)
+        if reason:
+            raise MarketplaceCommercialConflict(reason)
+
+    @staticmethod
+    def _require_not_quarantined(proposals) -> None:
+        """Early approval check under the account lock, before any provider read."""
+        for proposal in proposals:
+            hold = write_quarantine.proposal_hold(proposal)
+            if hold is not None:
+                raise QuarantinedCommercialConflict(hold)
+
+    @classmethod
+    def _stop_quarantined_batch(cls, operations, proposals, *, now):
+        """A frozen batch is indivisible: one held member stops every write."""
+        hold = None
+        for operation in operations:
+            if operation.attempt_count == 0:
+                hold = write_quarantine.operation_hold(operation)
+                if hold is not None:
+                    break
+        if hold is None:
+            return False
+        message = write_quarantine.hold_message(hold)
+        for operation, proposal in zip(operations, proposals):
+            cls._set_write_failed(
+                operation=operation, proposal=proposal,
+                code="ozon_write_quarantined", message=message, now=now,
+            )
+        db.session.commit()
+        return True
     POLL_INTERVAL = timedelta(seconds=30)
     DEADLINE = timedelta(hours=24)
     ACTIVE_PROPOSAL_STATUSES = {
@@ -392,9 +461,10 @@ class MarketplaceCommercialService:
                 adapter=adapter,
                 credentials=credentials,
             )
-        except OzonAPIError:
+        except OzonAPIError as exc:
             raise MarketplaceCommercialUpstreamError(
-                "Не удалось прочитать актуальную цену Ozon"
+                "Не удалось прочитать актуальную цену Ozon",
+                retry_after=exc.retry_after,
             ) from None
         except OzonCommercialContractError:
             raise MarketplaceCommercialUpstreamError(
@@ -446,6 +516,17 @@ class MarketplaceCommercialService:
                     },
                 )
             )
+            # Ozon can return a cursor on the last populated page, followed by
+            # an empty terminal page with total=0. Keep the populated-page
+            # total and exact identity checks below; this sentinel is not a
+            # new snapshot total and cannot make an incomplete read succeed.
+            if (
+                expected_total is not None
+                and not page["items"]
+                and not page["cursor"]
+                and page["total"] == 0
+            ):
+                break
             if expected_total is None:
                 expected_total = page["total"]
             elif page["total"] != expected_total:
@@ -581,7 +662,12 @@ class MarketplaceCommercialService:
                 raise MarketplaceCommercialConflict(
                     "Ozon stock pagination превысила безопасный лимит"
                 )
-        except (OzonAPIError, OzonCommercialContractError, MarketplaceWarehouseError):
+        except OzonAPIError as exc:
+            raise MarketplaceCommercialUpstreamError(
+                "Не удалось прочитать exact-set остатков Ozon по складам",
+                retry_after=exc.retry_after,
+            ) from None
+        except (OzonCommercialContractError, MarketplaceWarehouseError):
             raise MarketplaceCommercialUpstreamError(
                 "Не удалось прочитать exact-set остатков Ozon по складам"
             ) from None
@@ -876,6 +962,7 @@ class MarketplaceCommercialService:
         if lock_file is None:
             raise MarketplaceCommercialBusy("Кабинет Ozon занят другой операцией")
         try:
+            price_review = OzonPriceContract.prepare_price(price)
             baseline = cls._read_price_state(
                 listing=listing,
                 adapter=resolved_adapter,
@@ -884,7 +971,7 @@ class MarketplaceCommercialService:
             item = OzonPriceContract.build_item(
                 offer_id=listing.offer_id,
                 product_id=listing.external_product_id,
-                price=price,
+                price=price_review["price"],
                 currency_code=baseline["currency_code"],
                 old_price=baseline.get("old_price", "0"),
             )
@@ -897,6 +984,7 @@ class MarketplaceCommercialService:
                 allow_large_change=allow_large_change,
                 guardrail_note=guardrail_note,
             )
+            guardrails["price_review"] = price_review
             proposed = {
                 "kind": "price",
                 "offer_id": listing.offer_id,
@@ -1326,6 +1414,16 @@ class MarketplaceCommercialService:
             raise MarketplaceCommercialConflict(
                 "Commercial write уже мог быть отправлен; повтор запрещён"
             )
+        if cls._stop_quarantined_batch([operation], [proposal], now=now):
+            return
+        unavailable = cls.target_unavailable_reason(proposal)
+        if unavailable:
+            cls._mark_write_failed(
+                operation=operation, proposal=proposal,
+                code="commercial_review_requires_refresh", message=unavailable,
+                now=now,
+            )
+            return
         payload = cls._payload_for_proposal(proposal)
         operation.status = "submitting"
         operation.attempt_count = 1
@@ -1430,6 +1528,8 @@ class MarketplaceCommercialService:
                 raise MarketplaceCommercialConflict(
                     "Один из commercial writes уже мог быть отправлен; batch запрещён"
                 )
+        if cls._stop_quarantined_batch(operations, proposals, now=now):
+            return
         payload = cls._payload_for_proposals(proposals)
         for operation, proposal in zip(operations, proposals):
             operation.status = "submitting"
@@ -1593,19 +1693,25 @@ class MarketplaceCommercialService:
         operation: MarketplaceOperation,
         proposal: MarketplaceCommercialProposal,
         now: datetime,
+        retry_after=None,
     ) -> None:
-        if operation.deadline_at and now >= operation.deadline_at:
+        due = read_retry_at(
+            operation, now=now, interval=cls.POLL_INTERVAL,
+            retry_after=retry_after,
+        )
+        if operation.deadline_at and due >= operation.deadline_at:
             operation.status = "uncertain"
             operation.next_poll_at = None
             operation.error_code = "commercial_reconciliation_deadline"
             operation.error_message = (
-                "Не удалось подтвердить Ozon write за отведённое время"
+                "Результат Ozon не подтверждён. Срок автоматической проверки "
+                "истёк или пауза API выходит за его пределы; запись не повторяется"
             )
             proposal.status = "uncertain"
             proposal.error_code = operation.error_code
             proposal.error_message = operation.error_message
             return
-        operation.next_poll_at = now + cls.POLL_INTERVAL
+        operation.next_poll_at = due
         if operation.status != "uncertain":
             operation.status = "polling"
             operation.error_code = "commercial_reconciliation_read_failed"
@@ -1716,13 +1822,16 @@ class MarketplaceCommercialService:
                 adapter=adapter,
                 credentials=credentials,
             )
-        except (MarketplaceCommercialUpstreamError, MarketplaceCommercialConflict):
+        except (MarketplaceCommercialUpstreamError, MarketplaceCommercialConflict) as exc:
             for operation, proposal in zip(operations, proposals):
                 cls._set_reconciliation_read_failure(
                     operation=operation,
                     proposal=proposal,
                     now=now,
+                    retry_after=getattr(exc, "retry_after", None),
                 )
+                if write_quarantine.has_origin_hold(operation):
+                    operation.next_poll_at = None
             db.session.commit()
             return
         for operation, proposal in zip(operations, proposals):
@@ -1732,6 +1841,8 @@ class MarketplaceCommercialService:
                 live=live_states[proposal.id],
                 now=now,
             )
+            if write_quarantine.has_origin_hold(operation):
+                operation.next_poll_at = None
         db.session.commit()
 
     @classmethod
@@ -1822,6 +1933,14 @@ class MarketplaceCommercialService:
                 raise MarketplaceCommercialConflict(
                     "Original snapshot fingerprint не совпадает"
                 )
+            if proposal_kind == "price":
+                try:
+                    OzonPriceContract.whole_rub_price(before.get("price"))
+                except OzonCommercialContractError:
+                    raise MarketplaceCommercialConflict(
+                        "Исходная цена содержит копейки: точный откат недоступен. "
+                        "Подготовьте новое сравнение и подтвердите цену в целых рублях."
+                    ) from None
             live = cls._read_live_state(
                 proposal=original_proposal,
                 adapter=resolved_adapter,
@@ -1906,6 +2025,7 @@ class MarketplaceCommercialService:
                     raise MarketplaceCommercialConflict(
                         "Один из proposals уже изменился; batch write не начат"
                     )
+                cls._require_available_target(proposal)
             return proposals
 
         proposals = load_and_validate()
@@ -1928,6 +2048,7 @@ class MarketplaceCommercialService:
         try:
             db.session.expire_all()
             proposals = load_and_validate()
+            cls._require_not_quarantined(proposals)
             live_states = cls._read_live_states(
                 proposals=proposals,
                 adapter=resolved_adapter,
@@ -2040,6 +2161,7 @@ class MarketplaceCommercialService:
             raise MarketplaceCommercialConflict(
                 "Proposal уже изменился; обновите страницу"
             )
+        cls._require_available_target(proposal)
         _, resolved_adapter, resolved_credentials = cls._resolve_account(
             seller_id=seller_id,
             account_id=proposal.account_id,
@@ -2063,6 +2185,8 @@ class MarketplaceCommercialService:
                 raise MarketplaceCommercialConflict(
                     "Proposal уже изменился; обновите страницу"
                 )
+            cls._require_available_target(proposal)
+            cls._require_not_quarantined([proposal])
             live = cls._read_live_state(
                 proposal=proposal,
                 adapter=resolved_adapter,
@@ -2153,15 +2277,6 @@ class MarketplaceCommercialService:
             raise MarketplaceCommercialConflict(
                 "Commercial operation не связана с proposal"
             )
-        _, resolved_adapter, resolved_credentials = cls._resolve_account(
-            seller_id=seller_id,
-            account_id=operation.account_id,
-            proposal_kind=proposal.proposal_kind,
-            adapter=adapter,
-            credentials=credentials,
-            now=now,
-            write=operation.status == "queued" and allow_submission,
-        )
         lock_file = try_account_operation_lock(operation.account_id)
         if lock_file is None:
             raise MarketplaceCommercialBusy("Кабинет Ozon занят другой операцией")
@@ -2172,13 +2287,32 @@ class MarketplaceCommercialService:
                 seller_id=seller_id,
                 operation_id=operation_id,
             )
+            if operation.status in cls.TERMINAL_OPERATION_STATUSES:
+                return operation
             proposal = MarketplaceCommercialProposal.query.filter_by(
-                seller_id=seller_id,
-                operation_id=operation.id,
+                seller_id=seller_id, operation_id=operation.id,
             ).first()
+            if operation.status == "queued" and allow_submission:
+                if cls._stop_quarantined_batch(
+                    [operation], [proposal], now=current_time,
+                ):
+                    return cls._owned_operation(
+                        seller_id=seller_id, operation_id=operation_id,
+                    )
+            if provider_read_deferred(operation, current_time):
+                return operation
+            if operation.status == "queued" and not allow_submission:
+                return operation
+            _, resolved_adapter, resolved_credentials = cls._resolve_account(
+                seller_id=seller_id,
+                account_id=operation.account_id,
+                proposal_kind=proposal.proposal_kind,
+                adapter=adapter,
+                credentials=credentials,
+                now=current_time,
+                write=operation.status == "queued" and allow_submission,
+            )
             if operation.status == "queued":
-                if not allow_submission:
-                    return operation
                 cls._submit_locked(
                     operation=operation,
                     proposal=proposal,
@@ -2231,6 +2365,7 @@ class MarketplaceCommercialService:
         rows = MarketplaceOperation.query.filter(
             MarketplaceOperation.operation_kind.in_(cls.COMMERCIAL_OPERATION_KINDS),
             MarketplaceOperation.status.in_(statuses),
+            write_quarantine.automatic_reconciliation_allowed(),
             MarketplaceOperation.next_poll_at.isnot(None),
             MarketplaceOperation.next_poll_at <= current_time,
         ).order_by(
@@ -2287,7 +2422,7 @@ class MarketplaceCommercialService:
             joinedload(MarketplaceCommercialProposal.account),
             joinedload(MarketplaceCommercialProposal.listing),
             joinedload(MarketplaceCommercialProposal.warehouse),
-            joinedload(MarketplaceCommercialProposal.operation),
+            joinedload(MarketplaceCommercialProposal.operation).joinedload(MarketplaceOperation.snapshot),
         ).filter(MarketplaceCommercialProposal.seller_id == seller_id)
         if account_id is not None:
             account_id = cls._positive_integer(account_id, "account_id")

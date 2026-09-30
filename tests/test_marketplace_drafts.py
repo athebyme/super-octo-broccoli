@@ -2,6 +2,7 @@
 """Ozon drafts use observed facts, exact references and optimistic writes."""
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 import json
 import unittest
 from unittest.mock import patch
@@ -327,10 +328,12 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         is_collection=False,
         max_value_count=1,
         is_required=False,
+        product_type=None,
     ):
+        product_type = product_type or self.product_type
         attribute = MarketplaceAttributeDefinition(
             marketplace_id=self.marketplace.id,
-            product_type_id=self.product_type.id,
+            product_type_id=product_type.id,
             external_attribute_id=external_id,
             name=name,
             data_type="String",
@@ -352,7 +355,7 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         for index, value in enumerate(values, start=1):
             db.session.add(MarketplaceAttributeValue(
                 marketplace_id=self.marketplace.id,
-                product_type_id=self.product_type.id,
+                product_type_id=product_type.id,
                 attribute_id=attribute.id,
                 external_value_id=f"{external_id}-{index}",
                 value=value,
@@ -361,6 +364,44 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
                 last_seen_at=self.now,
             ))
         return attribute
+
+    def _official_type(self, name, path):
+        marker = MarketplaceTaxonomyCategory.query.count() + 1
+        category = MarketplaceTaxonomyCategory(
+            marketplace_id=self.marketplace.id,
+            external_category_id=f"official-category-{marker}",
+            name=path.rsplit(" / ", 1)[-1],
+            full_path=path,
+            depth=1,
+            is_available=True,
+            last_seen_at=self.now,
+        )
+        db.session.add(category)
+        db.session.flush()
+        product_type = MarketplaceProductType(
+            marketplace_id=self.marketplace.id,
+            category_id=category.id,
+            external_type_id=f"official-type-{name}-{marker}",
+            name=name,
+            is_available=True,
+            is_seller_selectable=True,
+            is_enabled=True,
+            attributes_synced_at=self.now,
+            attributes_sync_status="success",
+            attributes_schema_hash=f"official-schema-{name}-{marker}",
+            attributes_version=1,
+            attributes_count=0,
+            required_attributes_count=0,
+        )
+        db.session.add(product_type)
+        db.session.flush()
+        return product_type
+
+    def _erotic_clothing_type(self, name="Эротическое белье"):
+        return self._official_type(
+            name,
+            MarketplaceDraftService.EXPLICIT_EROTIC_CLOTHING_PATH,
+        )
 
     def test_fact_pack_never_promotes_legacy_ai_physical_values(self):
         product = self._product(dimensions=False, ai_physical=True)
@@ -402,6 +443,132 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
                 item["code"]
                 for item in validated.to_public_dict(detail=True)["validation"]["warnings"]
             },
+        )
+
+    def test_fact_pack_v3_keeps_distinct_source_description_observed(self):
+        product = self._product(external_id="source-description-v3")
+        product.description = None
+        original = json.loads(product.original_data)
+        original["description"] = "Точное описание из фида поставщика"
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+
+        pack = MarketplaceFactPackBuilder.build(product)
+        content = MarketplaceDraftService._content_from_facts(pack)
+
+        self.assertEqual(pack["version"], 3)
+        self.assertNotIn("description", pack["facts"]["identity"])
+        self.assertEqual(
+            pack["facts"]["identity"]["source_description"],
+            "Точное описание из фида поставщика",
+        )
+        self.assertEqual(
+            pack["provenance"]["identity.source_description"]["trust"],
+            "observed",
+        )
+        self.assertEqual(
+            content["description"],
+            "Точное описание из фида поставщика",
+        )
+
+    def test_fact_pack_v3_builds_and_rebases_a_fact_only_description(self):
+        product = self._product(
+            external_id="fact-description-v3",
+            dimensions=False,
+            ai_physical=True,
+        )
+        product.description = None
+        original = json.loads(product.original_data)
+        original.pop("description", None)
+        original.update({
+            "colors": ["чёрный"],
+            "gender": "для женщин",
+            "materials": ["94% нейлон", "6% спандекс"],
+            "sizes_raw": "универсальный (42-48)",
+        })
+        original["characteristics"]["Цена поставщика"] = "999"
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+
+        pack = MarketplaceFactPackBuilder.build(product)
+        description = MarketplaceDraftService._content_from_facts(pack)[
+            "description"
+        ]
+        for expected in (
+            "Футболка.",
+            "Бренд: Наблюдаемый бренд.",
+            "Категория: Футболки.",
+            "Цвет: чёрный.",
+            "Материал: 94% нейлон, 6% спандекс.",
+            "Размер: универсальный (42-48).",
+            "Пол: для женщин.",
+            "Страна производства: Россия.",
+        ):
+            self.assertIn(expected, description)
+        self.assertNotIn("999", description)
+        self.assertNotIn("Выдуманная", description)
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        self.assertEqual(
+            json.loads(draft.content_json)["description"],
+            description,
+        )
+
+        # A stored v2 draft had no deterministic fallback.  The version bump
+        # makes the three-way rebase see a newly available default and fill
+        # only the still-empty field.
+        legacy_facts = json.loads(draft.source_facts_json)
+        legacy_facts["version"] = 2
+        draft.source_facts_json = json.dumps(legacy_facts, ensure_ascii=False)
+        draft.source_fact_hash = "0" * 64
+        draft.content_json = json.dumps({"name": product.title})
+        db.session.commit()
+        draft = MarketplaceDraftService.get_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+        )
+        rebased = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        self.assertEqual(
+            json.loads(rebased.content_json)["description"],
+            description,
+        )
+        self.assertEqual(json.loads(rebased.source_facts_json)["version"], 3)
+
+        legacy_facts = json.loads(rebased.source_facts_json)
+        legacy_facts["version"] = 2
+        rebased.source_facts_json = json.dumps(
+            legacy_facts,
+            ensure_ascii=False,
+        )
+        rebased.source_fact_hash = "1" * 64
+        rebased.content_json = json.dumps({
+            "name": product.title,
+            "description": "Ручное описание продавца",
+        }, ensure_ascii=False)
+        db.session.commit()
+        rebased = MarketplaceDraftService.get_draft(
+            seller_id=self.seller1_id,
+            draft_id=rebased.id,
+        )
+        preserved = MarketplaceDraftService.rebase_source_defaults(
+            seller_id=self.seller1_id,
+            draft_id=rebased.id,
+            expected_version=rebased.version,
+        )
+        self.assertEqual(
+            json.loads(preserved.content_json)["description"],
+            "Ручное описание продавца",
         )
 
     def test_fact_pack_normalizes_observed_supplier_photo_objects(self):
@@ -953,7 +1120,6 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             [value["value"] for value in by_id["4559"]],
             [
                 "Два мотора",
-                "С вращением",
                 "Водонепроницаемость",
                 "На присоске",
             ],
@@ -1103,6 +1269,91 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         self.assertEqual(lubricant["объем, мл"], "50")
 
+        espresso = MarketplaceDraftService._attribute_candidate_values({
+            "facts": {
+                "identity": {
+                    "source_title": (
+                        "Вкусовой лубрикант на водной основе "
+                        "Hazelnut Espresso 30 мл"
+                    ),
+                    "source_category": (
+                        "Смазки, косметика > Вагинальные смазки"
+                    ),
+                    "source_categories": [
+                        "Смазки, косметика > Вагинальные смазки",
+                        "Смазки, косметика > Оральные смазки",
+                    ],
+                },
+                "attributes": {"characteristics": []},
+                "physical": {},
+            },
+        })
+        self.assertEqual(
+            espresso["вкус презервативов, средств для взрослых"],
+            "Кофе",
+        )
+        self.assertEqual(espresso["текстура"], "На водной основе")
+        self.assertEqual(
+            espresso["область использования"],
+            ["Вагинальная", "Пероральная"],
+        )
+
+        rotation = candidates(
+            "Вибратор-ротатор",
+            "Вибраторы и фаллоимитаторы > С ротацией (вращение)",
+        )
+        self.assertEqual(rotation["особенности 18+"], ["С вращением"])
+        mixed_rotation = candidates(
+            "Эрекционное кольцо с вибрацией",
+            "Насадки и кольца > С вибрацией, с ротацией",
+        )
+        self.assertNotIn("особенности 18+", mixed_rotation)
+
+        physical_set = MarketplaceDraftService._attribute_candidate_values({
+            "facts": {
+                "identity": {
+                    "source_title": (
+                        "Интимный набор: вакуумный стимулятор и "
+                        "виброяйцо с пультом управления"
+                    ),
+                    "source_category": "Секс-наборы > Секс-наборы",
+                    "source_categories": ["Секс-наборы > Секс-наборы"],
+                },
+                "attributes": {
+                    "characteristics": [],
+                    "materials": [
+                        "Высококачественный силикон "
+                        "с бархатистой поверхностью"
+                    ],
+                },
+                "physical": {
+                    "dimensions": {"working_length_cm": 12},
+                },
+            },
+        })
+        self.assertEqual(physical_set["материал"], ["Силикон"])
+        self.assertEqual(physical_set["длина рабочей части, мм"], Decimal("120"))
+        self.assertEqual(
+            physical_set["состав комплекта"],
+            "Вакуумный стимулятор; Виброяйцо; Пульт управления",
+        )
+        self.assertEqual(
+            physical_set["особенности 18+"],
+            ["С пультом управления", "Бархатистая поверхность", "Набор"],
+        )
+
+        clitoral = candidates(
+            "Стимулятор клитора",
+            "Женские стимуляторы > Клиторально-вагинальные стимуляторы",
+        )
+        self.assertEqual(
+            clitoral["назначение товара 18+"],
+            [
+                "Для клиторальной стимуляции",
+                "Для вагинального секса",
+            ],
+        )
+
         self.assertEqual(
             candidates(
                 "Реалистичная вагина",
@@ -1185,6 +1436,55 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             }),
             ([], ""),
         )
+        for raw, expected in (
+            ("46-48 (об. бедер 96-100 см)", ["46", "48"]),
+            ("46 (об. груди 96-100 см)", ["46"]),
+            ("S (42-44)", ["42", "44"]),
+            ("2 (S), длина ступни 23-24 см", ["2"]),
+            ("3 M, длина ступни 25-26 см", ["3"]),
+            ("40-42 размер", ["40", "42"]),
+            (
+                "об. груди: 91-107 см, об. бедер: 97-112 см (46-48)",
+                ["46", "48"],
+            ),
+            ("4 (длина), длина ступни 27-28 см", ["4"]),
+            (
+                "4 (длина) на рост 175-182 см, обхват бедер 112-116 см",
+                ["4"],
+            ),
+            ("3 (объем бедер 101-108 см)", ["3"]),
+            ("85 C", ["85C"]),
+            ("1-2, длина стопы 23-25 см", ["1", "2"]),
+            ("3-4 (Mдлина), длина ступни 26-28 см", ["3", "4"]),
+            (r"5\\6 размер", ["5", "6"]),
+            ("размер 3, 20 диаметр", ["3"]),
+            ("52 российский размер", ["52"]),
+        ):
+            with self.subTest(raw=raw):
+                sizes, literal = (
+                    MarketplaceDraftService._observed_clothing_sizes({
+                        "raw": raw,
+                    })
+                )
+                self.assertEqual(sizes, expected)
+                self.assertEqual(literal, raw)
+        self.assertEqual(
+            MarketplaceDraftService._observed_clothing_sizes({
+                "raw": (
+                    "об. груди: 81-96 см, об. талии: 61-76 см, "
+                    "об. бедер: 86-101 см"
+                ),
+            }),
+            ([], ""),
+        )
+        for measurement in ("3-4 см", "размер 3 см"):
+            with self.subTest(measurement=measurement):
+                self.assertEqual(
+                    MarketplaceDraftService._observed_clothing_sizes({
+                        "raw": measurement,
+                    }),
+                    ([], ""),
+                )
         self.assertEqual(
             MarketplaceDraftService._observed_wearable_size({
                 "raw": "универсальный, ширина 6 см",
@@ -1608,6 +1908,7 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertEqual(completeness["schema_total"], 3)
         self.assertEqual(completeness["image_count"], 1)
         self.assertEqual(completeness["barcode_count"], 1)
+
         self.assertTrue(completeness["content_complete"])
         self.assertTrue(completeness["physical_complete"])
         self.assertTrue(completeness["commercial_complete"])
@@ -1630,6 +1931,970 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         self.assertEqual(mapped.product_type_id, self.product_type.id)
         self.assertIsNotNone(mapped.category_mapping_id)
+
+    def test_mixed_explicit_package_units_convert_exactly_or_block(self):
+        facts = {"facts": {"physical": {"dimensions": {
+            "Ширина упаковки, мм": 200,
+            "Длина упаковки, мм": 300,
+            "package_width": 20,
+            "package_height_mm": 30,
+            "dimension_unit": "CENTIMETERS",
+            "package_weight_g": 250,
+        }}}}
+        dimensions = MarketplaceDraftService._dimensions_from_facts(facts)
+        self.assertEqual(dimensions["dimension_unit"], "MILLIMETERS")
+        self.assertEqual(dimensions["width"], "200")
+        self.assertEqual(dimensions["height"], "30")
+        self.assertEqual(dimensions["depth"], "300")
+
+        facts["facts"]["physical"]["dimensions"].pop("dimension_unit")
+        self.assertNotIn(
+            "dimension_unit",
+            MarketplaceDraftService._dimensions_from_facts(facts),
+            "An unlabelled alias cannot inherit the old Russian mm unit",
+        )
+
+        facts["facts"]["physical"]["wb_package_dimensions"] = {
+            "width_cm": 21,
+            "height_cm": 4,
+            "length_cm": 31,
+            "weight_kg": "0.3",
+        }
+        self.assertEqual(
+            MarketplaceDraftService._dimensions_from_facts(facts),
+            {
+                "width": "210",
+                "height": "40",
+                "depth": "310",
+                "weight": "300",
+                "dimension_unit": "MILLIMETERS",
+                "weight_unit": "GRAMS",
+            },
+        )
+
+        inch_facts = {"facts": {"physical": {"dimensions": {
+            "package_width": "1",
+            "dimension_unit": "INCHES",
+            "package_height_mm": 254,
+            "package_depth_mm": 508,
+            "package_weight_g": 250,
+        }}}}
+        self.assertEqual(
+            MarketplaceDraftService._dimensions_from_facts(inch_facts),
+            {
+                "width": "1", "height": "10", "depth": "20",
+                "dimension_unit": "INCHES", "weight": "250",
+                "weight_unit": "GRAMS",
+            },
+            "Exact inch conversion should work when mm values are fractional",
+        )
+        inch_facts["facts"]["physical"]["dimensions"]["package_width"] = "0.1"
+        incompatible = MarketplaceDraftService._dimensions_from_facts(inch_facts)
+        self.assertNotIn("dimension_unit", incompatible)
+        self.assertEqual(incompatible["width"], "0.1")
+
+    def test_package_integer_bounds_match_import_builder(self):
+        _, draft = self._ready_draft(external_id="dimension-int32-boundary")
+        dimensions = draft.to_public_dict(detail=True)["dimensions"]
+        dimensions["width"] = "2147483648"
+        changed = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+            patch={"dimensions": dimensions},
+        )
+        rejected = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=changed.id,
+            expected_version=changed.version,
+        )
+        errors = rejected.to_public_dict(detail=True)["validation"]["errors"]
+        self.assertIn(
+            ("physical_fact_out_of_range", "dimensions.width"),
+            {(item["code"], item["field"]) for item in errors},
+        )
+        self.assertEqual(rejected.validation_status, "invalid")
+
+        dimensions["width"] = "2147483647"
+        corrected = MarketplaceDraftService.update_draft(
+            seller_id=self.seller1_id,
+            draft_id=rejected.id,
+            expected_version=rejected.version,
+            patch={"dimensions": dimensions},
+        )
+        accepted = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=corrected.id,
+            expected_version=corrected.version,
+        )
+        self.assertTrue(accepted.to_public_dict(detail=True)["validation"]["publishable"])
+
+    def test_explicit_erotic_apparel_taxonomy_is_a_literal_allowlist(self):
+        cases = {
+            "БДСМ товары и фетиш > Одежда и белье для женщин": (
+                "БДСМ одежда"
+            ),
+            "Аксессуары, украшения для тела > Стикини, пестис": (
+                "Пэстисы"
+            ),
+            "Аксессуары, украшения для тела > Портупеи, стрэпы": (
+                "Портупея эротическая"
+            ),
+            "Эротическое белье для женщин > Игровые костюмы": (
+                "Костюм для ролевых игр"
+            ),
+            "Эротическое белье для женщин > Платья, мини-платья": (
+                "Платье гоу-гоу"
+            ),
+            "Эротическое белье для женщин > Комбинезоны": (
+                "Эротическое белье"
+            ),
+            "Эротическое белье для мужчин > Трусы, стринги, шорты": (
+                "Эротическое белье"
+            ),
+        }
+        for source_category, expected_type in cases.items():
+            with self.subTest(source_category=source_category):
+                rule = MarketplaceDraftService._explicit_source_taxonomy_rule(
+                    source_category
+                )
+                self.assertIsNotNone(rule)
+                self.assertEqual(rule["product_type_name"], expected_type)
+                self.assertEqual(
+                    rule["product_type_path"],
+                    MarketplaceDraftService.EXPLICIT_EROTIC_CLOTHING_PATH,
+                )
+
+        for ambiguous in (
+            "Страпоны и фаллопротезы > Трусики и насадки",
+            "Вибраторы и фаллоимитаторы > Реалистичные",
+            "Аксессуары, украшения для тела > Гартеры",
+            "Аксессуары, украшения для тела > Парики",
+            "Эротическое белье для женщин > Маскарадные маски",
+            "Эротическое белье для женщин > Накладные парики",
+            "Эротическое белье для женщин",
+            "Эротическое белье для женщин > Новый неизвестный лист",
+        ):
+            with self.subTest(ambiguous=ambiguous):
+                self.assertIsNone(
+                    MarketplaceDraftService._explicit_source_taxonomy_rule(
+                        ambiguous
+                    )
+                )
+
+    def test_explicit_adult_taxonomy_is_a_literal_allowlist(self):
+        cases = {
+            "Гели, смазки и лубриканты": (
+                "Лубрикант",
+                MarketplaceDraftService.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            ),
+            "Смазки, косметика > Вагинальные смазки": (
+                "Лубрикант",
+                MarketplaceDraftService.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            ),
+            "Анальные стимуляторы и пробки > Анальные пробки, втулки": (
+                "Анальная пробка",
+                MarketplaceDraftService.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            "Анальные стимуляторы и пробки > Стимуляторы простаты": (
+                "Массажер простаты",
+                MarketplaceDraftService.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            "Мастурбаторы и вагины > Мастурбаторы Fleshlight, в колбах": (
+                "Мастурбатор",
+                MarketplaceDraftService.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            "Насадки и кольца > Эрекционные": (
+                "Эрекционное кольцо",
+                MarketplaceDraftService.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            "Вакуумные помпы > Насадки на помпу": (
+                "Аксессуары для помпы",
+                MarketplaceDraftService.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            "Презервативы > Ароматизированные": (
+                "Презервативы",
+                MarketplaceDraftService.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            ),
+            "БДСМ товары и фетиш > Уретральные стимуляторы": (
+                "Расширитель уретральный",
+                MarketplaceDraftService.EXPLICIT_ADULT_BDSM_PATH,
+            ),
+            "Препараты и возбудители > Пролонгаторы для мужчин": (
+                "Пролонгатор",
+                MarketplaceDraftService.EXPLICIT_ADULT_COSMETICS_PATH,
+            ),
+            "Аксессуары для игр > Эротические игры": (
+                "Игра эротическая",
+                MarketplaceDraftService.EXPLICIT_ADULT_SOUVENIRS_PATH,
+            ),
+            "Сумочки для хранения > Мешочки": (
+                "Хранение секс игрушек",
+                MarketplaceDraftService.EXPLICIT_ADULT_CARE_PATH,
+            ),
+        }
+        for source_category, expected in cases.items():
+            with self.subTest(source_category=source_category):
+                rule = MarketplaceDraftService._explicit_source_taxonomy_rule(
+                    source_category
+                )
+                self.assertIsNotNone(rule)
+                self.assertEqual(
+                    (rule["product_type_name"], rule["product_type_path"]),
+                    expected,
+                )
+
+        for ambiguous in (
+            "Секс-игрушки",
+            "Вибраторы и фаллоимитаторы > Реалистичные",
+            "Вибраторы и фаллоимитаторы > Нереалистичные",
+            "Анальные стимуляторы и пробки > С вибрацией",
+            "Анальные стимуляторы и пробки > Без вибрации",
+            "Насадки и кольца > Без вибрации",
+            "БДСМ товары и фетиш > Плетки, стеки, шлепалки",
+            "Смазки, косметика > Массажные масла, свечи, гели",
+            "Страпоны и фаллопротезы > Трусики и насадки",
+            "Страпоны и фаллопротезы > Без вибрации",
+            "Страпоны и фаллопротезы > С вибрацией",
+        ):
+            with self.subTest(ambiguous=ambiguous):
+                self.assertIsNone(
+                    MarketplaceDraftService._explicit_source_taxonomy_rule(
+                        ambiguous
+                    )
+                )
+
+    def test_explicit_adult_mapping_uses_exact_official_path_and_survives_v1(self):
+        correct = self._official_type(
+            "Лубрикант",
+            MarketplaceDraftService.EXPLICIT_PERSONAL_HYGIENE_PATH,
+        )
+        db.session.add(MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=correct.id,
+            external_attribute_id=(
+                MarketplaceDraftService.OZON_MODEL_NAME_ATTRIBUTE_ID
+            ),
+            name="Название модели (для объединения в одну карточку)",
+            data_type="String",
+            is_required=True,
+            max_value_count=1,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=self.now,
+        ))
+        self._official_type(
+            "Лубрикант",
+            MarketplaceDraftService.EXPLICIT_ADULT_COSMETICS_PATH,
+        )
+        source_category = "Смазки, косметика > Вагинальные смазки"
+        product = self._product(
+            external_id="explicit-vaginal-lubricant",
+            category=source_category,
+        )
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            observed_mapping_preflight=False,
+        )
+
+        self.assertEqual(draft.product_type_id, correct.id)
+        mapping = db.session.get(
+            MarketplaceCategoryMapping,
+            draft.category_mapping_id,
+        )
+        evidence = json.loads(mapping.evidence_json)
+        self.assertEqual(
+            evidence["algorithm"],
+            MarketplaceDraftService.EXPLICIT_SOURCE_MAPPING_ALGORITHM,
+        )
+        self.assertEqual(
+            evidence["target_type_path"],
+            MarketplaceDraftService.EXPLICIT_PERSONAL_HYGIENE_PATH,
+        )
+        self.assertEqual(evidence["attribute_recipes"], [{
+            "attribute_id": (
+                MarketplaceDraftService.OZON_MODEL_NAME_ATTRIBUTE_ID
+            ),
+            "isolation": "per_imported_product",
+            "recipe": MarketplaceDraftService.EXPLICIT_SOURCE_MODEL_RECIPE,
+        }])
+        attributes = {
+            item["attribute_id"]: item["values"]
+            for item in json.loads(draft.attributes_json)
+        }
+        self.assertEqual(
+            attributes[MarketplaceDraftService.OZON_MODEL_NAME_ATTRIBUTE_ID],
+            [{
+                "value": (
+                    f"{product.external_vendor_code} · "
+                    f"SH-{self.supplier.id}-{product.id}"
+                ),
+            }],
+        )
+
+        # Deployed v1 apparel rows remain protected during a rolling upgrade;
+        # the next actual remap may upgrade their evidence to v2.
+        evidence["algorithm"] = "ozon-explicit-source-taxonomy-v1"
+        mapping.evidence_json = json.dumps(evidence)
+        db.session.commit()
+        MarketplaceDraftService.reconcile_observed_category_mappings(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+        )
+        db.session.refresh(mapping)
+        self.assertEqual(mapping.mapping_status, "active")
+        self.assertEqual(
+            json.loads(mapping.evidence_json)["algorithm"],
+            "ozon-explicit-source-taxonomy-v1",
+        )
+        legacy_attributes, _ = MarketplaceDraftService._auto_map_attributes(
+            product_type=correct,
+            facts_document=MarketplaceFactPackBuilder.build(product),
+            category_mapping=mapping,
+        )
+        self.assertNotIn(
+            MarketplaceDraftService.OZON_MODEL_NAME_ATTRIBUTE_ID,
+            {
+                item["attribute_id"]
+                for item in legacy_attributes
+            },
+        )
+
+    def test_explicit_source_model_keys_isolate_duplicate_vendor_codes(self):
+        product_type = self._official_type(
+            "Анальная пробка",
+            MarketplaceDraftService.EXPLICIT_ADULT_SEX_TOYS_PATH,
+        )
+        db.session.add(MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=product_type.id,
+            external_attribute_id=(
+                MarketplaceDraftService.OZON_MODEL_NAME_ATTRIBUTE_ID
+            ),
+            name="Название модели (для объединения в одну карточку)",
+            data_type="String",
+            is_required=True,
+            max_value_count=1,
+            is_available=True,
+            is_enabled=True,
+            last_seen_at=self.now,
+        ))
+        source_category = (
+            "Анальные стимуляторы и пробки > Анальные пробки, втулки"
+        )
+        products = [
+            self._product(
+                external_id=f"duplicate-model-{suffix}",
+                category=source_category,
+            )
+            for suffix in ("first", "second")
+        ]
+        for product in products:
+            original = json.loads(product.original_data)
+            original["vendor_code"] = "DUPLICATE-SOURCE-CODE"
+            product.original_data = json.dumps(original, ensure_ascii=False)
+            product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+
+        model_values = []
+        for index, product in enumerate(products, start=1):
+            draft = MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                offer_id=f"unique-offer-{index}",
+                observed_mapping_preflight=False,
+            )
+            self.assertEqual(draft.product_type_id, product_type.id)
+            model = next(
+                item
+                for item in json.loads(draft.attributes_json)
+                if item["attribute_id"]
+                == MarketplaceDraftService.OZON_MODEL_NAME_ATTRIBUTE_ID
+            )
+            model_values.append(model["values"][0]["value"])
+
+        self.assertNotEqual(model_values[0], model_values[1])
+        self.assertTrue(all(
+            value.startswith("DUPLICATE-SOURCE-CODE · SH-")
+            for value in model_values
+        ))
+
+    def test_dictionary_duplicate_uses_only_one_literal_display_match(self):
+        product_type = self._official_type(
+            "Лубрикант",
+            MarketplaceDraftService.EXPLICIT_PERSONAL_HYGIENE_PATH,
+        )
+        brand_attribute = self._dictionary_attribute(
+            "85",
+            "Бренд",
+            ["WET", "Wet", "Other"],
+            is_required=True,
+            product_type=product_type,
+        )
+        product_type.attributes_count = 1
+        product_type.required_attributes_count = 1
+        source_category = "Смазки, косметика > Вагинальные смазки"
+
+        exact = self._product(
+            external_id="literal-brand-exact",
+            category=source_category,
+        )
+        ambiguous = self._product(
+            external_id="literal-brand-ambiguous",
+            category=source_category,
+        )
+        for product, brand in ((exact, "WET"), (ambiguous, "wet")):
+            original = json.loads(product.original_data)
+            original["brand"] = brand
+            original["characteristics"]["Бренд"] = brand
+            product.original_data = json.dumps(original, ensure_ascii=False)
+            product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+
+        exact_draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=exact.id,
+            observed_mapping_preflight=False,
+        )
+        exact_brand = next(
+            item
+            for item in json.loads(exact_draft.attributes_json)
+            if item["attribute_id"] == "85"
+        )
+        self.assertEqual(exact_brand["values"], [{
+            "dictionary_value_id": "85-1",
+            "value": "WET",
+        }])
+
+        ambiguous_draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=ambiguous.id,
+            observed_mapping_preflight=False,
+        )
+        self.assertNotIn(
+            "85",
+            {
+                item["attribute_id"]
+                for item in json.loads(ambiguous_draft.attributes_json)
+            },
+        )
+
+        identity_literal = self._product(
+            external_id="literal-brand-identity-display",
+            category=source_category,
+        )
+        original = json.loads(identity_literal.original_data)
+        original["brand"] = "WET"
+        original["characteristics"]["Бренд"] = "wet"
+        identity_literal.original_data = json.dumps(
+            original, ensure_ascii=False
+        )
+        identity_literal.supplier_product.original_data_json = (
+            identity_literal.original_data
+        )
+        conflicting = self._product(
+            external_id="literal-brand-source-conflict",
+            category=source_category,
+        )
+        original = json.loads(conflicting.original_data)
+        original["brand"] = "WET"
+        original["characteristics"]["Бренд"] = "Other"
+        conflicting.original_data = json.dumps(original, ensure_ascii=False)
+        conflicting.supplier_product.original_data_json = conflicting.original_data
+        db.session.commit()
+
+        identity_draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=identity_literal.id,
+            observed_mapping_preflight=False,
+        )
+        identity_brand = next(
+            item
+            for item in json.loads(identity_draft.attributes_json)
+            if item["attribute_id"] == "85"
+        )
+        self.assertEqual(identity_brand["values"][0]["value"], "WET")
+
+        conflicting_draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=conflicting.id,
+            observed_mapping_preflight=False,
+        )
+        self.assertNotIn(
+            "85",
+            {
+                item["attribute_id"]
+                for item in json.loads(conflicting_draft.attributes_json)
+            },
+        )
+
+        brand_attribute.restriction_value_ids_json = json.dumps(["85-2"])
+        restricted = self._product(
+            external_id="literal-brand-restricted",
+            category=source_category,
+        )
+        original = json.loads(restricted.original_data)
+        original["brand"] = "wet"
+        original["characteristics"]["Бренд"] = "wet"
+        restricted.original_data = json.dumps(original, ensure_ascii=False)
+        restricted.supplier_product.original_data_json = restricted.original_data
+        db.session.commit()
+        restricted_draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=restricted.id,
+            observed_mapping_preflight=False,
+        )
+        restricted_brand = next(
+            item
+            for item in json.loads(restricted_draft.attributes_json)
+            if item["attribute_id"] == "85"
+        )
+        self.assertEqual(restricted_brand["values"], [{
+            "dictionary_value_id": "85-2",
+            "value": "Wet",
+        }])
+
+    def test_reviewed_brand_aliases_still_require_exact_official_value(self):
+        product_type = self._official_type(
+            "Лубрикант",
+            MarketplaceDraftService.EXPLICIT_PERSONAL_HYGIENE_PATH,
+        )
+        canonical_values = list(dict.fromkeys(
+            MarketplaceDraftService.OBSERVED_BRAND_CANONICAL_ALIASES.values()
+        ))
+        self._dictionary_attribute(
+            "85",
+            "Бренд",
+            canonical_values,
+            is_required=True,
+            product_type=product_type,
+        )
+        product_type.attributes_count = 1
+        product_type.required_attributes_count = 1
+        source_category = "Смазки, косметика > Вагинальные смазки"
+
+        for index, (source_brand, canonical) in enumerate(
+            MarketplaceDraftService.OBSERVED_BRAND_CANONICAL_ALIASES.items(),
+            start=1,
+        ):
+            product = self._product(
+                external_id=f"reviewed-brand-{index}",
+                category=source_category,
+            )
+            original = json.loads(product.original_data)
+            original["brand"] = source_brand.upper()
+            original["characteristics"]["Бренд"] = source_brand.upper()
+            product.original_data = json.dumps(original, ensure_ascii=False)
+            product.supplier_product.original_data_json = product.original_data
+            db.session.commit()
+
+            draft = MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                observed_mapping_preflight=False,
+            )
+            brand = next(
+                item
+                for item in json.loads(draft.attributes_json)
+                if item["attribute_id"] == "85"
+            )
+            self.assertEqual(brand["values"][0]["value"], canonical)
+
+        near_match = self._product(
+            external_id="reviewed-brand-near-match",
+            category=source_category,
+        )
+        original = json.loads(near_match.original_data)
+        original["brand"] = "BIORITM LAB"
+        original["characteristics"]["Бренд"] = "BIORITM LAB"
+        near_match.original_data = json.dumps(original, ensure_ascii=False)
+        near_match.supplier_product.original_data_json = near_match.original_data
+        db.session.commit()
+        near_draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=near_match.id,
+            observed_mapping_preflight=False,
+        )
+        self.assertNotIn(
+            "85",
+            {
+                item["attribute_id"]
+                for item in json.loads(near_draft.attributes_json)
+            },
+        )
+
+    def test_pasties_use_the_official_universal_size_not_source_diameter(self):
+        product_type = self._erotic_clothing_type("Пэстисы")
+        self._dictionary_attribute(
+            "4295",
+            "Российский размер",
+            ["Универсальный", "42"],
+            is_required=True,
+            product_type=product_type,
+        )
+        product_type.attributes_count = 1
+        product_type.required_attributes_count = 1
+        source_category = (
+            "Аксессуары, украшения для тела > Стикини, пестис"
+        )
+        product = self._product(
+            external_id="pasties-universal-size",
+            category=source_category,
+            dimensions=False,
+        )
+        original = json.loads(product.original_data)
+        original["sizes_raw"] = "диаметр 5,5 см"
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            observed_mapping_preflight=False,
+        )
+        attributes = {
+            item["attribute_id"]: item["values"]
+            for item in json.loads(draft.attributes_json)
+        }
+
+        self.assertEqual(draft.product_type_id, product_type.id)
+        self.assertEqual(attributes["4295"], [{
+            "dictionary_value_id": "4295-1",
+            "value": "Универсальный",
+        }])
+
+    def test_explicit_erotic_lingerie_mapping_fills_every_grounded_field(self):
+        product_type = self._erotic_clothing_type()
+
+        def plain(external_id, name, *, data_type="String", required=False):
+            row = MarketplaceAttributeDefinition(
+                marketplace_id=self.marketplace.id,
+                product_type_id=product_type.id,
+                external_attribute_id=external_id,
+                name=name,
+                data_type=data_type,
+                is_required=required,
+                max_value_count=1,
+                is_collection=False,
+                is_available=True,
+                is_enabled=True,
+                last_seen_at=self.now,
+            )
+            db.session.add(row)
+            return row
+
+        plain("31", "Бренд в одежде и обуви", required=True)
+        plain("23536", "Нужен код маркировки", data_type="Boolean", required=True)
+        plain("8292", "Объединить на одной карточке", required=True)
+        self._dictionary_attribute(
+            "22232",
+            "ТН ВЭД коды ЕАЭС",
+            ["6108210000 - Трусы женские"],
+            is_required=True,
+            product_type=product_type,
+        )
+        self._dictionary_attribute(
+            "10096",
+            "Цвет товара",
+            ["Черный"],
+            is_collection=True,
+            is_required=True,
+            product_type=product_type,
+        )
+        self._dictionary_attribute(
+            "4295",
+            "Российский размер",
+            ["42", "44", "46", "48"],
+            is_collection=True,
+            max_value_count=0,
+            is_required=True,
+            product_type=product_type,
+        )
+        self._dictionary_attribute(
+            "8229",
+            "Тип",
+            ["Эротическое белье"],
+            is_required=True,
+            product_type=product_type,
+        )
+        self._dictionary_attribute(
+            "9163",
+            "Пол",
+            ["Женский", "Мужской"],
+            is_collection=True,
+            product_type=product_type,
+        )
+        self._dictionary_attribute(
+            "4496",
+            "Материал",
+            ["нейлон", "спандекс"],
+            is_collection=True,
+            max_value_count=4,
+            product_type=product_type,
+        )
+        self._dictionary_attribute(
+            "32",
+            "Страна производства",
+            ["Россия"],
+            product_type=product_type,
+        )
+        plain("9533", "Размер производителя")
+        plain("4604", "Состав материала")
+        plain("9070", "Признак 18+", data_type="Boolean")
+        plain("23171", "#Хештеги")
+        product_type.attributes_count = 14
+        product_type.required_attributes_count = 7
+
+        source_category = (
+            "Эротическое белье для женщин > Комбинезоны"
+        )
+        product = self._product(
+            external_id="explicit-erotic-lingerie",
+            category=source_category,
+            dimensions=False,
+        )
+        original = json.loads(product.original_data)
+        original.update({
+            "all_categories": [source_category],
+            "colors": ["чёрный"],
+            "gender": "для женщин",
+            "materials": ["94% нейлон", "6% спандекс"],
+            "sizes_raw": "универсальный (42-48)",
+        })
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+
+        # A historical exact-listing consensus is not seller review and may
+        # be superseded by the narrower literal source-taxonomy recipe.
+        wrong_mapping = MarketplaceCategoryMapping(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            supplier_id=self.supplier.id,
+            product_type_id=self.product_type.id,
+            scope_key=f"supplier:{self.supplier.id}",
+            source_type="synthetic",
+            source_category=source_category,
+            source_category_normalized=(
+                MarketplaceDraftService._normalized_text(source_category)
+            ),
+            external_category_id=self.category.external_category_id,
+            external_type_id=self.product_type.external_type_id,
+            mapping_source="deterministic",
+            mapping_status="active",
+            confidence=0.99,
+            evidence_json=json.dumps({
+                "algorithm": MarketplaceDraftService.OBSERVED_MAPPING_ALGORITHM,
+                "state": "active",
+            }),
+        )
+        db.session.add(wrong_mapping)
+        db.session.commit()
+
+        # Bulk preparation disables the expensive observed-listing scan; the
+        # O(1) explicit recipe must still run on that path.
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            observed_mapping_preflight=False,
+        )
+
+        self.assertEqual(draft.product_type_id, product_type.id)
+        mapping = db.session.get(
+            MarketplaceCategoryMapping,
+            draft.category_mapping_id,
+        )
+        self.assertEqual(mapping.id, wrong_mapping.id)
+        self.assertEqual(mapping.mapping_status, "active")
+        self.assertEqual(mapping.confidence, 0.995)
+        evidence = json.loads(mapping.evidence_json)
+        self.assertEqual(
+            evidence["algorithm"],
+            MarketplaceDraftService.EXPLICIT_SOURCE_MAPPING_ALGORITHM,
+        )
+        self.assertEqual(
+            evidence["rule_id"],
+            "explicit_womens_erotic_lingerie_leaf_v1",
+        )
+
+        attributes = {
+            item["attribute_id"]: item["values"]
+            for item in json.loads(draft.attributes_json)
+        }
+        self.assertEqual(
+            {"31", "8292", "10096", "4295", "8229"} - set(attributes),
+            set(),
+        )
+        self.assertNotIn("22232", attributes)
+        self.assertNotIn("23536", attributes)
+        self.assertEqual(
+            {"32", "9163", "4496", "9533", "4604", "9070", "23171"}
+            - set(attributes),
+            set(),
+        )
+        self.assertEqual(
+            [value["value"] for value in attributes["4295"]],
+            ["42", "44", "46", "48"],
+        )
+        self.assertEqual(attributes["8229"][0]["value"], "Эротическое белье")
+
+        MarketplaceDraftService.reconcile_observed_category_mappings(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+        )
+        db.session.refresh(mapping)
+        self.assertEqual(mapping.mapping_status, "active")
+        self.assertEqual(
+            json.loads(mapping.evidence_json)["algorithm"],
+            MarketplaceDraftService.EXPLICIT_SOURCE_MAPPING_ALGORITHM,
+        )
+
+    def test_explicit_source_taxonomy_never_overwrites_seller_mapping(self):
+        self._erotic_clothing_type()
+        source_category = (
+            "Эротическое белье для женщин > Трусики, стринги, шортики"
+        )
+        first = self._product(
+            external_id="manual-erotic-category-first",
+            category=source_category,
+        )
+        manual_draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=first.id,
+            product_type_id=self.product_type.id,
+            save_mapping=True,
+        )
+        manual_mapping = db.session.get(
+            MarketplaceCategoryMapping,
+            manual_draft.category_mapping_id,
+        )
+
+        second = self._product(
+            external_id="manual-erotic-category-second",
+            category=source_category,
+        )
+        inherited = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=second.id,
+        )
+
+        db.session.refresh(manual_mapping)
+        self.assertEqual(inherited.product_type_id, self.product_type.id)
+        self.assertEqual(inherited.category_mapping_id, manual_mapping.id)
+        self.assertEqual(manual_mapping.mapping_source, "manual")
+        self.assertEqual(
+            json.loads(manual_mapping.evidence_json)["confirmation"],
+            "seller",
+        )
+
+    def test_explicit_source_taxonomy_honors_a_rejected_mapping(self):
+        self._erotic_clothing_type()
+        source_category = "Эротическое белье для женщин > Комплекты"
+        product = self._product(
+            external_id="rejected-erotic-category",
+            category=source_category,
+        )
+        rejected = MarketplaceCategoryMapping(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            supplier_id=self.supplier.id,
+            product_type_id=self.product_type.id,
+            scope_key=f"supplier:{self.supplier.id}",
+            source_type="synthetic",
+            source_category=source_category,
+            source_category_normalized=(
+                MarketplaceDraftService._normalized_text(source_category)
+            ),
+            external_category_id=self.category.external_category_id,
+            external_type_id=self.product_type.external_type_id,
+            mapping_source="deterministic",
+            mapping_status="rejected",
+            confidence=0.99,
+            evidence_json="{}",
+        )
+        db.session.add(rejected)
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+        )
+
+        db.session.refresh(rejected)
+        self.assertIsNone(draft.product_type_id)
+        self.assertEqual(draft.status, "needs_category")
+        self.assertEqual(rejected.mapping_status, "rejected")
+        self.assertEqual(rejected.product_type_id, self.product_type.id)
+
+    def test_explicit_source_taxonomy_stales_wrong_auto_type_until_schema_exists(
+        self,
+    ):
+        source_category = (
+            "Эротическое белье для женщин > Игровые костюмы"
+        )
+        product = self._product(
+            external_id="missing-roleplay-schema",
+            category=source_category,
+        )
+        automatic = MarketplaceCategoryMapping(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            supplier_id=self.supplier.id,
+            product_type_id=self.product_type.id,
+            scope_key=f"supplier:{self.supplier.id}",
+            source_type="synthetic",
+            source_category=source_category,
+            source_category_normalized=(
+                MarketplaceDraftService._normalized_text(source_category)
+            ),
+            external_category_id=self.category.external_category_id,
+            external_type_id=self.product_type.external_type_id,
+            mapping_source="deterministic",
+            mapping_status="active",
+            confidence=0.99,
+            evidence_json=json.dumps({
+                "algorithm": MarketplaceDraftService.OBSERVED_MAPPING_ALGORITHM,
+                "state": "active",
+            }),
+        )
+        db.session.add(automatic)
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            observed_mapping_preflight=False,
+        )
+
+        db.session.refresh(automatic)
+        self.assertIsNone(draft.product_type_id)
+        self.assertEqual(automatic.mapping_status, "stale")
+        evidence = json.loads(automatic.evidence_json)
+        self.assertEqual(
+            evidence["algorithm"],
+            MarketplaceDraftService.EXPLICIT_SOURCE_MAPPING_ALGORITHM,
+        )
+        self.assertEqual(
+            evidence["reason"],
+            "official_target_unavailable_or_stale",
+        )
 
     def test_exact_linked_consensus_removes_repeated_category_choice(self):
         first = self._product(
@@ -1680,6 +2945,189 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             readiness["category"]["mapping_origin"],
             "deterministic",
         )
+
+    def test_automatic_mapping_guard_rejects_literal_taxonomy_conflicts(self):
+        adult_category = MarketplaceTaxonomyCategory(
+            marketplace_id=self.marketplace.id,
+            external_category_id="adult-category",
+            name="Секс игрушки",
+            full_path="Товары для взрослых / Секс игрушки",
+            depth=1,
+            is_available=True,
+            last_seen_at=self.now,
+        )
+        db.session.add(adult_category)
+        db.session.flush()
+
+        def product_type(external_id, name):
+            row = MarketplaceProductType(
+                marketplace_id=self.marketplace.id,
+                category_id=adult_category.id,
+                external_type_id=external_id,
+                name=name,
+                is_available=True,
+                is_enabled=True,
+                attributes_synced_at=self.now,
+                attributes_sync_status="success",
+                attributes_schema_hash=f"schema-{external_id}",
+                attributes_version=1,
+                attributes_count=0,
+                required_attributes_count=0,
+            )
+            db.session.add(row)
+            db.session.flush()
+            return row
+
+        strapon = product_type("adult-strapon", "Страпон")
+        erotic_set = product_type("adult-set", "Эротический набор")
+        vaginal_balls = product_type(
+            "adult-vaginal-balls",
+            "Вагинальные шарики",
+        )
+        anal_plug = product_type("adult-plug", "Анальная пробка")
+        extension = product_type(
+            "adult-extension",
+            "Насадки, удлинители эротические",
+        )
+        db.session.commit()
+
+        conflict_cases = (
+            (
+                "Эротическое белье для женщин > Комплекты",
+                strapon,
+            ),
+            ("Тампоны, чаши > Менструальные чаши", erotic_set),
+            ("Шарики > Анальные", vaginal_balls),
+            ("Анальные крюки", anal_plug),
+            ("Вакуумные помпы > Насадки на помпу", extension),
+        )
+        for source_category, target_type in conflict_cases:
+            with self.subTest(
+                source_category=source_category,
+                target_type=target_type.name,
+            ):
+                self.assertEqual(
+                    MarketplaceDraftService
+                    ._automatic_mapping_conflict_reason(
+                        identity={"source_category": source_category},
+                        product_type=target_type,
+                    ),
+                    "explicit_source_category_conflict",
+                )
+
+        self.assertIsNone(
+            MarketplaceDraftService._automatic_mapping_conflict_reason(
+                identity={
+                    "source_category": (
+                        "Эротическое белье для женщин > Комплекты"
+                    ),
+                },
+                product_type=self.product_type,
+            )
+        )
+        self.assertIsNone(
+            MarketplaceDraftService._automatic_mapping_conflict_reason(
+                identity={
+                    "source_category": (
+                        "Страпоны и фаллопротезы > Трусики и насадки"
+                    ),
+                },
+                product_type=strapon,
+            )
+        )
+
+    def test_observed_clothing_consensus_stales_non_clothing_mapping(self):
+        adult_category = MarketplaceTaxonomyCategory(
+            marketplace_id=self.marketplace.id,
+            external_category_id="adult-clothing-conflict",
+            name="Секс игрушки",
+            full_path="Товары для взрослых / Секс игрушки",
+            depth=1,
+            is_available=True,
+            last_seen_at=self.now,
+        )
+        db.session.add(adult_category)
+        db.session.flush()
+        wrong_type = MarketplaceProductType(
+            marketplace_id=self.marketplace.id,
+            category_id=adult_category.id,
+            external_type_id="wrong-clothing-strapon",
+            name="Страпон",
+            is_available=True,
+            is_enabled=True,
+            attributes_synced_at=self.now,
+            attributes_sync_status="success",
+            attributes_schema_hash="wrong-clothing-schema",
+            attributes_version=1,
+            attributes_count=0,
+            required_attributes_count=0,
+        )
+        db.session.add(wrong_type)
+        db.session.flush()
+        source_category = (
+            "БДСМ товары и фетиш > Одежда и белье для женщин"
+        )
+        mapping = MarketplaceCategoryMapping(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            supplier_id=self.supplier.id,
+            product_type_id=wrong_type.id,
+            scope_key=f"supplier:{self.supplier.id}",
+            source_type="synthetic",
+            source_category=source_category,
+            source_category_normalized=(
+                MarketplaceDraftService._normalized_text(source_category)
+            ),
+            external_category_id=adult_category.external_category_id,
+            external_type_id=wrong_type.external_type_id,
+            mapping_source="deterministic",
+            mapping_status="active",
+            confidence=0.99,
+            evidence_json="{}",
+        )
+        db.session.add(mapping)
+        db.session.commit()
+        for suffix in ("first", "second"):
+            product = self._product(
+                external_id=f"clothing-conflict-{suffix}",
+                category=source_category,
+            )
+            self._linked_listing(product, product_type=wrong_type)
+
+        result = (
+            MarketplaceDraftService.reconcile_observed_category_mappings(
+                seller_id=self.seller1_id,
+                marketplace_id=self.marketplace.id,
+            )
+        )
+        db.session.refresh(mapping)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["safe_groups"], 0)
+        self.assertEqual(result["unsafe_groups"], 1)
+        self.assertEqual(result["staled"], 1)
+        self.assertEqual(mapping.mapping_status, "stale")
+        evidence = json.loads(mapping.evidence_json)
+        self.assertEqual(
+            evidence["algorithm"],
+            MarketplaceDraftService.OBSERVED_MAPPING_ALGORITHM,
+        )
+        self.assertEqual(
+            evidence["reason"],
+            "explicit_source_category_conflict",
+        )
+
+        target = self._product(
+            external_id="clothing-conflict-target",
+            category=source_category,
+        )
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=target.id,
+        )
+        self.assertIsNone(draft.product_type_id)
+        self.assertEqual(draft.status, "needs_category")
 
     def test_one_product_in_two_accounts_is_not_category_consensus(self):
         second_account = self._account(
@@ -2502,6 +3950,7 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
 
         self.assertEqual(readiness["overall"], "ready")
         self.assertEqual(readiness["category"]["status"], "exact_mapping")
+        self.assertFalse(readiness['category']['explicit_source_taxonomy'])
         self.assertTrue(readiness["schema"]["fresh"])
         self.assertEqual(readiness["attributes"]["required_total"], 3)
         self.assertEqual(readiness["attributes"]["required_supplied"], 3)
@@ -3184,12 +4633,22 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         )
         self.assertIsNone(draft.product_type_id)
 
+        self.app.secret_key = 'synthetic-category-review-test'
         with patch(f'{module}.resolve_type_defaults', return_value=resolved):
+            review = MarketplaceDraftService.category_impact(
+                seller_id=self.seller1_id,
+                draft_id=draft.id,
+                expected_version=draft.version,
+                target_product_type_id=self.product_type.id,
+                save_mapping=False,
+                actor_user_id=None,
+            )
             updated = MarketplaceDraftService.update_draft(
                 seller_id=self.seller1_id,
                 draft_id=draft.id,
                 expected_version=draft.version,
                 patch={'product_type_id': self.product_type.id},
+                category_review_token=review['review_token'],
             )
 
         provenance = json.loads(updated.provenance_json)

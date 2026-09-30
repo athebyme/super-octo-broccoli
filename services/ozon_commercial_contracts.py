@@ -7,7 +7,7 @@ successful batch.  HTTP and tenant authorization remain outside this module.
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from typing import Any, Mapping, Sequence
 
@@ -176,6 +176,39 @@ class OzonPriceContract(_Contract):
     MAX_BATCH = 100
 
     @classmethod
+    def whole_rub_price(cls, value: Any) -> str:
+        """Local write policy; observed/read amounts retain their precision."""
+        normalized = cls.money(value, "price")
+        amount = Decimal(normalized)
+        if amount != amount.to_integral_value():
+            raise OzonCommercialPayloadError(
+                "Для отправки нужна подтверждённая цена в целых рублях. "
+                "Подготовьте новое сравнение с округлением."
+            )
+        return normalized
+
+    @classmethod
+    def prepare_price(cls, value: Any) -> dict:
+        """Round only BEFORE seller review, using our explicit local policy.
+
+        This is not a claim about Ozon's general rounding algorithm. Sending
+        a reviewed integer avoids an unreviewed fractional-price adjustment.
+        Approval, payload building and reconciliation must never round again.
+        """
+        requested = cls.money(value, "price")
+        rounded = Decimal(requested).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        if rounded < 1 or rounded > Decimal("999999999"):
+            raise OzonCommercialPayloadError(
+                "Цена после округления должна быть от 1 до 999 999 999 ₽."
+            )
+        return {
+            "requested_price": requested,
+            "price": cls.whole_rub_price(rounded),
+            "rounding_rule": "seller_hub_whole_rub_half_up_v1",
+            "rounded": Decimal(requested) != rounded,
+        }
+
+    @classmethod
     def response_money(
         cls,
         value: Any,
@@ -267,7 +300,7 @@ class OzonPriceContract(_Contract):
     ) -> dict:
         normalized_offer = cls.offer_id(offer_id)
         normalized_product = cls.provider_id(product_id, "product_id")
-        normalized_price = cls.money(price, "price")
+        normalized_price = cls.whole_rub_price(price)
         if not isinstance(currency_code, str) or currency_code.strip().upper() != "RUB":
             raise OzonCommercialPayloadError(
                 "Only RUB price updates are enabled in the current rollout"

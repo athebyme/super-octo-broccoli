@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Scheduler refreshes Ozon references only behind the dark-launch flag."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 import os
@@ -12,6 +12,8 @@ from flask import Flask
 
 from models import (
     Marketplace,
+    MarketplaceListing,
+    MarketplaceQualityAssessment,
     MarketplaceReferenceAccount,
     Seller,
     SellerMarketplaceAccount,
@@ -21,6 +23,8 @@ from models import (
 from services.product_sync_scheduler import (
     poll_ozon_commercial_operations,
     poll_ozon_marketplace_operations,
+    process_ozon_draft_ai_completions,
+    prepare_ozon_uploads,
     sync_marketplace_characteristics,
     sync_marketplaces,
     sync_ozon_demanded_references,
@@ -77,11 +81,26 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
                 is_active=True,
                 connection_status="connected",
             )
+            account.set_credentials({"api_key": "synthetic-read-scheduler-key"})
             db.session.add(account)
+            db.session.flush()
+            listing = MarketplaceListing(
+                seller_id=seller.id,
+                marketplace_id=marketplace.id,
+                account_id=account.id,
+                offer_id="scheduler-offer-1",
+                external_product_id="scheduler-product-1",
+                normalized_status="active",
+                is_available=True,
+                is_archived=False,
+                sync_fingerprint="s" * 64,
+            )
+            db.session.add(listing)
             db.session.commit()
             self.marketplace_id = marketplace.id
             self.seller_id = seller.id
             self.account_id = account.id
+            self.listing_id = listing.id
 
     def tearDown(self):
         with self.app.app_context():
@@ -214,6 +233,55 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
         self.assertEqual(result["upload_runs"]["reconciled"], 1)
         upload_runs.assert_called_once_with(limit=20)
 
+    def test_local_preparation_is_independent_with_publication_disabled(self):
+        self.app.config["MARKETPLACE_OZON_ENABLED"] = True
+        self.app.config["MARKETPLACE_OZON_PUBLICATION_ENABLED"] = False
+        with patch("services.marketplace_publications.MarketplacePublicationService.poll_due_operations") as provider, \
+             patch("services.ozon_bulk_upload.OzonBulkUploadService.run_due_preparation",
+                   return_value={"selected": 1, "processed_items": 1, "prepared": 1, "failed": 0}) as prepare:
+            result = prepare_ozon_uploads(self.app)
+        provider.assert_not_called()
+        prepare.assert_called_once_with(run_limit=20, item_limit=40, seconds_budget=8)
+        self.assertEqual(result["prepared"], 1)
+
+    def test_ai_coordinator_drains_results_with_flag_disabled_without_new_calls(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                self.app.config["MARKETPLACE_OZON_ENABLED"] = enabled
+                with patch("services.ozon_draft_ai_worker.tick", return_value={"completed": 1}) as tick, \
+                     patch("services.marketplace_publications.MarketplacePublicationService.poll_due_operations") as publish:
+                    result = process_ozon_draft_ai_completions(self.app)
+                tick.assert_called_once_with(seconds_budget=8, allow_new=enabled)
+                publish.assert_not_called()
+                self.assertEqual(result, {"completed": 1})
+
+    def test_ai_coordinator_failure_is_sanitized_and_next_tick_can_progress(self):
+        with patch("services.ozon_draft_ai_worker.tick", side_effect=RuntimeError("private-provider-body")), \
+             self.assertLogs(self.app.logger, level="ERROR") as logs:
+            result = process_ozon_draft_ai_completions(self.app)
+        self.assertEqual(result, {"error": "ai_coordinator_deferred"})
+        self.assertNotIn("private-provider-body", " ".join(logs.output))
+        with patch("services.ozon_draft_ai_worker.tick", return_value={"completed": 2}):
+            self.assertEqual(process_ozon_draft_ai_completions(self.app), {"completed": 2})
+
+    def test_provider_poll_does_not_wait_on_local_preparation(self):
+        with patch("services.marketplace_publications.MarketplacePublicationService.poll_due_operations",
+                   return_value={"selected": 1, "processed": 1, "busy": 0, "failed": 0}), \
+             patch("services.ozon_bulk_upload.OzonBulkUploadService.reconcile_active_runs",
+                   return_value={"selected": 0, "reconciled": 0, "failed": 0}), \
+             patch("services.ozon_bulk_upload.OzonBulkUploadService.run_due_preparation") as prepare:
+            result = poll_ozon_marketplace_operations(self.app)
+        prepare.assert_not_called()
+        self.assertEqual(result["processed"], 1)
+
+    def test_preparation_failure_is_reported_without_provider_work(self):
+        with patch("services.marketplace_publications.MarketplacePublicationService.poll_due_operations") as provider, \
+             patch("services.ozon_bulk_upload.OzonBulkUploadService.run_due_preparation",
+                   side_effect=RuntimeError("synthetic local preparation failure")):
+            result = prepare_ozon_uploads(self.app)
+        provider.assert_not_called()
+        self.assertEqual(result["failed"], 1)
+
     def test_commercial_reconciliation_has_independent_dark_write_flag(self):
         self.app.config["MARKETPLACE_OZON_ENABLED"] = False
         self.app.config["MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED"] = False
@@ -263,8 +331,8 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
             return_value=run,
         ) as sync, patch(
             "services.marketplace_quality."
-            "MarketplaceQualityService.recompute_account",
-            return_value={"processed": 0},
+            "MarketplaceQualityService.recompute_next_account_batch",
+            return_value={"processed": 11},
         ) as quality:
             result = sync_ozon_analytics_accounts(self.app, limit=1)
 
@@ -278,6 +346,121 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
         self.assertFalse(sync_kwargs["force"])
         self.assertEqual(sync_kwargs["max_pages"], 2)
         quality.assert_called_once()
+        self.assertEqual(result["quality_selected"], 1)
+        self.assertEqual(result["quality_processed"], 11)
+
+    def test_analytics_scheduler_rotates_quality_while_analytics_is_fresh(self):
+        with patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService._running_run",
+            return_value=None,
+        ), patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService._fresh_cached_sync",
+            return_value=SimpleNamespace(status="completed"),
+        ), patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService.sync_account",
+        ) as sync, patch(
+            "services.marketplace_quality."
+            "MarketplaceQualityService.recompute_next_account_batch",
+            return_value={"processed": 7},
+        ) as quality:
+            result = sync_ozon_analytics_accounts(self.app, limit=1)
+
+        self.assertEqual(result["selected"], 0)
+        self.assertEqual(result["quality_selected"], 1)
+        self.assertEqual(result["quality_processed"], 7)
+        sync.assert_not_called()
+        quality.assert_called_once()
+
+    def test_quality_account_rotation_selects_oldest_active_assessment(self):
+        evaluated_at = datetime.utcnow()
+        with self.app.app_context():
+            marketplace = db.session.get(Marketplace, self.marketplace_id)
+            first_listing = db.session.get(MarketplaceListing, self.listing_id)
+            other_user = User(
+                username="ozon-quality-older",
+                email="ozon-quality-older@test.local",
+                is_active=True,
+            )
+            other_user.set_password("synthetic-password")
+            other_seller = Seller(
+                user=other_user,
+                company_name="Older quality account",
+            )
+            db.session.add_all([other_user, other_seller])
+            db.session.flush()
+            other_account = SellerMarketplaceAccount(
+                seller_id=other_seller.id,
+                marketplace_id=marketplace.id,
+                external_account_id="seller-quality-older",
+                label="Older quality account",
+                is_active=True,
+                connection_status="connected",
+            )
+            db.session.add(other_account)
+            db.session.flush()
+            other_listing = MarketplaceListing(
+                seller_id=other_seller.id,
+                marketplace_id=marketplace.id,
+                account_id=other_account.id,
+                offer_id="scheduler-offer-older",
+                external_product_id="scheduler-product-older",
+                normalized_status="active",
+                is_available=True,
+                is_archived=False,
+                sync_fingerprint="o" * 64,
+            )
+            db.session.add(other_listing)
+            db.session.flush()
+            db.session.add_all([
+                MarketplaceQualityAssessment(
+                    seller_id=self.seller_id,
+                    marketplace_id=marketplace.id,
+                    account_id=self.account_id,
+                    listing_id=first_listing.id,
+                    listing_fingerprint=first_listing.sync_fingerprint,
+                    status="unscorable",
+                    severity="critical",
+                    impact=1,
+                    evaluated_at=evaluated_at,
+                ),
+                MarketplaceQualityAssessment(
+                    seller_id=other_seller.id,
+                    marketplace_id=marketplace.id,
+                    account_id=other_account.id,
+                    listing_id=other_listing.id,
+                    listing_fingerprint=other_listing.sync_fingerprint,
+                    status="unscorable",
+                    severity="critical",
+                    impact=1,
+                    evaluated_at=evaluated_at - timedelta(hours=1),
+                ),
+            ])
+            db.session.commit()
+            older_account_id = other_account.id
+
+        with patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService._running_run",
+            return_value=None,
+        ), patch(
+            "services.marketplace_analytics."
+            "MarketplaceAnalyticsService._fresh_cached_sync",
+            return_value=SimpleNamespace(status="completed"),
+        ), patch(
+            "services.marketplace_quality."
+            "MarketplaceQualityService.recompute_next_account_batch",
+            return_value={"processed": 1},
+        ) as quality:
+            result = sync_ozon_analytics_accounts(self.app, limit=1)
+
+        self.assertEqual(result["quality_selected"], 1)
+        self.assertEqual(
+            quality.call_args.kwargs["account_id"],
+            older_account_id,
+        )
 
     def test_analytics_scheduler_flag_blocks_read_calls(self):
         self.app.config["MARKETPLACE_OZON_ENABLED"] = False
@@ -407,7 +590,7 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
         with patch(
             "services.marketplace_inbox."
             "MarketplaceInboxService.access_denied_retry_after",
-            return_value=datetime.utcnow(),
+            return_value=datetime.utcnow() + timedelta(hours=1),
         ), patch(
             "services.marketplace_inbox.MarketplaceInboxService.sync_kind",
         ) as sync:
@@ -416,6 +599,24 @@ class OzonReferenceSchedulerTest(unittest.TestCase):
         self.assertEqual(result["selected"], 0)
         self.assertEqual(result["failed"], 0)
         sync.assert_not_called()
+
+    def test_inbox_subscription_denial_is_unavailable_not_scheduler_failure(self):
+        from services.marketplace_inbox import MarketplaceInboxAccessDenied
+
+        with self.app.app_context():
+            account = db.session.get(SellerMarketplaceAccount, self.account_id)
+            account.capabilities_json = '["reviews_read"]'
+            db.session.commit()
+        with patch(
+            "services.marketplace_inbox.MarketplaceInboxService.sync_kind",
+            side_effect=MarketplaceInboxAccessDenied("Доступ не подтверждён"),
+        ), patch("services.product_sync_scheduler.logger") as log:
+            result = sync_ozon_inbox_accounts(self.app, limit=1)
+
+        self.assertEqual(result["selected"], 1)
+        self.assertEqual(result["unavailable"], 1)
+        self.assertEqual(result["failed"], 0)
+        log.error.assert_not_called()
 
 
 if __name__ == "__main__":

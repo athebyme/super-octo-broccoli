@@ -2,12 +2,94 @@
 
 {% block title %}Итог синхронизации Ozon — Seller Hub{% endblock %}
 
-{% block extra_head %}
-{% if run.status == 'running' %}<meta http-equiv="refresh" content="15">{% endif %}
-{% endblock %}
-
 {% block content %}
 {% set summary = run.summary %}
+{% if run.mode in ['source_prepare', 'reviewed_drafts'] %}
+{% set local_only = run.mode == 'source_prepare' %}
+{% set review_drafts = namespace(ids=[]) %}
+{% for item in run['items'] %}{% if local_only and item.draft_id and item.draft_id not in review_drafts.ids %}{% set review_drafts.ids = review_drafts.ids + [item.draft_id] %}{% endif %}{% endfor %}
+<div class="sh-page-header">
+    <div class="sh-page-header-content">
+        <div>
+            <p class="text-xs uppercase tracking-widest" style="color:var(--accent)">{{ 'Локальная подготовка' if local_only else 'Отправка проверенных версий' }} · Ozon</p>
+            <h1 class="sh-page-title">
+                {% if local_only %}
+                    {% if summary.outcome == 'running' %}Подготавливаем черновики
+                    {% elif summary.outcome == 'success' %}Черновики готовы к проверке
+                    {% elif summary.outcome == 'partial' %}Часть черновиков требует внимания
+                    {% else %}Проверьте результат подготовки{% endif %}
+                {% else %}
+                    {% if summary.outcome == 'running' %}Проверенные карточки в работе
+                    {% elif summary.outcome == 'success' %}Отправка завершена
+                    {% elif summary.outcome == 'partial' %}Часть карточек требует внимания
+                    {% else %}Проверьте результат отправки{% endif %}
+                {% endif %}
+            </h1>
+            <p class="sh-page-subtitle">{{ run.account_label or ('Магазин #' ~ run.account_id) }} · {{ 'Подготовка не отправляет данные в Ozon. Готовые карточки можно проверить и отправить отдельно, не дожидаясь остальных.' if local_only else 'Каждая строка привязана к просмотренной версии черновика и отдельной операции Ozon.' }}</p>
+        </div>
+        <div class="sh-page-actions">
+            {% if local_only and review_drafts.ids %}
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="/marketplaces/ozon/uploads/review?account_id={{ run.account_id }}&draft_ids={{ review_drafts.ids|join(',') }}&parent_prepare_job_uid={{ run.job_uid }}">Проверить подготовленные карточки →</a>
+            {% endif %}
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index', account_id=run.account_id) }}">История</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index', account_id=run.account_id) }}">Черновики</a>
+        </div>
+    </div>
+</div>
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    {% set result_config = {'kind': 'run', 'initial': run, 'url': url_for('ozon_bulk_uploads.detail_api', job_uid=run.job_uid)} %}
+    {% include 'partials/ozon_result_status.html' %}
+    <div class="sh-card p-5">
+        <div class="flex flex-wrap gap-x-8 gap-y-3">
+            <div><span class="block text-xs" style="color:var(--text-muted)">Всего</span><strong class="text-2xl">{{ summary.total or 0 }}</strong></div>
+            {% if local_only %}
+            <div><span class="block text-xs" style="color:var(--text-muted)">Подготовлено локально</span><strong class="text-2xl" style="color:var(--ok)">{{ summary.prepared or 0 }}</strong></div>
+            <div><span class="block text-xs" style="color:var(--text-muted)">Нужно заполнить</span><strong class="text-2xl" style="color:var(--warn)">{{ summary.needs_input or 0 }}</strong></div>
+            <div><span class="block text-xs" style="color:var(--text-muted)">Ждём справочник</span><strong class="text-2xl">{{ summary.status_counts.waiting_reference or 0 }}</strong></div>
+            {% else %}
+            <div><span class="block text-xs" style="color:var(--text-muted)">Создано</span><strong class="text-2xl" style="color:var(--ok)">{{ summary.created or 0 }}</strong></div>
+            <div><span class="block text-xs" style="color:var(--text-muted)">Обновлено</span><strong class="text-2xl" style="color:var(--ok)">{{ summary.updated or 0 }}</strong></div>
+            <div><span class="block text-xs" style="color:var(--text-muted)">Требуют внимания</span><strong class="text-2xl" style="color:var(--warn)">{{ (summary.needs_input or 0) + (summary.needs_manual_reconciliation or 0) + (summary.failed or 0) }}</strong></div>
+            {% endif %}
+            <div><span class="block text-xs" style="color:var(--text-muted)">В работе</span><strong class="text-2xl">{{ summary.active or 0 }}</strong></div>
+        </div>
+        <p class="mt-4 text-sm" style="color:var(--text-secondary)">
+            {% if local_only %}Готовность означает локальный черновик, а не публикацию. Откройте проверку, исправьте нужные строки и отдельно подтвердите отправку выбранных версий.
+            {% else %}Если результат Ozon неизвестен, откройте связанную операцию для чтения состояния. Не отправляйте ту же карточку повторно вслепую.{% endif %}
+        </p>
+    </div>
+    <div class="mt-5 space-y-3">
+        {% set phase_labels = {
+            'pending':'Ждёт подготовки','preparing':'Готовим локально','waiting_reference':'Ждём справочник',
+            'needs_input':'Нужно заполнить','prepared':'Подготовлена','reviewed':'Проверена · в очереди',
+            'operation_linked':'Операция создана','preparing_media':'Проверяем фото','queued':'В очереди',
+            'submitting':'Отправляем','submitted':'Ozon принял задачу','checking':'Проверяем результат',
+            'uncertain':'Нужна сверка','succeeded':'Подтверждено','already_current':'Уже актуальна',
+            'failed_local':'Локальная ошибка','failed':'Не выполнено','excluded':'Исключена',
+            'needs_manual_reconciliation':'Нужна ручная сверка'
+        } %}
+        {% for item in run['items'] %}
+        <article class="sh-card p-4">
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="sh-badge sh-badge--sm {% if item.status in ['prepared','succeeded','already_current'] %}sh-badge--green{% elif item.status in ['needs_input','waiting_reference','uncertain','needs_manual_reconciliation'] %}sh-badge--yellow{% elif item.status in ['failed','failed_local'] %}sh-badge--red{% else %}sh-badge--blue{% endif %}">{{ phase_labels.get(item.status, item.status) }}</span>
+                        {% if not local_only and item.reviewed_version %}<span class="text-xs" style="color:var(--text-muted)">Просмотрена версия {{ item.reviewed_version }}</span>{% endif %}
+                        {% if item.offer_id %}<span class="text-xs break-all" style="color:var(--text-muted)">Артикул {{ item.offer_id }}</span>{% endif %}
+                    </div>
+                    <h2 class="mt-2 font-semibold" style="color:var(--text)">{{ item.title }}</h2>
+                    {% if item.message %}<p class="mt-2 text-sm" style="color:var(--text-secondary)">{{ item.message }}</p>{% endif %}
+                </div>
+                <div class="flex shrink-0 flex-wrap gap-2">
+                    {% if item.draft_id %}<a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('marketplace_drafts.detail', draft_id=item.draft_id) }}">{{ 'Проверить черновик' if local_only else 'Черновик' }}</a>{% endif %}
+                    {% if item.operation_id %}<a class="sh-btn sh-btn--secondary sh-btn--sm" href="{{ url_for('marketplace_operations.detail', operation_id=item.operation_id) }}">Операция Ozon</a>{% endif %}
+                </div>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
 {% set status_labels = {
     'preparing': 'Подготавливаем',
     'preparing_media': 'Проверяем фото',
@@ -31,7 +113,7 @@
                 {% elif summary.outcome == 'partial' %}Синхронизация завершена частично
                 {% else %}Карточки требуют внимания{% endif %}
             </h1>
-            <p class="sh-page-subtitle">{{ run.account_label or ('Кабинет #' ~ run.account_id) }} · результат сохранён и обновляется автоматически.</p>
+            <p class="sh-page-subtitle">{{ run.account_label or ('Кабинет #' ~ run.account_id) }} · результат сохранён. Статус проверяется автоматически.</p>
         </div>
         <div class="sh-page-actions">
             {% if summary.ready_to_retry or summary.needs_input or summary.failed %}
@@ -44,13 +126,15 @@
                 </button>
             </form>
             {% endif %}
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index') }}">Все загрузки</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('seller_my_products') }}">Мои товары</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index', account_id=run.account_id) }}">Загрузки кабинета</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('seller_my_products', account_id=run.account_id) }}">Мои товары</a>
         </div>
     </div>
 </div>
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    {% set result_config = {'kind': 'run', 'initial': run, 'url': url_for('ozon_bulk_uploads.detail_api', job_uid=run.job_uid)} %}
+    {% include 'partials/ozon_result_status.html' %}
     <section class="sh-card p-5">
         <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-10">
             <div>
@@ -101,7 +185,7 @@
         </div>
         <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs" style="color:var(--text-muted)">
             <span>Обработано {{ summary.processed or 0 }} из {{ summary.total or 0 }}</span>
-            {% if run.status == 'running' %}<span>Страница обновится через 15 секунд</span>{% endif %}
+            {% if run.status == 'running' %}<span>При изменении статуса появится уведомление выше</span>{% endif %}
         </div>
     </section>
 
@@ -276,4 +360,5 @@
         {% endfor %}
     </div>
 </div>
+{% endif %}
 {% endblock %}

@@ -84,6 +84,11 @@ class OzonAdapter(MarketplaceAdapter):
                 provider_request_id=exc.request_id,
                 error_code=exc.code,
                 error_message=str(exc),
+                metadata={
+                    "http_status": exc.status_code,
+                    "retry_after_seconds": exc.retry_after,
+                    "retriable": bool(exc.retriable),
+                },
             )
         except (TypeError, ValueError):
             return ConnectionCheck(
@@ -118,7 +123,7 @@ class OzonAdapter(MarketplaceAdapter):
 
     @staticmethod
     def _role_capabilities(response: Dict[str, Any]) -> Tuple[str, ...]:
-        """Map only exact current role methods to premium inbox capabilities."""
+        """Observed exact method grants are hints, never write authorization."""
         raw_roles = response.get("roles")
         if raw_roles is None:
             raw_roles = response.get("result")
@@ -131,12 +136,21 @@ class OzonAdapter(MarketplaceAdapter):
                 for method in role_methods[:2_000]:
                     if isinstance(method, str):
                         methods.add(method)
-        capabilities = []
-        if "/v2/review/list" in methods:
-            capabilities.append(MarketplaceCapability.REVIEWS_READ.value)
-        if "/v1/question/list" in methods:
-            capabilities.append(MarketplaceCapability.QUESTIONS_READ.value)
-        return tuple(capabilities)
+        required_methods = {
+            "catalog_read": {"/v3/product/list", "/v3/product/info/list", "/v4/product/info/attributes"},
+            "catalog_write": {"/v3/product/import"},
+            "prices_read": {"/v5/product/info/prices"},
+            "prices_write": {"/v1/product/import/prices"},
+            "stocks_read": {"/v4/product/info/stocks"},
+            "stocks_write": {"/v2/products/stocks"},
+            "warehouses_read": {"/v2/warehouse/list"},
+            "orders_read": {"/v4/posting/fbs/list", "/v3/posting/fbo/list"},
+            "analytics_read": {"/v1/analytics/data"},
+            "finance_read": {"/v1/finance/accrual/by-day", "/v1/finance/accrual/types", "/v1/finance/accrual/postings"},
+            "reviews_read": {"/v2/review/list"},
+            "questions_read": {"/v1/question/list"},
+        }
+        return tuple(sorted(capability for capability, required in required_methods.items() if required <= methods))
 
     @staticmethod
     def _expires_at(value: Any) -> Optional[datetime]:

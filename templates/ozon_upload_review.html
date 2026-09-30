@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% block title %}Проверка карточек Ozon — Seller Hub{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-upload-review.css') }}">
+<script type="application/json" id="our-bootstrap">{{ {
+    'review': review,
+    'urls': {
+        'html': '/marketplaces/ozon/uploads/review',
+        'api': '/marketplaces/ozon/uploads/api/review',
+        'publish': url_for('ozon_bulk_uploads.create_from_drafts'),
+        'byRequest': url_for('ozon_bulk_uploads.find_by_request'),
+        'runBase': url_for('ozon_bulk_uploads.detail', job_uid='JOB_UID').replace('JOB_UID', ''),
+        'editorBase': url_for('marketplace_drafts.detail', draft_id=123456789).replace('123456789', ''),
+        'history': url_for('ozon_bulk_uploads.index', account_id=review.account_id),
+        'drafts': url_for('marketplace_drafts.index', account_id=review.account_id)
+    }
+} | tojson }}</script>
+<div id="our-boot-fallback" class="our-boot">Открываем проверку карточек…</div>
+<section id="ozon-upload-review" class="our" v-cloak x-ignore aria-labelledby="our-title">
+    <header class="our-header">
+        <a class="our-back" :href="config.urls.drafts">← Черновики магазина</a>
+        <p class="our-eyebrow">Ozon · отдельное подтверждение отправки</p>
+        <h1 id="our-title">Проверьте карточки перед отправкой</h1>
+        <p class="our-lead">Это текущие значения черновиков. Выберите готовые карточки, проверьте их ещё раз и отдельно подтвердите создание или полное обновление в Ozon.</p>
+        <div class="our-context"><strong>{{ review.account_label }}</strong><span>Выбрано для просмотра {{ review.pagination.total }} · страница {{ review.pagination.page }} из {{ review.pagination.pages }}</span><span>Проверено {{ review.checked_at }}</span></div>
+    </header>
+{% raw %}
+    <div v-if="error" ref="error" class="our-message our-message--error" role="alert" tabindex="-1">{{ error }}</div>
+    <div v-if="status" class="our-message" role="status">{{ status }}</div>
+    <div v-if="sessionEnded" class="our-message our-message--warning" role="status">Действия остановлены. Войдите снова и откройте этот просмотр; выбранные версии и ключ незавершённого действия сохраняются в этой вкладке.</div>
+    <div v-if="storageProblem" class="our-message our-message--warning" role="status"><div><strong>Сохранённый результат нельзя прочитать.</strong><p>Проверьте историю запусков магазина перед новым действием.</p></div><div class="our-actions"><a class="sh-btn sh-btn--secondary" :href="config.urls.history">История запусков</a><button type="button" class="our-text-button" @click="clearStorageProblem">Я проверил историю · начать новый просмотр</button></div></div>
+    <div v-if="pending" class="our-message our-message--warning" role="status">
+        <div><strong>Результат отправки пока неизвестен.</strong><p>Магазин {{ review.account_label }} · {{ pending.draft_ids.length }} проверенных карточек. Сначала проверьте запуск по сохранённому ключу. Повтор возможен только вручную с тем же ключом и теми же версиями.</p></div>
+        <div class="our-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy || sessionEnded" @click="readPending">{{ busy === 'readback' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="retrySameKey" type="button" class="sh-btn sh-btn--secondary" :disabled="!!busy || sessionEnded" @click="retryPending">Повторить тот же запрос</button></div>
+    </div>
+    <div class="our-toolbar">
+        <div><strong>К отправке выбрано {{ selected.length }}</strong><span>Каждая карточка выбирается на странице после просмотра. Выбор между страницами сохраняется в этой вкладке.</span></div>
+        <div class="our-actions"><button type="button" class="our-text-button" :disabled="locked || !selected.length" @click="clear">Снять выбор</button><button ref="reviewButton" type="button" class="sh-btn sh-btn--primary" :disabled="!canReview" @click="reviewSelected">{{ busy === 'read' ? 'Проверяем…' : 'Проверить выбранные' }}</button></div>
+    </div>
+    <div class="our-list">
+        <article v-for="row in review.items" :key="row.draft_id" class="our-card" :class="{'our-card--blocked':!row.selectable}">
+            <div class="our-card-select"><label class="our-card-check"><input type="checkbox" :id="'our-select-'+row.draft_id" :checked="picked(row)" :disabled="locked || !row.selectable" :aria-label="'Выбрать карточку ' + row.title" @change="toggle(row, $event.target.checked)"></label></div>
+            <div class="our-photo"><draft-photo v-if="imageUrl(row)" :src="imageUrl(row)" :source-id="row.imported_product_id" :alt="row.title"></draft-photo><span v-else>Нет фото</span></div>
+            <div class="our-card-main">
+                <div class="our-badges"><span>{{ row.action === 'update' ? 'Полное обновление' : 'Новая карточка' }}</span><span :class="row.selectable ? 'our-ready' : 'our-blocked'">{{ row.selectable ? 'Готова к выбору' : 'Нужны исправления' }}</span></div>
+                <h2><a :href="editorUrl(row)">{{ row.title }}</a></h2>
+                <p class="our-meta">Артикул {{ row.offer_id }} · версия {{ row.version }} · товар № {{ row.imported_product_id }}</p>
+                <p class="our-meta">{{ row.type_name || 'Тип Ozon не выбран' }}<span v-if="row.external_category_id"> · категория {{ row.external_category_id }}</span></p>
+                <div class="our-facts"><span><strong>Цена продавца:</strong> {{ sellerPrice(row) }}</span><span v-if="oldPrice(row)"><strong>До скидок:</strong> {{ oldPrice(row) }}</span><span><strong>Упаковка:</strong> {{ packageLabel(row) }}</span><span v-if="Number.isSafeInteger(row.photos_count)"><strong>Фото в составе:</strong> {{ row.photos_count }}</span></div>
+                <ul v-if="row.errors?.length" class="our-issues"><li v-for="(issue,index) in row.errors" :key="'e'+index">{{ issue.message }}</li></ul>
+                <details v-if="row.warnings?.length" class="our-warnings"><summary>Предупреждения · {{ row.warnings.length }}</summary><ul><li v-for="(issue,index) in row.warnings" :key="'w'+index">{{ issue.message }}</li></ul></details>
+                <a class="our-card-link" :href="editorUrl(row)">{{ row.selectable ? 'Открыть и проверить поля →' : 'Исправить карточку →' }}</a>
+            </div>
+        </article>
+    </div>
+    <nav v-if="review.pagination.pages > 1" class="our-pagination" aria-label="Страницы проверки">
+        <a v-if="review.pagination.page > 1" class="sh-btn sh-btn--secondary" :href="pageUrl(review.pagination.page-1)">← Предыдущие 20</a>
+        <span>Страница {{ review.pagination.page }} из {{ review.pagination.pages }}</span>
+        <a v-if="review.pagination.page < review.pagination.pages" class="sh-btn sh-btn--secondary" :href="pageUrl(review.pagination.page+1)">Следующие 20 →</a>
+    </nav>
+    <dialog ref="dialog" class="our-dialog" aria-labelledby="our-dialog-title" @cancel.prevent="closeDialog">
+        <div class="our-dialog-head"><div><p class="our-eyebrow">{{ review.account_label }}</p><h2 id="our-dialog-title">Подтвердить отправку</h2></div><button type="button" class="our-close" aria-label="Закрыть подтверждение" :disabled="busy === 'post'" @click="closeDialog">×</button></div>
+        <p>Выбранные версии перечитаны. Ozon создаст новые карточки или полностью обновит существующие после отдельной проверки при запуске. Изменения после этого просмотра будут отклонены.</p>
+        <ul class="our-dialog-list"><li v-for="row in reviewed || []" :key="row.draft_id"><strong>{{ row.title }}</strong><span>{{ row.action === 'update' ? 'Обновление' : 'Создание' }} · версия {{ row.version }} · {{ row.offer_id }}<small>Цена продавца: {{ sellerPrice(row) }} · {{ packageLabel(row) }} · фото: {{ Number.isSafeInteger(row.photos_count) ? row.photos_count : 'неизвестно' }}</small></span></li></ul>
+        <label class="our-confirm"><input ref="confirm" type="checkbox" v-model="confirmed" :disabled="locked">Я проверил выбранные карточки и подтверждаю отправку в указанный магазин Ozon</label>
+        <div class="our-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy === 'post'" @click="closeDialog">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!confirmed || !!busy || !!pending || sessionEnded" @click="publish">{{ busy === 'post' ? 'Принимаем…' : 'Отправить проверенные карточки' }}</button></div>
+    </dialog>
+{% endraw %}
+</section>
+<noscript>
+    <section class="our our-noscript" aria-labelledby="our-noscript-title">
+        {% set dimension_units = {'MILLIMETERS':'мм', 'CENTIMETERS':'см', 'INCHES':'дюйм'} %}
+        {% set weight_units = {'GRAMS':'г', 'KILOGRAMS':'кг', 'POUNDS':'фунт'} %}
+        <h2 id="our-noscript-title">Проверка карточек без JavaScript</h2>
+        <p>На этой странице можно подтвердить только показанные {{ review['items']|length }} карточек. Для остальных перейдите на следующую страницу.</p>
+        <form method="post" action="{{ url_for('ozon_bulk_uploads.create_from_drafts') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="account_id" value="{{ review.account_id }}">
+            <input type="hidden" name="request_key" value="{{ review.request_key }}">
+            <input type="hidden" name="expected_versions" value="{{ review.expected_versions|tojson|forceescape }}">
+            {% if review.parent_prepare_job_uid %}<input type="hidden" name="parent_prepare_job_uid" value="{{ review.parent_prepare_job_uid }}">{% endif %}
+            <div class="our-list">
+            {% for row in review['items'] %}
+                <article class="our-card"><div class="our-card-select">{% if row.selectable %}<label class="our-card-check"><input type="checkbox" name="draft_ids" value="{{ row.draft_id }}" aria-label="Выбрать карточку {{ row.title }}"></label>{% endif %}</div><div class="our-card-main"><h3>{{ row.title }}</h3><p>{{ 'Полное обновление' if row.action == 'update' else 'Новая карточка' }} · версия {{ row.version }} · {{ row.offer_id }}</p><p>{{ row.type_name or 'Тип Ozon не выбран' }}</p><p>Цена продавца: {% if row.commercial and row.commercial.currency_code == 'RUB' and row.commercial.price %}{{ row.commercial.price }} ₽{% else %}не указана или валюта не подтверждена{% endif %} · фото в составе: {{ row.photos_count if row.photos_count is not none else 'неизвестно' }}</p><p>Упаковка: {{ row.dimensions.width if row.dimensions and row.dimensions.width else '—' }} × {{ row.dimensions.height if row.dimensions and row.dimensions.height else '—' }} × {{ row.dimensions.depth if row.dimensions and row.dimensions.depth else '—' }} {{ dimension_units.get(row.dimensions.dimension_unit, '') if row.dimensions else '' }} · вес {{ row.dimensions.weight if row.dimensions and row.dimensions.weight else '—' }} {{ weight_units.get(row.dimensions.weight_unit, '') if row.dimensions else '' }}</p>{% if row.errors %}<ul class="our-issues">{% for issue in row.errors %}<li>{{ issue.message }}</li>{% endfor %}</ul>{% endif %}<a href="{{ url_for('marketplace_drafts.classic_detail', draft_id=row.draft_id) }}">Открыть карточку</a></div></article>
+            {% endfor %}
+            </div>
+            <label class="our-confirm"><input type="checkbox" name="confirm_write" value="1" required>Я проверил выбранные карточки и подтверждаю отправку в Ozon</label>
+            <button type="submit" class="sh-btn sh-btn--primary">Отправить отмеченные карточки</button>
+        </form>
+        <nav class="our-pagination" aria-label="Страницы проверки">
+            {% if review.pagination.page > 1 %}<a href="/marketplaces/ozon/uploads/review?account_id={{ review.account_id }}&draft_ids={{ review.draft_ids|join(',') }}&page={{ review.pagination.page - 1 }}{% if review.parent_prepare_job_uid %}&parent_prepare_job_uid={{ review.parent_prepare_job_uid }}{% endif %}">← Предыдущие 20</a>{% endif %}
+            {% if review.pagination.page < review.pagination.pages %}<a href="/marketplaces/ozon/uploads/review?account_id={{ review.account_id }}&draft_ids={{ review.draft_ids|join(',') }}&page={{ review.pagination.page + 1 }}{% if review.parent_prepare_job_uid %}&parent_prepare_job_uid={{ review.parent_prepare_job_uid }}{% endif %}">Следующие 20 →</a>{% endif %}
+        </nav>
+    </section>
+</noscript>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-draft-editor.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-upload-review.js') }}" defer></script>
+{% endblock %}

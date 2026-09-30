@@ -84,10 +84,16 @@ class OzonLiveReadProbeTest(unittest.TestCase):
             self.assertEqual(OZON_ENDPOINTS[endpoint_name].retry_class, "read")
         calls = dict(client.calls)
         self.assertEqual(calls["finance_accrual_types"], {})
-        self.assertEqual(calls["review_list"]["limit"], 1)
+        self.assertEqual(calls["review_list"]["limit"], 20)
         self.assertEqual(calls["review_list"]["filters"]["status"], "NEW")
         self.assertEqual(calls["question_list"]["limit"], 1)
         self.assertEqual(calls["question_list"]["filter"]["status"], "NEW")
+        self.assertEqual(calls["product_stocks_by_warehouse_fbs"], {
+            "sku": [20], "limit": 1, "cursor": "",
+        })
+        self.assertEqual(calls["product_stocks_by_warehouse_fbo"], {
+            "skus": [20], "limit": 1, "cursor": "",
+        })
         self.assertEqual(
             date.fromisoformat(calls["finance_accrual_by_day"]["date"]),
             date.today(),

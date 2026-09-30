@@ -6,6 +6,7 @@ has been proven with ``account_id + seller_id``.
 """
 
 from datetime import datetime
+from contextlib import contextmanager, ExitStack
 from typing import Any, Dict, Optional, Tuple
 import json
 
@@ -23,9 +24,11 @@ from models import (
     db,
 )
 from services.marketplace_operation_locks import (
+    _try_operation_lock,
     release_account_operation_lock,
     try_account_operation_lock,
 )
+from services.marketplace_account_history import snapshot as account_snapshot, append_event, validate_actor
 from services.marketplace_adapters import (
     ConnectionCheck,
     MarketplaceAdapterError,
@@ -52,6 +55,10 @@ class MarketplaceAccountNotFound(MarketplaceAccountError):
 class MarketplaceAccountConflict(MarketplaceAccountError):
     status_code = 409
     code = "marketplace_account_conflict"
+
+
+class MarketplaceAccountVersionConflict(MarketplaceAccountConflict):
+    code = "marketplace_account_version_conflict"
 
 
 class MarketplaceAccountConfigurationError(MarketplaceAccountError):
@@ -177,6 +184,111 @@ class MarketplaceAccountService:
 
     @classmethod
     def save_ozon_account(
+        cls, *, seller_id, external_account_id, label, api_key, is_default=False,
+        account_id=None, default_vat=None, actor_user_id=None,
+    ):
+        cls._require_clean_session()
+        seller_id = cls._positive_integer(seller_id, 'seller_id')
+        marketplace = cls._marketplace('ozon')
+        with cls._group_claim(seller_id, marketplace.id):
+            validate_actor(seller_id, actor_user_id)
+            return cls._save_ozon_account_locked(seller_id=seller_id,
+                external_account_id=external_account_id, label=label, api_key=api_key,
+                is_default=is_default, account_id=account_id, default_vat=default_vat,
+                actor_user_id=actor_user_id)
+
+    @classmethod
+    @contextmanager
+    def _group_claim(cls, seller_id, marketplace_id):
+        """Serialize bounded default fan-out with every affected account writer."""
+        cls._require_clean_session()
+        group = _try_operation_lock('account-settings-seller', seller_id)
+        if group is None:
+            raise MarketplaceAccountConflict('Настройки магазинов уже меняются. Повторите после обновления страницы.')
+        with ExitStack() as stack:
+            stack.callback(group.close)
+            ids = [row[0] for row in db.session.query(SellerMarketplaceAccount.id).filter_by(
+                seller_id=seller_id, marketplace_id=marketplace_id).order_by(SellerMarketplaceAccount.id).limit(cls.MAX_ACCOUNTS_PER_MARKETPLACE + 1)]
+            db.session.rollback()
+            if len(ids) > cls.MAX_ACCOUNTS_PER_MARKETPLACE:
+                raise MarketplaceAccountConflict('Слишком много магазинов для безопасного изменения. Обратитесь к администратору.')
+            for identity in ids:
+                claim = try_account_operation_lock(identity)
+                if claim is None:
+                    raise MarketplaceAccountConflict('Один из магазинов сейчас сверяется с Ozon. Повторите через несколько секунд.')
+                stack.callback(claim.close)
+            try:
+                yield
+            except Exception:
+                db.session.rollback()
+                raise
+
+    @classmethod
+    def save_settings(cls, *, seller_id, account_id, external_account_id, label,
+                      expected_version, default_vat=None, actor_user_id=None):
+        cls._require_clean_session()
+        seller_id = cls._positive_integer(seller_id, 'seller_id')
+        account_id = cls._positive_integer(account_id, 'account_id')
+        cls._reviewed_version(expected_version)
+        label = cls._bounded_text(label, 'Название магазина', maximum=cls.MAX_LABEL_LENGTH)
+        external_account_id = cls._bounded_text(external_account_id, 'Client-Id', maximum=cls.MAX_EXTERNAL_ACCOUNT_ID_LENGTH)
+        if default_vat is not None and (not isinstance(default_vat, str) or default_vat not in cls.OZON_VAT_VALUES | {''}):
+            raise MarketplaceAccountValidationError('Выберите поддерживаемую ставку НДС для новых карточек.')
+        cls.get_owned_account(seller_id=seller_id, account_id=account_id, marketplace_code='ozon')
+        claim = try_account_operation_lock(account_id)
+        if claim is None:
+            raise MarketplaceAccountConflict('Магазин сейчас сверяется с Ozon. Повторите через несколько секунд.')
+        try:
+            db.session.expire_all()
+            account = cls.get_owned_account(seller_id=seller_id, account_id=account_id, marketplace_code='ozon')
+            cls._reviewed_version(expected_version, account)
+            validate_actor(seller_id, actor_user_id)
+            if account.external_account_id != external_account_id:
+                raise MarketplaceAccountConflict('Настройки относятся к другому Client-Id. Откройте нужный магазин.')
+            try:
+                settings = json.loads(account.settings_json or '{}')
+            except (TypeError, ValueError):
+                raise MarketplaceAccountConfigurationError('Сохранённые настройки повреждены. Обратитесь к администратору.') from None
+            if not isinstance(settings, dict):
+                raise MarketplaceAccountConfigurationError('Сохранённые настройки повреждены. Обратитесь к администратору.')
+            before = account_snapshot(account)
+            if default_vat is not None:
+                if default_vat:
+                    settings['default_vat'] = default_vat
+                else:
+                    settings.pop('default_vat', None)
+            if account.label == label and settings == json.loads(account.settings_json or '{}'):
+                return account
+            account.label = label
+            account.settings_json = json.dumps(settings, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            account.version += 1
+            append_event(account, before, 'settings_changed', actor_user_id)
+            db.session.commit()
+            return account
+        except Exception:
+            db.session.rollback()
+            raise
+        finally:
+            claim.close()
+
+    @staticmethod
+    def _require_clean_session():
+        session = db.session()
+        if session.new or session.dirty or session.deleted:
+            raise MarketplaceAccountConflict('Сначала завершите текущее изменение магазина.')
+        if session.in_transaction() and db.engine.dialect.name == 'sqlite':
+            if session.connection().connection.driver_connection.in_transaction:
+                raise MarketplaceAccountConflict('Сначала завершите текущую транзакцию.')
+
+    @staticmethod
+    def _reviewed_version(expected_version, account=None):
+        if type(expected_version) is not int or expected_version <= 0:
+            raise MarketplaceAccountValidationError('Не удалось подтвердить просмотренную версию магазина. Перечитайте настройки.')
+        if account is not None and account.version != expected_version:
+            raise MarketplaceAccountVersionConflict('Настройки магазина изменились. Перечитайте текущее состояние перед сохранением.')
+
+    @classmethod
+    def _save_ozon_account_locked(
         cls,
         *,
         seller_id: int,
@@ -186,6 +298,7 @@ class MarketplaceAccountService:
         is_default: bool = False,
         account_id: Optional[int] = None,
         default_vat: Optional[Any] = None,
+        actor_user_id: Optional[int] = None,
     ) -> SellerMarketplaceAccount:
         seller_id = cls._positive_integer(seller_id, "seller_id")
         if not isinstance(is_default, bool):
@@ -232,6 +345,7 @@ class MarketplaceAccountService:
                 normalized_api_key=normalized_api_key,
                 is_default=is_default,
                 default_vat=normalized_default_vat,
+                actor_user_id=actor_user_id,
             )
 
         account_id = cls._positive_integer(account_id, "account_id")
@@ -240,68 +354,122 @@ class MarketplaceAccountService:
             account_id=account_id,
             marketplace_code="ozon",
         )
+        db.session.expire_all()
+        account = cls.get_owned_account(
+            seller_id=seller_id,
+            account_id=account_id,
+            marketplace_code="ozon",
+        )
+        if account.external_account_id != external_account_id:
+            raise MarketplaceAccountConflict(
+                "Client-Id существующего кабинета нельзя заменить: "
+                "для другого магазина создайте отдельное подключение. "
+                "Так каталог и история останутся у своего магазина."
+            )
+        blocking = MarketplaceOperation.query.filter(
+            MarketplaceOperation.seller_id == seller_id,
+            MarketplaceOperation.account_id == account.id,
+            MarketplaceOperation.status.in_(
+                cls.ACCOUNT_MUTATION_BLOCKING_STATUSES
+            ),
+        ).first()
+        blocking_media = MarketplaceMediaOperation.query.filter(
+            MarketplaceMediaOperation.seller_id == seller_id,
+            MarketplaceMediaOperation.account_id == account.id,
+            MarketplaceMediaOperation.status.in_(
+                cls.MEDIA_OPERATION_BLOCKING_STATUSES
+            ),
+        ).first()
+        pending_commercial = MarketplaceCommercialProposal.query.filter(
+            MarketplaceCommercialProposal.seller_id == seller_id,
+            MarketplaceCommercialProposal.account_id == account.id,
+            MarketplaceCommercialProposal.status.in_((
+                "pending_review",
+                "approved",
+                "applying",
+                "uncertain",
+            )),
+        ).first()
+        pending_canonical_content = (
+            MarketplaceCanonicalContentProposal.query.filter_by(
+                seller_id=seller_id,
+                account_id=account.id,
+                status="pending_review",
+            ).first()
+        )
+        if (
+            blocking is not None
+            or blocking_media is not None
+            or pending_commercial is not None
+            or pending_canonical_content is not None
+        ):
+            raise MarketplaceAccountConflict(
+                "Настройки кабинета пока нельзя менять: отправка карточек, фото "
+                "или подтверждение изменений ещё не завершены. "
+                "Дождитесь сверки результата с Ozon."
+            )
+        return cls._save_normalized_ozon_account(
+            seller_id=seller_id,
+            marketplace=marketplace,
+            account=account,
+            external_account_id=external_account_id,
+            label=label,
+            normalized_api_key=normalized_api_key,
+            is_default=is_default,
+            default_vat=normalized_default_vat,
+            actor_user_id=actor_user_id,
+        )
+
+    @classmethod
+    def rotate_ozon_key(cls, *, seller_id, account_id, external_account_id, api_key, expected_version, actor_user_id=None):
+        """Replace only the key of the same cabinet, including during recovery.
+
+        An account claim excludes physical writes/reconciliation in flight.
+        Durable pending/uncertain rows remain unchanged; they need the new key
+        for their read-only reconciliation, not a second provider submission.
+        """
+        cls._require_clean_session()
+        seller_id = cls._positive_integer(seller_id, 'seller_id')
+        account_id = cls._positive_integer(account_id, 'account_id')
+        external_account_id = cls._bounded_text(external_account_id, 'Client-Id', maximum=cls.MAX_EXTERNAL_ACCOUNT_ID_LENGTH)
+        key = cls._bounded_text(api_key, 'API key', maximum=2000)
+        if type(expected_version) is not int or expected_version <= 0:
+            raise MarketplaceAccountValidationError('Не удалось подтвердить просмотренную версию магазина. Перечитайте настройки перед заменой ключа.')
+        cls.get_owned_account(seller_id=seller_id, account_id=account_id, marketplace_code='ozon')
         claim = try_account_operation_lock(account_id)
         if claim is None:
-            raise MarketplaceAccountConflict(
-                "Кабинет используется публикацией или сверкой; повторите позже"
-            )
+            raise MarketplaceAccountConflict('Кабинет сейчас сверяется с Ozon. Повторите замену ключа через несколько секунд.')
         try:
             db.session.expire_all()
-            account = cls.get_owned_account(
-                seller_id=seller_id,
-                account_id=account_id,
-                marketplace_code="ozon",
-            )
-            blocking = MarketplaceOperation.query.filter(
-                MarketplaceOperation.seller_id == seller_id,
-                MarketplaceOperation.account_id == account.id,
-                MarketplaceOperation.status.in_(
-                    cls.ACCOUNT_MUTATION_BLOCKING_STATUSES
-                ),
-            ).first()
-            blocking_media = MarketplaceMediaOperation.query.filter(
-                MarketplaceMediaOperation.seller_id == seller_id,
-                MarketplaceMediaOperation.account_id == account.id,
-                MarketplaceMediaOperation.status.in_(
-                    cls.MEDIA_OPERATION_BLOCKING_STATUSES
-                ),
-            ).first()
-            pending_commercial = MarketplaceCommercialProposal.query.filter(
-                MarketplaceCommercialProposal.seller_id == seller_id,
-                MarketplaceCommercialProposal.account_id == account.id,
-                MarketplaceCommercialProposal.status.in_((
-                    "pending_review",
-                    "approved",
-                    "applying",
-                    "uncertain",
-                )),
-            ).first()
-            pending_canonical_content = (
-                MarketplaceCanonicalContentProposal.query.filter_by(
-                    seller_id=seller_id,
-                    account_id=account.id,
-                    status="pending_review",
-                ).first()
-            )
-            if (
-                blocking is not None
-                or blocking_media is not None
-                or pending_commercial is not None
-                or pending_canonical_content is not None
-            ):
-                raise MarketplaceAccountConflict(
-                    "Client-Id и API key нельзя менять при активном Ozon proposal/write"
-                )
-            return cls._save_normalized_ozon_account(
-                seller_id=seller_id,
-                marketplace=marketplace,
-                account=account,
-                external_account_id=external_account_id,
-                label=label,
-                normalized_api_key=normalized_api_key,
-                is_default=is_default,
-                default_vat=normalized_default_vat,
-            )
+            account = cls.get_owned_account(seller_id=seller_id, account_id=account_id, marketplace_code='ozon')
+            if account.version != expected_version:
+                raise MarketplaceAccountVersionConflict('Настройки магазина изменились в другой вкладке или во время проверки. Новый ключ не сохранён. Перечитайте настройки, проверьте состояние магазина и подтвердите замену снова.')
+            if account.external_account_id != external_account_id:
+                raise MarketplaceAccountConflict('Новый ключ должен принадлежать тому же Client-Id. Другой магазин подключается отдельно.')
+            validate_actor(seller_id, actor_user_id)
+            before = account_snapshot(account)
+            try:
+                account.set_credentials({'api_key': key})
+            except MarketplaceCredentialEncryptionError as exc:
+                raise MarketplaceAccountConfigurationError(str(exc)) from None
+            except ValueError as exc:
+                raise MarketplaceAccountValidationError(str(exc)) from None
+            account.is_active = True
+            account.connection_status = 'unchecked'
+            account.connection_checked_at = None
+            account.credential_expires_at = None
+            account.provider_request_id = None
+            account.last_error_code = None
+            account.last_error_message = None
+            account.capabilities_json = '[]'
+            account.roles_json = '[]'
+            account.version = (account.version or 0) + 1
+            append_event(account, before, 'key_replaced', actor_user_id)
+            db.session.commit()
+            return account
+        except Exception:
+            db.session.rollback()
+            raise
         finally:
             release_account_operation_lock(claim)
 
@@ -317,6 +485,7 @@ class MarketplaceAccountService:
         normalized_api_key: Optional[str],
         is_default: bool,
         default_vat: Optional[str],
+        actor_user_id: Optional[int] = None,
     ) -> SellerMarketplaceAccount:
         if account is None:
             existing_count = SellerMarketplaceAccount.query.filter_by(
@@ -362,6 +531,7 @@ class MarketplaceAccountService:
             )
             db.session.add(account)
 
+        before = {} if is_new else account_snapshot(account)
         identity_changed = account.external_account_id != external_account_id
         credential_changed = normalized_api_key is not None
         account.external_account_id = external_account_id
@@ -411,17 +581,18 @@ class MarketplaceAccountService:
             )
         should_default = is_default or other_default.first() is None
         if should_default:
-            SellerMarketplaceAccount.query.filter_by(
-                seller_id=seller_id,
-                marketplace_id=marketplace.id,
-            ).update(
-                {SellerMarketplaceAccount.is_default: False},
-                synchronize_session="fetch",
-            )
+            for previous in other_default.all():
+                previous_before = account_snapshot(previous)
+                previous.is_default = False
+                previous.version += 1
+                append_event(previous, previous_before, 'default_changed', actor_user_id)
+            db.session.flush()
             account.is_default = True
 
         account.version = 1 if is_new else (account.version or 0) + 1
         try:
+            db.session.flush()
+            append_event(account, before, 'connected' if is_new else 'key_replaced' if credential_changed else 'settings_changed', actor_user_id)
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
@@ -441,6 +612,7 @@ class MarketplaceAccountService:
         account_id: int,
         registry=None,
         now: Optional[datetime] = None,
+        expected_version: Optional[int] = None,
     ) -> Tuple[SellerMarketplaceAccount, ConnectionCheck]:
         seller_id = cls._positive_integer(seller_id, "seller_id")
         account_id = cls._positive_integer(account_id, "account_id")
@@ -459,24 +631,13 @@ class MarketplaceAccountService:
                 seller_id=seller_id,
                 account_id=account_id,
             )
-            blocking = MarketplaceOperation.query.filter(
-                MarketplaceOperation.seller_id == seller_id,
-                MarketplaceOperation.account_id == account.id,
-                MarketplaceOperation.status.in_(
-                    cls.ACCOUNT_MUTATION_BLOCKING_STATUSES
-                ),
-            ).first()
-            blocking_media = MarketplaceMediaOperation.query.filter(
-                MarketplaceMediaOperation.seller_id == seller_id,
-                MarketplaceMediaOperation.account_id == account.id,
-                MarketplaceMediaOperation.status.in_(
-                    cls.MEDIA_OPERATION_BLOCKING_STATUSES
-                ),
-            ).first()
-            if blocking is not None or blocking_media is not None:
+            if expected_version is not None and account.version != expected_version:
                 raise MarketplaceAccountConflict(
-                    "Проверка подключения недоступна во время Ozon write"
+                    "Настройки кабинета изменились; повторите проверку"
                 )
+            # This is a read-only roles check under the same physical account
+            # claim as writes. Durable uncertain rows must not prevent key
+            # recovery: their reconciliation depends on a working connection.
             return cls._check_connection_owned(
                 account=account,
                 registry=registry,
@@ -594,180 +755,192 @@ class MarketplaceAccountService:
         return text[:maximum] or None
 
     @classmethod
-    def set_default(
-        cls,
-        *,
-        seller_id: int,
-        account_id: int,
-    ) -> SellerMarketplaceAccount:
-        account = cls.get_owned_account(
-            seller_id=seller_id,
-            account_id=account_id,
-        )
-        if not account.is_active or not account.has_credentials:
-            raise MarketplaceAccountConflict(
-                "Отключённый кабинет нельзя сделать основным"
-            )
-        SellerMarketplaceAccount.query.filter_by(
-            seller_id=account.seller_id,
-            marketplace_id=account.marketplace_id,
-        ).update(
-            {SellerMarketplaceAccount.is_default: False},
-            synchronize_session="fetch",
-        )
-        account.is_default = True
-        account.version = (account.version or 0) + 1
-        try:
+    def set_default(cls, *, seller_id, account_id, expected_version=None,
+                    expected_default=None, actor_user_id=None):
+        cls._require_clean_session()
+        current = cls.get_owned_account(seller_id=seller_id, account_id=account_id)
+        with cls._group_claim(current.seller_id, current.marketplace_id):
+            account = cls.get_owned_account(seller_id=seller_id, account_id=account_id)
+            validate_actor(seller_id, actor_user_id)
+            if expected_version is not None:
+                cls._reviewed_version(expected_version, account)
+            if not account.is_active or not account.has_credentials:
+                raise MarketplaceAccountConflict('Отключённый кабинет нельзя сделать основным')
+            previous = SellerMarketplaceAccount.query.filter_by(seller_id=account.seller_id,
+                marketplace_id=account.marketplace_id, is_default=True).one_or_none()
+            if expected_default is not None:
+                observed = {'id': previous.id if previous else None, 'version': previous.version if previous else None}
+                if (not isinstance(expected_default, dict) or set(expected_default) != {'id', 'version'}
+                        or any(value is not None and (type(value) is not int or value <= 0) for value in expected_default.values())):
+                    raise MarketplaceAccountValidationError('Не удалось подтвердить просмотренный основной магазин.')
+                if expected_default != observed:
+                    raise MarketplaceAccountVersionConflict('Основной магазин изменился. Обновите страницу перед выбором.')
+            if account.is_default:
+                return account
+            before = account_snapshot(account)
+            if previous is not None:
+                previous_before = account_snapshot(previous)
+                previous.is_default = False
+                previous.version += 1
+                append_event(previous, previous_before, 'default_changed', actor_user_id)
+                db.session.flush()
+            account.is_default = True
+            account.version += 1
+            append_event(account, before, 'default_changed', actor_user_id)
             db.session.commit()
-        except Exception:
-            db.session.rollback()
-            raise
-        return account
+            return account
 
     @classmethod
-    def disconnect(
+    def disconnect(cls, *, seller_id, account_id, expected_version=None, actor_user_id=None):
+        cls._require_clean_session()
+        account = cls.get_owned_account(seller_id=seller_id, account_id=account_id)
+        with cls._group_claim(account.seller_id, account.marketplace_id):
+            return cls._disconnect_locked(seller_id=seller_id, account_id=account_id,
+                expected_version=expected_version, actor_user_id=actor_user_id)
+
+    @classmethod
+    def _disconnect_locked(
         cls,
         *,
         seller_id: int,
         account_id: int,
+        expected_version=None,
+        actor_user_id=None,
     ) -> SellerMarketplaceAccount:
         account = cls.get_owned_account(
             seller_id=seller_id,
             account_id=account_id,
         )
-        claim = try_account_operation_lock(account.id)
-        if claim is None:
+        db.session.expire_all()
+        account = cls.get_owned_account(
+            seller_id=seller_id,
+            account_id=account_id,
+        )
+        validate_actor(seller_id, actor_user_id)
+        if expected_version is not None:
+            cls._reviewed_version(expected_version, account)
+        blocking = MarketplaceOperation.query.filter(
+            MarketplaceOperation.seller_id == seller_id,
+            MarketplaceOperation.account_id == account.id,
+            MarketplaceOperation.status.in_(
+                cls.RECONCILIATION_REQUIRED_STATUSES
+            ),
+        ).first()
+        unsafe_queued = MarketplaceOperation.query.filter_by(
+            seller_id=seller_id,
+            account_id=account.id,
+            status="queued",
+        ).filter(
+            MarketplaceOperation.attempt_count > 0,
+        ).first()
+        blocking_media = MarketplaceMediaOperation.query.filter(
+            MarketplaceMediaOperation.seller_id == seller_id,
+            MarketplaceMediaOperation.account_id == account.id,
+            MarketplaceMediaOperation.status.in_((
+                "preflighting",
+                "submitting",
+                "reconciling",
+                "uncertain",
+            )),
+        ).first()
+        unsafe_queued_media = MarketplaceMediaOperation.query.filter_by(
+            seller_id=seller_id,
+            account_id=account.id,
+            status="queued",
+        ).filter(
+            MarketplaceMediaOperation.attempt_count > 0,
+        ).first()
+        if (
+            blocking is not None
+            or unsafe_queued is not None
+            or blocking_media is not None
+            or unsafe_queued_media is not None
+        ):
             raise MarketplaceAccountConflict(
-                "Кабинет используется публикацией или сверкой; повторите позже"
+                "API key нельзя удалить, пока Ozon write требует сверки"
             )
-        try:
-            db.session.expire_all()
-            account = cls.get_owned_account(
-                seller_id=seller_id,
-                account_id=account_id,
+
+        now = datetime.utcnow()
+        queued = MarketplaceOperation.query.filter_by(
+            seller_id=seller_id,
+            account_id=account.id,
+            status="queued",
+            attempt_count=0,
+        ).all()
+        for operation in queued:
+            operation.status = "cancelled"
+            operation.error_code = "account_disconnected_before_submission"
+            operation.error_message = (
+                "Операция отменена до Ozon write при отключении кабинета"
             )
-            blocking = MarketplaceOperation.query.filter(
-                MarketplaceOperation.seller_id == seller_id,
-                MarketplaceOperation.account_id == account.id,
-                MarketplaceOperation.status.in_(
-                    cls.RECONCILIATION_REQUIRED_STATUSES
-                ),
-            ).first()
-            unsafe_queued = MarketplaceOperation.query.filter_by(
-                seller_id=seller_id,
-                account_id=account.id,
-                status="queued",
-            ).filter(
-                MarketplaceOperation.attempt_count > 0,
-            ).first()
-            blocking_media = MarketplaceMediaOperation.query.filter(
-                MarketplaceMediaOperation.seller_id == seller_id,
-                MarketplaceMediaOperation.account_id == account.id,
-                MarketplaceMediaOperation.status.in_((
-                    "preflighting",
-                    "submitting",
-                    "reconciling",
-                    "uncertain",
-                )),
-            ).first()
-            unsafe_queued_media = MarketplaceMediaOperation.query.filter_by(
-                seller_id=seller_id,
-                account_id=account.id,
-                status="queued",
-            ).filter(
-                MarketplaceMediaOperation.attempt_count > 0,
-            ).first()
-            if (
-                blocking is not None
-                or unsafe_queued is not None
-                or blocking_media is not None
-                or unsafe_queued_media is not None
-            ):
-                raise MarketplaceAccountConflict(
-                    "API key нельзя удалить, пока Ozon write требует сверки"
-                )
+            operation.quota_reserved = 0
+            operation.next_poll_at = None
+            operation.completed_at = now
 
-            now = datetime.utcnow()
-            queued = MarketplaceOperation.query.filter_by(
-                seller_id=seller_id,
-                account_id=account.id,
-                status="queued",
-                attempt_count=0,
-            ).all()
-            for operation in queued:
-                operation.status = "cancelled"
-                operation.error_code = "account_disconnected_before_submission"
-                operation.error_message = (
-                    "Операция отменена до Ozon write при отключении кабинета"
-                )
-                operation.quota_reserved = 0
-                operation.next_poll_at = None
-                operation.completed_at = now
-
-            queued_media = MarketplaceMediaOperation.query.filter_by(
-                seller_id=seller_id,
-                account_id=account.id,
-                status="queued",
-                attempt_count=0,
-            ).all()
-            media_publication_ids = set()
-            for operation in queued_media:
-                media_publication_ids.add(operation.publication_id)
-                operation.status = "cancelled"
-                operation.error_code = "account_disconnected_before_submission"
-                operation.error_message = (
-                    "Media-операция отменена до Ozon write при отключении кабинета"
-                )
-                operation.next_reconcile_at = None
-                operation.completed_at = now
-            if media_publication_ids:
-                db.session.flush()
-                from services.marketplace_media_publications import refresh_publication
-                for publication_id in media_publication_ids:
-                    publication = db.session.get(
-                        MarketplaceMediaPublication, publication_id,
-                    )
-                    if publication is not None:
-                        refresh_publication(publication, commit=False)
-
-            proposals = MarketplaceCommercialProposal.query.filter(
-                MarketplaceCommercialProposal.seller_id == seller_id,
-                MarketplaceCommercialProposal.account_id == account.id,
-                MarketplaceCommercialProposal.status.in_((
-                    "pending_review",
-                    "approved",
-                )),
-            ).all()
-            for proposal in proposals:
-                proposal.status = "cancelled"
-                proposal.error_code = "account_disconnected_before_submission"
-                proposal.error_message = (
-                    "Proposal отменён до Ozon write при отключении кабинета"
-                )
-
-            canonical_content_proposals = (
-                MarketplaceCanonicalContentProposal.query.filter_by(
-                    seller_id=seller_id,
-                    account_id=account.id,
-                    status="pending_review",
-                ).all()
+        queued_media = MarketplaceMediaOperation.query.filter_by(
+            seller_id=seller_id,
+            account_id=account.id,
+            status="queued",
+            attempt_count=0,
+        ).all()
+        media_publication_ids = set()
+        for operation in queued_media:
+            media_publication_ids.add(operation.publication_id)
+            operation.status = "cancelled"
+            operation.error_code = "account_disconnected_before_submission"
+            operation.error_message = (
+                "Media-операция отменена до Ozon write при отключении кабинета"
             )
-            for proposal in canonical_content_proposals:
-                proposal.status = "conflict"
-                proposal.error_code = "account_disconnected_before_review"
-                proposal.error_message = (
-                    "Кабинет отключён до review; создайте новый diff после подключения"
+            operation.next_reconcile_at = None
+            operation.completed_at = now
+        if media_publication_ids:
+            db.session.flush()
+            from services.marketplace_media_publications import refresh_publication
+            for publication_id in media_publication_ids:
+                publication = db.session.get(
+                    MarketplaceMediaPublication, publication_id,
                 )
+                if publication is not None:
+                    refresh_publication(publication, commit=False)
 
-            return cls._disconnect_owned_account(account)
-        finally:
-            release_account_operation_lock(claim)
+        proposals = MarketplaceCommercialProposal.query.filter(
+            MarketplaceCommercialProposal.seller_id == seller_id,
+            MarketplaceCommercialProposal.account_id == account.id,
+            MarketplaceCommercialProposal.status.in_((
+                "pending_review",
+                "approved",
+            )),
+        ).all()
+        for proposal in proposals:
+            proposal.status = "cancelled"
+            proposal.error_code = "account_disconnected_before_submission"
+            proposal.error_message = (
+                "Proposal отменён до Ozon write при отключении кабинета"
+            )
+
+        canonical_content_proposals = (
+            MarketplaceCanonicalContentProposal.query.filter_by(
+                seller_id=seller_id,
+                account_id=account.id,
+                status="pending_review",
+            ).all()
+        )
+        for proposal in canonical_content_proposals:
+            proposal.status = "conflict"
+            proposal.error_code = "account_disconnected_before_review"
+            proposal.error_message = (
+                "Кабинет отключён до review; создайте новый diff после подключения"
+            )
+
+        return cls._disconnect_owned_account(account, actor_user_id=actor_user_id)
 
     @classmethod
     def _disconnect_owned_account(
         cls,
         account: SellerMarketplaceAccount,
+        actor_user_id=None,
     ) -> SellerMarketplaceAccount:
+        before = account_snapshot(account)
         was_default = bool(account.is_default)
         account.clear_credentials()
         account.is_active = False
@@ -781,13 +954,6 @@ class MarketplaceAccountService:
         account.version = (account.version or 0) + 1
 
         if was_default:
-            SellerMarketplaceAccount.query.filter_by(
-                seller_id=account.seller_id,
-                marketplace_id=account.marketplace_id,
-            ).update(
-                {SellerMarketplaceAccount.is_default: False},
-                synchronize_session="fetch",
-            )
             replacement = SellerMarketplaceAccount.query.filter(
                 SellerMarketplaceAccount.seller_id == account.seller_id,
                 SellerMarketplaceAccount.marketplace_id == account.marketplace_id,
@@ -799,9 +965,12 @@ class MarketplaceAccountService:
                 SellerMarketplaceAccount.id.asc(),
             ).first()
             if replacement is not None:
+                replacement_before = account_snapshot(replacement)
                 replacement.is_default = True
                 replacement.version = (replacement.version or 0) + 1
+                append_event(replacement, replacement_before, 'default_changed', actor_user_id)
         try:
+            append_event(account, before, 'disconnected', actor_user_id)
             db.session.commit()
         except Exception:
             db.session.rollback()

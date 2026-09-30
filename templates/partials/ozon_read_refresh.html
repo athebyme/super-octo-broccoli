@@ -1,0 +1,17 @@
+<section class="sh-card ozon-read-status" x-show="refreshState && refreshState.status !== 'idle'"
+         x-cloak role="status" aria-live="polite" :data-state="refreshState?.status">
+  <div>
+    <strong x-text="refreshTitle()"></strong>
+    <span class="ozon-read-status__dates" x-text="refreshPeriodLabel()"></span>
+    <p x-text="refreshState?.message"></p>
+    <p class="ozon-read-status__due" x-show="refreshDueLabel()" x-text="refreshDueLabel()"></p>
+    <p x-show="refreshState?.active" class="ozon-read-status__hint">Пока обновляем, можно работать с последними сохранёнными данными.</p>
+  </div>
+  <a class="sh-btn sh-btn--secondary sh-btn--sm" href="/api-settings#ozon-api-settings-title"
+     x-show="['access_denied','account_unavailable','credentials_changed'].includes(refreshState?.error_code)">Настройки подключения</a>
+</section>
+<div class="sh-alert sh-alert--warning" x-show="refreshStatusError" x-cloak role="alert">
+  <span x-text="refreshStatusError"></span>
+  <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="loadRefreshStatus()" x-show="!refreshSessionEnded">Проверить состояние</button>
+  <a class="sh-btn sh-btn--secondary sh-btn--sm" x-show="refreshSessionEnded" :href="'/login?next='+encodeURIComponent(location.pathname+location.search)">Войти снова</a>
+</div>

@@ -171,6 +171,67 @@ class MarketplaceDraftRoutesTest(unittest.TestCase):
         self.assertEqual(foreign.status_code, 404)
         self.assertNotIn("Foreign draft secret", foreign.get_data(as_text=True))
 
+    def test_vue_editor_and_dictionary_reads_keep_tenant_and_query_scope(self):
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            own = self.client.get(f'/marketplaces/drafts/{self.own_id}/editor')
+            foreign = self.client.get(f'/marketplaces/drafts/{self.foreign_id}/editor')
+            duplicate = self.client.get(
+                f'/marketplaces/drafts/{self.own_id}/dictionary/32?product_type_id=1&q=a&q=b')
+            foreign_dictionary = self.client.get(
+                f'/marketplaces/drafts/{self.foreign_id}/dictionary/32?product_type_id=1')
+            with patch('routes.marketplace_drafts.render_template', return_value='vue') as render:
+                html = self.client.get(f'/marketplaces/drafts/{self.own_id}')
+        self.assertEqual(own.status_code, 200)
+        self.assertEqual(own.get_json()['draft']['id'], self.own_id)
+        self.assertEqual(foreign.status_code, 404)
+        self.assertEqual(foreign_dictionary.status_code, 404)
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertEqual(html.status_code, 200)
+        self.assertEqual(render.call_args.args[0], 'marketplace_draft_detail.html')
+
+    def test_classic_form_returns_to_classic_editor_after_saving(self):
+        with self.app.app_context():
+            version = db.session.get(MarketplaceProductDraft, self.own_id).version
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            response = self.client.post(f'/marketplaces/drafts/{self.own_id}?view=classic', data={
+                'expected_version':str(version), 'content_json':'{"name":"Edited name"}',
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith(f'/marketplaces/drafts/classic/{self.own_id}'))
+
+    def test_source_search_reaches_old_rows_and_handles_cyrillic_without_leaks(self):
+        with self.app.app_context():
+            source = db.session.get(ImportedProduct, self.own_source_id)
+            source.title = 'Тестовый Подарок 100%'
+            db.session.add_all([ImportedProduct(
+                seller_id=self.seller1_id, external_id=f'new-{index}', title='Новый товар',
+            ) for index in range(205)])
+            db.session.commit()
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            found = self.client.get('/marketplaces/drafts/sources?q=пОдАрОк')
+            literal = self.client.get('/marketplaces/drafts/sources?q=%25')
+            foreign = self.client.get('/marketplaces/drafts/sources?q=Foreign')
+            recent = self.client.get('/marketplaces/drafts/sources')
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual([item['id'] for item in found.get_json()['items']], [self.own_source_id])
+        self.assertEqual([item['id'] for item in literal.get_json()['items']], [self.own_source_id])
+        self.assertEqual(foreign.get_json()['items'], [])
+        self.assertEqual(len(recent.get_json()['items']), 20)
+        self.assertTrue(recent.get_json()['has_more'])
+        self.assertEqual(set(found.get_json()['items'][0]), {'id', 'title', 'external_id', 'vendor_code'})
+
+    def test_source_search_rejects_scope_smuggling_duplicate_or_oversized_query(self):
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch:
+            for query in ['seller_id=2', 'q=a&q=b', 'q=' + 'a' * 101]:
+                response = self.client.get('/marketplaces/drafts/sources?' + query)
+                self.assertEqual(response.status_code, 400)
+            self.app.config['MARKETPLACE_OZON_ENABLED'] = False
+            self.assertEqual(self.client.get('/marketplaces/drafts/sources').status_code, 404)
+
     def test_foreign_account_and_source_are_denied(self):
         user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
         with user_patch, login_patch:
@@ -333,6 +394,8 @@ class MarketplaceDraftRoutesTest(unittest.TestCase):
             expected_version=1,
             patch={"offer_id": "new"},
             corrected_by_user_id=self.user1_id,
+            category_review_token=None,
+            category_review_required=True,
         )
 
     def test_feature_flag_and_non_seller_block_writes(self):

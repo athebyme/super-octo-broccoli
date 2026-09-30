@@ -13,6 +13,7 @@ from flask import Flask, render_template, redirect, url_for, flash, request, abo
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import or_
+from sqlalchemy.orm import defer
 
 from models import (
     db, User, Seller, Product, APILog, ProductStock,
@@ -310,7 +311,8 @@ def after_request(response):
         )
     )
     if hasattr(response, 'cache_control') and not explicit_public_asset:
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        private = 'private, ' if response.cache_control.private else ''
+        response.headers['Cache-Control'] = private + 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
     elif explicit_public_asset:
         response.headers.pop('Pragma', None)
@@ -1283,6 +1285,7 @@ def admin_api_debug_directories():
 def _render_api_settings(seller):
     """Render marketplace credentials without exposing provider secrets."""
     from services.marketplace_accounts import MarketplaceAccountService
+    from services.wb_credentials import token_public_status
 
     ozon_accounts = MarketplaceAccountService.list_accounts(
         seller_id=seller.id,
@@ -1291,6 +1294,7 @@ def _render_api_settings(seller):
     return render_template(
         'api_settings.html',
         seller=seller,
+        wb_credential=token_public_status(seller.wb_api_key),
         ozon_accounts=[account.to_public_dict() for account in ozon_accounts],
         ozon_enabled=bool(app.config.get('MARKETPLACE_OZON_ENABLED', False)),
         ozon_publication_enabled=bool(
@@ -1411,14 +1415,18 @@ def api_tasks_tray():
     # 1. BackgroundJob — импорт/публикация, обновление фото
     try:
         _labels = {
+            'wb_warehouse_stocks': 'Обновление остатков WB',
+            'ozon_account_sync': 'Подключение и каталог Ozon',
+            'ozon_quality_recompute': 'Пересчёт качества Ozon',
             'bulk_wb_import': 'Публикация в WB',
             'competitor_matching': 'Сопоставление товаров конкурентов',
-            'ozon_bulk_upload': 'Загрузка карточек Ozon',
+            'ozon_bulk_upload': 'Партия карточек Ozon',
+            'ozon_draft_completion': 'AI-характеристики Ozon',
             'marketplace_source_link_reconcile': (
                 'Связь карточек Ozon и WB'
             ),
         }
-        for j in (BackgroundJob.query
+        for j in (BackgroundJob.query.options(defer(BackgroundJob.progress_data), defer(BackgroundJob.result_data))
                   .filter(BackgroundJob.seller_id == sid,
                           BackgroundJob.status.in_(['pending', 'running']))
                   .order_by(BackgroundJob.created_at.desc()).limit(10).all()):
@@ -1437,6 +1445,9 @@ def api_tasks_tray():
                                       '/marketplaces/listings?link_status=unlinked'
                                       if j.job_type
                                       == 'marketplace_source_link_reconcile'
+                                      else '/inventory' if j.job_type == 'wb_warehouse_stocks'
+                                      else '/marketplaces/quality?account_id=' + str(j.get_result().get('account_id', '')) if j.job_type == 'ozon_quality_recompute'
+                                      else '/marketplaces/accounts/' if j.job_type == 'ozon_account_sync'
                                       else '/supplier-updates'
                                   )
                               )
@@ -1931,8 +1942,10 @@ def products_list():
             except Exception as e:
                 app.logger.debug(f"Ozon channel badge data failed: {e}")
 
+        from services.wb_stock_sync import latest_stock_sync
         return render_template(
             'products.html',
+            stock_sync=latest_stock_sync(current_user.seller.id),
             products=products,
             pagination=pagination,
             total_products=total_products,
@@ -2208,19 +2221,24 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     except Exception:
                         db.session.remove()
 
-                # Удаляем мусорные Product с nm_id=0 (болванки от неудачного импорта)
+                # Legacy placeholders keep their canonical links and audit
+                # history. They are not confirmed WB cards and become inactive.
                 try:
-                    zero_nm_products = Product.query.filter(
-                        Product.seller_id == seller.id,
-                        Product.nm_id == 0
-                    ).all()
-                    if zero_nm_products:
-                        for zp in zero_nm_products:
-                            db.session.delete(zp)
+                    from services.wb_catalog_lifecycle import deactivate_unconfirmed_products
+                    deactivated = deactivate_unconfirmed_products(seller.id)
+                    if deactivated:
                         db_commit_with_retry(db.session)
-                        app.logger.info(f"🧹 Removed {len(zero_nm_products)} products with nm_id=0 (stale imports)")
+                        app.logger.info(
+                            "Deactivated %s unconfirmed WB products; history and links preserved",
+                            deactivated,
+                        )
+                    else:
+                        db.session.rollback()
                 except Exception as cleanup_err:
-                    app.logger.warning(f"nm_id=0 cleanup failed (non-critical): {cleanup_err}")
+                    app.logger.warning(
+                        "Unconfirmed WB product deactivation failed: %s",
+                        type(cleanup_err).__name__,
+                    )
                     try:
                         db.session.rollback()
                     except Exception:
@@ -2407,126 +2425,14 @@ def _perform_product_sync_task(seller_id: int, flask_app):
                     except Exception:
                         db.session.remove()
 
-                # ============ СИНХРОНИЗАЦИЯ ОСТАТКОВ ============
-                # Загружаем остатки из Statistics API
-                app.logger.info(f"📦 Background sync: fetching stocks from Statistics API...")
-                stocks_created = 0
-                stocks_updated = 0
+                # Остатки имеют отдельный durable read-контур и свой статус.
+                # Каталог не ждёт лимиты Analytics и не стирает stock на miss.
                 try:
-                    from datetime import timedelta
-                    date_from = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
-                    all_stocks = client.get_stocks(date_from=date_from)
-                    app.logger.info(f"✅ Background sync: got {len(all_stocks)} stock records from Statistics API")
-
-                    # Группируем остатки по nmId и складу
-                    stocks_by_product = {}
-                    for stock_data in all_stocks:
-                        nm_id = stock_data.get('nmId')
-                        warehouse_name = stock_data.get('warehouseName', 'Неизвестный склад')
-
-                        if not nm_id:
-                            continue
-
-                        key = (nm_id, warehouse_name)
-                        if key not in stocks_by_product:
-                            stocks_by_product[key] = {
-                                'nm_id': nm_id,
-                                'warehouse_name': warehouse_name,
-                                'quantity': 0,
-                                'quantity_full': 0,
-                                'in_way_to_client': 0,
-                                'in_way_from_client': 0,
-                            }
-
-                        # Суммируем количества (могут быть разные размеры)
-                        stocks_by_product[key]['quantity'] += stock_data.get('quantity', 0)
-                        stocks_by_product[key]['quantity_full'] += stock_data.get('quantityFull', 0)
-                        stocks_by_product[key]['in_way_to_client'] += stock_data.get('inWayToClient', 0)
-                        stocks_by_product[key]['in_way_from_client'] += stock_data.get('inWayFromClient', 0)
-
-                    app.logger.info(f"📊 Aggregated {len(stocks_by_product)} unique stock records")
-
-                    # Сохраняем остатки в БД
-                    for key, stock_data in stocks_by_product.items():
-                        nm_id = stock_data['nm_id']
-                        warehouse_name = stock_data['warehouse_name']
-
-                        # Находим товар по nm_id
-                        product = Product.query.filter_by(
-                            seller_id=seller.id,
-                            nm_id=nm_id
-                        ).first()
-
-                        if not product:
-                            continue
-
-                        # Генерируем стабильный warehouse_id из имени (hashlib вместо hash())
-                        warehouse_id = int(hashlib.md5(warehouse_name.encode('utf-8')).hexdigest(), 16) % 1000000
-
-                        # Удаляем дубликаты по warehouse_name (оставляем только одну запись)
-                        duplicates = ProductStock.query.filter_by(
-                            product_id=product.id,
-                            warehouse_name=warehouse_name
-                        ).all()
-                        if len(duplicates) > 1:
-                            for dup in duplicates[1:]:
-                                db.session.delete(dup)
-                            stock = duplicates[0]
-                        elif duplicates:
-                            stock = duplicates[0]
-                        else:
-                            stock = None
-
-                        if stock:
-                            stock.warehouse_id = warehouse_id
-                            stock.warehouse_name = warehouse_name
-                            stock.quantity = stock_data['quantity']
-                            stock.quantity_full = stock_data['quantity_full']
-                            stock.in_way_to_client = stock_data['in_way_to_client']
-                            stock.in_way_from_client = stock_data['in_way_from_client']
-                            stock.updated_at = datetime.utcnow()
-                            stocks_updated += 1
-                        else:
-                            stock = ProductStock(
-                                product_id=product.id,
-                                warehouse_id=warehouse_id,
-                                warehouse_name=warehouse_name,
-                                quantity=stock_data['quantity'],
-                                quantity_full=stock_data['quantity_full'],
-                                in_way_to_client=stock_data['in_way_to_client'],
-                                in_way_from_client=stock_data['in_way_from_client']
-                            )
-                            db.session.add(stock)
-                            stocks_created += 1
-
-                    db_commit_with_retry(db.session)
-                    app.logger.info(f"💾 Stocks saved: {stocks_created} new, {stocks_updated} updated")
-
-                    # Обновляем Product.quantity из суммы складских остатков
-                    try:
-                        seller_products = Product.query.filter_by(seller_id=seller.id).all()
-                        product_ids = [p.id for p in seller_products]
-                        if product_ids:
-                            stock_totals = (
-                                db.session.query(
-                                    ProductStock.product_id,
-                                    db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
-                                )
-                                .filter(ProductStock.product_id.in_(product_ids))
-                                .group_by(ProductStock.product_id)
-                                .all()
-                            )
-                            qty_map = {pid: int(total) for pid, total in stock_totals}
-                            for p in seller_products:
-                                p.quantity = qty_map.get(p.id, 0)
-                            db_commit_with_retry(db.session)
-                            app.logger.info(f"📦 Product.quantity updated for {len(qty_map)} products from stock totals")
-                    except Exception as qty_error:
-                        app.logger.warning(f"⚠️ Failed to update Product.quantity from stocks: {qty_error}")
-
+                    from services.wb_stock_sync import enqueue_stock_sync
+                    enqueue_stock_sync(seller.id)
                 except Exception as stock_error:
-                    app.logger.warning(f"⚠️ Failed to fetch stocks from Statistics API: {stock_error}")
-                    # Не прерываем синхронизацию из-за ошибки остатков
+                    db.session.rollback()
+                    app.logger.info("WB stock refresh not queued: %s", type(stock_error).__name__)
 
                 # Обновляем статус синхронизации
                 seller.api_last_sync = datetime.utcnow()
@@ -2739,196 +2645,17 @@ def sync_products():
 @app.route('/products/sync-stocks', methods=['POST'])
 @login_required
 def sync_warehouse_stocks():
-    """Синхронизация остатков по складам через API WB"""
+    """Insert a durable seller-scoped request, without provider I/O."""
     if not current_user.seller:
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
-
-    if not current_user.seller.has_valid_api_key():
-        flash('API ключ Wildberries не настроен. Настройте его в разделе "Настройки API".', 'warning')
-        return redirect(url_for('api_settings'))
-
+    from services.wb_stock_sync import WBStockSyncError, enqueue_stock_sync
     try:
-        start_time = time.time()
-
-        with WildberriesAPIClient(current_user.seller.wb_api_key) as client:
-            # Получаем все остатки через Statistics API
-            # Используем дату 30 дней назад для получения актуальных данных
-            from datetime import timedelta
-            date_from = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
-
-            app.logger.info(f"🔄 Начинаем загрузку остатков для seller_id={current_user.seller.id}")
-            all_stocks = client.get_stocks(date_from=date_from)
-            app.logger.info(f"✅ Получено {len(all_stocks)} записей об остатках из WB API")
-
-            # Статистика
-            created_count = 0
-            updated_count = 0
-
-            # Группируем остатки по nmId и складу (Statistics API может возвращать несколько записей)
-            stocks_by_product = {}
-            for stock_data in all_stocks:
-                nm_id = stock_data.get('nmId')
-                warehouse_name = stock_data.get('warehouseName', 'Неизвестный склад')
-
-                if not nm_id:
-                    continue
-
-                key = (nm_id, warehouse_name)
-                if key not in stocks_by_product:
-                    stocks_by_product[key] = {
-                        'nm_id': nm_id,
-                        'warehouse_name': warehouse_name,
-                        'quantity': 0,
-                        'quantity_full': 0,
-                        'barcode': stock_data.get('barcode', ''),
-                        'subject': stock_data.get('subject', ''),
-                    }
-
-                # Суммируем количества (могут быть разные размеры)
-                stocks_by_product[key]['quantity'] += stock_data.get('quantity', 0)
-                stocks_by_product[key]['quantity_full'] += stock_data.get('quantityFull', 0)
-
-            app.logger.info(f"📊 Агрегировано {len(stocks_by_product)} уникальных записей остатков")
-
-            # Обрабатываем каждую агрегированную запись
-            for key, stock_data in stocks_by_product.items():
-                nm_id = stock_data['nm_id']
-                warehouse_name = stock_data['warehouse_name']
-
-                # Находим товар по nm_id
-                product = Product.query.filter_by(
-                    seller_id=current_user.seller.id,
-                    nm_id=nm_id
-                ).first()
-
-                if not product:
-                    # Товар не найден - пропускаем (возможно не синхронизированы карточки)
-                    continue
-
-                # Генерируем стабильный warehouse_id из имени (hashlib вместо hash())
-                warehouse_id = int(hashlib.md5(warehouse_name.encode('utf-8')).hexdigest(), 16) % 1000000
-
-                # Удаляем дубликаты по warehouse_name (оставляем только одну запись)
-                duplicates = ProductStock.query.filter_by(
-                    product_id=product.id,
-                    warehouse_name=warehouse_name
-                ).all()
-                if len(duplicates) > 1:
-                    for dup in duplicates[1:]:
-                        db.session.delete(dup)
-                    stock = duplicates[0]
-                elif duplicates:
-                    stock = duplicates[0]
-                else:
-                    stock = None
-
-                quantity = stock_data['quantity']
-                quantity_full = stock_data['quantity_full']
-
-                if stock:
-                    # Обновляем существующую запись
-                    stock.warehouse_id = warehouse_id
-                    stock.warehouse_name = warehouse_name
-                    stock.quantity = quantity
-                    stock.quantity_full = quantity_full
-                    stock.updated_at = datetime.utcnow()
-                    updated_count += 1
-                else:
-                    # Создаем новую запись
-                    stock = ProductStock(
-                        product_id=product.id,
-                        warehouse_id=warehouse_id,
-                        warehouse_name=warehouse_name,
-                        quantity=quantity,
-                        quantity_full=quantity_full,
-                        in_way_to_client=0,
-                        in_way_from_client=0
-                    )
-                    db.session.add(stock)
-                    created_count += 1
-
-            # Сохраняем все изменения
-            db.session.commit()
-
-            # Обновляем Product.quantity из суммы складских остатков
-            try:
-                seller_products = Product.query.filter_by(seller_id=current_user.seller.id).all()
-                product_ids = [p.id for p in seller_products]
-                if product_ids:
-                    stock_totals = (
-                        db.session.query(
-                            ProductStock.product_id,
-                            db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
-                        )
-                        .filter(ProductStock.product_id.in_(product_ids))
-                        .group_by(ProductStock.product_id)
-                        .all()
-                    )
-                    qty_map = {pid: int(total) for pid, total in stock_totals}
-                    for p in seller_products:
-                        p.quantity = qty_map.get(p.id, 0)
-                    db.session.commit()
-                    app.logger.info(f"📦 Product.quantity updated for {len(qty_map)} products from stock totals")
-            except Exception as qty_error:
-                app.logger.warning(f"⚠️ Failed to update Product.quantity from stocks: {qty_error}")
-
-            app.logger.info(f"💾 Сохранено остатков в БД: {created_count} новых, {updated_count} обновлено")
-
-            elapsed = time.time() - start_time
-
-            # Логируем успешный запрос
-            APILog.log_request(
-                seller_id=current_user.seller.id,
-                endpoint='/api/v1/supplier/stocks',
-                method='GET',
-                status_code=200,
-                response_time=elapsed,
-                success=True
-            )
-
-            app.logger.info(f"✅ Синхронизация остатков завершена успешно за {elapsed:.1f}с")
-
-            flash(
-                f'Синхронизация остатков завершена за {elapsed:.1f}с: '
-                f'{created_count} новых, {updated_count} обновлено',
-                'success'
-            )
-
-    except WBAuthException as e:
-        app.logger.error(f"❌ Ошибка авторизации при загрузке остатков: {str(e)}")
-
-        APILog.log_request(
-            seller_id=current_user.seller.id,
-            endpoint='/api/v1/supplier/stocks',
-            method='GET',
-            status_code=401,
-            response_time=0,
-            success=False,
-            error_message=f'Authentication failed: {str(e)}'
-        )
-
-        flash('Ошибка авторизации. Проверьте API ключ.', 'danger')
-
-    except WBAPIException as e:
-        app.logger.error(f"❌ Ошибка WB API при загрузке остатков: {str(e)}")
-
-        APILog.log_request(
-            seller_id=current_user.seller.id,
-            endpoint='/api/v1/supplier/stocks',
-            method='GET',
-            status_code=500,
-            response_time=0,
-            success=False,
-            error_message=str(e)
-        )
-
-        flash(f'Ошибка API WB: {str(e)}', 'danger')
-
-    except Exception as e:
-        app.logger.exception(f"❌ Неожиданная ошибка синхронизации остатков: {str(e)}")
-        flash(f'Ошибка синхронизации остатков: {str(e)}', 'danger')
-
+        enqueue_stock_sync(current_user.seller.id)
+        flash('Обновление остатков поставлено в очередь. Прогресс виден в фоновых задачах; до завершения показываются последние данные.', 'info')
+    except WBStockSyncError as exc:
+        db.session.rollback()
+        flash(str(exc), 'warning')
     return redirect(url_for('products_list'))
 
 
@@ -3148,24 +2875,16 @@ def product_detail(product_id):
     characteristics = json.loads(product.characteristics_json) if product.characteristics_json else []
     dimensions = json.loads(product.dimensions_json) if product.dimensions_json else {}
 
-    # Получаем остатки по складам для этого товара (агрегируем дубликаты по warehouse_name)
-    all_stocks = ProductStock.query.filter_by(product_id=product.id).all()
-    stocks_by_name = {}
-    for stock in all_stocks:
-        name = stock.warehouse_name or f'Склад {stock.warehouse_id}'
-        if name in stocks_by_name:
-            existing = stocks_by_name[name]
-            existing.quantity += stock.quantity
-            existing.quantity_full += stock.quantity_full
-            existing.in_way_to_client = (existing.in_way_to_client or 0) + (stock.in_way_to_client or 0)
-            existing.in_way_from_client = (existing.in_way_from_client or 0) + (stock.in_way_from_client or 0)
-        else:
-            stocks_by_name[name] = stock
-    warehouse_stocks = list(stocks_by_name.values())
+    # A GET must never mutate managed ORM rows while calculating display totals.
+    # Same-name warehouses may have different official identities.
+    warehouse_stocks = ProductStock.query.filter_by(product_id=product.id).order_by(ProductStock.warehouse_id).all()
 
     # Вычисляем общие остатки
-    total_quantity = sum(stock.quantity for stock in warehouse_stocks)
-    total_quantity_full = sum(stock.quantity_full for stock in warehouse_stocks)
+    total_quantity = sum(stock.quantity or 0 for stock in warehouse_stocks)
+    total_quantity_full = (
+        sum(stock.quantity_full for stock in warehouse_stocks)
+        if all(stock.quantity_full is not None for stock in warehouse_stocks) else None
+    )
 
     return render_template(
         'product_detail.html',
@@ -6711,6 +6430,9 @@ register_marketplace_draft_routes(app)
 from routes.ozon_bulk_uploads import register_ozon_bulk_upload_routes
 register_ozon_bulk_upload_routes(app)
 
+from routes.ozon_draft_ai import register_ozon_draft_ai_routes
+register_ozon_draft_ai_routes(app)
+
 from routes.marketplace_operations import register_marketplace_operation_routes
 register_marketplace_operation_routes(app)
 
@@ -6728,6 +6450,8 @@ register_marketplace_finance_routes(app)
 
 from routes.marketplace_inbox import register_marketplace_inbox_routes
 register_marketplace_inbox_routes(app)
+from routes.ozon_account_health import register_ozon_account_health_routes
+register_ozon_account_health_routes(app)
 
 # Глобальный UI-контекст каналов (mp_nav) для channel bar в shell-слое
 from services.marketplace_nav import register_marketplace_nav
@@ -6826,74 +6550,38 @@ def _run_startup_migrations():
         sqlite_path = bind.url.database
         if sqlite_path and sqlite_path != ':memory:':
             db.session.remove()
-            from migrations.migrate_add_marketplace_auto_publish import (
-                migrate as migrate_marketplace_auto_publish,
-            )
-            migrate_marketplace_auto_publish(sqlite_path)
-            from migrations.migrate_add_marketplace_quality_analytics import (
-                migrate as migrate_marketplace_quality_analytics,
-            )
-            migrate_marketplace_quality_analytics(sqlite_path)
-            from migrations.migrate_add_marketplace_fulfillment import (
-                migrate as migrate_marketplace_fulfillment,
-            )
-            migrate_marketplace_fulfillment(sqlite_path)
-            from migrations.migrate_add_marketplace_finance import (
-                migrate as migrate_marketplace_finance,
-            )
-            migrate_marketplace_finance(sqlite_path)
-            from migrations.migrate_add_marketplace_inbox import (
-                migrate as migrate_marketplace_inbox,
-            )
-            migrate_marketplace_inbox(sqlite_path)
-            from migrations.migrate_add_ozon_product_type_visibility import (
-                migrate as migrate_ozon_product_type_visibility,
-            )
-            migrate_ozon_product_type_visibility(sqlite_path)
-            from migrations.migrate_add_brand_category_external_id import (
-                migrate as migrate_brand_category_external_id,
-            )
-            migrate_brand_category_external_id(sqlite_path)
-            from migrations.migrate_add_marketplace_product_links import (
-                migrate as migrate_marketplace_product_links,
-            )
-            migrate_marketplace_product_links(sqlite_path)
-            from migrations.migrate_add_marketplace_canonical_content import (
-                migrate as migrate_marketplace_canonical_content,
-            )
-            migrate_marketplace_canonical_content(sqlite_path)
-            from migrations.migrate_add_marketplace_rollout import (
-                migrate as migrate_marketplace_rollout,
-            )
-            migrate_marketplace_rollout(sqlite_path)
-            from migrations.migrate_add_image_lab_marketplace_target import (
-                migrate as migrate_image_lab_marketplace_target,
-            )
-            migrate_image_lab_marketplace_target(sqlite_path)
-            from migrations.migrate_add_infographic_campaigns import (
-                migrate as migrate_infographic_campaigns,
-            )
-            migrate_infographic_campaigns(sqlite_path)
-            from migrations.migrate_add_marketplace_media_publications import (
-                migrate as migrate_marketplace_media_publications,
-            )
-            migrate_marketplace_media_publications(sqlite_path)
-            from migrations.migrate_add_bestseller_image_recommendations import (
-                migrate as migrate_bestseller_image_recommendations,
-            )
-            migrate_bestseller_image_recommendations(sqlite_path)
-            from migrations.migrate_add_content_factory_marketplace_scope import (
-                migrate as migrate_content_factory_marketplace_scope,
-            )
-            migrate_content_factory_marketplace_scope(sqlite_path)
-            from migrations.migrate_add_social_account_publish_health import (
-                migrate as migrate_social_account_publish_health,
-            )
-            migrate_social_account_publish_health(sqlite_path)
-            from migrations.migrate_add_supplier_catalog_enrichment import (
-                migrate as migrate_supplier_catalog_enrichment,
-            )
-            migrate_supplier_catalog_enrichment(sqlite_path)
+            from migrations.run_scoped_batch import run_batch as run_migration_batch
+            run_migration_batch(sqlite_path, [
+                'migrations/migrate_add_marketplace_credential_notices.py',
+                'migrations/migrate_add_marketplace_account_events.py',
+                'migrations/migrate_add_ozon_catalog_checkpoints.py',
+                'migrations/migrate_add_ozon_warehouse_reads.py',
+                'migrations/migrate_add_marketplace_read_schedules.py',
+                'migrations/migrate_add_marketplace_read_requests.py',
+                'migrations/migrate_add_inbox_read_queue.py',
+                'migrations/migrate_add_marketplace_read_credential_identity.py',
+                'migrations/migrate_add_marketplace_auto_publish.py',
+                'migrations/migrate_add_marketplace_quality_analytics.py',
+                'migrations/migrate_add_marketplace_fulfillment.py',
+                'migrations/migrate_add_marketplace_finance.py',
+                'migrations/migrate_add_marketplace_inbox.py',
+                'migrations/migrate_add_ozon_product_type_visibility.py',
+                'migrations/migrate_add_ozon_reference_reviews.py',
+                'migrations/migrate_add_brand_category_external_id.py',
+                'migrations/migrate_add_marketplace_product_links.py',
+                'migrations/migrate_add_marketplace_canonical_content.py',
+                'migrations/migrate_add_marketplace_rollout.py',
+                'migrations/migrate_add_image_lab_marketplace_target.py',
+                'migrations/migrate_add_infographic_campaigns.py',
+                'migrations/migrate_add_marketplace_media_publications.py',
+                'migrations/migrate_add_marketplace_write_quarantine.py',
+                'migrations/migrate_add_ozon_upload_queue.py',
+                'migrations/migrate_add_ozon_draft_ai_completion.py',
+                'migrations/migrate_add_bestseller_image_recommendations.py',
+                'migrations/migrate_add_content_factory_marketplace_scope.py',
+                'migrations/migrate_add_social_account_publish_health.py',
+                'migrations/migrate_add_supplier_catalog_enrichment.py',
+            ])
             bind.dispose()
             bind = db.engine
     insp = sa_inspect(bind)
@@ -7560,7 +7248,7 @@ def api_job_status(job_uid):
     ).first_or_404()
 
     # Автоматическая детекция зависших задач: если 'running' более 30 минут — failed
-    if job.status in ('running', 'pending') and job.updated_at:
+    if job.job_type not in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute', 'ozon_bulk_upload', 'ozon_draft_completion'} and job.status in ('running', 'pending') and job.updated_at:
         from datetime import datetime, timedelta
         stale_threshold = datetime.utcnow() - timedelta(minutes=30)
         if job.updated_at < stale_threshold:
@@ -7590,7 +7278,7 @@ def api_jobs_active():
     stale_threshold = datetime.utcnow() - timedelta(minutes=30)
     active_jobs = []
     for j in jobs:
-        if j.updated_at and j.updated_at < stale_threshold:
+        if j.job_type not in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute', 'ozon_bulk_upload', 'ozon_draft_completion'} and j.updated_at and j.updated_at < stale_threshold:
             j.status = 'failed'
             j.error_message = 'Задача зависла (нет прогресса более 30 минут)'
         else:

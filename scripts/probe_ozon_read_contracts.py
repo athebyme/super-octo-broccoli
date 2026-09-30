@@ -24,6 +24,7 @@ from services.ozon_api_client import (
     OzonSellerAPIClient,
 )
 from services.ozon_feedback_contracts import (
+    MIN_REVIEW_PAGE_SIZE,
     build_question_list_request,
     build_review_list_request,
 )
@@ -232,8 +233,8 @@ def _product_read_probes(identity: Mapping[str, Any]) -> Iterable[tuple]:
         # Both calls are read-only. Their exact July 2026 envelopes are what
         # this staging probe is intended to confirm before write support ships.
         probes.extend((
-            ("product_stocks_by_warehouse_fbs", {"sku": [sku]}),
-            ("product_stocks_by_warehouse_fbo", {"sku": [sku]}),
+            ("product_stocks_by_warehouse_fbs", {"sku": [sku], "limit": 1, "cursor": ""}),
+            ("product_stocks_by_warehouse_fbo", {"skus": [sku], "limit": 1, "cursor": ""}),
         ))
     return tuple(probes)
 
@@ -250,7 +251,7 @@ def _inbox_read_probes(role_checks: Mapping[str, bool]) -> Iterable[tuple]:
                 status="NEW",
                 date_from=start,
                 date_to=today,
-                limit=1,
+                limit=MIN_REVIEW_PAGE_SIZE,
             ),
         ))
     if role_checks.get("/v1/question/list") is True:

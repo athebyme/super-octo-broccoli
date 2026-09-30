@@ -19,7 +19,7 @@ from models import (
     db,
 )
 from routes.marketplace_inbox import register_marketplace_inbox_routes
-from services.marketplace_inbox import MarketplaceInboxService
+from services.marketplace_inbox import MarketplaceInboxAccessDenied, MarketplaceInboxService
 
 
 class MarketplaceInboxRoutesTest(unittest.TestCase):
@@ -62,6 +62,7 @@ class MarketplaceInboxRoutesTest(unittest.TestCase):
                 marketplace_id=marketplace.id,
                 external_account_id="own-inbox",
                 label="Own Inbox",
+                _credentials_encrypted="synthetic-not-decrypted-in-http",
                 is_active=True,
                 is_default=True,
                 connection_status="connected",
@@ -241,32 +242,33 @@ class MarketplaceInboxRoutesTest(unittest.TestCase):
         self.assertEqual(loose_pages.status_code, 400)
         sync.assert_not_called()
 
-    def test_sync_passes_only_authenticated_query_scope(self):
-        run = SimpleNamespace(to_public_dict=lambda: {
-            "id": 900,
-            "account_id": self.own_account_id,
-            "source_kind": "question",
-            "status": "running",
-        })
+    def test_sync_is_durable_enqueue_only_and_status_never_calls_provider(self):
         user_patch, login_patch = self._auth()
-        with user_patch, login_patch, patch.object(
-            MarketplaceInboxService,
-            "sync_kind",
-            return_value=run,
-        ) as sync:
-            response = self.client.post(
-                f"/marketplaces/api/reviews/sync?account_id={self.own_account_id}",
-                json={"source_kind": "question", "force": True, "max_pages": 4},
-            )
+        with user_patch, login_patch, patch.object(MarketplaceInboxService, 'sync_kind') as sync:
+            url = f'/marketplaces/api/reviews/sync?account_id={self.own_account_id}'
+            response = self.client.post(url, json={'period':'90d', 'force':True})
+            duplicate = self.client.post(url, json={'period':'90d', 'force':True})
+            observed = self.client.get(url + '&period=90d')
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json['data']['status'], 'pending')
+        self.assertEqual(response.json['data']['id'], duplicate.json['data']['id'])
+        self.assertEqual(observed.json['data']['id'], response.json['data']['id'])
+        self.assertEqual(observed.headers['Cache-Control'], 'private, no-store')
+        sync.assert_not_called()
 
-        self.assertEqual(response.status_code, 200)
-        sync.assert_called_once_with(
-            seller_id=self.seller1_id,
-            account_id=self.own_account_id,
-            source_kind="question",
-            force=True,
-            max_pages=4,
-        )
+    def test_legacy_body_enqueues_exact_question_scope_and_page_budget_is_worker_owned(self):
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch.object(MarketplaceInboxService, 'sync_kind') as sync:
+            response = self.client.post(
+                f'/marketplaces/api/reviews/sync?account_id={self.own_account_id}',
+                json={'source_kind':'question', 'force':True, 'max_pages':4})
+            observed = self.client.get(f'/marketplaces/api/questions/sync?account_id={self.own_account_id}&period=90d')
+            foreign = self.client.get(f'/marketplaces/api/questions/sync?account_id={self.foreign_account_id}&period=90d')
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json['data']['domain'], 'questions')
+        self.assertEqual(observed.json['data']['id'], response.json['data']['id'])
+        self.assertEqual(foreign.status_code, 404)
+        sync.assert_not_called()
 
     def test_draft_endpoint_is_local_service_only_and_uses_authenticated_user(self):
         draft = SimpleNamespace(to_public_dict=lambda: {
@@ -304,6 +306,33 @@ class MarketplaceInboxRoutesTest(unittest.TestCase):
                 f"/marketplaces/api/reviews?account_id={self.own_account_id}",
             )
         self.assertEqual(response.status_code, 404)
+
+    def test_edit_round_trip_and_stale_version_are_local_and_private(self):
+        user_patch, login_patch = self._auth()
+        base = f'/marketplaces/api/reviews/{self.own_item_id}'
+        suffix = f'?account_id={self.own_account_id}'
+        with user_patch, login_patch:
+            created = self.client.post(base+'/draft'+suffix, json={'generation_mode':'template','expected_draft_id':None})
+            self.assertEqual(created.status_code, 200)
+            before = created.json['data']
+            body = {'draft_id':before['id'],'expected_content_hash':before['content_hash'],'text':'Спасибо за отзыв. Учтём ваше замечание.'}
+            saved = self.client.post(base+'/draft/save'+suffix,json=body)
+            self.assertEqual(saved.status_code, 200)
+            self.assertNotEqual(saved.json['data']['id'],before['id'])
+            read = self.client.get(base+suffix)
+            self.assertEqual(read.json['data']['draft']['text'],body['text'])
+            self.assertEqual(read.headers['Cache-Control'],'private, no-store')
+            self.assertEqual(self.client.post(base+'/draft/save'+suffix,json=body).status_code,409)
+            self.assertEqual(self.client.get(base+f'?account_id={self.foreign_account_id}').status_code,404)
+            self.assertEqual(self.client.post(base+'/draft/save'+suffix,json={**body,'account_id':self.foreign_account_id}).status_code,400)
+
+    def test_local_edit_still_requires_csrf(self):
+        self.app.config['WTF_CSRF_ENABLED'] = True
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch.object(MarketplaceInboxService, 'save_reply_draft') as save:
+            response=self.client.post(f'/marketplaces/api/reviews/{self.own_item_id}/draft/save?account_id={self.own_account_id}',json={'text':'Ответ'})
+        self.assertEqual(response.status_code,400)
+        save.assert_not_called()
 
 
 if __name__ == "__main__":

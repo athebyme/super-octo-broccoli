@@ -1,174 +1,65 @@
-{% extends "base.html" %}
-
-{% block title %}Черновики маркетплейсов — Seller Hub{% endblock %}
-
+{% extends 'base.html' %}
+{% from 'macros/icons.html' import icon %}
+{% block title %}Подготовка товаров Ozon — Seller Hub{% endblock %}
 {% block content %}
-{% set status_labels = {'needs_category': 'Нет категории', 'draft': 'Черновик', 'ready': 'Готов', 'published': 'Опубликован', 'blocked': 'Заблокирован', 'archived': 'Архив'} %}
-{% set validation_status_labels = {'never_validated': 'Не проверялся', 'valid': 'Готов к публикации', 'invalid': 'Есть ошибки', 'stale': 'Устарело'} %}
-{% set connection_status_labels = {'unchecked': 'не проверен', 'connected': 'подключён', 'invalid': 'ключ отклонён', 'limited': 'ограничен', 'error': 'ошибка проверки', 'disconnected': 'отключён'} %}
-<div class="sh-page-header">
-    <div class="sh-page-header-content">
-        <div>
-            <h1 class="sh-page-title">Черновики Ozon</h1>
-            <p class="sh-page-subtitle">Черновик карточки для Ozon: точная категория и тип, происхождение фактов о товаре и проверка заполненности перед публикацией.</p>
-        </div>
-        <div class="sh-page-actions">
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index') }}">Загрузки</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index') }}">Каталог</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_accounts.index') }}">Кабинеты</a>
-        </div>
-    </div>
-</div>
-
-<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-
-    {% if ozon_enabled %}
-    <section class="sh-card p-4 mb-5">
-        <h2 class="font-semibold" style="color:var(--text)">Создать черновик</h2>
-        <p class="mt-1 text-xs" style="color:var(--text-muted)">
-            Общая карточка товара будет преобразована в черновик для Ozon и сразу локально проверена. Если категория и тип ещё не выбраны, черновик сохранится в статусе «Нет категории». Никакого запроса в Ozon не выполняется.
-        </p>
-        <form method="post" action="{{ url_for('marketplace_drafts.create') }}"
-              class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="validate" value="1">
-            <label class="block">
-                <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет Ozon</span>
-                <select name="account_id" required class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                        style="border-color:var(--border);color:var(--text)">
-                    <option value="">Выберите кабинет</option>
-                    {% for account in accounts %}
-                    <option value="{{ account.id }}">{{ account.label }} · {{ connection_status_labels.get(account.connection_status, account.connection_status) }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label class="block md:col-span-2">
-                <span class="block text-xs mb-1" style="color:var(--text-muted)">Импортированный товар</span>
-                <select name="imported_product_id" required class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                        style="border-color:var(--border);color:var(--text)">
-                    <option value="">Выберите товар</option>
-                    {% for source in sources %}
-                    <option value="{{ source.id }}">#{{ source.id }} · {{ source.title or source.external_id or 'Без названия' }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label class="block md:col-span-2">
-                <span class="block text-xs mb-1" style="color:var(--text-muted)">Артикул (offer_id), необязательно</span>
-                <input name="offer_id" maxlength="200" placeholder="По умолчанию артикул поставщика"
-                       class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                       style="border-color:var(--border);color:var(--text)">
-            </label>
-            <div class="flex items-end">
-                <button class="sh-btn sh-btn--primary w-full" type="submit" {% if not accounts or not sources %}disabled{% endif %}>Подготовить и проверить</button>
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-drafts.css') }}">
+<script type="application/json" id="odl-bootstrap">{{ {
+    'enabled': ozon_enabled, 'publicationEnabled': publication_enabled, 'csrf': csrf_token(),
+    'rows': draft_cards, 'accounts': account_options, 'filters': filters, 'sourceSearch': source_search,
+    'pagination': {'page': pagination.page, 'total': pagination.total, 'pages': pagination.pages or 1},
+    'urls': {
+        'sources': url_for('marketplace_drafts.source_search_api'),
+        'create': url_for('marketplace_drafts.create'),
+        'editorBase': url_for('marketplace_drafts.detail', draft_id=123456789).replace('123456789', ''),
+        'bulk': url_for('ozon_bulk_uploads.create_from_drafts'),
+        'review': '/marketplaces/ozon/uploads/review',
+        'aiCreate': url_for('ozon_draft_ai.create'),
+        'aiByRequest': url_for('ozon_draft_ai.by_request'),
+        'aiRunBase': url_for('ozon_draft_ai.run_page', job_uid='JOB_UID').replace('JOB_UID', ''),
+        'runBase': url_for('ozon_bulk_uploads.detail', job_uid='JOB_UID').replace('JOB_UID', ''),
+        'runs': url_for('ozon_bulk_uploads.index', account_id=filters.account_id),
+        'list': url_for('marketplace_drafts.index', account_id=filters.account_id, status=filters.status),
+        'accounts': url_for('marketplace_accounts.index'),
+        'catalog': url_for('marketplace_listings.index', account_id=filters.account_id, marketplace='ozon'),
+        'emptyImage': url_for('static', filename='images/ozon-shop-start.webp')
+    }
+} | tojson }}</script>
+<div id="odl-boot-fallback" class="ode-boot">Открываем подготовку товаров… <a href="{{ url_for('marketplace_drafts.classic_index', account_id=filters.account_id, status=filters.status) }}">Упрощённый список</a></div>
+<noscript><p class="ode-boot"><a href="{{ url_for('marketplace_drafts.classic_index', account_id=filters.account_id, status=filters.status) }}">Посмотреть черновики без JavaScript</a></p></noscript>
+<div id="ozon-drafts-list" class="ode odl" v-cloak x-ignore>
+    <header class="ode-header"><a :href="config.urls.catalog" class="ode-back">{{ icon('arrow-left', size=16) }} Каталог Ozon</a><div class="ode-header-line"><div><p class="ode-eyebrow">Ozon · Работа с карточками</p><h1>Подготовка товаров</h1></div><div class="ode-actions"><a :href="config.urls.runs" class="sh-btn sh-btn--secondary">{{ icon('clock', size=16) }} История загрузок</a><a :href="config.urls.accounts" class="sh-btn sh-btn--secondary">Магазины</a></div></div><p class="odl-intro">Соберите карточки, заполните недостающее и отправьте в нужный магазин.</p></header>
+{% raw %}
+    <div v-if="actionError" ref="actionError" class="ode-message ode-message--error" role="alert" tabindex="-1"><div>{{ actionError }}<p v-if="actionUncertain">Повторная отправка заблокирована до проверки сохранённого состояния.</p></div><div class="ode-actions"><a :href="config.urls.list" class="sh-btn sh-btn--secondary">Обновить список</a><a :href="config.urls.runs" class="sh-btn sh-btn--secondary">История загрузок</a></div></div>
+    <section v-if="config.enabled && accounts.length" class="ode-card odl-create" aria-labelledby="odl-create-title"><div><p class="ode-eyebrow">Новая карточка</p><h2 id="odl-create-title">Начните с вашего товара</h2><p class="ode-muted">Подготовка создаёт локальный черновик. Отправка в Ozon подтверждается отдельно.</p></div>
+        <form @submit.prevent="createDraft($event)" class="odl-create-form"><fieldset :disabled="!!busy || actionUncertain"><div class="odl-create-grid">
+            <div><label class="ode-label" for="odl-account">Магазин Ozon</label><select id="odl-account" class="sh-input" v-model="createAccountId" required><option value="">Выберите магазин</option><option v-for="account in accounts" :key="account.id" :value="account.id">{{ account.label }}</option></select></div>
+            <div ref="sourceWrap" class="odl-source" @keydown.esc.stop.prevent="open = false"><label class="ode-label" for="draft-source-query">Товар из «Моих товаров»</label><input ref="sourceQuery" id="draft-source-query" class="sh-input" v-model="query" @input="changed" @focus="open = true" @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)" @keydown.enter="enter($event)" @keydown.tab="open = false" required maxlength="100" autocomplete="off" placeholder="Название, артикул или ID" role="combobox" aria-autocomplete="list" aria-controls="draft-source-options" :aria-expanded="open" :aria-activedescendant="open && active >= 0 ? 'draft-source-option-' + active : undefined" aria-describedby="odl-source-help">
+                <p id="odl-source-help" class="ode-help">{{ selectedLabel || 'Поиск по всему вашему каталогу. Выберите товар из списка.' }}</p>
+                <div v-show="open" id="draft-source-options" class="odl-source-options" role="listbox" aria-label="Найденные товары"><p v-if="loading" class="ode-help" role="status">Ищем товары…</p><div v-else-if="error" class="ode-help ode-danger" role="alert">{{ error }} <button type="button" class="ode-text-button" @click="search()">Повторить поиск</button></div><p v-else-if="!items.length" class="ode-help">Совпадений нет. Измените запрос.</p><template v-else><div v-for="(item, index) in items" :key="item.id" :id="'draft-source-option-' + index" role="option" :aria-selected="selectedId === String(item.id)" :class="{'is-active':active === index}" @mousedown.prevent @mouseenter="active = index" @click="choose(item)"><strong>{{ item.title }}</strong><small>{{ item.vendor_code || item.external_id }} · № {{ item.id }}</small></div><p v-if="hasMore" class="ode-help">Первые 20 совпадений. Уточните запрос для более точного поиска.</p></template></div>
             </div>
-        </form>
+        </div><div class="odl-create-bottom"><details><summary>Свой артикул</summary><label class="ode-label" for="odl-offer">Артикул в Ozon</label><input id="odl-offer" class="sh-input" v-model="offerId" maxlength="50" placeholder="По умолчанию — артикул поставщика"></details><button type="submit" class="sh-btn sh-btn--primary" :disabled="!selectedId || !createAccountId">{{ busy === 'create' ? 'Подготавливаем…' : 'Подготовить карточку' }} →</button></div></fieldset></form>
     </section>
-    {% else %}
-    <div class="mb-5 rounded-md border px-4 py-3 text-sm"
-         style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
-        Ozon выключен флагом включения. Существующие черновики доступны только для чтения.
-    </div>
-    {% endif %}
-
-    <form method="get" class="sh-card p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-        <label class="block">
-            <span class="block text-xs mb-1" style="color:var(--text-muted)">Кабинет</span>
-            <select name="account_id" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                    style="border-color:var(--border);color:var(--text)">
-                <option value="">Все</option>
-                {% for account in accounts %}
-                <option value="{{ account.id }}" {% if filters.account_id == account.id %}selected{% endif %}>{{ account.label }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label class="block">
-            <span class="block text-xs mb-1" style="color:var(--text-muted)">Статус</span>
-            <select name="status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                    style="border-color:var(--border);color:var(--text)">
-                <option value="">Все</option>
-                {% for status in ['needs_category', 'draft', 'blocked', 'ready', 'published', 'archived'] %}
-                <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status_labels.get(status, status) }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <div class="flex items-end"><button class="sh-btn sh-btn--primary sh-btn--sm w-full" type="submit">Применить</button></div>
-    </form>
-
-    <div class="flex items-center justify-between mb-3 text-sm" style="color:var(--text-secondary)">
-        <span>Найдено: {{ pagination.total }}</span>
-        <span>Страница {{ pagination.page }} из {{ pagination.pages or 1 }}</span>
-    </div>
-    {% if drafts %}
-    <div class="space-y-3" x-data="{ selectedDrafts: [], selectedAccountId: null }">
-        {% if ozon_enabled and publication_enabled %}
-        <div class="sh-card p-3 flex flex-wrap items-center gap-3" x-show="selectedDrafts.length" x-cloak>
-            <span class="text-sm" style="color:var(--text)" x-text="'Выбрано готовых черновиков: ' + selectedDrafts.length"></span>
-            <form method="POST" action="{{ url_for('ozon_bulk_uploads.create_from_drafts') }}"
-                  class="flex flex-wrap items-center gap-2"
-                  onsubmit="return confirm('Синхронизировать выбранные карточки с Ozon? Новые будут созданы, существующие — полностью обновлены после live-проверки.')">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="confirm_write" value="1">
-                <input type="hidden" name="account_id" :value="selectedAccountId">
-                <template x-for="id in selectedDrafts" :key="'pub-' + id">
-                    <input type="hidden" name="draft_ids" :value="id">
-                </template>
-                <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit"
-                        :disabled="selectedAccountId === null || selectedDrafts.length === 0 || selectedDrafts.length > 200">
-                    Синхронизировать Ozon (<span x-text="selectedDrafts.length"></span>)
-                </button>
-                <span class="text-xs" style="color:var(--warn)" x-show="selectedDrafts.length > 200">не больше 200 за запуск</span>
-                <span class="text-xs" style="color:var(--text-muted)">один кабинет на запуск</span>
-            </form>
-        </div>
-        {% endif %}
-        {% for draft in drafts %}
-        {% set summary = draft.to_public_dict().validation_summary %}
-        {% set can_bulk_publish = ozon_enabled and publication_enabled and draft.account_id in upload_ready_account_ids and draft.status in ['ready', 'published'] and summary.publishable %}
-        <article class="sh-card block p-4">
-            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                {% if can_bulk_publish %}
-                <label class="flex items-start pt-1" title="Выбрать для массового создания или обновления">
-                    <input type="checkbox" class="rounded"
-                           :checked="selectedDrafts.includes({{ draft.id }})"
-                           :disabled="selectedAccountId !== null && selectedAccountId !== {{ draft.account_id }}"
-                           @change="if ($event.target.checked) { selectedAccountId = selectedAccountId === null ? {{ draft.account_id }} : selectedAccountId; selectedDrafts = [...selectedDrafts, {{ draft.id }}] } else { selectedDrafts = selectedDrafts.filter(id => id !== {{ draft.id }}); if (selectedDrafts.length === 0) selectedAccountId = null }">
-                </label>
-                {% endif %}
-                <div class="min-w-0 flex-1">
-                    <div class="flex flex-wrap items-center gap-2 text-xs">
-                        <span class="uppercase font-medium" style="color:var(--accent)">Ozon</span>
-                        <span style="color:var(--text-muted)">{{ draft.account.label }}</span>
-                        <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ status_labels.get(draft.status, draft.status) }}</span>
-                        <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ validation_status_labels.get(draft.validation_status, draft.validation_status) }}</span>
-                    </div>
-                    <h2 class="mt-2 font-semibold truncate">
-                        <a href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}" style="color:var(--text)">
-                            {{ draft.imported_product.title or draft.offer_id }}
-                        </a>
-                    </h2>
-                    <p class="mt-1 text-xs break-all" style="color:var(--text-muted)">артикул: {{ draft.offer_id }} · товар-источник #{{ draft.imported_product_id }}</p>
-                    <p class="mt-1 text-xs" style="color:var(--text-muted)">{{ draft.product_type.category.full_path ~ ' / ' ~ draft.product_type.name if draft.product_type else 'Категория не выбрана' }}</p>
-                </div>
-                {% set summary = draft.to_public_dict().validation_summary %}
-                <div class="text-xs md:text-right" style="color:var(--text-muted)">
-                    <div>Ошибок: {{ summary.error_count }} · предупреждений: {{ summary.warning_count }}</div>
-                    <div class="mt-1">Версия {{ draft.version }}</div>
-                    <a class="inline-block mt-2 font-medium" style="color:var(--accent)"
-                       href="{{ url_for('marketplace_drafts.detail', draft_id=draft.id) }}">Открыть →</a>
-                </div>
-            </div>
-        </article>
-        {% endfor %}
-    </div>
-    {% else %}
-    <div class="sh-card px-4 py-10 text-center text-sm" style="color:var(--text-muted)">Черновиков пока нет.</div>
-    {% endif %}
-
-    {% if pagination.pages > 1 %}
-    <nav class="mt-5 flex justify-center gap-2">
-        {% if pagination.has_prev %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index', page=pagination.prev_num, account_id=filters.account_id, status=filters.status) }}">Назад</a>{% endif %}
-        {% if pagination.has_next %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index', page=pagination.next_num, account_id=filters.account_id, status=filters.status) }}">Дальше</a>{% endif %}
-    </nav>
-    {% endif %}
+    <section v-else-if="config.enabled" class="ode-card odl-connect"><img :src="config.urls.emptyImage" alt="" width="120" height="120"><div><h2>Подключите первый магазин Ozon</h2><p class="ode-muted">После подключения можно подготовить товары и загрузить существующий каталог.</p><a :href="config.urls.accounts" class="sh-btn sh-btn--primary">Подключить магазин</a></div></section>
+    <p v-else class="ode-message">Интеграция отключена. Сохранённые черновики доступны для просмотра.</p>
+{% endraw %}
+    <form method="get" action="{{ url_for('marketplace_drafts.index') }}" class="odl-filters" aria-label="Фильтры черновиков"><div><label for="odl-filter-account" class="ode-label">Магазин</label><select id="odl-filter-account" name="account_id" class="sh-input"><option value="">Все магазины</option><option v-for="account in accounts" :key="account.id" :value="account.id" :selected="account.id === config.filters.account_id" v-text="account.label"></option></select></div><div><label for="odl-filter-status" class="ode-label">Состояние</label><select id="odl-filter-status" name="status" class="sh-input"><option value="">Все черновики</option>{% for status, label in [('needs_category','Нужна категория'),('draft','На подготовке'),('blocked','Нужны исправления'),('ready','Проверены'),('published','Опубликованы'),('archived','Архив')] %}<option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div><button type="submit" class="sh-btn sh-btn--secondary">Применить</button></form>
+{% raw %}
+    <div class="odl-count"><h2>Ваши черновики <span>{{ config.pagination.total }}</span></h2><span>Страница {{ config.pagination.page }} из {{ config.pagination.pages }}</span></div>
+    <div class="odl-modes" role="group" aria-label="Для чего выбираются черновики"><span>Выбор карточек:</span><button type="button" :aria-pressed="selectionMode === 'send'" :class="{'is-active':selectionMode === 'send'}" @click="setSelectionMode('send')">Для отправки <small v-if="selectedDrafts.length">{{ selectedDrafts.length }}</small></button><button type="button" :aria-pressed="selectionMode === 'ai'" :class="{'is-active':selectionMode === 'ai'}" @click="setSelectionMode('ai')">Для AI-дополнения <small v-if="aiSelected.length">{{ aiSelected.length }}</small></button></div>
+    <div v-if="aiError" ref="aiError" class="ode-message ode-message--error" role="alert" tabindex="-1">{{ aiError }}</div>
+    <div v-if="aiSessionEnded" class="ode-message ode-message--warning" role="status">AI-действия остановлены. Войдите снова и проверьте состояние по сохранённому ключу.</div>
+    <div v-if="aiStorageProblem" class="ode-message ode-message--warning" role="status"><span>Сохранённый ключ AI-запуска повреждён. Проверьте историю карточек перед новым запуском.</span><button type="button" class="sh-btn sh-btn--secondary" @click="clearAiStorageProblem">Я проверил состояние</button></div>
+    <div v-if="aiPending" class="ode-message ode-message--warning" role="status"><div><strong>Результат AI-запуска пока неизвестен.</strong><p>{{ aiPending.draft_ids.length }} черновиков · магазин № {{ aiPending.account_id }}. Повтор возможен только вручную с тем же ключом, составом и версиями.</p></div><div class="ode-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="!!aiBusy || aiSessionEnded" @click="readAiPending">{{ aiBusy === 'read' ? 'Проверяем…' : 'Проверить результат' }}</button><button v-if="aiRetrySameKey" type="button" class="sh-btn sh-btn--secondary" :disabled="!!aiBusy || aiSessionEnded" @click="retryAiPending">Повторить тот же запрос</button></div></div>
+    <div v-if="selectionMode === 'send' && selectedDrafts.length" class="odl-selection" role="status"><div><strong>Для отправки выбрано {{ selectedDrafts.length }}</strong><span>{{ selectedAccount?.label }} · Выбор сохраняется между страницами; отправка подтверждается после свежей проверки</span></div><div class="ode-actions"><button type="button" class="ode-text-button" :disabled="!!busy" @click="clearSelection">Снять выбор</button><button ref="bulkButton" type="button" class="sh-btn sh-btn--primary" :disabled="!bulkReady || !!busy || actionUncertain" @click="reviewBulk">Просмотреть карточки →</button></div></div>
+    <div v-if="selectionMode === 'ai'" class="odl-selection" role="status"><div><strong>Для AI выбрано {{ aiSelected.length }}</strong><span>{{ aiSelectedAccount?.label || 'Один магазин Ozon' }} · Пропуски заполняются только после вашего отдельного принятия; готовые карточки можно отправлять независимо.</span></div><div class="ode-actions"><button type="button" class="ode-text-button" :disabled="!!aiBusy || !!aiPending" @click="clearAiSelection">Снять выбор</button><button ref="aiButton" type="button" class="sh-btn sh-btn--primary" :disabled="!aiReady || !!aiBusy || !!busy" @click="openAiDialog">Предложить характеристики →</button></div></div>
+    <div v-if="rows.length" class="odl-rows"><article v-for="row in rows" :key="row.id" class="odl-row"><div class="odl-select"><label v-if="selectionMode === 'send' && eligible(row) || selectionMode === 'ai' && aiEligible(row)" class="odl-check"><input type="checkbox" :aria-label="(selectionMode === 'ai' ? 'Выбрать для AI ' : 'Выбрать для отправки ') + row.title" :checked="selectionMode === 'ai' ? aiPicked(row) : selectedDrafts.includes(row.id)" :disabled="selectionMode === 'ai' ? (!!aiBusy || !!aiPending || aiSessionEnded || aiStorageProblem || (aiAccountId !== null && aiAccountId !== row.account_id) || (aiSelected.length >= 200 && !aiPicked(row))) : (!!busy || actionUncertain || (selectedAccountId !== null && selectedAccountId !== row.account_id) || (selectedDrafts.length >= 200 && !selectedDrafts.includes(row.id)))" @change="toggleActiveRow(row, $event.target.checked)"></label></div><a :href="editorUrl(row)" class="odl-thumbnail" :aria-label="'Открыть карточку ' + row.title"><img v-if="imageUrl(row)" :src="imageUrl(row)" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" @error="failedImages.push(row.id)"><svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 17 6-6 5 5 3-3 4 4"/></svg></a><div class="odl-row-main"><div class="odl-row-meta"><span>{{ row.account_label }}</span><span class="odl-badge" :class="'odl-badge--' + stateTone(row)">{{ stateLabel(row) }}</span></div><h3><a :href="editorUrl(row)">{{ row.title }}</a></h3><p class="ode-help odl-offer">Артикул {{ row.offer_id }}</p><p class="odl-category">{{ [row.category_path,row.product_type_name].filter(Boolean).join(' / ') || 'Выберите категорию и тип товара' }}</p></div><div class="odl-row-action"><span :class="{'ode-danger':row.validation_summary?.error_count > 0}">{{ validationLabel(row) }}</span><a :href="editorUrl(row)" class="ode-link">Открыть карточку →</a></div></article></div>
+    <div v-else class="odl-empty"><img :src="config.urls.emptyImage" alt="" width="160" height="160"><h2>{{ config.filters.status ? 'В этом состоянии черновиков пока нет' : 'Первый товар начинается здесь' }}</h2><p>{{ config.filters.status ? 'Выберите другое состояние или все черновики.' : 'Выберите товар выше — мы соберём карточку и покажем, что осталось заполнить.' }}</p></div>
+    <dialog ref="aiDialog" class="ode-dialog odl-ai-dialog" aria-labelledby="odl-ai-title" @cancel.prevent="closeAiDialog"><div class="ode-dialog-head"><div><p class="ode-eyebrow">Локальные предложения · {{ aiSelectedAccount?.label }}</p><h2 id="odl-ai-title">Предложить характеристики для {{ aiSelected.length }} карточек?</h2></div><button type="button" class="ode-icon-button" :disabled="aiBusy === 'post'" aria-label="Закрыть AI-подтверждение" @click="closeAiDialog">×</button></div><p class="ode-help">Используются только сохранённые исходные сведения и выбранные категории. AI предложит значения для пустых характеристик, но ничего не запишет в карточки и не отправит в Ozon. Отдельные значения вы проверите и примете позже.</p><p class="ode-help">Модель может израсходовать настроенный бюджет. Карточки без подтверждённых исходных фактов останутся для ручного заполнения; готовые карточки можно отправлять независимо.</p><ol class="odl-ai-scope"><li v-for="row in aiSelected" :key="row.id">Черновик № {{ row.id }} · сохранённая версия {{ row.version }}</li></ol><label class="ode-checkbox"><input ref="aiConfirm" type="checkbox" v-model="aiConfirmed" :disabled="!!aiBusy">Я выбрал эти карточки и понимаю, что предложения не применяются автоматически</label><div class="ode-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="aiBusy === 'post'" @click="closeAiDialog">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!aiConfirmed || !aiReady || !!aiBusy" @click="startAi">{{ aiBusy === 'post' ? 'Принимаем…' : 'Запустить поиск предложений' }}</button></div></dialog>
+{% endraw %}
+    {% if pagination.pages > 1 %}<nav class="odl-pagination" aria-label="Страницы черновиков">{% if pagination.has_prev %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index', page=pagination.prev_num, account_id=filters.account_id, status=filters.status) }}">← Назад</a>{% endif %}<span>{{ pagination.page }} / {{ pagination.pages }}</span>{% if pagination.has_next %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_drafts.index', page=pagination.next_num, account_id=filters.account_id, status=filters.status) }}">Дальше →</a>{% endif %}</nav>{% endif %}
 </div>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static', filename='draft-source-picker.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-drafts-vue.js') }}" defer></script>
 {% endblock %}

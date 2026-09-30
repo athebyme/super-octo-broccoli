@@ -1,144 +1,33 @@
 {% extends "base.html" %}
-
-{% block title %}Заявка Ozon #{{ proposal.id }} — Seller Hub{% endblock %}
-
-{% block extra_head %}
-{% if proposal.status in ['approved','applying','uncertain'] %}<meta http-equiv="refresh" content="15">{% endif %}
-{% endblock %}
-
+{% block title %}Изменение Ozon #{{ proposal.id }} — Seller Hub{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css') }}">{% endblock %}
 {% block content %}
-{% set before = proposal_data.baseline_state %}
-{% set proposed = proposal_data.proposed_state %}
-{% set guardrails = proposal_data.guardrails %}
-{% set is_price = proposal.proposal_kind == 'price' %}
-{% set status_labels = {
-    'pending_review': 'Ждёт вашего решения',
-    'approved': 'Подтверждено, готовится отправка',
-    'applying': 'Отправлено, проверяем результат',
-    'applied': 'Изменение подтверждено Ozon',
-    'rejected': 'Отклонено без записи',
-    'failed': 'Ozon отклонил изменение',
-    'conflict': 'Данные в Ozon изменились',
-    'uncertain': 'Результат требует сверки',
-    'cancelled': 'Отменено'
-} %}
-{% set operation_status_labels = {
-    'queued': 'В очереди', 'submitting': 'Отправляется', 'submitted': 'Отправлено',
-    'polling': 'Проверяем статус', 'uncertain': 'Нужна сверка', 'succeeded': 'Успешно',
-    'partial': 'Частично', 'failed': 'Ошибка', 'cancelled': 'Отменено'
-} %}
-{% set operation_kind_labels = {
-    'product_import': 'Создание карточки', 'product_import_rollback': 'Откат создания',
-    'product_update': 'Обновление карточки', 'product_update_rollback': 'Откат обновления',
-    'price_update': 'Изменение цены', 'stock_update': 'Изменение остатков',
-    'price_rollback': 'Откат цены', 'stock_rollback': 'Откат остатков'
-} %}
-{% set success_status = proposal.status == 'applied' %}
-{% set danger_status = proposal.status in ['failed','conflict'] %}
-
-<div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
-    <a href="{{ url_for('marketplace_commercial.index', account_id=proposal.account_id) }}" class="text-sm" style="color:var(--accent)">← Цены и остатки Ozon</a>
-
-    <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div class="min-w-0">
-            <div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)">
-                <span style="color:var(--accent)">{{ 'Цена' if is_price else 'Остаток' }}</span>
-                <span>заявка #{{ proposal.id }}</span>
-                <span>{{ proposal.account.label if proposal.account else 'кабинет удалён' }}</span>
-                {% if proposal.source == 'rollback' %}<span>откат</span>{% endif %}
-            </div>
-            <h1 class="mt-2 text-2xl font-semibold break-all" style="color:var(--text)">{{ proposal.listing.offer_id if proposal.listing else 'Листинг удалён' }}</h1>
-            <p class="mt-1 text-sm" style="color:var(--text-secondary)">{{ status_labels.get(proposal.status, proposal.status) }} · версия {{ proposal.version }}</p>
-        </div>
-        {% if proposal.operation %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id) }}">Открыть журнал операции</a>{% endif %}
-    </div>
-
-
-    <section class="mt-5 rounded-lg border p-4" style="border-color:{{ 'var(--danger)' if danger_status else 'var(--border)' }};background:var(--bg-card)">
-        <div class="flex items-start gap-3">
-            <div class="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full" style="background:{{ 'var(--ok)' if success_status else 'var(--danger)' if danger_status else 'var(--accent)' }}"></div>
-            <div>
-                <h2 class="font-semibold" style="color:var(--text)">{{ status_labels.get(proposal.status, proposal.status) }}</h2>
-                {% if proposal.status == 'pending_review' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Запись в Ozon ещё не выполнялась. При подтверждении платформа сначала повторно прочитает текущее состояние в Ozon и остановится без записи при любом расхождении.</p>
-                {% elif proposal.status == 'conflict' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Заявку больше нельзя применить: данные Ozon изменились после её создания. Обновите карточку и создайте новую заявку.</p>
-                {% elif proposal.status == 'uncertain' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Платформа не повторяет запись. Фоновый процесс выполняет только сверку с Ozon до получения точного результата.</p>
-                {% elif proposal.status == 'applied' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Проверка после записи подтвердила точное предлагаемое состояние; откат доступен через журнал операции.</p>
-                {% elif proposal.status == 'rejected' %}<p class="mt-1 text-sm" style="color:var(--text-secondary)">Заявка закрыта локально, запрос изменения в Ozon не отправлялся.</p>{% endif %}
-            </div>
-        </div>
-    </section>
-
-    {% if proposal.source == 'rollback' %}
-    <div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--border);color:var(--text-secondary)">Это восстановление точного состояния до операции #{{ proposal.rollback_of_operation_id }}. Оно является новой записью и поэтому требует отдельного подтверждения.</div>
-    {% endif %}
-
-    <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <section class="sh-card p-4">
-            <div class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">Сейчас в Ozon</div>
-            <div class="mt-3 text-3xl font-semibold" style="color:var(--text)">{% if is_price %}{{ before.get('price', '—') }} <span class="text-base">{{ before.get('currency_code','RUB') }}</span>{% else %}{{ before.get('stock', '—') }} <span class="text-base">шт.</span>{% endif %}</div>
-            {% if not is_price %}<p class="mt-2 text-xs" style="color:var(--text-muted)">Точный доступный остаток выбранного склада</p>{% endif %}
-        </section>
-        <section class="sh-card p-4">
-            <div class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">{{ 'Восстановить' if proposal.source == 'rollback' else 'Предлагается' }}</div>
-            <div class="mt-3 text-3xl font-semibold" style="color:var(--accent)">{% if is_price %}{{ proposed.get('price', '—') }} <span class="text-base">{{ proposed.get('currency_code','RUB') }}</span>{% else %}{{ proposed.get('stock', '—') }} <span class="text-base">шт.</span>{% endif %}</div>
-            {% if guardrails.get('direction') %}<p class="mt-2 text-xs" style="color:var(--text-muted)">{{ 'Повышение' if guardrails.direction == 'increase' else 'Снижение' }}{% if guardrails.get('change_pct') %} на {{ guardrails.change_pct }}%{% endif %}</p>{% endif %}
-            {% if not is_price and proposed.get('stock') == 0 %}<p class="mt-2 text-xs" style="color:var(--danger)">После применения товар станет недоступен на этом складе.</p>{% endif %}
-        </section>
-        <section class="sh-card p-4">
-            <div class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">Область действия</div>
-            <dl class="mt-3 space-y-2 text-sm">
-                <div><dt class="text-xs" style="color:var(--text-muted)">Артикул (offer_id)</dt><dd class="break-all" style="color:var(--text)">{{ proposed.get('offer_id', '—') }}</dd></div>
-                <div><dt class="text-xs" style="color:var(--text-muted)">ID товара в Ozon</dt><dd style="color:var(--text)">{{ proposed.get('product_id', '—') }}</dd></div>
-                {% if not is_price %}<div><dt class="text-xs" style="color:var(--text-muted)">Склад</dt><dd style="color:var(--text)">{{ proposal.warehouse.name if proposal.warehouse else 'удалён' }} · {{ proposed.get('warehouse_id','—') }}</dd></div>{% endif %}
-            </dl>
-        </section>
-    </div>
-
-    {% if proposal.status == 'pending_review' %}
-    <section class="sh-card p-4 mt-4">
-        <h2 class="font-semibold" style="color:var(--text)">Решение</h2>
-        <p class="mt-1 text-sm" style="color:var(--text-secondary)">Подтверждение и отклонение проверяют версию заявки: устаревшая вкладка не сможет изменить уже обработанную заявку.</p>
-        <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {% if write_enabled %}
-            <form method="post" action="{{ url_for('marketplace_commercial.approve', proposal_id=proposal.id) }}" class="rounded border p-4" style="border-color:var(--border)">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="expected_version" value="{{ proposal.version }}">
-                <div class="text-sm font-medium" style="color:var(--text)">Применить в Ozon</div>
-                <label class="mt-3 flex items-start gap-2 text-xs" style="color:var(--text-secondary)"><input class="mt-0.5" type="checkbox" name="confirm_write" value="1" required><span>Я сверил «сейчас» и «предлагается» и подтверждаю одну запись в Ozon.</span></label>
-                <button class="sh-btn sh-btn--primary mt-4" type="submit">Подтвердить запись</button>
-            </form>
-            {% else %}
-            <div class="rounded border p-4" style="border-color:var(--border)"><div class="text-sm font-medium" style="color:var(--text)">Применение временно выключено</div><p class="mt-2 text-xs" style="color:var(--text-secondary)">Заявка сохранена. Для подтверждения нужен отдельный флаг включения записи цен и остатков.</p></div>
-            {% endif %}
-            <form method="post" action="{{ url_for('marketplace_commercial.reject', proposal_id=proposal.id) }}" class="rounded border p-4" style="border-color:var(--border)">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="expected_version" value="{{ proposal.version }}">
-                <div class="text-sm font-medium" style="color:var(--text)">Отклонить без записи</div>
-                <label class="mt-3 block text-xs" style="color:var(--text-muted)">Комментарий (необязательно)<textarea name="note" maxlength="1000" rows="2" class="mt-1 w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)"></textarea></label>
-                <button class="sh-btn sh-btn--secondary mt-3" type="submit">Закрыть заявку</button>
-            </form>
-        </div>
-    </section>
-    {% endif %}
-
-    {% if proposal.error_message %}<section class="sh-card p-4 mt-4"><div class="text-xs" style="color:var(--danger)">{{ proposal.error_code }}</div><p class="mt-2 text-sm" style="color:var(--text)">{{ proposal.error_message }}</p></section>{% endif %}
-
-    {% if proposal.operation %}
-    <section class="sh-card p-4 mt-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-            <div><h2 class="font-semibold" style="color:var(--text)">Операция #{{ proposal.operation.id }}</h2><p class="mt-1 text-sm" style="color:var(--text-secondary)">{{ operation_kind_labels.get(proposal.operation.operation_kind, proposal.operation.operation_kind) }} · {{ operation_status_labels.get(proposal.operation.status, proposal.operation.status) }} · попыток записи {{ proposal.operation.attempt_count }} · сверок {{ proposal.operation.reconcile_count }}</p></div>
-            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id) }}">Открыть полный аудит</a>
-        </div>
-    </section>
-    {% endif %}
-
-    <details class="sh-card p-4 mt-4">
-        <summary class="cursor-pointer font-semibold" style="color:var(--text)">Технические данные и отпечатки состояния</summary>
-        <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Текущее состояние в Ozon</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ before | tojson(indent=2) }}</pre><p class="mt-2 break-all text-xs" style="color:var(--text-muted)">{{ proposal.baseline_fingerprint }}</p></div>
-            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Предлагаемое состояние</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ proposed | tojson(indent=2) }}</pre><p class="mt-2 break-all text-xs" style="color:var(--text-muted)">{{ proposal.proposed_fingerprint }}</p></div>
-        </div>
-        <div class="mt-4"><div class="text-xs mb-2" style="color:var(--text-muted)">Ограничения безопасности</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ guardrails | tojson(indent=2) }}</pre></div>
-    </details>
+<script type="application/json" id="oc-bootstrap">{{ {'mode':'detail', 'proposalId':proposal.id, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled} | tojson }}</script>
+<div class="oc-fallback" id="oc-fallback">Загружаем изменение… <a href="{{ url_for('marketplace_commercial.classic_detail', proposal_id=proposal.id) }}">Открыть упрощённую версию</a></div>
+<div id="ozon-commercial-app" class="oc-page" v-cloak>
+{% raw %}
+    <a class="oc-back" :href="base + (proposal ? '?account_id=' + proposal.account_id : '')">← Цены и остатки</a>
+    <div v-if="error" class="oc-alert" role="alert"><p>{{ error }}</p><a v-if="reviewUrl(errorQuarantine)" :href="reviewUrl(errorQuarantine)">Разобрать исходную операцию</a><button class="sh-btn sh-btn--secondary" :disabled="loading || busy || sessionEnded" @click="loadDetail">Проверить состояние</button><a v-if="sessionEnded" href="/login">Войти снова</a></div>
+    <p v-if="loading && !proposal" class="oc-loading" role="status">Загружаем заявку…</p>
+    <template v-if="proposal">
+        <header class="oc-header"><div><p>{{ proposal.proposal_kind === 'price' ? 'Изменение цены' : 'Изменение остатка' }} · заявка № {{ proposal.id }}</p><h1>{{ title(proposal) }}</h1><p>{{ proposal.account_label }} · артикул {{ proposal.product?.offer_id || proposal.proposed_state.offer_id }}</p></div><a :href="catalog + 'view/' + proposal.listing_id" class="oc-detail-photo oc-photo"><img v-if="photo(proposal.product)" v-image-deadline :src="photo(proposal.product)" :alt="title(proposal)" width="100" height="112" @error="imageError(proposal.product)"><span v-else>O</span></a></header>
+        <section class="oc-outcome" :class="statusClass(proposal.status)" aria-live="polite"><strong>{{ statuses[proposal.status] || proposal.status }}</strong><p>{{ statusDescription(proposal) }}</p><button v-if="active(proposal)" class="sh-btn sh-btn--secondary" :disabled="busy || loading" @click="loadDetail">{{ loading ? 'Проверяем…' : 'Проверить состояние' }}</button></section>
+        <p v-if="proposal.source === 'rollback'" class="oc-notice">Восстановление значения до операции № {{ proposal.rollback_of_operation_id }}. Это новая отправка в Ozon, которую нужно подтвердить.</p>
+        <div class="oc-detail-grid"><section class="oc-panel"><h2>Сравнение перед отправкой</h2>
+            <div class="oc-comparison"><div><span>При создании заявки</span><strong>{{ value(proposal, 'baseline_state') }}</strong><small>{{ date(proposal.created_at) }}</small></div><span class="oc-arrow" aria-hidden="true">→</span><div><span>{{ proposal.source === 'rollback' ? 'Восстановить' : 'Предлагается' }}</span><strong>{{ value(proposal, 'proposed_state') }}</strong><small v-if="proposal.guardrails.change_pct">Изменение на {{ proposal.guardrails.change_pct }}%</small></div></div>
+            <p v-if="proposal.guardrails.price_review?.rounded" class="oc-notice oc-rounding">Вы ввели {{ money(proposal.guardrails.price_review.requested_price, 'RUB') }}. Для отправки округлили до ближайшего рубля, от 50 копеек — вверх. Подтверждается <strong>{{ value(proposal, 'proposed_state') }}</strong>.</p>
+            <template v-if="proposal.proposal_kind === 'price'"><p class="oc-muted">Цена продавца. Итоговая цена покупателя может отличаться из-за акций и скидок Ozon.</p><dl class="oc-facts"><div><dt>Цена до скидки</dt><dd>{{ money(proposal.proposed_state.old_price, proposal.proposed_state.currency_code) }}</dd></div><div><dt>Минимальная цена Ozon</dt><dd>{{ money(proposal.proposed_state.min_price, proposal.proposed_state.currency_code) }}</dd></div><div v-if="proposal.guardrails.supplier_floor"><dt>Порог по закупке</dt><dd>{{ money(proposal.guardrails.supplier_floor, proposal.proposed_state.currency_code) }}</dd></div></dl><p class="oc-muted">Эти ограничения сохраняются. Порог по закупке учитывает текущую настройку минимальной наценки; это не расчёт чистой прибыли с комиссиями и логистикой Ozon.</p><p v-if="proposal.guardrails.override_note" class="oc-note">Основание: {{ proposal.guardrails.override_note }}</p></template>
+            <template v-else><dl class="oc-facts"><div><dt>Склад FBS/rFBS</dt><dd>{{ proposal.warehouse_name }}</dd></div><div><dt>Что изменится</dt><dd>Доступное к продаже количество</dd></div></dl><p class="oc-alert" v-if="proposal.proposed_state.stock === 0">После применения товар станет недоступен на этом складе.</p><p class="oc-muted">Остатки на других складах и на складах Ozon (FBO) этим изменением не затрагиваются.</p></template>
+            <p class="oc-muted">Перед отправкой повторно сравним данные с Ozon. Если они изменились, заявка остановится и потребуется новое сравнение.</p>
+        </section><section class="oc-panel oc-decision"><h2>{{ proposal.status === 'pending_review' ? 'Ваше решение' : 'Результат' }}</h2>
+            <template v-if="proposal.status === 'pending_review'"><p>Сверьте товар, магазин и значения слева.</p><p v-if="!proposal.target_available" class="oc-alert">{{ proposal.target_unavailable_reason }}</p><p v-if="held(proposal)" class="oc-alert">Новые изменения {{ proposal.write_quarantine.scope === 'account' ? 'всего магазина' : 'этого товара' }} остановлены решением №{{ proposal.write_quarantine.id }}. Эта заявка остаётся сохранённой, но отправка недоступна. <a v-if="reviewUrl(proposal.write_quarantine)" :href="reviewUrl(proposal.write_quarantine)">Открыть разбор исходной операции</a></p><form v-if="writeEnabled && proposal.target_available && !held(proposal)" @submit.prevent="approve"><label class="oc-check"><input name="confirm_write" type="checkbox" v-model="confirmed" :disabled="busy || loading || actionBlocked" required><span>{{ proposal.proposal_kind === 'price' ? 'Подтверждаю цену ' + value(proposal, 'proposed_state') + ' для отправки в Ozon' : 'Подтверждаю отправку этого изменения в Ozon' }}</span></label><button class="sh-btn sh-btn--primary" type="submit" :disabled="busy || loading || actionBlocked">{{ busy === 'approve' ? 'Отправляем и сверяем…' : 'Применить в Ozon' }}</button></form><p v-else-if="!writeEnabled" class="oc-notice">Отправка временно выключена. Заявка сохранена.</p>
+                <details><summary>Отклонить заявку</summary><form @submit.prevent="reject"><label>Причина, необязательно<textarea v-model="rejectNote" name="note" rows="3" maxlength="1000" :disabled="!!busy" autocomplete="off"></textarea></label><button class="sh-btn sh-btn--secondary" type="submit" :disabled="busy || loading || actionBlocked">{{ busy === 'reject' ? 'Закрываем…' : 'Закрыть без отправки' }}</button></form></details>
+            </template><template v-else><p v-if="proposal.applied_at">Подтверждено {{ date(proposal.applied_at) }}</p><p v-if="proposal.error_message" class="oc-alert">{{ friendly(proposal.error_message) }}</p><a v-if="['conflict','failed','rejected','cancelled'].includes(proposal.status)" class="sh-btn sh-btn--secondary" :href="base + '?listing_id=' + proposal.listing_id + '&account_id=' + proposal.account_id">Подготовить новое изменение</a></template>
+            <template v-if="proposal.operation"><a class="sh-btn sh-btn--secondary" :href="'/marketplaces/operations/' + proposal.operation.id">Журнал операции</a><p class="oc-muted">Отправок: {{ proposal.operation.attempt_count }}. Сверок: {{ proposal.operation.reconcile_count }}.</p><form v-if="proposal.status === 'applied'" @submit.prevent="rollback"><button type="submit" class="sh-btn sh-btn--secondary" :disabled="busy || loading || actionBlocked">{{ busy === 'rollback' ? 'Готовим сравнение…' : 'Подготовить откат' }}</button><p class="oc-muted">Создадим новое сравнение. Возврат к прежнему значению потребует вашего подтверждения.</p></form></template>
+        </section></div>
+        <details class="oc-panel oc-technical"><summary>Подробности проверки</summary><dl class="oc-facts"><div><dt>Версия заявки</dt><dd>{{ proposal.version }}</dd></div><div><dt>Создана</dt><dd>{{ date(proposal.created_at) }}</dd></div><div><dt>Последнее изменение</dt><dd>{{ date(proposal.updated_at) }}</dd></div><div><dt>Код результата</dt><dd>{{ proposal.error_code || '—' }}</dd></div></dl><pre>{{ JSON.stringify({before:proposal.baseline_state, proposed:proposal.proposed_state, guardrails:proposal.guardrails}, null, 2) }}</pre></details>
+    </template>
+{% endraw %}
 </div>
+{% include 'partials/ozon_commercial_scripts.html' %}
 {% endblock %}

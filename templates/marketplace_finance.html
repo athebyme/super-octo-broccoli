@@ -1,293 +1,58 @@
 {% extends "base.html" %}
-{% from "macros/components.html" import channel_bar %}
-{% from "macros/icons.html" import icon %}
-
+{% from 'macros/components.html' import channel_bar %}
+{% from 'macros/icons.html' import icon %}
 {% block title %}Финансы Ozon — Seller Hub{% endblock %}
-
 {% block content %}
-<style>
-  /* Переключатель периода на тёмном hero page-header (обе темы: header всегда тёмный) */
-  .mp-period-seg { display: flex; gap: 2px; padding: 3px; background: rgba(255,255,255,.12); border-radius: var(--r-sm); }
-  .mp-period-btn {
-    border: none; background: transparent; cursor: pointer;
-    padding: 5px 12px; border-radius: var(--r-xs);
-    font-size: 13px; font-weight: 500; color: rgba(255,255,255,.72);
-    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
-  }
-  .mp-period-btn:hover { color: var(--text-on-accent); }
-  .mp-period-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-  .mp-period-btn:active { opacity: .85; }
-  .mp-period-btn--active { background: var(--text-on-accent); color: var(--bg-sidebar); box-shadow: var(--shadow-1); }
-  .mp-facts-table td { vertical-align: top; }
-</style>
-
-<div x-data="ozonFinancePage()" x-init="init()">
-  <div class="sh-page-header">
-    <div class="sh-page-header-content">
-      <div>
-        <h1 class="sh-page-title">Финансы Ozon</h1>
-        <p class="sh-page-subtitle">Проверяемые начисления по кабинету, валюте и источнику</p>
-      </div>
-      <div class="sh-page-actions">
-        <div class="mp-period-seg" role="group" aria-label="Период">
-          <button type="button" @click="changePeriod('7d')" class="mp-period-btn" :class="period==='7d' ? 'mp-period-btn--active' : ''" :aria-pressed="period==='7d' ? 'true' : 'false'">7 дней</button>
-          <button type="button" @click="changePeriod('30d')" class="mp-period-btn" :class="period==='30d' ? 'mp-period-btn--active' : ''" :aria-pressed="period==='30d' ? 'true' : 'false'">30 дней</button>
-        </div>
-        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="sync()" :disabled="syncing">
-          <span x-text="syncing ? 'Читаем Ozon…' : (syncState && syncState.status==='running' ? 'Продолжить sync' : 'Обновить из Ozon')"></span>
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <div style="max-width:1380px;margin:0 auto;padding:0 24px 40px">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-      {{ channel_bar(active='ozon', account_id=selected_account.id, wb_href=url_for('finances_page'), ozon_href=url_for('marketplace_finance.page'), carry='period') }}
-      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
-        <a href="{{ url_for('marketplace_fulfillment.orders_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Заказы</a>
-        <a href="{{ url_for('marketplace_analytics_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Аналитика</a>
-        <a href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы</a>
-      </div>
-    </div>
-
-    <div class="sh-alert sh-alert--info" role="note">
-      <div class="sh-alert-icon">{{ icon('info-circle', size=18) }}</div>
-      <div class="sh-alert-content"><strong>Это не P&amp;L и не прибыль.</strong> Итоги считаются только из <code>accruals[].total_amount</code>: положительные и отрицательные суммы показываются отдельно, net — их алгебраическая сумма внутри одной валюты. Детали fee поясняют операцию и никогда не суммируются второй раз. WB и разные валюты не объединяются.</div>
-    </div>
-
-    <template x-if="error">
-      <div class="sh-alert sh-alert--error" role="alert">
-        <div class="sh-alert-icon">{{ icon('x-circle', size=18) }}</div>
-        <div class="sh-alert-content" x-text="error"></div>
-      </div>
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-read-refresh.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-finance.css') }}">
+<div id="ofn-fallback" class="ofn-page" role="status"><h1>Финансы Ozon</h1><p>Загружаем журнал начислений… Если он не открылся, обновите страницу.</p><noscript>Для журнала начислений включите JavaScript.</noscript></div>
+<div id="ofn-app" class="ofn-page" x-ignore v-cloak>
+  <header class="ofn-header"><div><h1>Начисления и удержания</h1><p>Суммы Ozon и расшифровка каждой операции</p></div><div class="ofn-actions"><div class="ofn-period" role="group" aria-label="Период"><button v-for="p in ['7d','30d']" :key="p" type="button" :aria-pressed="period===p" @click="changePeriod(p)" v-text="p==='7d'?'7 дней':'30 дней'"></button></div><button type="button" class="sh-btn sh-btn--primary" @click="requestRefresh()" :disabled="refreshing || refreshUncertain || refreshSessionEnded || sessionEnded">{{ icon('refresh', size=16) }}<span v-text="refreshUncertain?'Проверяем заявку…':refreshing?'Обновление идёт…':'Обновить из Ozon'"></span></button></div></header>
+  {{ channel_bar(active='ozon', account_id=selected_account.id, wb_href=url_for('finances_page'), ozon_href=url_for('marketplace_finance.page'), carry='period') }}
+  <nav class="ofn-nav" aria-label="Связанные разделы"><a :href="withRefreshPeriod(config.orders+'?account_id='+config.accountId)">Заказы {{ icon('arrow-right', size=15) }}</a><a :href="withRefreshPeriod(config.analytics+'?account_id='+config.accountId)">Аналитика {{ icon('arrow-right', size=15) }}</a></nav>
+  <section v-if="refreshState && refreshState.status!=='idle'" class="sh-card ozon-read-status" role="status" aria-live="polite" :data-state="refreshState.status"><div><strong v-text="refreshTitle()"></strong><span class="ozon-read-status__dates" v-text="refreshPeriodLabel()"></span><p v-text="refreshState.message"></p><p v-if="refreshDueLabel()" class="ozon-read-status__due" v-text="refreshDueLabel()"></p><p v-if="refreshState.active" class="ozon-read-status__hint">Пока обновляем, доступны последние сохранённые данные.</p></div><a v-if="['access_denied','account_unavailable','credentials_changed'].includes(refreshState.error_code)" href="/api-settings#ozon-api-settings-title" class="sh-btn sh-btn--secondary">Настройки подключения</a></section>
+  <div v-if="refreshStatusError" class="ofn-notice ofn-warning" role="alert"><span v-text="refreshStatusError"></span><a v-if="refreshSessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" @click="loadRefreshStatus()">Проверить состояние</button></div>
+  <p class="ofn-explanation">{{ icon('info-circle', size=18) }}<span>Итог начислений — это суммы Ozon за выбранный период. Себестоимость и другие расходы продавца сюда не входят: это не расчёт прибыли и не сумма банковской выплаты.</span></p>
+  <form class="ofn-filters" role="search" aria-label="Поиск начислений" @submit.prevent="applyFilters()">
+    <label class="ofn-search">Номер начисления, отправления или SKU<span><input name="search" type="search" v-model="searchDraft" autocomplete="off" maxlength="200" placeholder="Найти в выбранном периоде…"><button type="submit" class="sh-btn sh-btn--secondary" aria-label="Найти">{{ icon('search', size=18) }}</button></span></label>
+    <label>Категория<select name="category" :value="filters.category" @change="navigate({category:$event.target.value,page:1})"><option value="">Все категории</option><option v-for="(label,key) in categories" :key="key" :value="key" v-text="label"></option></select></label>
+    <label>Направление<select name="sign" :value="filters.sign" @change="navigate({sign:$event.target.value,page:1})"><option value="">Все суммы</option><option value="positive">Положительные</option><option value="negative">Отрицательные</option><option value="zero">Нулевые</option></select></label>
+    <label>Тип в расшифровке<select name="type_id" :value="filters.typeId" @change="navigate({typeId:$event.target.value,page:1})"><option value="">Любой тип</option><option v-for="t in typeOptions" :key="t.value" :value="t.value" v-text="t.label"></option></select></label>
+  </form>
+  <p v-if="filters.typeId" class="ofn-muted ofn-filter-hint">Выбраны начисления, содержащие этот тип. Итоги учитывают всю сумму каждого начисления, а не отдельную услугу.</p><p v-if="typesTruncated" class="ofn-muted ofn-filter-hint">В фильтре показаны 50 наиболее частых типов. Все полученные компоненты доступны в расшифровках.</p>
+  <div class="ofn-list-heading"><div><strong v-if="loaded" v-text="'Начисления · '+pagination.total.toLocaleString('ru-RU')"></strong><span v-else>Загружаем журнал…</span><span class="ofn-muted" v-text="freshness"></span><span v-if="coverage" class="ofn-muted" v-text="day(coverage.requested_start)+' — '+day(coverage.requested_end)"></span></div><div class="ofn-actions"><a class="sh-btn sh-btn--secondary" :href="'/marketplaces/finance/changes?account_id='+config.accountId+(snapshot?'&newer='+snapshot.id:'')">{{ icon('clock', size=16) }} История загрузок</a><button type="button" class="sh-btn sh-btn--secondary" :disabled="!canExport || exporting" @click="exportExcel()">{{ icon('download', size=16) }}<span v-text="exporting?'Готовим файл…':'Скачать Excel'"></span></button><button v-if="exporting" type="button" class="ofn-text-button" @click="cancelExport()">Отменить выгрузку</button><button v-if="snapshot && !sessionEnded" type="button" class="ofn-text-button" @click="openLatest()" :disabled="loading">Открыть последние данные</button><button v-if="hasFilters" type="button" class="ofn-text-button" @click="resetFilters()">Сбросить фильтры</button></div></div>
+  <p v-if="exportMessage" class="ofn-muted" role="status" v-text="exportMessage"></p>
+  <div v-if="exportError" class="ofn-notice ofn-error ofn-export-error" role="alert"><span v-text="exportError"></span><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" :disabled="!canExport || exporting" @click="exportExcel()">Повторить выгрузку</button></div>
+  <div v-if="error" class="ofn-notice ofn-error" role="alert"><div><strong v-text="error"></strong><p v-if="loaded" v-text="staleScope?'Ниже остаётся предыдущая выборка и её суммы. Новые условия ещё не загружены.':'Показываем последнюю загруженную выборку.'"></p></div><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><div v-else class="ofn-actions"><button v-if="filters.snapshotId" type="button" class="sh-btn sh-btn--secondary" @click="openLatest()">Открыть актуальные данные</button><button type="button" class="sh-btn sh-btn--secondary" @click="load()">Повторить загрузку</button></div></div>
+  <div v-if="snapshot && coverage && !coverage.complete" class="ofn-notice ofn-warning" role="status"><span>Период загружен не полностью. Показаны доступные начисления из снимка с <b v-text="day(coverage.snapshot_start)"></b> по <b v-text="day(coverage.snapshot_end)"></b>. Завершите обновление, чтобы получить остальные даты.</span></div>
+  <div v-if="syncState?.status==='failed' && !refreshing" class="ofn-notice ofn-warning" role="status"><span>Последнее обновление не завершилось. <span v-if="snapshot">Показан последний готовый снимок.</span> Повторите обновление позже.</span></div>
+  <div v-if="loading && !loaded" class="ofn-loading" role="status">Загружаем сохранённые начисления…<div v-for="n in 3" :key="n" class="sh-skeleton ofn-skeleton"></div></div>
+  <section v-if="loaded" class="ofn-observation" :aria-busy="loading" aria-label="Сохранённая выборка начислений">
+    <p v-if="loading" class="ofn-muted" role="status">Загружаем выбранную выборку…</p>
+    <section v-for="total in totals" :key="total.currency" class="ofn-summary" :aria-label="'Итоги в валюте '+total.currency"><div class="ofn-summary-title"><strong v-text="total.currency"></strong><small v-text="'Начислений в выборке: '+total.fact_count.toLocaleString('ru-RU')"></small></div><dl><div><dt>Положительные суммы</dt><dd class="is-positive" v-text="money(total.positive,total.currency)"></dd></div><div><dt>Отрицательные суммы</dt><dd class="is-negative" v-text="money(total.negative,total.currency)"></dd></div><div><dt>Итог начислений</dt><dd v-text="money(total.net,total.currency)"></dd></div></dl></section>
+    <div v-if="!items.length && !error && !loading" class="ofn-empty">{{ icon('currency', size=40) }}<h2 v-text="filters.page>1?'На этой странице нет начислений':hasFilters?'Ничего не нашлось':snapshot?'За этот период начислений нет':'Начисления ещё не загружены'"></h2><p v-text="hasFilters?'Попробуйте другой номер или измените фильтры.':snapshot?'Выберите другой период или обновите сведения из Ozon.':'Загрузите данные магазина. Суммы появятся после завершения обновления.'"></p><button v-if="filters.page>1" type="button" class="sh-btn sh-btn--secondary" @click="navigate({page:1})">На первую страницу</button><button v-else-if="hasFilters" type="button" class="sh-btn sh-btn--secondary" @click="resetFilters()">Сбросить фильтры</button><button v-else type="button" class="sh-btn sh-btn--secondary" @click="requestRefresh()" :disabled="refreshing || refreshUncertain || refreshSessionEnded">Получить начисления</button></div>
+    <div v-if="items.length" class="ofn-ledger"><article v-for="item in items" :key="item.id" class="ofn-row">
+      <div class="ofn-row-date"><time v-text="day(item.fact_date)"></time><button type="button" class="ofn-text-button" @click="openDetail(item.id)" :aria-label="'Открыть начисление '+item.accrual_id" v-text="'№ '+item.accrual_id"></button><small v-text="categoryLabel(item.accrued_category)"></small></div>
+      <div class="ofn-row-content"><a v-if="item.posting_url" :href="withRefreshPeriod(item.posting_url)" class="ofn-link" v-text="'Отправление '+item.unit_number"></a><strong v-else-if="item.unit_number" class="ofn-document" v-text="item.unit_number"></strong>
+        <div v-for="line in item.items" :key="line.id" class="ofn-product"><span class="ofn-photo"><img v-if="safeImage(line.listing?.image) && !failedImages[line.id]" :src="safeImage(line.listing.image)" alt="" width="44" height="52" loading="lazy" v-image-deadline @error="failedImages[line.id]=true"><span v-else>{{ icon('image', size=20) }}</span></span><div><a v-if="line.listing" :href="line.listing.url" v-text="lineName(line)"></a><span v-else v-text="lineName(line)"></span><small v-text="'SKU '+line.external_sku"></small><small v-if="line.match_status!=='matched'" v-text="matchLabel(line.match_status)"></small></div></div>
+        <p v-if="!item.items.length" class="ofn-muted">Начисление без привязки к товару</p><p class="ofn-component-preview" v-if="item.components.length" v-text="item.components.map(componentLabel).join(' · ')"></p><button v-if="item.items_truncated" type="button" class="ofn-text-button" @click="openDetail(item.id)" v-text="'Все товары: '+item.items_count"></button>
+      </div><div class="ofn-row-amount"><strong :class="'is-'+item.amount_sign" v-text="money(item.total_amount,item.currency)"></strong><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="openDetail(item.id)" :aria-label="'Расшифровка начисления '+item.accrual_id">Расшифровка {{ icon('chevron-right', size=14) }}</button><small v-if="item.components_count" v-text="'Компоненты: '+item.components_count"></small></div>
+    </article></div>
+  </section>
+  <nav v-if="pagination.pages>1 && !staleScope && !loading" class="ofn-pagination" aria-label="Страницы начислений"><a v-if="filters.page>1" class="sh-btn sh-btn--secondary" :href="url({...filters,page:filters.page-1})" @click="pageLink($event,filters.page-1)">Назад</a><span v-text="'Страница '+pagination.page+' из '+pagination.pages"></span><a v-if="filters.page<pagination.pages" class="sh-btn sh-btn--secondary" :href="url({...filters,page:filters.page+1})" @click="pageLink($event,filters.page+1)">Далее</a></nav>
+  <button v-if="Object.keys(failedImages).length" type="button" class="ofn-text-button" @click="retryImages()">Повторить загрузку фотографий</button>
+  <dialog ref="drawer" class="ofn-drawer" aria-labelledby="ofn-detail-title" @cancel.prevent="dismissDetail()" @click.self="dismissDetail()"><div class="ofn-drawer-inner"><header><h2 id="ofn-detail-title" v-text="detail?'Начисление № '+detail.accrual_id:'Расшифровка начисления'"></h2><button type="button" class="sh-btn sh-btn--secondary" aria-label="Закрыть расшифровку" @click="dismissDetail()">{{ icon('close', size=20) }}</button></header><div class="ofn-drawer-body">
+    <div v-if="detailError" class="ofn-notice ofn-error" role="alert"><span v-text="detailError"></span><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" @click="openDetail(detailId,false,itemPage,componentPage)">Повторить загрузку</button></div><p v-if="detailLoading" role="status">Загружаем расшифровку…</p>
+    <template v-if="detail"><div class="ofn-detail-amount"><strong :class="'is-'+detail.amount_sign" v-text="money(detail.total_amount,detail.currency)"></strong><span v-text="day(detail.fact_date)"></span><span v-text="categoryLabel(detail.accrued_category)"></span></div><a v-if="detail.posting_url" :href="withRefreshPeriod(detail.posting_url)" class="ofn-link" v-text="'Открыть отправление '+detail.unit_number"></a><p v-else-if="detail.unit_number" class="ofn-document" v-text="'Документ: '+detail.unit_number"></p>
+      <section class="ofn-detail-section"><h3 v-text="'Товары · '+detail.items_pagination.total"></h3><p v-if="!detail.items_pagination.total" class="ofn-muted">Ozon не указал товары для этого начисления.</p><div v-for="line in detail.items" :key="line.id" class="ofn-product"><span class="ofn-photo"><img v-if="safeImage(line.listing?.image) && !failedImages[line.id]" :src="safeImage(line.listing.image)" alt="" width="44" height="52" loading="lazy" v-image-deadline @error="failedImages[line.id]=true"><span v-else>{{ icon('image', size=20) }}</span></span><div><a v-if="line.listing" :href="line.listing.url" v-text="lineName(line)"></a><span v-else v-text="lineName(line)"></span><small v-text="'SKU '+line.external_sku+' · '+matchLabel(line.match_status)"></small></div></div><p v-if="!detail.items.length && detail.items_pagination.total" class="ofn-muted">На этой странице товаров нет.</p><nav v-if="detail.items_pagination.pages>1 || itemPage>1" class="ofn-pagination" aria-label="Страницы товаров"><button v-if="itemPage>1" type="button" class="sh-btn sh-btn--secondary" @click="detailPage('items',Math.max(1,itemPage-1))">Назад</button><button v-if="itemPage>detail.items_pagination.pages" type="button" class="sh-btn sh-btn--secondary" @click="detailPage('items',1)">В начало</button><span v-text="'Страница '+detail.items_pagination.page+' из '+detail.items_pagination.pages"></span><button v-if="itemPage<detail.items_pagination.pages" type="button" class="sh-btn sh-btn--secondary" @click="detailPage('items',itemPage+1)">Далее</button></nav></section>
+      <section class="ofn-detail-section"><h3 v-text="'Расшифровка · '+detail.components_pagination.total"></h3><p class="ofn-muted">Пояснения Ozon к начислению. Эти суммы не прибавляются к итогу повторно и могут не совпадать с ним в сумме.</p><p v-if="!detail.components_pagination.total" class="ofn-muted">Ozon не передал отдельные компоненты.</p><dl class="ofn-components"><div v-for="component in detail.components" :key="component.id"><dt><span v-text="componentLabel(component)"></span><small v-if="component.external_sku" v-text="'SKU '+component.external_sku"></small></dt><dd v-text="money(component.amount,component.currency)"></dd></div></dl><p v-if="!detail.components.length && detail.components_pagination.total" class="ofn-muted">На этой странице компонентов нет.</p><nav v-if="detail.components_pagination.pages>1 || componentPage>1" class="ofn-pagination" aria-label="Страницы расшифровки"><button v-if="componentPage>1" type="button" class="sh-btn sh-btn--secondary" @click="detailPage('components',Math.max(1,componentPage-1))">Назад</button><button v-if="componentPage>detail.components_pagination.pages" type="button" class="sh-btn sh-btn--secondary" @click="detailPage('components',1)">В начало</button><span v-text="'Страница '+detail.components_pagination.page+' из '+detail.components_pagination.pages"></span><button v-if="componentPage<detail.components_pagination.pages" type="button" class="sh-btn sh-btn--secondary" @click="detailPage('components',componentPage+1)">Далее</button></nav></section>
+      <details class="ofn-source"><summary>Источник и время наблюдения</summary><p v-text="'Получено '+date(detail.observed_at)"></p><p>Источник: Ozon Seller API, начисления за день.</p><dl><div><dt>Метод</dt><dd v-text="detail.source_endpoint"></dd></div><div><dt>Сумма</dt><dd>accruals[].total_amount</dd></div><div><dt>Снимок</dt><dd v-text="detail.sync_id"></dd></div></dl></details>
     </template>
-
-    <template x-if="!error && syncState && syncState.status==='failed' && syncState.error_message">
-      <div class="sh-alert sh-alert--warning" role="alert">
-        <div class="sh-alert-icon">{{ icon('warning', size=18) }}</div>
-        <div class="sh-alert-content">
-          <strong>Последнее обновление не завершилось.</strong>
-          <span x-text="' '+syncState.error_message"></span>
-          <span x-show="snapshotState"> Данные ниже взяты из последнего готового снимка.</span>
-        </div>
-      </div>
-    </template>
-
-    <div class="sh-card" style="padding:16px;margin-bottom:20px">
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;align-items:center">
-        <input class="sh-input" x-model="search" @keyup.enter="applyFilters()" placeholder="Accrual ID, отправление или SKU">
-        <select class="sh-input" x-model="category" @change="applyFilters()">
-          <option value="">Все категории</option>
-          <option value="POSTING">По отправлению</option>
-          <option value="ITEM">По товару</option>
-          <option value="NON_ITEM">По продавцу</option>
-          <option value="UNSPECIFIED">Не определено Ozon</option>
-        </select>
-        <select class="sh-input" x-model="sign" @change="applyFilters()">
-          <option value="">Любой знак</option>
-          <option value="positive">Положительные</option>
-          <option value="negative">Отрицательные</option>
-          <option value="zero">Нулевые</option>
-        </select>
-        <select class="sh-input" x-model="typeId" @change="applyFilters()">
-          <option value="">Любой тип fee</option>
-          <template x-for="type in typeCounts" :key="type.external_type_id">
-            <option :value="String(type.external_type_id)" x-text="(type.name || ('Тип '+type.external_type_id))+' · '+type.occurrence_count"></option>
-          </template>
-        </select>
-        <button class="sh-btn sh-btn--secondary" @click="applyFilters()">Найти</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;color:var(--text-muted);font-size:12px">
-        <span x-text="total.toLocaleString('ru-RU')+' начислений'"></span>
-        <span aria-hidden="true">•</span>
-        <span x-text="syncLabel"></span>
-        <template x-if="syncState && syncState.status==='running'">
-          <span style="color:var(--info)" x-text="'День '+syncState.current_date+' · '+syncState.page_count+' страниц · '+syncState.fact_count+' фактов'"></span>
-        </template>
-        <template x-if="coverage && snapshotState && !coverage.complete">
-          <span style="color:var(--warn)" x-text="'Снимок покрывает данные по '+dateOnly(coverage.snapshot_end)+'; недостающий хвост сейчас обновляется'"></span>
-        </template>
-        <template x-if="syncState && (syncState.unmatched_item_count || syncState.ambiguous_item_count)">
-          <span style="color:var(--warn)" x-text="'Без точной связи: '+syncState.unmatched_item_count+'; неоднозначных SKU: '+syncState.ambiguous_item_count"></span>
-        </template>
-      </div>
-    </div>
-
-    <template x-for="summary in totals" :key="summary.currency">
-      <section style="margin-bottom:20px">
-        <div style="display:flex;align-items:center;gap:8px;margin:0 0 9px 2px">
-          <strong x-text="summary.currency"></strong>
-          <span style="font-size:12px;color:var(--text-muted)" x-text="summary.fact_count.toLocaleString('ru-RU')+' фактов источника'"></span>
-        </div>
-        <div class="sh-stat-grid sh-stat-grid--3" style="margin-bottom:0">
-          <div class="sh-stat-card" style="border-left:3px solid var(--ok)">
-            <span class="sh-stat-label">Положительные total_amount</span>
-            <div class="sh-stat-value" style="color:var(--ok)" x-text="money(summary.positive,summary.currency)"></div>
-          </div>
-          <div class="sh-stat-card" style="border-left:3px solid var(--danger)">
-            <span class="sh-stat-label">Отрицательные total_amount</span>
-            <div class="sh-stat-value" style="color:var(--danger)" x-text="money(summary.negative,summary.currency)"></div>
-          </div>
-          <div class="sh-stat-card" style="border-left:3px solid var(--info)">
-            <span class="sh-stat-label">Net = сумма total_amount</span>
-            <div class="sh-stat-value" x-text="money(summary.net,summary.currency)"></div>
-          </div>
-        </div>
-      </section>
-    </template>
-
-    <div x-show="loading" class="sh-card" style="padding:52px;text-align:center;color:var(--text-muted)">
-      <span class="sh-spinner sh-spinner--lg" role="status" aria-label="Загрузка"></span>
-      <div style="margin-top:12px">Загрузка…</div>
-    </div>
-
-    <div x-show="!loading && !items.length" class="sh-card">
-      <div class="sh-empty">
-        <div class="sh-empty-icon">{{ icon('currency', size=44, stroke=1.2) }}</div>
-        <p class="sh-empty-title" x-text="syncState && syncState.status==='running' ? 'Снимок ещё собирается' : 'Финансовых фактов пока нет'"></p>
-        <p class="sh-empty-desc" x-text="syncState && syncState.status==='running' ? 'Частичный run скрыт: здесь появится только полностью проверенный снимок.' : 'Запустите read-only синхронизацию выбранного кабинета Ozon.'"></p>
-        <button class="sh-btn sh-btn--primary sh-btn--sm" style="margin-top:16px" @click="sync()" :disabled="syncing" x-text="syncState && syncState.status==='running' ? 'Продолжить' : 'Получить начисления'"></button>
-      </div>
-    </div>
-
-    <div x-show="!loading && items.length" class="sh-table-wrap">
-      <table class="sh-table mp-facts-table" style="min-width:1080px">
-        <thead>
-          <tr>
-            <th>Дата и accrual</th>
-            <th>Источник / связь</th>
-            <th>Категория</th>
-            <th>Поясняющие fee</th>
-            <th class="text-right">Total amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="item in items" :key="item.id">
-            <tr>
-              <td style="min-width:190px">
-                <div style="font-weight:700" x-text="dateOnly(item.fact_date)"></div>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:4px" x-text="'ID '+item.accrual_id"></div>
-              </td>
-              <td style="min-width:300px">
-                <div style="font-weight:600" x-text="item.unit_number || 'Без номера документа'"></div>
-                <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">
-                  <template x-for="line in item.items" :key="line.external_sku">
-                    <div style="font-size:12px">
-                      <span x-text="line.title || line.offer_id || ('SKU '+line.external_sku)"></span>
-                      <span :style="'margin-left:5px;color:'+(line.match_status==='matched'?'var(--ok)':'var(--warn)')" x-text="matchLabel(line.match_status)"></span>
-                    </div>
-                  </template>
-                  <span x-show="!item.items.length" style="font-size:12px;color:var(--text-muted)">Операция без SKU</span>
-                </div>
-              </td>
-              <td><span class="sh-badge" x-text="categoryLabel(item.accrued_category)"></span></td>
-              <td style="min-width:280px">
-                <template x-if="item.components.length">
-                  <details>
-                    <summary style="cursor:pointer;color:var(--accent);font-size:13px" x-text="item.components.length+' fee-компонентов'"></summary>
-                    <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
-                      <template x-for="component in item.components" :key="component.component_kind+'-'+component.external_type_id+'-'+(component.external_sku||'')">
-                        <div style="font-size:12px;display:flex;justify-content:space-between;gap:12px">
-                          <span x-text="component.type_name || ('Тип '+component.external_type_id)"></span>
-                          <span style="white-space:nowrap" x-text="money(component.amount,component.currency)"></span>
-                        </div>
-                      </template>
-                      <div style="font-size:11px;color:var(--text-muted)">Справочно: эти суммы не участвуют в повторном rollup.</div>
-                    </div>
-                  </details>
-                </template>
-                <span x-show="!item.components.length" style="color:var(--text-muted)">—</span>
-              </td>
-              <td class="text-right" style="white-space:nowrap">
-                <div style="font-size:16px;font-weight:800" :style="'color:'+(item.amount_sign==='positive'?'var(--ok)':(item.amount_sign==='negative'?'var(--danger)':'var(--text)'))" x-text="money(item.total_amount,item.currency)"></div>
-                <div style="font-size:10px;color:var(--text-muted);margin-top:4px" x-text="item.definition_code"></div>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-
-    <div x-show="!loading && items.length && pages > 1" style="display:flex;justify-content:center;align-items:center;gap:10px;padding:2px 0 8px">
-      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="page--;load()">Назад</button>
-      <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="page+' / '+pages"></span>
-      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="page++;load()">Далее</button>
-    </div>
-  </div>
+  </div></div></dialog>
 </div>
-
-<script>
-function ozonFinancePage() {
-  const accountId = {{ selected_account.id|tojson }};
-  return {
-    accountId, period:'30d', items:[], totals:[], typeCounts:[], page:1, pages:0, total:0,
-    search:'', category:'', sign:'', typeId:'', loading:true, syncing:false,
-    error:'', syncState:null, snapshotState:null, coverage:null,
-    get syncLabel() {
-      if (!this.syncState && !this.snapshotState) return 'Синхронизация ещё не запускалась';
-      if (this.syncState && this.syncState.status === 'running') {
-        return this.snapshotState ? 'Показываем последний готовый снимок; новый собирается' : 'Первый снимок собирается';
-      }
-      if (this.syncState && this.syncState.status === 'failed') {
-        return this.snapshotState ? 'Последняя попытка с ошибкой; показан последний готовый снимок' : 'Последняя попытка завершилась ошибкой';
-      }
-      const state=this.snapshotState||this.syncState;
-      return state && state.completed_at ? 'Готовый снимок от '+new Date(state.completed_at).toLocaleString('ru-RU') : 'Синхронизировано';
-    },
-    async init() {
-      const q=new URLSearchParams(location.search);
-      if (['7d','30d'].includes(q.get('period'))) this.period=q.get('period');
-      await this.load();
-    },
-    changePeriod(value) { this.period=value; this.page=1; const u=new URL(location); u.searchParams.set('period',value); history.replaceState(null,'',u); this.load(); },
-    applyFilters() { this.page=1; this.load(); },
-    async load() {
-      this.loading=true; this.error='';
-      try {
-        let u='/marketplaces/api/finance?account_id='+this.accountId+'&period='+this.period+'&page='+this.page+'&per_page=50';
-        if(this.search.trim()) u+='&search='+encodeURIComponent(this.search.trim());
-        if(this.category) u+='&category='+encodeURIComponent(this.category);
-        if(this.sign) u+='&sign='+encodeURIComponent(this.sign);
-        if(this.typeId) u+='&type_id='+encodeURIComponent(this.typeId);
-        const r=await fetch(u); const d=await r.json();
-        if(!r.ok) throw new Error(d.error||'Не удалось загрузить финансы Ozon');
-        const data=d.data||{}; this.items=data.items||[]; this.totals=data.totals||[];
-        this.typeCounts=data.type_counts||this.typeCounts||[];
-        this.total=(data.pagination&&data.pagination.total)||0;
-        this.pages=(data.pagination&&data.pagination.pages)||0;
-        this.syncState=data.sync||null; this.snapshotState=data.snapshot_sync||null;
-        this.coverage=data.coverage||null;
-      } catch(e) { this.error=e.message; }
-      finally { this.loading=false; }
-    },
-    async sync() {
-      this.syncing=true; this.error='';
-      try {
-        let force=!(this.syncState&&this.syncState.status==='running');
-        for(let attempt=0;attempt<2;attempt++) {
-          const r=await fetch('/marketplaces/api/finance/sync?account_id='+this.accountId,{
-            method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
-            body:JSON.stringify({period:this.period,force:force,max_pages:10})
-          });
-          const d=await r.json(); if(!r.ok) throw new Error(d.error||'Ошибка синхронизации');
-          this.syncState=d.data; force=false;
-          if(this.syncState.status!=='running') break;
-        }
-        await this.load();
-        if(this.syncState&&this.syncState.status==='running') this.$store.toasts.info('Большой финансовый снимок сохранён и продолжится с текущего дня');
-        else this.$store.toasts.success('Проверенный финансовый снимок Ozon готов');
-      } catch(e) { this.error=e.message; }
-      finally { this.syncing=false; }
-    },
-    money(value,currency) {
-      const code=(currency&&currency.length===3)?currency:'RUB';
-      try{return new Intl.NumberFormat('ru-RU',{style:'currency',currency:code,maximumFractionDigits:2}).format(Number(value));}
-      catch(e){return Number(value).toLocaleString('ru-RU')+' '+code;}
-    },
-    dateOnly(value) { return value ? new Date(value+'T00:00:00').toLocaleDateString('ru-RU') : '—'; },
-    categoryLabel(value) { return {POSTING:'Отправление',ITEM:'Товар',NON_ITEM:'Продавец',UNSPECIFIED:'Не определено'}[value]||value; },
-    matchLabel(value) { return {matched:'связано',unmatched:'нет карточки',ambiguous:'SKU неоднозначен'}[value]||value; }
-  };
-}
-</script>
+<script type="application/json" id="ofn-bootstrap">{{ {'accountId':selected_account.id,'csrfToken':csrf_token(),'page':url_for('marketplace_finance.page'),'api':url_for('marketplace_finance.list_api'),'exportApi':url_for('marketplace_finance.export_api'),'orders':url_for('marketplace_fulfillment.orders_page'),'analytics':url_for('marketplace_analytics_page')}|tojson }}</script>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-read-refresh.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-finance.js') }}" defer></script>
 {% endblock %}

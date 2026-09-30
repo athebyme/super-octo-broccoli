@@ -20,7 +20,7 @@ from typing import (
     Tuple,
 )
 
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -233,7 +233,25 @@ class MarketplaceProductLinkService:
             raise MarketplaceProductLinkNotFound(
                 "Внутренняя карточка не найдена"
             )
+        if not cls._candidate_fk_valid(product):
+            raise MarketplaceProductLinkConflict(
+                "Связи внутренней карточки с источником требуют проверки"
+            )
         return product
+
+    @staticmethod
+    def _candidate_fk_valid(product: ImportedProduct) -> bool:
+        wb = product.product
+        supplier = product.supplier_product
+        return (
+            (product.product_id is None or wb is not None)
+            and (product.supplier_product_id is None or supplier is not None)
+            and (wb is None or wb.seller_id == product.seller_id)
+            and (supplier is None or (
+                product.supplier_id is None
+                or supplier.supplier_id == product.supplier_id
+            ))
+        )
 
     @classmethod
     def _candidate_query(cls, *, seller_id: int):
@@ -1784,8 +1802,11 @@ class MarketplaceProductLinkService:
 
     @classmethod
     def _candidate_summary(cls, product: ImportedProduct) -> dict:
+        from services.source_photo_display import imported_photo_previews
+
         wb = product.product
         supplier = product.supplier_product
+        photos = imported_photo_previews(product)
         if supplier and (
             supplier.ai_parsed_at is not None
             or bool(supplier.ai_parsed_data_json)
@@ -1814,7 +1835,8 @@ class MarketplaceProductLinkService:
             ),
             "ai_cache_available": ai_source is not None,
             "ai_source": ai_source,
-            "has_source_photos": bool(product.photo_urls),
+            "has_source_photos": bool(photos),
+            "photo_preview_url": next(iter(photos.values()), None),
         }
 
     @classmethod
@@ -1878,16 +1900,27 @@ class MarketplaceProductLinkService:
                 SupplierProduct.external_id.ilike(pattern, escape="\\"),
                 SupplierProduct.vendor_code.ilike(pattern, escape="\\"),
             ]
-            if term.isascii() and term.isdigit():
-                filters.append(ImportedProduct.id == int(term))
-                filters.append(Product.nm_id == int(term))
-            products = cls._candidate_query(seller_id=seller_id).filter(
-                or_(*filters)
-            ).order_by(
+            exact_imported_id = int(term) if term.isascii() and term.isdigit() else None
+            if exact_imported_id is not None:
+                filters.append(ImportedProduct.id == exact_imported_id)
+                filters.append(Product.nm_id == exact_imported_id)
+            order = [
                 ImportedProduct.updated_at.desc(),
                 ImportedProduct.id.desc(),
-            ).limit(limit).all()
-        unique = {product.id: product for product in products}
+            ]
+            if exact_imported_id is not None:
+                # Put an exact internal ID inside the bounded page even when
+                # many newer titles/vendor codes contain the same digits.
+                order.insert(0, case(
+                    (ImportedProduct.id == exact_imported_id, 0), else_=1,
+                ))
+            products = cls._candidate_query(seller_id=seller_id).filter(
+                or_(*filters)
+            ).order_by(*order).limit(limit).all()
+        unique = {
+            product.id: product for product in products
+            if cls._candidate_fk_valid(product)
+        }
         return [
             cls._candidate_summary(product)
             for product in list(unique.values())[:limit]
@@ -1919,10 +1952,18 @@ class MarketplaceProductLinkService:
         ).order_by(
             MarketplaceListingLinkEvent.id.desc()
         ).limit(20).all()
+        bound_draft = None
+        if listing.imported_product_id is not None:
+            bound_draft = MarketplaceProductDraft.query.filter_by(
+                seller_id=seller_id,
+                published_listing_id=listing.id,
+            ).first()
+        ozon = bool(listing.marketplace and listing.marketplace.code == "ozon")
         return {
             "canonical_product": (
                 cls._candidate_summary(listing.imported_product)
-                if listing.imported_product else None
+                if listing.imported_product and cls._candidate_fk_valid(listing.imported_product)
+                else None
             ),
             "candidates": (
                 []
@@ -1934,4 +1975,14 @@ class MarketplaceProductLinkService:
                 )
             ),
             "events": [event.to_public_dict() for event in events],
+            "actions": {
+                "can_link": ozon and listing.imported_product_id is None,
+                "can_unlink": ozon and listing.imported_product_id is not None and bound_draft is None,
+                "unlink_reason": (
+                    "Связь используется Ozon-черновиком; сначала завершите или архивируйте его"
+                    if bound_draft is not None else None
+                ),
+                "bound_draft_id": bound_draft.id if bound_draft is not None else None,
+                "link_version": listing.link_version,
+            },
         }

@@ -17,6 +17,9 @@ import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
+from services.wb_credentials import token_is_expired
+from services.wb_stock_contracts import ENDPOINT as WB_STOCK_ENDPOINT, normalize_stock_page, stock_request
+
 # Настройка логирования
 logger = logging.getLogger('wb_api')
 
@@ -95,6 +98,12 @@ class WBAPIException(Exception):
 class WBAuthException(WBAPIException):
     """Ошибка аутентификации"""
     pass
+
+
+class WBTokenExpiredException(WBAuthException):
+    """A negative-only local expiry gate; no network request was made."""
+
+    code = 'wb_token_expired'
 
 
 class WBRateLimitException(WBAPIException):
@@ -179,6 +188,19 @@ class RateLimiter:
         self.requests_log: List[float] = []
         self._lock = threading.Lock()
 
+    def acquire_or_raise(self):
+        """A background page can defer durably instead of sleeping in a worker."""
+        import math
+        with self._lock:
+            now = time.time()
+            self.requests_log = [stamp for stamp in self.requests_log if now - stamp < self.time_window]
+            if len(self.requests_log) >= self.max_requests:
+                raise WBRateLimitException(
+                    'Ожидается лимит Wildberries',
+                    retry_after=max(1, math.ceil(self.time_window - (now - self.requests_log[0]))),
+                )
+            self.requests_log.append(now)
+
     def wait_if_needed(self):
         """Ожидание если достигнут лимит запросов (thread-safe)"""
         while True:
@@ -230,6 +252,7 @@ class WildberriesAPIClient:
         '/content/v2/cards/upload': 8,
         '/content/v2/cards/upload/add': 8,
         '/api/content/v1/brands': (1, 1),
+        WB_STOCK_ENDPOINT: (1, 20),
     }
 
     # Бюджеты по категориям API: (запросов, окно в секундах).
@@ -293,7 +316,11 @@ class WildberriesAPIClient:
         retry_strategy = Retry(
             total=max_retries,
             backoff_factor=1,  # 1s, 2s, 4s, ...
-            status_forcelist=[429, 500, 502, 503, 504],
+            # Rate-limit deferral belongs to the caller's visible budgets. 429
+            # is handled below as WBRateLimitException; urllib3 must not silently
+            # retry it (including implicit Retry-After retries).
+            status_forcelist=[500, 502, 503, 504],
+            respect_retry_after_header=False,
             allowed_methods=frozenset({"HEAD", "GET", "OPTIONS"}),
         )
 
@@ -305,6 +332,13 @@ class WildberriesAPIClient:
 
         session.mount("http://", adapter)
         session.mount("https://", adapter)
+        # Brand sweep already owns pagination, request budgets and durable
+        # partial checkpoints. Hidden urllib3 GET/429 retries bypass those
+        # budgets and turn a typed rate limit into a multi-minute RetryError.
+        session.mount(
+            urljoin(self._get_base_url('content'), '/api/content/v1/brands'),
+            HTTPAdapter(max_retries=0, pool_connections=10, pool_maxsize=20),
+        )
 
         # Заголовки по умолчанию
         session.headers.update({
@@ -394,17 +428,28 @@ class WildberriesAPIClient:
             WBRateLimitException: Превышен лимит запросов
             WBAPIException: Общая ошибка API
         """
+        # A stale credential cannot become valid after waiting in a limiter.
+        # Recheck each call, including long-lived clients and changed keys.
+        if token_is_expired(self.api_key):
+            raise WBTokenExpiredException(
+                'Срок действия API ключа Wildberries истёк. Обновите ключ в настройках API.'
+            )
+
         # Rate limiting: пул инстанса → бюджет категории → бюджет метода
-        self.rate_limiter.wait_if_needed()
+        limiter_method = (
+            'acquire_or_raise' if api_type == 'analytics' and endpoint == WB_STOCK_ENDPOINT
+            else 'wait_if_needed'
+        )
+        getattr(self.rate_limiter, limiter_method)()
         category_limiter = self._limiter_for_category(api_type)
         if category_limiter is not None:
-            category_limiter.wait_if_needed()
+            getattr(category_limiter, limiter_method)()
         content_burst_limiter = self._limiter_for_content_burst(api_type)
         if content_burst_limiter is not None:
-            content_burst_limiter.wait_if_needed()
+            getattr(content_burst_limiter, limiter_method)()
         endpoint_limiter = self._limiter_for_endpoint(endpoint)
         if endpoint_limiter is not None:
-            endpoint_limiter.wait_if_needed()
+            getattr(endpoint_limiter, limiter_method)()
 
         # Формирование URL
         base_url = self._get_base_url(api_type)
@@ -415,11 +460,11 @@ class WildberriesAPIClient:
             kwargs['timeout'] = self.timeout
         is_write_method = str(method).upper() not in {
             'GET', 'HEAD', 'OPTIONS',
-        }
+        } and not (str(method).upper() == 'POST' and api_type == 'analytics' and endpoint == WB_STOCK_ENDPOINT)
         # requests follows 307/308 with the original method and body.  WB
         # writes have no idempotency key, so an implicit redirect would be an
         # invisible second physical submission outside the durable receipt.
-        if is_write_method:
+        if is_write_method or endpoint == '/api/content/v1/brands':
             kwargs.setdefault('allow_redirects', False)
 
         # Логирование запроса
@@ -869,22 +914,18 @@ class WildberriesAPIClient:
         response = self._make_request('GET', 'statistics', endpoint, params=params)
         return response.json()
 
-    def get_stocks(self, date_from: str) -> List[Dict[str, Any]]:
-        """
-        Получить остатки товаров (Statistics API)
+    def get_stocks_page(self, nm_ids, *, offset=0, limit=5000):
+        """One bounded Analytics read; the durable worker owns pagination."""
+        payload = stock_request(nm_ids, offset=offset, limit=limit)
+        response = self._make_request(
+            'POST', 'analytics', WB_STOCK_ENDPOINT, json=payload,
+            allow_redirects=False,
+        )
+        return normalize_stock_page(response.json(), nm_ids=nm_ids, limit=limit)
 
-        Args:
-            date_from: Дата начала в формате YYYY-MM-DD
-
-        Returns:
-            Список остатков
-        """
-        endpoint = "/api/v1/supplier/stocks"
-
-        params = {'dateFrom': date_from}
-
-        response = self._make_request('GET', 'statistics', endpoint, params=params)
-        return response.json()
+    def get_stocks(self, date_from=None):
+        """Fail closed for extensions still using the retired Statistics API."""
+        raise WBAPIException('Устаревший метод остатков отключён. Используйте фоновую синхронизацию складов.')
 
     # ==================== MARKETPLACE API ====================
 

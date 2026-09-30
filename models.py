@@ -4101,6 +4101,7 @@ class SellerMarketplaceAccount(db.Model):
     )
 
     __table_args__ = (
+        db.Index('idx_marketplace_account_expiry', 'marketplace_id', 'is_active', 'credential_expires_at', 'id'),
         db.UniqueConstraint(
             'seller_id',
             'marketplace_id',
@@ -4233,6 +4234,7 @@ class SellerMarketplaceAccount(db.Model):
         return {'default_vat': default_vat}
 
     def to_public_dict(self) -> dict:
+        from services.marketplace_credential_expiry import expiry_notice
         return {
             'id': self.id,
             'marketplace_code': self.marketplace.code if self.marketplace else None,
@@ -4246,6 +4248,8 @@ class SellerMarketplaceAccount(db.Model):
             'capabilities': self.capabilities,
             'roles': self.roles,
             'settings': self.public_settings,
+            'credential_expiry': expiry_notice(self.credential_expires_at,
+                active=bool(self.is_active and self.has_credentials)),
             'credential_expires_at': (
                 self.credential_expires_at.isoformat()
                 if self.credential_expires_at else None
@@ -4267,6 +4271,115 @@ class SellerMarketplaceAccount(db.Model):
             '<SellerMarketplaceAccount '
             f'id={self.id} seller={self.seller_id} marketplace={self.marketplace_id}>'
         )
+
+
+class MarketplaceCredentialNotice(db.Model):
+    """One current expiry series per account; deletion of notices keeps dedup."""
+    __tablename__ = 'marketplace_credential_notices'
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'), primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    credential_version = db.Column(db.Integer, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    highest_stage = db.Column(db.Integer, nullable=False)
+    notified_at = db.Column(db.DateTime, nullable=False)
+    __table_args__ = (
+        db.CheckConstraint('credential_version > 0 AND highest_stage BETWEEN 1 AND 4', name='ck_marketplace_credential_notice_stage'),
+        db.Index('idx_marketplace_credential_notice_scope', 'seller_id', 'marketplace_id', 'account_id'),
+    )
+
+
+class MarketplaceAccountEvent(db.Model):
+    """Append-only local account changes; never a copy of credential material."""
+    __tablename__ = 'marketplace_account_events'
+    id = db.Column(db.Integer, primary_key=True)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'), nullable=False)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    actor_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    action = db.Column(db.String(30), nullable=False)
+    account_version_before = db.Column(db.Integer, nullable=False)
+    account_version_after = db.Column(db.Integer, nullable=False)
+    credential_version_before = db.Column(db.Integer, nullable=False)
+    credential_version_after = db.Column(db.Integer, nullable=False)
+    changes_json = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        db.UniqueConstraint('account_id', 'account_version_after', name='uq_marketplace_account_event_version'),
+        db.CheckConstraint("action IN ('connected','key_replaced','settings_changed','default_changed','disconnected')", name='ck_marketplace_account_event_action'),
+        db.CheckConstraint('account_version_before >= 0 AND account_version_after > account_version_before AND credential_version_before >= 0 AND credential_version_after >= credential_version_before', name='ck_marketplace_account_event_versions'),
+        db.Index('idx_marketplace_account_event_scope', 'seller_id', 'marketplace_id', 'account_id', 'id'),
+    )
+
+
+class MarketplaceReadSchedule(db.Model):
+    """Durable read scheduling, independent of immutable domain snapshots."""
+    __tablename__ = 'marketplace_read_schedules'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'), nullable=False)
+    domain = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    next_due_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    cooldown_until = db.Column(db.DateTime)
+    last_attempt_at = db.Column(db.DateTime)
+    last_success_at = db.Column(db.DateTime)
+    last_run_id = db.Column(db.Integer)
+    consecutive_failures = db.Column(db.Integer, nullable=False, default=0)
+    last_error_code = db.Column(db.String(100))
+    lease_token = db.Column(db.String(64))
+    lease_expires_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('account_id', 'domain', name='uq_marketplace_read_schedule'),
+        db.CheckConstraint("domain IN ('analytics','fulfillment','finance','reviews','questions')", name='ck_marketplace_read_schedule_domain'),
+        db.CheckConstraint("status IN ('pending','running','waiting','idle','failed')", name='ck_marketplace_read_schedule_status'),
+        db.CheckConstraint('consecutive_failures >= 0', name='ck_marketplace_read_schedule_failures'),
+        db.CheckConstraint('(lease_token IS NULL) = (lease_expires_at IS NULL)', name='ck_marketplace_read_schedule_lease'),
+        db.Index('idx_marketplace_read_schedule_due', 'domain', 'next_due_at', 'id'),
+        db.Index('idx_marketplace_read_schedule_scope', 'seller_id', 'marketplace_id', 'account_id'),
+    )
+
+
+class MarketplaceReadRequest(db.Model):
+    """A seller's exact-period refresh, independent of the periodic schedule."""
+    __tablename__ = 'marketplace_read_requests'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'), nullable=False)
+    domain = db.Column(db.String(20), nullable=False)
+    period_code = db.Column(db.String(3), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    force = db.Column(db.Boolean, nullable=False, default=False)
+    credential_version = db.Column(db.Integer, nullable=False)
+    credential_fingerprint = db.Column(db.String(64))  # private manual-read key identity
+    status = db.Column(db.String(20), nullable=False, default='pending')
+    run_id = db.Column(db.Integer)
+    failure_count = db.Column(db.Integer, nullable=False, default=0)
+    error_code = db.Column(db.String(100))
+    requested_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.CheckConstraint("domain IN ('analytics','fulfillment','finance','reviews','questions')", name='ck_marketplace_read_request_domain'),
+        db.CheckConstraint("period_code IN ('7d','30d','90d')", name='ck_marketplace_read_request_period'),
+        db.CheckConstraint("(domain IN ('reviews','questions') AND period_code = '90d') OR "
+                           "(domain IN ('analytics','fulfillment','finance') AND period_code IN ('7d','30d'))",
+                           name='ck_marketplace_read_request_domain_period'),
+        db.CheckConstraint("status IN ('pending','running','completed','failed')", name='ck_marketplace_read_request_status'),
+        db.CheckConstraint('period_start <= period_end AND failure_count >= 0', name='ck_marketplace_read_request_values'),
+        db.Index('uq_marketplace_read_request_active', 'account_id', 'domain', 'period_code', unique=True,
+                 sqlite_where=db.text("status IN ('pending','running')")),
+        db.Index('idx_marketplace_read_request_scope', 'seller_id', 'marketplace_id', 'account_id', 'domain', 'id'),
+    )
 
 
 class MarketplaceReferenceAccount(db.Model):
@@ -4602,6 +4715,9 @@ class MarketplaceAttributeDefinition(db.Model):
         nullable=False,
     )
 
+    # One indexed join loads only review metadata; the snapshot stays deferred.
+    value_review = db.relationship('OzonReferenceValueReview', uselist=False,
+                                   lazy='joined', viewonly=True)
     marketplace = db.relationship('Marketplace')
     product_type = db.relationship(
         'MarketplaceProductType',
@@ -4647,6 +4763,36 @@ class MarketplaceAttributeDefinition(db.Model):
             seen.add(item)
             result.append(item)
         return result
+
+
+class OzonReferenceValueReview(db.Model):
+    """Latest bounded official snapshot awaiting exact administrative review."""
+    __tablename__ = 'ozon_reference_value_reviews'
+
+    attribute_id = db.Column(db.Integer, db.ForeignKey('marketplace_attribute_definitions.id'), primary_key=True)
+    product_type_id = db.Column(db.Integer, db.ForeignKey('marketplace_product_types.id'), nullable=False)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    status = db.Column(db.String(20), nullable=False, default='pending_review')
+    baseline_hash = db.Column(db.String(64), nullable=False)
+    baseline_version = db.Column(db.Integer, nullable=False)
+    schema_hash = db.Column(db.String(64), nullable=False)
+    scope_hash = db.Column(db.String(64), nullable=False)
+    candidate_hash = db.Column(db.String(64), nullable=False)
+    candidate_json = db.deferred(db.Column(db.Text))
+    payload_bytes = db.Column(db.Integer, nullable=False, default=0)
+    previous_count = db.Column(db.Integer, nullable=False)
+    candidate_count = db.Column(db.Integer, nullable=False)
+    observed_at = db.Column(db.DateTime, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    approved_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    approved_at = db.Column(db.DateTime)
+    applied_at = db.Column(db.DateTime)
+
+    __table_args__ = (
+        db.Index('idx_ozon_reference_review_status', 'status', 'product_type_id'),
+        db.CheckConstraint("status IN ('pending_review','approved','applied','stale')"),
+        db.CheckConstraint('version > 0 AND payload_bytes >= 0 AND previous_count >= 0 AND candidate_count >= 0'),
+    )
 
 
 class MarketplaceAttributeValue(db.Model):
@@ -5416,6 +5562,59 @@ class MarketplaceOperation(db.Model):
         return data
 
 
+class MarketplaceWriteQuarantine(db.Model):
+    """An operator's durable write fence, separate from provider outcome."""
+    __tablename__ = 'marketplace_write_quarantines'
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'), nullable=False)
+    operation_id = db.Column(db.Integer, db.ForeignKey('marketplace_operations.id', ondelete='RESTRICT'), unique=True)
+    media_operation_id = db.Column(db.Integer, db.ForeignKey('marketplace_media_operations.id', ondelete='RESTRICT'), unique=True)
+    scope_kind = db.Column(db.String(20), nullable=False)
+    offer_id = db.Column(db.String(200))
+    product_id = db.Column(db.String(100))
+    scope_reason = db.Column(db.String(50), nullable=False)
+    reviewed_scope_token = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='active')
+    version = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    released_at = db.Column(db.DateTime)
+    __mapper_args__ = {'version_id_col': version}
+    __table_args__ = (
+        db.CheckConstraint('(operation_id IS NOT NULL AND media_operation_id IS NULL) OR (operation_id IS NULL AND media_operation_id IS NOT NULL)', name='ck_write_quarantine_origin'),
+        db.CheckConstraint("(scope_kind = 'account' AND offer_id IS NULL AND product_id IS NULL) OR (scope_kind = 'product' AND offer_id IS NOT NULL AND length(offer_id) BETWEEN 1 AND 200 AND (product_id IS NULL OR (length(product_id) BETWEEN 1 AND 100 AND product_id NOT GLOB '*[^0-9]*' AND product_id NOT LIKE '0%')))", name='ck_write_quarantine_scope'),
+        db.CheckConstraint("scope_reason IN ('immutable_target_verified','identity_unknown','identity_conflict','document_invalid','unsupported_kind') AND length(reviewed_scope_token) = 64", name='ck_write_quarantine_review'),
+        db.CheckConstraint("(status = 'active' AND released_at IS NULL) OR (status = 'released' AND released_at IS NOT NULL)", name='ck_write_quarantine_status'),
+        db.CheckConstraint('version > 0', name='ck_write_quarantine_version'),
+        db.Index('idx_write_quarantine_offer', 'seller_id', 'marketplace_id', 'account_id', 'status', 'offer_id'),
+        db.Index('idx_write_quarantine_product', 'seller_id', 'marketplace_id', 'account_id', 'status', 'product_id'),
+    )
+
+
+class MarketplaceWriteQuarantineEvent(db.Model):
+    """Append-only local decisions; never a fabricated Ozon confirmation."""
+    __tablename__ = 'marketplace_write_quarantine_events'
+    id = db.Column(db.Integer, primary_key=True)
+    quarantine_id = db.Column(db.Integer, db.ForeignKey('marketplace_write_quarantines.id', ondelete='CASCADE'), nullable=False)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'), nullable=False)
+    actor_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    action = db.Column(db.String(20), nullable=False)
+    reason = db.Column(db.Text, nullable=False)
+    quarantine_version = db.Column(db.Integer, nullable=False)
+    operation_version = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    __table_args__ = (
+        db.UniqueConstraint('quarantine_id', 'quarantine_version', name='uq_write_quarantine_event_version'),
+        db.CheckConstraint("action IN ('placed','note_added','released')", name='ck_write_quarantine_event_action'),
+        db.CheckConstraint('quarantine_version > 0 AND operation_version > 0 AND length(reason) BETWEEN 10 AND 1000', name='ck_write_quarantine_event_values'),
+        db.Index('idx_write_quarantine_event_scope', 'seller_id', 'marketplace_id', 'account_id', 'quarantine_id', 'id'),
+    )
+
+
 class MarketplaceListingSnapshot(db.Model):
     """Exact before/submitted/confirmed state owned by one operation.
 
@@ -5579,6 +5778,7 @@ class MarketplaceCatalogSync(db.Model):
     phase = db.Column(db.String(20), default='active', nullable=False)
     visibility = db.Column(db.String(30), default='ALL', nullable=False)
     cursor = db.Column(db.String(1000), default='', nullable=False)
+    credential_fingerprint = db.Column(db.String(64))  # private ciphertext identity
     phase_seen_count = db.Column(db.Integer, default=0, nullable=False)
     phase_expected_total = db.Column(db.Integer)
     page_count = db.Column(db.Integer, default=0, nullable=False)
@@ -5664,6 +5864,72 @@ class MarketplaceCatalogSync(db.Model):
                 self.completed_at.isoformat() if self.completed_at else None
             ),
         }
+
+
+class MarketplaceCatalogPageCheckpoint(db.Model):
+    """Private, incomplete Ozon list page; never a listing projection."""
+
+    __tablename__ = 'marketplace_catalog_page_checkpoints'
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.Integer, db.ForeignKey('marketplace_catalog_syncs.id', ondelete='CASCADE'), nullable=False, unique=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'), nullable=False)
+    credential_fingerprint = db.Column(db.String(64), nullable=False)
+    phase = db.Column(db.String(20), nullable=False)
+    visibility = db.Column(db.String(30), nullable=False)
+    start_cursor = db.Column(db.String(1000), nullable=False, default='')
+    next_cursor = db.Column(db.String(1000), nullable=False, default='')
+    list_total = db.Column(db.Integer)
+    page_limit = db.Column(db.Integer, nullable=False, default=1000)
+    generation = db.Column(db.Integer, nullable=False, default=0)
+    ttl_restarts = db.Column(db.Integer, nullable=False, default=0)
+    base_items_json = db.Column(db.Text, nullable=False, default='[]')
+    base_hash = db.Column(db.String(64))
+    domain = db.Column(db.String(20), nullable=False, default='list')
+    domain_cursor = db.Column(db.String(1000), nullable=False, default='')
+    domain_total = db.Column(db.Integer)
+    domain_seen_count = db.Column(db.Integer, nullable=False, default=0)
+    domain_page_count = db.Column(db.Integer, nullable=False, default=0)
+    staged_bytes = db.Column(db.Integer, nullable=False, default=0)
+    list_observed_at = db.Column(db.DateTime)
+    domain_observed_at_json = db.Column(db.Text, nullable=False, default='{}')
+    started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.CheckConstraint("phase IN ('active','archived')", name='ck_catalog_checkpoint_phase'),
+        db.CheckConstraint("domain IN ('list','info','attributes','prices','stocks','apply')", name='ck_catalog_checkpoint_domain'),
+        db.CheckConstraint('page_limit BETWEEN 1 AND 1000', name='ck_catalog_checkpoint_page_limit'),
+        db.CheckConstraint('generation BETWEEN 0 AND 16 AND ttl_restarts BETWEEN 0 AND 8', name='ck_catalog_checkpoint_generations'),
+        db.CheckConstraint('domain_seen_count >= 0 AND domain_page_count >= 0 AND staged_bytes >= 0', name='ck_catalog_checkpoint_counters'),
+        db.CheckConstraint('list_total IS NULL OR list_total >= 0', name='ck_catalog_checkpoint_list_total'),
+        db.CheckConstraint('domain_total IS NULL OR domain_total >= 0', name='ck_catalog_checkpoint_domain_total'),
+        db.Index('idx_catalog_checkpoint_expiry', 'started_at', 'id'),
+        db.Index('idx_catalog_checkpoint_account', 'seller_id', 'account_id', 'run_id'),
+    )
+
+
+class MarketplaceCatalogPageItem(db.Model):
+    """One normalized enrichment item staged with its domain cursor."""
+
+    __tablename__ = 'marketplace_catalog_page_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    checkpoint_id = db.Column(db.Integer, db.ForeignKey('marketplace_catalog_page_checkpoints.id', ondelete='CASCADE'), nullable=False)
+    domain = db.Column(db.String(20), nullable=False)
+    product_id = db.Column(db.String(100), nullable=False)
+    item_json = db.Column(db.Text, nullable=False)
+    byte_count = db.Column(db.Integer, nullable=False)
+    observed_at = db.Column(db.DateTime, nullable=False)
+
+    __table_args__ = (
+        db.CheckConstraint("domain IN ('info','attributes','prices','stocks')", name='ck_catalog_page_item_domain'),
+        db.CheckConstraint('byte_count > 0', name='ck_catalog_page_item_bytes'),
+        db.UniqueConstraint('checkpoint_id', 'domain', 'product_id', name='uq_catalog_page_item_identity'),
+        db.Index('idx_catalog_page_item_domain', 'checkpoint_id', 'domain', 'product_id'),
+    )
 
 
 class MarketplaceListing(db.Model):
@@ -8062,6 +8328,10 @@ class MarketplaceInboxSync(db.Model):
         ),
     )
 
+    @property
+    def period_code(self):
+        return '90d'
+
     def to_public_dict(self) -> dict:
         return {
             'id': self.id,
@@ -8198,27 +8468,39 @@ class MarketplaceInboxItem(db.Model):
         ),
     )
 
+    @property
+    def owned_listing(self):
+        listing = self.listing
+        if listing is not None and self.match_status == 'matched' and (
+            listing.seller_id, listing.marketplace_id, listing.account_id
+        ) == (self.seller_id, self.marketplace_id, self.account_id):
+            return listing
+        return None
+
     def to_public_dict(self, *, include_draft: bool = True) -> dict:
         listing = None
-        if self.listing is not None:
+        owned = self.owned_listing
+        if owned is not None:
             # Inbox needs only a compact display reference. Reusing the full
             # listing serializer would expose unrelated commercial summaries
             # and lazily load marketplace/account relationships per row.
             listing = {
-                'id': self.listing.id,
-                'offer_id': self.listing.offer_id,
-                'title': self.listing.title,
-                'normalized_status': self.listing.normalized_status,
-                'is_available': bool(self.listing.is_available),
+                'id': owned.id,
+                'offer_id': owned.offer_id,
+                'title': owned.title,
+                'normalized_status': owned.normalized_status,
+                'is_available': bool(owned.is_available),
+                'image': owned.primary_image_url(),
+                'url': f'/marketplaces/listings/view/{owned.id}?account_id={self.account_id}',
             }
         data = {
             'id': self.id,
             'account_id': self.account_id,
-            'listing_id': self.listing_id,
+            'listing_id': owned.id if owned is not None else None,
             'source_kind': self.source_kind,
             'external_id': self.external_id,
             'external_sku': self.external_sku,
-            'match_status': self.match_status,
+            'match_status': ('unavailable' if self.match_status == 'matched' and owned is None else self.match_status),
             'listing': listing,
             'text': self.text,
             'rating': self.rating,
@@ -8236,7 +8518,10 @@ class MarketplaceInboxItem(db.Model):
             'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
         }
         if include_draft:
-            draft = self.reply_drafts.filter_by(status='draft').order_by(
+            draft = self.reply_drafts.filter_by(
+                status='draft', seller_id=self.seller_id,
+                marketplace_id=self.marketplace_id, account_id=self.account_id,
+            ).order_by(
                 MarketplaceReplyDraft.id.desc()
             ).first()
             data['draft'] = draft.to_public_dict() if draft else None
@@ -8341,6 +8626,7 @@ class MarketplaceReplyDraft(db.Model):
             'status': self.status,
             'generation_mode': self.generation_mode,
             'text': self.text,
+            'content_hash': self.content_hash,
             'model_name': self.model_name,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -8529,6 +8815,72 @@ class MarketplaceWarehouse(db.Model):
                 self.last_synced_at.isoformat() if self.last_synced_at else None
             ),
         }
+
+
+class MarketplaceWarehouseReadJob(db.Model):
+    """Private, resumable Ozon read of one account's warehouses or one listing's FBS stocks."""
+    __tablename__ = 'marketplace_warehouse_read_jobs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='CASCADE'), nullable=False)
+    marketplace_id = db.Column(db.Integer, db.ForeignKey('marketplaces.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='CASCADE'), nullable=False)
+    kind = db.Column(db.String(20), nullable=False)
+    listing_id = db.Column(db.Integer, db.ForeignKey('marketplace_listings.id', ondelete='CASCADE'))
+    external_account_id = db.Column(db.String(200), nullable=False)  # private exact Client-Id at enqueue
+    offer_id = db.Column(db.String(200))  # private exact FBS listing identity at enqueue
+    external_product_id = db.Column(db.String(100))
+    credential_fingerprint = db.Column(db.String(64), nullable=False)  # private ciphertext marker
+    status = db.Column(db.String(24), nullable=False, default='queued')
+    next_due_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    cooldown_until = db.Column(db.DateTime)
+    lease_token = db.Column(db.String(64))
+    lease_expires_at = db.Column(db.DateTime)
+    last_attempt_at = db.Column(db.DateTime)
+    failure_count = db.Column(db.Integer, nullable=False, default=0)
+    page_count = db.Column(db.Integer, nullable=False, default=0)
+    next_cursor = db.Column(db.Text)  # private provider cursor
+    seen_cursor_hashes_json = db.Column(db.Text, nullable=False, default='[]')
+    staged_count = db.Column(db.Integer, nullable=False, default=0)
+    staged_bytes = db.Column(db.Integer, nullable=False, default=0)
+    error_code = db.Column(db.String(100))
+    warehouse_sync_id = db.Column(db.Integer, db.ForeignKey('marketplace_warehouse_syncs.id', ondelete='SET NULL'))
+    last_completed_at = db.Column(db.DateTime)  # prior complete snapshot stays visible on failure
+    requested_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.CheckConstraint("kind IN ('warehouses','fbs_stock')", name='ck_marketplace_warehouse_read_kind'),
+        db.CheckConstraint("(kind = 'warehouses' AND listing_id IS NULL AND offer_id IS NULL AND external_product_id IS NULL) OR (kind = 'fbs_stock' AND listing_id IS NOT NULL AND offer_id IS NOT NULL AND external_product_id IS NOT NULL)", name='ck_marketplace_warehouse_read_scope'),
+        db.CheckConstraint("status IN ('queued','running','waiting_provider','waiting_access','completed','failed','cancelled')", name='ck_marketplace_warehouse_read_status'),
+        db.CheckConstraint('failure_count >= 0 AND page_count >= 0 AND staged_count >= 0 AND staged_bytes >= 0', name='ck_marketplace_warehouse_read_counts'),
+        db.Index('uq_marketplace_warehouse_read_active_account', 'account_id', 'kind', unique=True, sqlite_where=db.text("kind = 'warehouses' AND status IN ('queued','running','waiting_provider')")),
+        db.Index('uq_marketplace_warehouse_read_active_listing', 'account_id', 'listing_id', 'kind', unique=True, sqlite_where=db.text("kind = 'fbs_stock' AND status IN ('queued','running','waiting_provider')")),
+        db.Index('idx_marketplace_warehouse_read_due', 'status', 'next_due_at', 'last_attempt_at', 'id'),
+        db.Index('idx_marketplace_warehouse_read_scope', 'seller_id', 'account_id', 'kind', 'listing_id', 'id'),
+    )
+
+
+class MarketplaceWarehouseReadItem(db.Model):
+    """Bounded normalized staging item; never a public or last-good projection."""
+    __tablename__ = 'marketplace_warehouse_read_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(db.Integer, db.ForeignKey('marketplace_warehouse_read_jobs.id', ondelete='CASCADE'), nullable=False)
+    external_warehouse_id = db.Column(db.String(100), nullable=False)
+    item_kind = db.Column(db.String(20), nullable=False)
+    normalized_json = db.Column(db.Text, nullable=False)
+    normalized_bytes = db.Column(db.Integer, nullable=False)
+    fingerprint = db.Column(db.String(64), nullable=False)
+    observed_at = db.Column(db.DateTime, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('job_id', 'external_warehouse_id', name='uq_marketplace_warehouse_read_item'),
+        db.CheckConstraint("item_kind IN ('warehouses','fbs_stock') AND normalized_bytes >= 0", name='ck_marketplace_warehouse_read_item'),
+        db.Index('idx_marketplace_warehouse_read_item_job', 'job_id', 'id'),
+    )
 
 
 class MarketplaceWarehouseStock(db.Model):
@@ -9717,7 +10069,8 @@ class BackgroundJob(db.Model):
             'processed': self.processed,
             'succeeded': self.succeeded,
             'failed_count': self.failed_count,
-            'progress': self.get_progress(),
+            # WB stock pages are private worker state, not a public API blob.
+            'progress': {} if self.job_type in {'wb_warehouse_stocks', 'ozon_account_sync', 'ozon_quality_recompute'} else self.get_progress(),
             'result': self.get_result(),
             'error_message': self.error_message,
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -9726,6 +10079,161 @@ class BackgroundJob(db.Model):
 
     def __repr__(self):
         return f'<BackgroundJob {self.job_uid} [{self.status}] {self.processed}/{self.total}>'
+
+
+class OzonBulkUploadRun(db.Model):
+    """Durable account-scoped local preparation or explicitly reviewed upload.
+
+    The row records consent and scheduling only. MarketplaceOperation owns any
+    physical provider write and its outcome; deleting this audit path is
+    intentionally restricted by its foreign keys.
+    """
+    __tablename__ = 'ozon_bulk_upload_runs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(
+        db.Integer, db.ForeignKey('background_jobs.id', ondelete='RESTRICT'),
+        unique=True, nullable=False,
+    )
+    seller_id = db.Column(
+        db.Integer, db.ForeignKey('sellers.id', ondelete='RESTRICT'),
+        nullable=False,
+    )
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey('seller_marketplace_accounts.id', ondelete='RESTRICT'),
+        nullable=False,
+    )
+    mode = db.Column(db.String(24), nullable=False)
+    request_key_hash = db.Column(db.CHAR(64), nullable=False)
+    request_fingerprint = db.Column(db.CHAR(64), nullable=False)
+    created_by_user_id = db.Column(
+        db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'),
+    )
+    parent_prepare_run_id = db.Column(
+        db.Integer, db.ForeignKey('ozon_bulk_upload_runs.id', ondelete='RESTRICT'),
+    )
+    state = db.Column(
+        db.String(12), nullable=False, default='active', server_default='active',
+    )
+    next_due_at = db.Column(db.DateTime)
+    last_attempt_at = db.Column(db.DateTime)
+    mapping_preflight_at = db.Column(db.DateTime)
+    lease_token = db.Column(db.CHAR(32))
+    lease_until = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime, nullable=False,
+        default=datetime.utcnow, onupdate=datetime.utcnow,
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'seller_id', 'request_key_hash', name='uq_ozon_bulk_run_request',
+        ),
+        db.CheckConstraint(
+            "mode IN ('source_prepare','reviewed_drafts')",
+            name='ck_ozon_bulk_run_mode',
+        ),
+        db.CheckConstraint(
+            "state IN ('active','completed')",
+            name='ck_ozon_bulk_run_state',
+        ),
+        db.CheckConstraint(
+            '(lease_token IS NULL) = (lease_until IS NULL)',
+            name='ck_ozon_bulk_run_lease_pair',
+        ),
+        db.CheckConstraint(
+            "(state = 'active') = (next_due_at IS NOT NULL)",
+            name='ck_ozon_bulk_run_due_state',
+        ),
+        db.Index(
+            'idx_ozon_bulk_run_due', 'state', 'next_due_at',
+            'last_attempt_at', 'id',
+        ),
+        db.Index(
+            'idx_ozon_bulk_run_history', 'seller_id', 'account_id',
+            'created_at', 'id',
+        ),
+    )
+
+
+class OzonBulkUploadItem(db.Model):
+    """Immutable source/review identity and exact operation link for a run."""
+    __tablename__ = 'ozon_bulk_upload_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(
+        db.Integer, db.ForeignKey('ozon_bulk_upload_runs.id', ondelete='RESTRICT'),
+        nullable=False,
+    )
+    ordinal = db.Column(db.Integer, nullable=False)
+    # Historical logical snapshots: a deleted source or draft must not delete
+    # the item, and each worker step rechecks live seller/account scope.
+    imported_product_id = db.Column(db.Integer, nullable=False)
+    reviewed_draft_id = db.Column(db.Integer)
+    reviewed_version = db.Column(db.Integer)
+    draft_id = db.Column(db.Integer)
+    prepared_version = db.Column(db.Integer)
+    operation_id = db.Column(
+        db.Integer,
+        db.ForeignKey('marketplace_operations.id', ondelete='RESTRICT'),
+        unique=True,
+    )
+    phase = db.Column(db.String(40), nullable=False)
+    next_due_at = db.Column(db.DateTime)
+    reference_wait_started_at = db.Column(db.DateTime)
+    local_failure_count = db.Column(
+        db.Integer, nullable=False, default=0, server_default=db.text('0'),
+    )
+    title_snapshot = db.Column(db.String(300), nullable=False)
+    offer_id_snapshot = db.Column(db.String(200))
+    error_code = db.Column(db.String(100))
+    error_message = db.Column(db.String(700))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime, nullable=False,
+        default=datetime.utcnow, onupdate=datetime.utcnow,
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint('run_id', 'ordinal', name='uq_ozon_bulk_item_ordinal'),
+        db.UniqueConstraint(
+            'run_id', 'imported_product_id', name='uq_ozon_bulk_item_source',
+        ),
+        db.CheckConstraint('ordinal > 0', name='ck_ozon_bulk_item_ordinal'),
+        db.CheckConstraint(
+            "phase IN ('pending','preparing','waiting_reference','needs_input',"
+            "'prepared','reviewed','operation_linked',"
+            "'needs_manual_reconciliation','failed_local','excluded')",
+            name='ck_ozon_bulk_item_phase',
+        ),
+        db.CheckConstraint(
+            'local_failure_count BETWEEN 0 AND 3',
+            name='ck_ozon_bulk_item_failure_count',
+        ),
+        db.CheckConstraint(
+            '(reviewed_draft_id IS NULL AND reviewed_version IS NULL) OR '
+            '(reviewed_draft_id IS NOT NULL AND reviewed_version IS NOT NULL '
+            'AND reviewed_draft_id > 0 AND reviewed_version > 0)',
+            name='ck_ozon_bulk_item_review_pair',
+        ),
+        db.CheckConstraint(
+            "phase != 'operation_linked' OR operation_id IS NOT NULL",
+            name='ck_ozon_bulk_item_operation_link',
+        ),
+        db.CheckConstraint(
+            "phase != 'prepared' OR (draft_id IS NOT NULL AND prepared_version IS NOT NULL)",
+            name='ck_ozon_bulk_item_prepared',
+        ),
+        db.CheckConstraint(
+            "phase != 'reviewed' OR (reviewed_draft_id IS NOT NULL AND reviewed_version IS NOT NULL)",
+            name='ck_ozon_bulk_item_reviewed',
+        ),
+        db.Index(
+            'idx_ozon_bulk_item_due', 'run_id', 'phase', 'next_due_at', 'ordinal',
+        ),
+    )
 
 
 # ============================================================================
@@ -11712,3 +12220,193 @@ class AutoPublishItem(db.Model):
 
     def __repr__(self):
         return f'<AutoPublishItem #{self.id} product={self.imported_product_id} {self.step}/{self.status}>'
+
+
+class OzonDraftCompletionRun(db.Model):
+    """One seller-approved, local-only AI suggestion request."""
+    __tablename__ = 'ozon_draft_completion_runs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    job_id = db.Column(db.Integer, db.ForeignKey('background_jobs.id', ondelete='RESTRICT'), nullable=False, unique=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='RESTRICT'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='RESTRICT'), nullable=False)
+    actor_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    request_key_hash = db.Column(db.CHAR(64), nullable=False)
+    request_fingerprint = db.Column(db.CHAR(64), nullable=False)
+    profile_version = db.Column(db.String(60), nullable=False)
+    model = db.Column(db.String(80), nullable=False)
+    status = db.Column(db.String(24), nullable=False, default='pending')
+    next_due_at = db.Column(db.DateTime)
+    lease_token = db.Column(db.CHAR(32))
+    lease_until = db.Column(db.DateTime)
+    item_count = db.Column(db.Integer, nullable=False)
+    max_calls = db.Column(db.Integer, nullable=False)
+    requested_calls = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))
+    prompt_tokens = db.Column(db.BigInteger)
+    completion_tokens = db.Column(db.BigInteger)
+    cache_hit_tokens = db.Column(db.BigInteger)
+    cache_miss_tokens = db.Column(db.BigInteger)
+    reasoning_tokens = db.Column(db.BigInteger)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+
+    job = db.relationship('BackgroundJob')
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'request_key_hash', name='uq_ozon_draft_ai_run_request'),
+        db.CheckConstraint("status IN ('pending','running','cancelling','completed','cancelled','failed')", name='ck_ozon_draft_ai_run_status'),
+        db.CheckConstraint('item_count BETWEEN 1 AND 200 AND max_calls BETWEEN 1 AND 80 AND requested_calls BETWEEN 0 AND max_calls', name='ck_ozon_draft_ai_run_counts'),
+        db.CheckConstraint('(lease_token IS NULL) = (lease_until IS NULL)', name='ck_ozon_draft_ai_run_lease'),
+        db.Index('idx_ozon_draft_ai_run_due', 'status', 'next_due_at', 'id'),
+        db.Index('idx_ozon_draft_ai_run_history', 'seller_id', 'account_id', 'created_at', 'id'),
+    )
+
+
+class OzonDraftCompletionItem(db.Model):
+    """Sealed source/reference identity for one draft in a completion run."""
+    __tablename__ = 'ozon_draft_completion_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_id = db.Column(db.Integer, db.ForeignKey('ozon_draft_completion_runs.id', ondelete='RESTRICT'), nullable=False)
+    ordinal = db.Column(db.Integer, nullable=False)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='RESTRICT'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='RESTRICT'), nullable=False)
+    draft_id = db.Column(db.Integer, db.ForeignKey('marketplace_product_drafts.id', ondelete='RESTRICT'), nullable=False)
+    imported_product_id = db.Column(db.Integer, nullable=False)
+    product_type_id = db.Column(db.Integer)
+    expected_draft_version = db.Column(db.Integer, nullable=False)
+    source_kind = db.Column(db.String(16))
+    source_product_id = db.Column(db.Integer)
+    source_hash = db.Column(db.CHAR(64))
+    type_schema_hash = db.Column(db.CHAR(64))
+    dictionary_hash = db.Column(db.CHAR(64))
+    filled_slots_hash = db.Column(db.CHAR(64))
+    reviewed_filled_slots_hash = db.Column(db.CHAR(64))
+    status = db.Column(db.String(24), nullable=False, default='pending')
+    next_due_at = db.Column(db.DateTime)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))
+    call_id = db.Column(db.CHAR(32))
+    lease_token = db.Column(db.CHAR(32))
+    lease_until = db.Column(db.DateTime)
+    last_attempt_at = db.Column(db.DateTime)
+    safe_code = db.Column(db.String(80))
+    prompt_tokens = db.Column(db.BigInteger)
+    completion_tokens = db.Column(db.BigInteger)
+    cache_hit_tokens = db.Column(db.BigInteger)
+    cache_miss_tokens = db.Column(db.BigInteger)
+    reasoning_tokens = db.Column(db.BigInteger)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = db.Column(db.DateTime)
+
+    run = db.relationship('OzonDraftCompletionRun')
+    draft = db.relationship('MarketplaceProductDraft')
+    __table_args__ = (
+        db.UniqueConstraint('run_id', 'ordinal', name='uq_ozon_draft_ai_item_ordinal'),
+        db.UniqueConstraint('run_id', 'draft_id', name='uq_ozon_draft_ai_item_draft'),
+        db.CheckConstraint('ordinal BETWEEN 1 AND 200 AND imported_product_id > 0 AND (product_type_id IS NULL OR product_type_id > 0) AND expected_draft_version > 0', name='ck_ozon_draft_ai_item_identity'),
+        db.CheckConstraint("status IN ('pending','reserved','unknown_response','proposed','no_evidence','stale','needs_input','failed','cancelled')", name='ck_ozon_draft_ai_item_status'),
+        db.CheckConstraint("source_kind IS NULL OR source_kind IN ('imported','supplier')", name='ck_ozon_draft_ai_item_source_kind'),
+        db.CheckConstraint("status NOT IN ('pending','reserved') OR (product_type_id IS NOT NULL AND source_kind IS NOT NULL AND source_hash IS NOT NULL AND type_schema_hash IS NOT NULL AND dictionary_hash IS NOT NULL AND filled_slots_hash IS NOT NULL)", name='ck_ozon_draft_ai_item_seal'),
+        db.CheckConstraint("status != 'reserved' OR (call_id IS NOT NULL AND lease_token IS NOT NULL AND lease_until IS NOT NULL)", name='ck_ozon_draft_ai_item_reservation'),
+        db.CheckConstraint('(lease_token IS NULL) = (lease_until IS NULL)', name='ck_ozon_draft_ai_item_lease'),
+        db.CheckConstraint('attempt_count BETWEEN 0 AND 80', name='ck_ozon_draft_ai_item_attempts'),
+        db.Index('uq_ozon_draft_ai_item_active', 'seller_id', 'account_id', 'draft_id', unique=True, sqlite_where=db.text("status IN ('pending','reserved')")),
+        db.Index('idx_ozon_draft_ai_item_due', 'status', 'next_due_at', 'last_attempt_at', 'id'),
+        db.Index('idx_ozon_draft_ai_item_run', 'run_id', 'ordinal'),
+    )
+
+
+class OzonDraftCompletionSuggestion(db.Model):
+    """Canonical, source-grounded missing attribute proposed for review."""
+    __tablename__ = 'ozon_draft_completion_suggestions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    item_id = db.Column(db.Integer, db.ForeignKey('ozon_draft_completion_items.id', ondelete='RESTRICT'), nullable=False)
+    attribute_id = db.Column(db.String(100), nullable=False)
+    complex_id = db.Column(db.String(100), nullable=False, default='0', server_default='0')
+    group_ordinal = db.Column(db.Integer, nullable=False, default=0, server_default=db.text('0'))
+    values_json = db.Column(db.Text, nullable=False)
+    evidence_json = db.Column(db.Text, nullable=False)
+    provenance_code = db.Column(db.String(60), nullable=False)
+    status = db.Column(db.String(16), nullable=False, default='proposed')
+    reviewer_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    reviewed_at = db.Column(db.DateTime)
+    applied_draft_version = db.Column(db.Integer)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    item = db.relationship('OzonDraftCompletionItem')
+    __table_args__ = (
+        db.UniqueConstraint('item_id', 'attribute_id', 'complex_id', 'group_ordinal', name='uq_ozon_draft_ai_suggestion_slot'),
+        db.CheckConstraint("length(attribute_id) BETWEEN 1 AND 100 AND length(complex_id) BETWEEN 1 AND 100 AND group_ordinal >= 0", name='ck_ozon_draft_ai_suggestion_identity'),
+        db.CheckConstraint("status IN ('proposed','accepted','rejected','stale')", name='ck_ozon_draft_ai_suggestion_status'),
+        db.CheckConstraint('applied_draft_version IS NULL OR applied_draft_version > 0', name='ck_ozon_draft_ai_suggestion_version'),
+        db.Index('idx_ozon_draft_ai_suggestion_item', 'item_id', 'status', 'id'),
+    )
+
+
+class OzonDraftCompletionReview(db.Model):
+    """Append-only local reviewer command; replay never edits a draft twice."""
+    __tablename__ = 'ozon_draft_completion_reviews'
+
+    id = db.Column(db.Integer, primary_key=True)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='RESTRICT'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('seller_marketplace_accounts.id', ondelete='RESTRICT'), nullable=False)
+    draft_id = db.Column(db.Integer, db.ForeignKey('marketplace_product_drafts.id', ondelete='RESTRICT'), nullable=False)
+    item_id = db.Column(db.Integer, db.ForeignKey('ozon_draft_completion_items.id', ondelete='RESTRICT'), nullable=False)
+    actor_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    request_key_hash = db.Column(db.CHAR(64), nullable=False)
+    request_fingerprint = db.Column(db.CHAR(64), nullable=False)
+    action = db.Column(db.String(12), nullable=False)
+    version_before = db.Column(db.Integer, nullable=False)
+    version_after = db.Column(db.Integer)
+    selected_ids_json = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('seller_id', 'request_key_hash', name='uq_ozon_draft_ai_review_request'),
+        db.CheckConstraint("action IN ('apply','reject')", name='ck_ozon_draft_ai_review_action'),
+        db.CheckConstraint("version_before > 0 AND ((action = 'apply' AND version_after > version_before) OR (action = 'reject' AND version_after IS NULL))", name='ck_ozon_draft_ai_review_version'),
+        db.Index('idx_ozon_draft_ai_review_item', 'item_id', 'created_at', 'id'),
+    )
+
+
+class AIParsingAttempt(db.Model):
+    """Shared physical-call reservation and nullable usage, without payloads."""
+    __tablename__ = 'ai_parsing_attempts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    call_id = db.Column(db.CHAR(32), nullable=False, unique=True)
+    run_uid = db.Column(db.String(80))
+    lane = db.Column(db.String(40), nullable=False)
+    seller_id = db.Column(db.Integer, db.ForeignKey('sellers.id', ondelete='RESTRICT'))
+    provider = db.Column(db.String(24), nullable=False)
+    model = db.Column(db.String(80), nullable=False)
+    request_fingerprint = db.Column(db.CHAR(64), nullable=False)
+    status = db.Column(db.String(24), nullable=False)
+    reserved_at = db.Column(db.DateTime, nullable=False)
+    deadline_at = db.Column(db.DateTime, nullable=False)
+    finished_at = db.Column(db.DateTime)
+    http_status = db.Column(db.Integer)
+    retry_due_at = db.Column(db.DateTime)
+    safe_code = db.Column(db.String(80))
+    prompt_tokens = db.Column(db.BigInteger)
+    completion_tokens = db.Column(db.BigInteger)
+    cache_hit_tokens = db.Column(db.BigInteger)
+    cache_miss_tokens = db.Column(db.BigInteger)
+    reasoning_tokens = db.Column(db.BigInteger)
+    provider_cost = db.Column(db.Numeric(20, 8))
+    estimated_cost = db.Column(db.Numeric(20, 8))
+
+    __table_args__ = (
+        db.CheckConstraint("lane IN ('seller_draft_completion','admin_supplier_parsing')", name='ck_ai_parsing_attempt_lane'),
+        db.CheckConstraint("status IN ('reserved','succeeded','rate_limited','http_error','invalid_response','unknown_response')", name='ck_ai_parsing_attempt_status'),
+        db.CheckConstraint('deadline_at > reserved_at', name='ck_ai_parsing_attempt_deadline'),
+        db.CheckConstraint("(status = 'reserved' AND finished_at IS NULL) OR (status != 'reserved' AND finished_at IS NOT NULL)", name='ck_ai_parsing_attempt_finished'),
+        db.CheckConstraint('http_status IS NULL OR http_status BETWEEN 100 AND 599', name='ck_ai_parsing_attempt_http'),
+        db.Index('idx_ai_parsing_attempt_active', 'status', 'deadline_at'),
+        db.Index('idx_ai_parsing_attempt_run', 'lane', 'run_uid'),
+        db.Index('idx_ai_parsing_attempt_cooldown', 'status', 'retry_due_at'),
+        db.Index('idx_ai_parsing_attempt_seller', 'seller_id', 'status'),
+    )

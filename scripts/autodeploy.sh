@@ -21,13 +21,7 @@ INTERVAL=30
 ONCE=false
 LOG_PREFIX="[autodeploy]"
 
-# Telegram-уведомления (задай в .env.autodeploy или через env)
-# AUTODEPLOY_TG_BOT_TOKEN=123456:ABC...
-# AUTODEPLOY_TG_CHAT_ID=-100123456789
-# AUTODEPLOY_TG_PROXY=socks5h://172.17.0.1:10808  (для обхода блокировки TG)
-TG_BOT_TOKEN="${AUTODEPLOY_TG_BOT_TOKEN:-}"
-TG_CHAT_ID="${AUTODEPLOY_TG_CHAT_ID:-}"
-TG_PROXY="${AUTODEPLOY_TG_PROXY:-}"
+# Telegram credentials are parsed by the shared broadcaster without shell eval.
 
 # --- Парсинг аргументов ---
 while [[ $# -gt 0 ]]; do
@@ -41,44 +35,23 @@ done
 
 cd "$PROJECT_DIR"
 
-# Загружаем .env.autodeploy если есть
-if [ -f "$PROJECT_DIR/.env.autodeploy" ]; then
-    set -a
-    source "$PROJECT_DIR/.env.autodeploy"
-    set +a
-    TG_BOT_TOKEN="${AUTODEPLOY_TG_BOT_TOKEN:-$TG_BOT_TOKEN}"
-    TG_CHAT_ID="${AUTODEPLOY_TG_CHAT_ID:-$TG_CHAT_ID}"
-    TG_PROXY="${AUTODEPLOY_TG_PROXY:-$TG_PROXY}"
-fi
-
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $LOG_PREFIX $*"
 }
 
 tg_send() {
-    # Отправка сообщения в Telegram (логируем ошибки, но не останавливаемся)
+    # Shared /start registry. Failure does not authorize a repeated send/deploy.
     local text="$1"
-    if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_CHAT_ID" ]; then
-        local response
-        local proxy_args=""
-        if [ -n "$TG_PROXY" ]; then
-            proxy_args="--proxy $TG_PROXY"
-        fi
-        log "Sending Telegram notification...${TG_PROXY:+ (proxy: $TG_PROXY)}"
-        response=$(curl -s --connect-timeout 10 --max-time 30 $proxy_args \
-            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "text=$text" \
-            -d "chat_id=$TG_CHAT_ID" \
-            -d "parse_mode=HTML" \
-            -d "disable_web_page_preview=true" 2>&1) || true
-        if echo "$response" | grep -q '"ok":true'; then
-            log "Telegram notification sent"
-        else
-            log "WARNING: Telegram send failed: $response"
-        fi
-    else
-        log "WARNING: TG_BOT_TOKEN or TG_CHAT_ID not set, skipping notification"
-    fi
+    local message_file python_bin
+    message_file=$(mktemp) || return 0
+    chmod 600 "$message_file"
+    printf '%s' "$text" > "$message_file"
+    python_bin="$PROJECT_DIR/venv/bin/python"
+    [ -x "$python_bin" ] || python_bin=python3
+    "$python_bin" "$PROJECT_DIR/scripts/notify_task_status.py" \
+        --config "$PROJECT_DIR/.env.autodeploy" --message-file "$message_file" --parse-mode HTML \
+        || log "WARNING: Telegram broadcast not fully confirmed; no automatic retry"
+    rm -f -- "$message_file"
 }
 
 deploy() {
@@ -208,6 +181,24 @@ while true; do
         REMOTE_HASH=$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")
 
         if [ -n "$REMOTE_HASH" ] && [ "$REMOTE_HASH" != "$LAST_HASH" ]; then
+            # Never pull/build an agent's or developer's unfinished working tree.
+            # Also makes restarting this watcher for notification changes safe.
+            if ! WORKTREE_CHANGES=$(git status --porcelain); then
+                log "Working tree inspection failed; automatic deployment deferred"
+                if [ "$ONCE" = true ]; then
+                    break
+                fi
+                sleep "$INTERVAL"
+                continue
+            fi
+            if [ -n "$WORKTREE_CHANGES" ]; then
+                log "Working tree has local changes; automatic deployment deferred"
+                if [ "$ONCE" = true ]; then
+                    break
+                fi
+                sleep "$INTERVAL"
+                continue
+            fi
             # Есть новые коммиты — pull и деплой
             git pull --ff-only origin "$BRANCH" 2>/dev/null || {
                 log "WARNING: fast-forward pull failed, trying merge..."
@@ -232,6 +223,3 @@ while true; do
 
     sleep "$INTERVAL"
 done
-
-
-

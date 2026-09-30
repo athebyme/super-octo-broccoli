@@ -1,4 +1,4 @@
-/* Каталог маркетплейсов · beta — Vue 3 (CDN, без бандлера).
+/* Основной каталог маркетплейсов — Vue 3 (CDN, без бандлера).
    Read-only витрина поверх существующего JSON API + существующий Ozon-синк. */
 (function () {
     'use strict';
@@ -24,8 +24,20 @@
     };
 
     var S = window.mcatShared;
+    var syncTimer, syncController, syncRevision = 0, syncStopped = false;
+    var syncRequests = new Set();
+    function activeJob(job) { return !!job && ['pending', 'running'].includes(job.status); }
+    function saved(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+    function remember(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Optional preference. */ } }
+    function utcDate(value) {
+        if (typeof value !== 'string' || !value) return null;
+        var parsed = new Date(/[Zz]|[+-]\d\d:\d\d$/.test(value) ? value : value + 'Z');
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
 
     Vue.createApp({
+        directives: {'image-deadline': S.imageDeadline},
+        components: {'ozon-prices': S.ozonPrices},
         data: function () {
             return {
                 ozonEnabled: !!bootstrap.ozonEnabled,
@@ -35,32 +47,37 @@
                     return acc;
                 }),
                 urls: bootstrap.urls || {},
+                illustration: bootstrap.illustration || '',
                 perPage: bootstrap.perPage || 60,
 
                 items: [],
                 pagination: { page: 1, pages: 1, total: 0, has_next: false },
                 loading: true,
                 loadingMore: false,
+                syncError: '', syncFailures: 0, syncSessionExpired: false,
                 error: null,
                 animate: false,
+                advancedFiltersOpen: false,
 
                 filters: {
-                    marketplace: null,
-                    account_id: null,
-                    status: '',
-                    link_status: '',
-                    include_unavailable: false,
-                    search: ''
+                    marketplace: (bootstrap.filters || {}).marketplace_code || null,
+                    account_id: (bootstrap.filters || {}).account_id || null,
+                    status: (bootstrap.filters || {}).normalized_status || '',
+                    link_status: (bootstrap.filters || {}).link_status || '',
+                    include_unavailable: !!(bootstrap.filters || {}).include_unavailable,
+                    search: (bootstrap.filters || {}).search || ''
                 },
-                searchInput: '',
+                searchInput: (bootstrap.filters || {}).search || '',
                 counts: { all: null, active: null, moderation: null, error: null, archived: null },
                 channelCounts: {},
                 displayTotal: 0,
 
-                view: localStorage.getItem('sh-mcat-view') === 'table' ? 'table' : 'grid',
-                mode: localStorage.getItem('sh-mcat-mode') === 'listings' ? 'listings' : 'products',
+                view: saved('sh-mcat-view') === 'table' ? 'table' : 'grid',
+                mode: saved('sh-mcat-mode') === 'listings' ? 'listings' : 'products',
                 selectedIndex: -1,
                 imgFailed: {},
+                hoverFailed: {},
+                failedImages: {},
                 hovered: {},
 
                 drawer: { open: false, loading: false, error: null, detail: null, image: null, memberIdx: 0, link: null },
@@ -76,6 +93,25 @@
         },
 
         computed: {
+            myProductsUrl: function () {
+                var scope = new URLSearchParams();
+                if (this.filters.marketplace) scope.set('marketplace', this.filters.marketplace);
+                if (this.filters.account_id) scope.set('account_id', this.filters.account_id);
+                return this.urls.myProducts + (scope.size ? '?' + scope.toString() : '');
+            },
+            draftsUrl: function () {
+                return this.urls.drafts + (this.filters.marketplace === 'ozon' && this.filters.account_id
+                    ? '?account_id=' + encodeURIComponent(this.filters.account_id) : '');
+            },
+            visibleAccounts: function () {
+                if (!this.ozonEnabled || this.filters.marketplace === 'wb') return [];
+                return this.accounts.filter(acc => !this.filters.account_id || acc.id === this.filters.account_id);
+            },
+            classicUrl: function () {
+                var params = this.scopeParams();
+                if (this.filters.status) params.set('status', this.filters.status);
+                return this.urls.classic + (params.size ? '?' + params.toString() : '');
+            },
             channelKey: function () {
                 if (this.filters.marketplace === 'wb') return 'wb';
                 if (this.filters.marketplace === 'ozon') {
@@ -121,9 +157,9 @@
                     : this.plural(this.targetTotal, 'листинг', 'листинга', 'листингов');
             },
             drawerImageSrc: function () {
-                if (this.drawer.image) return this.drawer.image;
+                if (this.drawer.image && !this.failedImages[this.drawer.image]) return this.drawer.image;
                 if (this.current && this.current.primary_image && !this.imgFailed[this.current.id]) {
-                    return this.current.primary_image;
+                    return this.failedImages[this.current.primary_image] ? null : this.current.primary_image;
                 }
                 return null;
             },
@@ -148,38 +184,46 @@
                     push(this.current.primary_image);
                     push(this.current.hover_image);
                 }
-                return urls.slice(0, 8);
+                return urls.filter(url => !this.failedImages[url]).slice(0, 8);
             },
             syncableAccount: function () {
                 var self = this;
-                return this.accounts.filter(function (acc) {
+                return this.visibleAccounts.filter(function (acc) {
                     return self.canSync(acc);
                 })[0] || null;
             },
-            hasActiveFilters: function () {
+            hasSearchFilters: function () {
                 return !!(this.filters.status || this.filters.link_status ||
-                    this.filters.include_unavailable || this.filters.search ||
-                    this.filters.marketplace || this.filters.account_id);
+                    this.filters.include_unavailable || this.filters.search);
             },
             emptyState: function () {
-                if (this.hasActiveFilters) {
+                if (this.hasSearchFilters) {
                     return {
                         title: 'По этим фильтрам ничего не нашлось',
                         text: 'Попробуйте убрать часть условий или изменить запрос.',
                         action: 'reset'
                     };
                 }
-                if (this.ozonEnabled && !this.accounts.length) {
+                if (this.filters.marketplace === 'wb' || !this.ozonEnabled) {
+                    return {title: 'Каталог Wildberries пока пуст', text: 'После синхронизации товаров Wildberries их карточки появятся здесь.', action: 'none'};
+                }
+                if (this.ozonEnabled && !this.visibleAccounts.length) {
                     return {
                         title: 'Каталог пока пуст',
                         text: 'Подключите кабинет Ozon, чтобы его карточки появились здесь. Карточки Wildberries подтянутся после синхронизации товаров.',
                         action: 'accounts'
                     };
                 }
+                if (this.visibleAccounts.some(acc => this.syncActive(acc))) {
+                    return {title: 'Загружаем ваш каталог', text: 'Товары появятся после загрузки. Страницу можно закрыть — прогресс сохранится.', action: 'sync'};
+                }
+                if (!this.syncableAccount) {
+                    return {title: 'Подключите магазин', text: 'Проверьте подключение и срок ключа в настройках кабинета. Затем можно будет загрузить товары.', action: 'accounts'};
+                }
                 if (this.ozonEnabled) {
                     return {
                         title: 'Каталог пока пуст',
-                        text: 'Запустите синхронизацию кабинета Ozon — карточки появятся здесь через пару минут.',
+                        text: 'Загрузите существующие товары из Ozon или подготовьте первую карточку для нового магазина.',
                         action: 'sync'
                     };
                 }
@@ -202,7 +246,12 @@
             },
             filters: {
                 deep: true,
-                handler: function () { this.refresh(); }
+                handler: function () {
+                    var params = this.scopeParams();
+                    if (this.filters.status) params.set('status', this.filters.status);
+                    history.replaceState(null, '', location.pathname + (params.size ? '?' + params.toString() : ''));
+                    this.refresh();
+                }
             },
             'drawer.open': function (open) {
                 document.body.style.overflow = open ? 'hidden' : '';
@@ -215,9 +264,27 @@
         mounted: function () {
             this._onKey = this.onKey.bind(this);
             window.addEventListener('keydown', this._onKey);
+            this._onVisibility = () => {
+                clearTimeout(syncTimer);
+                if (document.hidden) {
+                    if (syncController) syncController.abort();
+                } else { this.scheduleSyncPoll(); }
+            };
+            document.addEventListener('visibilitychange', this._onVisibility);
+            this.scheduleSyncPoll();
             this.refresh();
         },
         beforeUnmount: function () {
+            syncStopped = true;
+            clearTimeout(syncTimer);
+            clearTimeout(this._searchTimer);
+            if (this._totalRaf) cancelAnimationFrame(this._totalRaf);
+            if (syncController) syncController.abort();
+            if (this._listAbort) this._listAbort.abort();
+            if (this._facetAbort) this._facetAbort.abort();
+            if (this._detailAbort) this._detailAbort.abort();
+            syncRequests.forEach(controller => controller.abort());
+            document.removeEventListener('visibilitychange', this._onVisibility);
             window.removeEventListener('keydown', this._onKey);
             document.body.style.overflow = '';
         },
@@ -293,19 +360,32 @@
                 if (reset) { this.loading = true; this.error = null; } else { this.loadingMore = true; }
                 var params = this.scopeParams();
                 if (this.filters.status) params.set('status', this.filters.status);
+                var endpoint = this.mode === 'products' ? this.urls.groups : this.urls.api;
+                var scope = endpoint + '?' + params.toString();
+                if (reset && this._loadedScope && this._loadedScope !== scope) {
+                    if (this.drawer.open) this.closeDrawer();
+                    this.items = [];
+                    this.selectedIndex = -1;
+                    this.pagination = {page: 1, pages: 1, total: 0, has_next: false};
+                }
                 params.set('page', reset ? 1 : (this.pagination.page + 1));
                 params.set('per_page', this.perPage);
-                var endpoint = this.mode === 'products' ? this.urls.groups : this.urls.api;
 
                 fetch(endpoint + '?' + params.toString(), {
                     headers: { Accept: 'application/json' },
                     signal: abort.signal
                 }).then(S.readJson).then(function (data) {
                     if (abort.signal.aborted) return;
+                    self._loadedScope = scope;
                     var groups = self.normalizeGroups(data.items);
                     if (reset) {
+                        var selectedId = self.drawer.open && self.current ? self.current.id : null;
                         self.items = groups;
-                        self.selectedIndex = self.items.length ? 0 : -1;
+                        self.selectedIndex = selectedId === null ? -1 : groups.findIndex(group => group.listings.some(row => row.id === selectedId));
+                        if (self.drawer.open) {
+                            if (self.selectedIndex < 0) self.closeDrawer();
+                            else self.drawer.memberIdx = self.activeGroup.listings.findIndex(row => row.id === selectedId);
+                        }
                         self.animate = true;
                         setTimeout(function () { self.animate = false; }, 800);
                     } else {
@@ -318,7 +398,7 @@
                     self.pagination = data.pagination || self.pagination;
                 }).catch(function (err) {
                     if (err && err.name === 'AbortError') return;
-                    self.error = err.message || 'Не удалось загрузить каталог';
+                    self.error = err instanceof TypeError ? 'Не удалось связаться с сервером. Проверьте соединение и повторите попытку.' : err.message || 'Не удалось загрузить каталог';
                 }).finally(function () {
                     if (!abort.signal.aborted) { self.loading = false; self.loadingMore = false; }
                 });
@@ -327,6 +407,8 @@
             fetchFacets: function () {
                 var self = this;
                 if (this._facetAbort) this._facetAbort.abort();
+                this.statusChips.forEach(chip => { this.counts[chip.key] = null; });
+                this.channelCounts = {};
                 var abort = new AbortController();
                 this._facetAbort = abort;
 
@@ -364,15 +446,16 @@
             },
             setStatus: function (value) { this.filters.status = value; },
             setView: function (value) {
+                if (!['grid', 'table'].includes(value)) return;
                 this.view = value;
-                localStorage.setItem('sh-mcat-view', value);
+                remember('sh-mcat-view', value);
             },
             setMode: function (value) {
                 if (this.mode === value) return;
                 // Иначе открытая карточка осталась бы на другом товаре из нового списка
                 if (this.drawer.open) this.closeDrawer();
                 this.mode = value;
-                localStorage.setItem('sh-mcat-mode', value);
+                remember('sh-mcat-mode', value);
                 this.fetchList(true);
             },
             resetFilters: function () {
@@ -411,6 +494,7 @@
                 this.loadDetail();
             },
             closeDrawer: function () {
+                if (this._detailAbort) this._detailAbort.abort();
                 this.drawer.open = false;
                 this.drawer.detail = null;
                 this.drawer.error = null;
@@ -423,26 +507,31 @@
                 var self = this;
                 var item = this.current;
                 if (!item) return;
+                if (this._detailAbort) this._detailAbort.abort();
+                var abort = new AbortController();
+                this._detailAbort = abort;
                 this.drawer.loading = true;
                 this.drawer.error = null;
                 fetch(this.urls.base + item.id, {
-                    headers: { Accept: 'application/json' }
+                    headers: { Accept: 'application/json' }, signal: abort.signal
                 }).then(S.readJson).then(function (data) {
-                    if (self.current && data.listing && data.listing.id === self.current.id) {
+                    if (!abort.signal.aborted && self.drawer.open && self.current && data.listing && data.listing.id === self.current.id) {
                         self.drawer.detail = data.listing;
                         self.drawer.link = data.product_link || null;
                     }
                 }).catch(function (err) {
-                    self.drawer.error = err.message || 'Не удалось загрузить детали';
+                    if (abort.signal.aborted || !self.drawer.open) return;
+                    self.drawer.error = err instanceof TypeError ? 'Не удалось связаться с сервером. Откройте карточку ещё раз.' : err.message || 'Не удалось загрузить детали';
                 }).finally(function () {
-                    self.drawer.loading = false;
+                    if (!abort.signal.aborted) self.drawer.loading = false;
                 });
             },
 
             /* ---------- клавиатура ---------- */
             onKey: function (event) {
+                if (event.defaultPrevented) return;
                 var target = event.target;
-                var isField = target && /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName);
+                var isField = target && (/^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName) || target.isContentEditable);
                 if (this.drawer.open) {
                     if (event.key === 'Escape') { event.preventDefault(); this.closeDrawer(); }
                     if (event.key === 'ArrowRight' && !isField) { event.preventDefault(); this.stepDrawer(1); }
@@ -456,6 +545,7 @@
                     if (this.$refs.search) this.$refs.search.focus();
                     return;
                 }
+                if (target && target.closest && target.closest('a,button')) return;
                 if (!this.items.length) return;
                 var cols = this.view === 'grid' ? this.gridColumns() : 1;
                 var moves = {
@@ -516,38 +606,118 @@
 
             /* ---------- синхронизация Ozon ---------- */
             canSync: function (acc) {
-                return this.ozonEnabled && acc.is_active && acc.connection_status === 'connected';
+                var expiry = utcDate(acc.credential_expires_at);
+                return this.ozonEnabled && acc.is_active && acc.has_credentials && acc.connection_status === 'connected'
+                    && (!expiry || expiry > new Date());
+            },
+            accountSettingsUrl: function (acc) {
+                return this.urls.accountsPage + '?account_id=' + encodeURIComponent(acc.id) + '#ozon-account-' + acc.id;
+            },
+            accountState: function (acc) {
+                if (!acc.is_active || !acc.has_credentials) return {label: 'Отключён', tone: 'muted'};
+                var expiry = utcDate(acc.credential_expires_at);
+                if (expiry && expiry <= new Date()) return {label: 'Ключ истёк', tone: 'warn'};
+                if (this.canSync(acc)) return {label: 'Подключён', tone: 'ok'};
+                return {label: acc.connection_status === 'invalid' ? 'Ключ отклонён' : 'Нужна проверка', tone: 'warn'};
+            },
+            syncFailed: function (acc) {
+                return !!(acc._error || (acc.sync_job || {}).status === 'failed' || (acc.last_sync || {}).status === 'failed');
+            },
+            syncDate: function (acc) {
+                var retry = utcDate((acc.sync_job || {}).next_retry_at);
+                var completed = (acc.last_sync || {}).status === 'completed' && utcDate(acc.last_sync.completed_at);
+                var value = this.syncActive(acc) && retry ? retry : completed;
+                return value ? (this.syncActive(acc) && retry ? 'Продолжим после ' : 'Полная загрузка: ')
+                    + value.toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'}) : '';
+            },
+            syncActive: function (acc) {
+                return acc._syncing || activeJob(acc.sync_job);
             },
             syncActionLabel: function (acc) {
-                var status = acc.last_sync && acc.last_sync.status;
-                return status === 'paused' || status === 'running' ? 'продолжить' : 'синк';
+                return this.syncActive(acc) ? 'загружается' : 'обновить';
             },
             syncTone: function (acc) {
+                if (this.syncActive(acc)) return 'mcat-sync-pill--running';
                 var status = acc.last_sync && acc.last_sync.status;
-                if (acc._error || status === 'failed') return 'mcat-sync-pill--failed';
-                if (status === 'running' || status === 'paused' || acc._syncing) return 'mcat-sync-pill--running';
+                if (acc._error || (acc.sync_job || {}).status === 'failed' || status === 'failed') return 'mcat-sync-pill--failed';
                 return '';
             },
             syncHint: function (acc) {
                 if (acc._error) return acc._error;
+                if (!this.canSync(acc) && !this.syncActive(acc)) return 'Проверьте подключение в настройках магазина. Сохранённые товары остаются доступны.';
+                if (acc.sync_job) return (acc.sync_job.message || 'Загрузка каталога')
+                    + (acc.sync_job.processed ? ' · товаров ' + acc.sync_job.processed : '');
                 var sync = acc.last_sync;
                 if (!sync) return 'Каталог ещё не синхронизировался';
-                var parts = ['Синк: ' + (SYNC_STATUS_RU[sync.status] || sync.status)];
+                if (sync.status === 'completed') return 'Загружено товаров: ' + new Intl.NumberFormat('ru-RU').format(sync.seen_count || 0) + '. Можно работать с каталогом.';
+                var parts = ['Загрузка: ' + (SYNC_STATUS_RU[sync.status] || sync.status)];
                 if (sync.page_count) parts.push('страниц ' + sync.page_count);
                 if (sync.seen_count) parts.push('товаров ' + sync.seen_count);
                 if (sync.error_message) parts.push(sync.error_message);
                 return parts.join(' · ');
             },
+            scheduleSyncPoll: function () {
+                clearTimeout(syncTimer);
+                if (syncStopped || document.hidden || !this.ozonEnabled || this.syncSessionExpired
+                    || !this.accounts.some(acc => activeJob(acc.sync_job))) return;
+                syncTimer = setTimeout(() => this.pollSync(), Math.min(30000, 5000 * (1 + this.syncFailures)));
+            },
+            pollSync: async function () {
+                if (syncStopped || document.hidden || syncController) return;
+                syncController = new AbortController();
+                var revision = syncRevision;
+                var timeout = setTimeout(() => syncController && syncController.abort(), 15000);
+                try {
+                    var data = await fetch(this.urls.accountsStatus, {
+                        credentials: 'same-origin', cache: 'no-store',
+                        headers: {Accept: 'application/json'}, signal: syncController.signal
+                    }).then(S.readJson);
+                    if (syncStopped || revision !== syncRevision) return;
+                    var changed = false;
+                    this.accounts.forEach(acc => {
+                        var job = (data.onboarding_jobs || {})[acc.id];
+                        if (activeJob(acc.sync_job) && job && job.status === 'completed') changed = true;
+                        acc.sync_job = job || null;
+                        acc.last_sync = (data.catalog_syncs || {})[acc.id] || acc.last_sync;
+                        var current = (data.accounts || []).find(row => row.id === acc.id);
+                        if (current) {
+                            acc.is_active = current.is_active;
+                            acc.has_credentials = current.has_credentials;
+                            acc.connection_status = current.connection_status;
+                            acc.credential_expires_at = current.credential_expires_at;
+                        }
+                    });
+                    if (typeof data.ozon_enabled === 'boolean') this.ozonEnabled = data.ozon_enabled;
+                    this.syncError = '';
+                    this.syncFailures = 0;
+                    if (changed) this.refresh();
+                } catch (error) {
+                    if (!syncStopped && !document.hidden) {
+                        this.syncSessionExpired = error.code === 'auth_required';
+                        this.syncError = this.syncSessionExpired ? error.message : 'Не удалось обновить статус. Фоновая загрузка не отменена.';
+                        this.syncFailures += 1;
+                    }
+                } finally {
+                    clearTimeout(timeout);
+                    syncController = null;
+                    this.scheduleSyncPoll();
+                }
+            },
             syncAccount: function (acc, forceRestart) {
                 var self = this;
-                if (acc._syncing) return;
+                if (this.syncActive(acc) || !this.canSync(acc)) return;
                 if (forceRestart && !window.confirm('Начать синхронизацию ' + acc.label + ' заново с первой страницы?')) return;
                 acc._syncing = true;
                 acc._error = null;
-                var body = { max_pages: 5 };
+                syncRevision += 1;
+                var controller = new AbortController();
+                syncRequests.add(controller);
+                var timeout = setTimeout(() => controller.abort(), 20000);
+                var body = {};
                 if (forceRestart) body.force_restart = true;
                 fetch(this.urls.base + 'accounts/' + acc.id + '/sync', {
                     method: 'POST',
+                    credentials: 'same-origin', signal: controller.signal,
                     headers: {
                         'Content-Type': 'application/json',
                         Accept: 'application/json',
@@ -555,12 +725,18 @@
                     },
                     body: JSON.stringify(body)
                 }).then(S.readJson).then(function (data) {
-                    acc.last_sync = data.sync || acc.last_sync;
-                    self.refresh();
+                    if (syncStopped) return;
+                    syncRevision += 1;
+                    acc.sync_job = data.job;
                 }).catch(function (err) {
-                    acc._error = err.message || 'Синхронизация не удалась';
+                    acc._error = err.name === 'AbortError' || err instanceof TypeError
+                        ? 'Ответ не получен. Загрузка могла начаться — обновите страницу перед повтором.'
+                        : err.message || 'Не удалось запустить загрузку';
                 }).finally(function () {
+                    clearTimeout(timeout);
+                    syncRequests.delete(controller);
                     acc._syncing = false;
+                    self.scheduleSyncPoll();
                 });
             },
 
@@ -568,6 +744,7 @@
             plural: function (n, one, few, many) { return S.plural(n, one, few, many); },
             fmtMoney: function (value, currency) { return S.fmtMoney(value, currency); },
             priceOf: function (item) { return S.priceLabel(item); },
+            basePriceOf: function (item) { var facts = S.priceFacts(item); return S.fmtMoney(facts.base, facts.currency) || '—'; },
             oldPriceOf: function (item) { return S.oldPriceLabel(item); },
             minPriceOf: function (item) { return S.minPriceLabel(item); },
             stockNum: function (item) { return S.stockNumber(item); },
@@ -618,7 +795,7 @@
                 return 'Ozon';
             },
             betaDetailUrl: function (listing) {
-                return this.urls.base + 'beta/' + listing.id;
+                return this.urls.base + 'view/' + listing.id;
             },
             letterOf: function (item) { return S.letterOf(item); },
             hoverItem: function (item) {
@@ -653,4 +830,6 @@
             relTime: function (iso) { return S.relTime(iso); }
         }
     }).mount('#marketplace-catalog-app');
+    var fallback = document.getElementById('mcat-bootstrap-fallback');
+    if (fallback) fallback.remove();
 })();

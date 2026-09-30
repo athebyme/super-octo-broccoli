@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Тесты bounded-поведения фото-прокси (routes/photos.py):
+Тесты bounded-поведения доставки фото:
 
 - auth-cookies поставщика кэшируются с TTL и не порождают логин-шторм;
-- скачивание изображения укладывается в общий wall-clock дедлайн.
+- transport photo-cache укладывается в общий wall-clock дедлайн.
 
 Инцидент 2026-07-20: логин-POST на каждый промах кэша + отсутствие общего
 дедлайна забивали все gunicorn-слоты и платформа висела.
@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from routes import photos
+from services.photo_cache import PhotoCacheManager
 
 
 def _supplier(**kwargs):
@@ -85,19 +86,28 @@ class DownloadDeadlineTest(unittest.TestCase):
         return resp
 
     def test_expired_deadline_skips_request(self):
-        with mock.patch('requests.get') as get:
-            result = photos._download_image_with_deadline(
-                'https://example.com/a.jpg', {}, {},
-                deadline=time.monotonic() - 1)
+        session = mock.MagicMock()
+        with mock.patch(
+            'services.url_security.validate_external_url', return_value=None,
+        ):
+            result = PhotoCacheManager._download_image_bytes(
+                session, 'https://example.com/a.jpg', {}, {},
+                deadline=time.monotonic() - 1,
+            )
         self.assertIsNone(result)
-        get.assert_not_called()
+        session.get.assert_not_called()
 
     def test_normal_download_returns_content(self):
         resp = self._mock_response([b'a' * 2048])
-        with mock.patch('requests.get', return_value=resp):
-            result = photos._download_image_with_deadline(
-                'https://example.com/a.jpg', {}, {},
-                deadline=time.monotonic() + 10)
+        session = mock.MagicMock()
+        session.get.return_value = resp
+        with mock.patch(
+            'services.url_security.validate_external_url', return_value=None,
+        ):
+            result = PhotoCacheManager._download_image_bytes(
+                session, 'https://example.com/a.jpg', {}, {},
+                deadline=time.monotonic() + 10,
+            )
         self.assertEqual(result, b'a' * 2048)
         resp.close.assert_called_once()
 
@@ -110,28 +120,47 @@ class DownloadDeadlineTest(unittest.TestCase):
             yield b'b' * 100
 
         resp = self._mock_response(slow_chunks())
-        with mock.patch('requests.get', return_value=resp):
-            result = photos._download_image_with_deadline(
-                'https://example.com/a.jpg', {}, {},
-                deadline=time.monotonic() + 0.6)
+        session = mock.MagicMock()
+        session.get.return_value = resp
+        with mock.patch(
+            'services.url_security.validate_external_url', return_value=None,
+        ):
+            result = PhotoCacheManager._download_image_bytes(
+                session, 'https://example.com/a.jpg', {}, {},
+                deadline=time.monotonic() + 0.6,
+            )
         self.assertIsNone(result)
         resp.close.assert_called_once()
 
     def test_oversized_response_rejected(self):
         resp = self._mock_response([b'a' * 1024] * 3)
-        with mock.patch('requests.get', return_value=resp):
-            result = photos._download_image_with_deadline(
-                'https://example.com/a.jpg', {}, {},
-                deadline=time.monotonic() + 10, max_bytes=2048)
+        session = mock.MagicMock()
+        session.get.return_value = resp
+        with (
+            mock.patch(
+                'services.url_security.validate_external_url',
+                return_value=None,
+            ),
+            mock.patch('services.photo_cache.DOWNLOAD_MAX_BYTES', 2048),
+        ):
+            result = PhotoCacheManager._download_image_bytes(
+                session, 'https://example.com/a.jpg', {}, {},
+                deadline=time.monotonic() + 10,
+            )
         self.assertIsNone(result)
 
     def test_non_image_small_response_rejected(self):
         resp = self._mock_response([b'<html>err</html>'],
                                    content_type='text/html')
-        with mock.patch('requests.get', return_value=resp):
-            result = photos._download_image_with_deadline(
-                'https://example.com/a.jpg', {}, {},
-                deadline=time.monotonic() + 10)
+        session = mock.MagicMock()
+        session.get.return_value = resp
+        with mock.patch(
+            'services.url_security.validate_external_url', return_value=None,
+        ):
+            result = PhotoCacheManager._download_image_bytes(
+                session, 'https://example.com/a.jpg', {}, {},
+                deadline=time.monotonic() + 10,
+            )
         self.assertIsNone(result)
 
 

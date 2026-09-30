@@ -74,6 +74,13 @@ class MarketplaceInboxProtocolError(MarketplaceInboxError):
     code = "ozon_inbox_protocol_error"
 
 
+class MarketplaceInboxAccessDenied(MarketplaceInboxError):
+    """This inbox endpoint is unavailable; other account features may work."""
+
+    status_code = 403
+    code = "ozon_inbox_access_denied"
+
+
 class MarketplaceReplyGenerationError(MarketplaceInboxError):
     status_code = 422
     code = "marketplace_reply_generation_failed"
@@ -86,7 +93,7 @@ class MarketplaceInboxService:
     WINDOW_DAYS = 90
     CACHE_TTL = timedelta(minutes=15)
     ACCESS_DENIED_COOLDOWN = timedelta(hours=24)
-    ACCESS_DENIED_ERROR_CODE = "ozon_inbox_access_denied"
+    ACCESS_DENIED_ERROR_CODE = MarketplaceInboxAccessDenied.code
     STALE_RUNNING_AFTER = timedelta(minutes=30)
     MAX_PAGES_PER_CALL = 10
     MAX_COMPLETED_SYNCS = 12
@@ -333,6 +340,7 @@ class MarketplaceInboxService:
         account_id: int,
         source_kind: str,
         now: datetime,
+        recover_abandoned: bool = False,
     ) -> Optional[MarketplaceInboxSync]:
         run = MarketplaceInboxSync.query.filter_by(
             seller_id=seller_id,
@@ -343,7 +351,7 @@ class MarketplaceInboxService:
         if run is None:
             return None
         heartbeat = run.last_page_at or run.started_at
-        if heartbeat and heartbeat < now - cls.STALE_RUNNING_AFTER:
+        if heartbeat and heartbeat < now - cls.STALE_RUNNING_AFTER and not recover_abandoned:
             run.status = "failed"
             run.error_code = "inbox_sync_interrupted"
             run.error_message = "Синхронизация прервана до завершения страницы"
@@ -671,6 +679,7 @@ class MarketplaceInboxService:
         credentials: Optional[MarketplaceCredentials] = None,
         now: Optional[datetime] = None,
         today: Optional[date] = None,
+        recover_abandoned: bool = False,
     ) -> MarketplaceInboxSync:
         if not isinstance(force, bool):
             raise MarketplaceInboxValidationError("force должен быть boolean")
@@ -726,6 +735,7 @@ class MarketplaceInboxService:
                 account_id=account.id,
                 source_kind=source_kind,
                 now=current_time,
+                recover_abandoned=recover_abandoned,
             )
             if run is not None and (
                 run.period_start != period_start or run.period_end != period_end
@@ -811,13 +821,18 @@ class MarketplaceInboxService:
                 ).first()
                 if persisted is not None and persisted.status == "running":
                     code, message = cls._safe_error(exc)
-                    persisted.status = "failed"
                     persisted.error_code = code
                     persisted.error_message = message
-                    persisted.completed_at = current_time
+                    # The durable worker owns retry due and lifetime. Preserve the
+                    # committed cursor on transient failure; never replay prior pages.
+                    if not (recover_abandoned and isinstance(exc, OzonAPIError) and exc.retriable):
+                        persisted.status = "failed"
+                        persisted.completed_at = current_time
                     db.session.commit()
             if isinstance(exc, MarketplaceInboxError):
                 raise
+            if cls._is_provider_access_denied(exc):
+                raise MarketplaceInboxAccessDenied(cls._safe_error(exc)[1]) from None
             if isinstance(exc, (OzonFeedbackContractError, OzonAPIError)):
                 raise MarketplaceInboxProtocolError(str(exc)) from None
             raise
@@ -941,13 +956,25 @@ class MarketplaceInboxService:
         if len(search) > 200:
             raise MarketplaceInboxValidationError("search слишком длинный")
         if search:
-            pattern = f"%{search}%"
+            import unicodedata
+            fold = lambda value: unicodedata.normalize('NFKC', str(value or '')).casefold()
+            connection = db.session.connection()
+            connection.connection.driver_connection.create_function('sh_inbox_casefold', 1, fold, deterministic=True)
+            escaped = fold(search).replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            pattern = f"%{escaped}%"
             query = query.filter(or_(
-                MarketplaceInboxItem.external_id.ilike(pattern),
-                MarketplaceInboxItem.external_sku.ilike(pattern),
-                MarketplaceInboxItem.text.ilike(pattern),
+                db.func.sh_inbox_casefold(MarketplaceInboxItem.external_id).like(pattern, escape='\\'),
+                db.func.sh_inbox_casefold(MarketplaceInboxItem.external_sku).like(pattern, escape='\\'),
+                db.func.sh_inbox_casefold(MarketplaceInboxItem.text).like(pattern, escape='\\'),
                 MarketplaceInboxItem.listing.has(
-                    MarketplaceListing.title.ilike(pattern)
+                    db.and_(
+                        MarketplaceInboxItem.match_status == 'matched',
+                        MarketplaceListing.seller_id == account.seller_id,
+                        MarketplaceListing.marketplace_id == account.marketplace_id,
+                        MarketplaceListing.account_id == account.id,
+                        or_(db.func.sh_inbox_casefold(MarketplaceListing.title).like(pattern, escape='\\'),
+                            db.func.sh_inbox_casefold(MarketplaceListing.offer_id).like(pattern, escape='\\')),
+                    )
                 ),
             ))
         pagination = query.options(
@@ -961,6 +988,7 @@ class MarketplaceInboxService:
         if item_ids:
             drafts = MarketplaceReplyDraft.query.filter(
                 MarketplaceReplyDraft.seller_id == account.seller_id,
+                MarketplaceReplyDraft.marketplace_id == account.marketplace_id,
                 MarketplaceReplyDraft.account_id == account.id,
                 MarketplaceReplyDraft.inbox_item_id.in_(item_ids),
                 MarketplaceReplyDraft.status == "draft",
@@ -972,6 +1000,7 @@ class MarketplaceInboxService:
             db.func.count(MarketplaceInboxItem.id),
         ).filter(
             MarketplaceInboxItem.seller_id == account.seller_id,
+            MarketplaceInboxItem.marketplace_id == account.marketplace_id,
             MarketplaceInboxItem.account_id == account.id,
             MarketplaceInboxItem.source_kind == source_kind,
             MarketplaceInboxItem.published_at >= datetime.combine(
@@ -1049,6 +1078,8 @@ class MarketplaceInboxService:
                 "end": period_end.isoformat(),
             },
             "scope": {"account_id": account.id, "marketplace": "ozon"},
+            "filters": {"source_kind": source_kind, "status": provider_status or '',
+                        "search": search, "listing_id": listing_id},
         }
 
     @classmethod
@@ -1069,6 +1100,61 @@ class MarketplaceInboxService:
         if item is None:
             raise MarketplaceInboxNotFound("Отзыв или вопрос Ozon не найден")
         return item
+
+    @classmethod
+    def get_item(cls, *, seller_id, account_id, item_id):
+        item = cls._owned_item(seller_id=seller_id, account_id=account_id, item_id=item_id)
+        start, end = cls._period(today=datetime.utcnow().date())
+        if not start <= item.published_at.date() <= end:
+            raise MarketplaceInboxNotFound('Входящее больше не доступно в окне 90 дней')
+        return item.to_public_dict()
+
+    @classmethod
+    def save_reply_draft(cls, *, seller_id, account_id, item_id, draft_id,
+                         expected_content_hash, text, created_by_user_id):
+        """Append a locally edited version. Short write claim, no provider/LLM I/O."""
+        item = cls._owned_item(seller_id=seller_id, account_id=account_id, item_id=item_id)
+        draft_id = cls._positive_integer(draft_id, 'draft_id')
+        if not isinstance(expected_content_hash, str) or not re.fullmatch('[a-f0-9]{64}', expected_content_hash):
+            raise MarketplaceInboxValidationError('Нужна версия сохранённого черновика')
+        if Seller.query.filter_by(id=item.seller_id, user_id=created_by_user_id).first() is None:
+            raise MarketplaceInboxNotFound('Пользователь продавца не найден')
+        text = cls._normalize_draft_text(text)
+        scope = dict(id=draft_id, seller_id=item.seller_id, marketplace_id=item.marketplace_id,
+                     account_id=item.account_id, inbox_item_id=item.id, status='draft',
+                     content_hash=expected_content_hash)
+        try:
+            # Serializes local save/source refresh. Any failed gate rolls this claim back.
+            claimed = MarketplaceReplyDraft.query.filter_by(**scope).update(
+                {'status': 'superseded'}, synchronize_session=False,
+            )
+            if claimed != 1:
+                raise MarketplaceInboxConflict('Черновик уже изменился. Загрузите сохранённую версию; ваш текст остаётся в редакторе.')
+            db.session.expire_all()
+            item = cls._owned_item(seller_id=seller_id, account_id=account_id, item_id=item_id)
+            previous = db.session.get(MarketplaceReplyDraft, draft_id)
+            start, end = cls._period(today=datetime.utcnow().date())
+            if not item.reply_eligible or not start <= item.published_at.date() <= end or (
+                item.source_fingerprint != previous.source_fingerprint
+                or cls._fingerprint(cls._bounded_listing_facts(item.owned_listing)) != previous.facts_fingerprint
+            ):
+                raise MarketplaceInboxConflict('Входящее или карточка изменились. Проверьте их и подготовьте новый черновик.')
+            draft = MarketplaceReplyDraft(
+                seller_id=item.seller_id, marketplace_id=item.marketplace_id,
+                account_id=item.account_id, inbox_item_id=item.id,
+                listing_id=item.owned_listing.id if item.owned_listing else None,
+                created_by_user_id=created_by_user_id, status='draft',
+                generation_mode=previous.generation_mode, model_name=previous.model_name,
+                text=text, source_fingerprint=previous.source_fingerprint,
+                facts_fingerprint=previous.facts_fingerprint,
+                content_hash=sha256(text.encode('utf-8')).hexdigest(),
+            )
+            db.session.add(draft)
+            db.session.commit()
+            return draft
+        except Exception:
+            db.session.rollback()
+            raise
 
     @staticmethod
     def _bounded_listing_facts(listing: Optional[MarketplaceListing]) -> Dict[str, Any]:
@@ -1110,7 +1196,8 @@ class MarketplaceInboxService:
 
     @staticmethod
     def _template_draft(item: MarketplaceInboxItem) -> str:
-        title = item.listing.title.strip() if item.listing and item.listing.title else None
+        listing = item.owned_listing
+        title = listing.title.strip() if listing and listing.title else None
         if item.source_kind == "question":
             product = f" по товару «{title}»" if title else ""
             return (
@@ -1241,6 +1328,7 @@ class MarketplaceInboxService:
         created_by_user_id: Optional[int] = None,
         generator: Optional[Callable[[str, str], str]] = None,
         now: Optional[datetime] = None,
+        expected_draft_id=...,
     ) -> MarketplaceReplyDraft:
         if generation_mode not in {"ai", "template"}:
             raise MarketplaceInboxValidationError(
@@ -1266,7 +1354,19 @@ class MarketplaceInboxService:
             ).first() is None:
                 raise MarketplaceInboxNotFound("Пользователь продавца не найден")
         current_time = now or datetime.utcnow()
-        facts = cls._bounded_listing_facts(item.listing)
+        start, end = cls._period(today=current_time.date())
+        if not start <= item.published_at.date() <= end:
+            raise MarketplaceInboxNotFound('Входящее больше не доступно в окне 90 дней')
+        draft_scope = dict(seller_id=item.seller_id, marketplace_id=item.marketplace_id,
+                           account_id=item.account_id, inbox_item_id=item.id, status='draft')
+        previous = MarketplaceReplyDraft.query.filter_by(**draft_scope).first()
+        previous_identity = (previous.id, previous.content_hash) if previous else None
+        if expected_draft_id is not ...:
+            if expected_draft_id is not None:
+                expected_draft_id = cls._positive_integer(expected_draft_id, 'expected_draft_id')
+            if expected_draft_id != (previous.id if previous else None):
+                raise MarketplaceInboxConflict('Черновик уже изменился. Сначала загрузите сохранённый ответ.')
+        facts = cls._bounded_listing_facts(item.owned_listing)
         expected_source_fingerprint = item.source_fingerprint
         expected_facts_fingerprint = cls._fingerprint(facts)
         if generation_mode == "ai":
@@ -1279,52 +1379,41 @@ class MarketplaceInboxService:
         else:
             text = cls._normalize_draft_text(cls._template_draft(item))
             model_name = None
-        db.session.expire_all()
-        item = cls._owned_item(
-            seller_id=seller_id,
-            account_id=account_id,
-            item_id=item_id,
-        )
-        current_facts = cls._bounded_listing_facts(item.listing)
-        if (
-            item.source_fingerprint != expected_source_fingerprint
-            or cls._fingerprint(current_facts) != expected_facts_fingerprint
-        ):
-            raise MarketplaceInboxConflict(
-                "Входящее или факты карточки изменились во время подготовки; "
-                "создайте черновик заново"
-            )
-        previous = MarketplaceReplyDraft.query.filter_by(
-            seller_id=item.seller_id,
-            account_id=item.account_id,
-            inbox_item_id=item.id,
-            status="draft",
-        ).all()
-        for draft in previous:
-            draft.status = "superseded"
-        draft = MarketplaceReplyDraft(
-            seller_id=item.seller_id,
-            marketplace_id=item.marketplace_id,
-            account_id=item.account_id,
-            inbox_item_id=item.id,
-            listing_id=item.listing_id,
-            created_by_user_id=created_by_user_id,
-            status="draft",
-            generation_mode=generation_mode,
-            text=text,
-            source_fingerprint=expected_source_fingerprint,
-            facts_fingerprint=expected_facts_fingerprint,
-            content_hash=sha256(text.encode("utf-8")).hexdigest(),
-            model_name=model_name,
-            created_at=current_time,
-            updated_at=current_time,
-        )
-        db.session.add(draft)
         try:
+            # Begin a short SQLite writer claim only AFTER all AI I/O is over.
+            claimed = MarketplaceInboxItem.query.filter_by(
+                id=item_id, seller_id=seller_id, account_id=account_id,
+                marketplace_id=draft_scope['marketplace_id'],
+                source_fingerprint=expected_source_fingerprint,
+            ).update({'source_fingerprint': expected_source_fingerprint}, synchronize_session=False)
+            db.session.expire_all()
+            item = cls._owned_item(seller_id=seller_id, account_id=account_id, item_id=item_id)
+            if claimed != 1 or cls._fingerprint(cls._bounded_listing_facts(item.owned_listing)) != expected_facts_fingerprint:
+                raise MarketplaceInboxConflict('Входящее или факты карточки изменились во время подготовки; создайте черновик заново')
+            previous = MarketplaceReplyDraft.query.filter_by(**draft_scope).first()
+            if ((previous.id, previous.content_hash) if previous else None) != previous_identity:
+                raise MarketplaceInboxConflict('Черновик изменён другим запросом. Загрузите сохранённую версию.')
+            if previous:
+                previous.status = 'superseded'
+                db.session.flush()
+            draft = MarketplaceReplyDraft(
+                seller_id=item.seller_id, marketplace_id=item.marketplace_id,
+                account_id=item.account_id, inbox_item_id=item.id,
+                listing_id=item.owned_listing.id if item.owned_listing else None,
+                created_by_user_id=created_by_user_id, status='draft', generation_mode=generation_mode,
+                text=text, source_fingerprint=expected_source_fingerprint,
+                facts_fingerprint=expected_facts_fingerprint,
+                content_hash=sha256(text.encode('utf-8')).hexdigest(), model_name=model_name,
+                created_at=current_time, updated_at=current_time,
+            )
+            db.session.add(draft)
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
             raise MarketplaceInboxConflict(
                 "Черновик уже изменён другим запросом; повторите действие"
             ) from None
+        except Exception:
+            db.session.rollback()
+            raise
         return draft

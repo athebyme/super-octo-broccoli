@@ -53,6 +53,9 @@
                 <span class="px-2 py-0.5 rounded-full text-xs font-medium {% if account.is_active %}bg-green-50 text-green-700{% else %}bg-gray-100 text-gray-500{% endif %}">
                     {{ 'Активен' if account.is_active else 'Неактивен' }}
                 </span>
+                {% if account.platform == 'vk' %}
+                <button @click="openVkKeyModal({{ account.id }})" class="px-2 py-1 text-xs text-sky-700 hover:text-sky-900" title="Обновить ключ сообщества">Обновить ключ</button>
+                {% endif %}
                 <button @click="deleteAccount({{ account.id }})" class="p-1.5 text-gray-400 hover:text-red-500 transition" title="Удалить">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                 </button>
@@ -120,14 +123,10 @@
                 <!-- VK specific -->
                 <template x-if="newPlatform === 'vk'">
                     <div class="space-y-3 p-4 bg-sky-50 rounded-lg">
-                        <p class="text-xs text-sky-700">Для публикации нужен ключ сообщества, а для загрузки фото — отдельный пользовательский токен с доступом к фото.</p>
+                        <p class="text-xs text-sky-700">Ключ сообщества с правом «Стена» подходит для текстовых записей. Товарные посты без доступа к загрузке фото не публикуются: картинка для них обязательна. Для фото приложению VK ID должны выдать права «Стена» и «Фотографии». <a href="https://id.vk.ru/business/go" target="_blank" rel="noopener noreferrer" class="underline">Проверить доступы</a> или <a href="mailto:devsupport@corp.vk.com" class="underline">запросить права у VK ID</a>.</p>
                         <div>
                             <label class="block text-xs text-sky-700 mb-1">Access Token сообщества</label>
                             <input type="password" x-model="newCredsAccessToken" autocomplete="new-password" class="w-full px-3 py-2 border border-sky-200 rounded-lg text-sm" placeholder="vk1.a.xxx...">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-sky-700 mb-1">User Token для фото</label>
-                            <input type="password" x-model="newCredsUserToken" autocomplete="new-password" class="w-full px-3 py-2 border border-sky-200 rounded-lg text-sm" placeholder="vk1.a.xxx...">
                         </div>
                         <div>
                             <label class="block text-xs text-sky-700 mb-1">ID сообщества</label>
@@ -164,6 +163,18 @@
             <div x-show="addWarning" class="mt-3 text-sm text-amber-600" x-text="addWarning"></div>
         </div>
     </div>
+<div x-show="showVkKeyModal" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h2 class="text-lg font-semibold text-gray-900">Обновить ключ сообщества VK</h2>
+        <p class="mt-2 text-sm text-gray-600">ID сообщества останется прежним. Текущий ключ не показывается.</p>
+        <input type="password" x-model="replacementVkKey" autocomplete="new-password" class="mt-4 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="Новый ключ сообщества">
+        <p x-show="vkKeyError" x-text="vkKeyError" class="mt-2 text-sm text-red-600"></p>
+        <div class="mt-5 flex gap-3">
+            <button @click="saveVkKey()" :disabled="savingVkKey" class="rounded-lg bg-brand px-4 py-2 text-sm text-white disabled:opacity-50">Сохранить</button>
+            <button @click="showVkKeyModal = false; replacementVkKey = ''" class="px-4 py-2 text-sm text-gray-600">Отмена</button>
+        </div>
+    </div>
+</div>
 </div>
 
 <script>
@@ -175,7 +186,11 @@ function socialAccounts() {
         newAccountId: '',
         newCredsBotToken: '',
         newCredsAccessToken: '',
-        newCredsUserToken: '',
+        showVkKeyModal: false,
+        vkKeyAccountId: null,
+        replacementVkKey: '',
+        savingVkKey: false,
+        vkKeyError: '',
         saving: false,
         addError: '',
         addWarning: '',
@@ -194,11 +209,9 @@ function socialAccounts() {
                 credentials = { bot_token: this.newCredsBotToken, chat_id: this.newAccountId };
             } else if (this.newPlatform === 'vk') {
                 if (!this.newCredsAccessToken) { this.addError = 'Укажите Access Token сообщества'; this.saving = false; return; }
-                if (!this.newCredsUserToken) { this.addError = 'Укажите User Token для загрузки фото'; this.saving = false; return; }
                 if (!this.newAccountId) { this.addError = 'Укажите ID сообщества'; this.saving = false; return; }
                 credentials = {
                     access_token: this.newCredsAccessToken,
-                    user_token: this.newCredsUserToken,
                     group_id: this.newAccountId,
                 };
             } else {
@@ -221,11 +234,44 @@ function socialAccounts() {
 
                 if (data.error) { this.addError = data.error; }
                 else {
-                    if (data.warning) this.addWarning = data.warning;
-                    else location.reload();
+                    if (data.warning) alert(data.warning);
+                    location.reload();
                 }
             } catch(e) { this.addError = 'Ошибка: ' + e.message; }
             this.saving = false;
+        },
+
+        openVkKeyModal(id) {
+            this.vkKeyAccountId = id;
+            this.replacementVkKey = '';
+            this.vkKeyError = '';
+            this.showVkKeyModal = true;
+        },
+
+        async saveVkKey() {
+            if (!this.replacementVkKey.trim()) {
+                this.vkKeyError = 'Введите новый ключ сообщества';
+                return;
+            }
+            this.savingVkKey = true;
+            this.vkKeyError = '';
+            try {
+                const resp = await fetch(`/api/content-factory/accounts/${this.vkKeyAccountId}/credentials`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': this.csrf() },
+                    body: JSON.stringify({ access_token: this.replacementVkKey }),
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.error) this.vkKeyError = data.error || 'Не удалось сохранить ключ';
+                else {
+                    this.replacementVkKey = '';
+                    if (data.warning) alert(data.warning);
+                    location.reload();
+                }
+            } catch (e) {
+                this.vkKeyError = 'Не удалось обновить ключ';
+            }
+            this.savingVkKey = false;
         },
 
         async deleteAccount(id) {

@@ -704,6 +704,50 @@ class EnrichmentService:
     # BATCH: проверка доступности обогащения для списка карточек
     # =========================================================================
 
+    @staticmethod
+    def _has_potential_supplier_data(products, seller_id: int) -> bool:
+        """Negative-only batch preflight; never admits an identity match.
+
+        Skip the expensive per-card resolver only when no owned import can
+        match any of its exact keys. A positive/ambiguous result still goes
+        through the original resolver with its ordering and conflict gates.
+        """
+        from sqlalchemy import or_, select
+        from models import db, ImportedProduct, SellerSupplier, SupplierProduct
+        from services.pricing_engine import extract_supplier_product_id
+
+        vendor_codes, source_ids, supplier_source_ids = set(), set(), set()
+        for product in products:
+            if product.supplier_vendor_code:
+                vendor_codes.add(product.supplier_vendor_code)
+            if product.vendor_code:
+                numeric_id = extract_supplier_product_id(product.vendor_code)
+                if numeric_id:
+                    candidates = {str(numeric_id), f'id-{numeric_id}'}
+                    source_ids.update(candidates)
+                    supplier_source_ids.update(candidates)
+                    prefix = re.match(r'^(id-\w+)-', product.vendor_code)
+                    if prefix:
+                        source_ids.add(prefix.group(1))
+        connected_suppliers = select(SellerSupplier.supplier_id).where(
+            SellerSupplier.seller_id == seller_id,
+        )
+        candidate_supplier_ids = select(SupplierProduct.id).where(
+            SupplierProduct.supplier_id.in_(connected_suppliers),
+            or_(SupplierProduct.external_id.in_(supplier_source_ids),
+                SupplierProduct.vendor_code.in_(vendor_codes)),
+        )
+        candidates = ImportedProduct.query.filter(
+            ImportedProduct.seller_id == seller_id,
+            or_(
+                ImportedProduct.product_id.in_([p.id for p in products]),
+                ImportedProduct.external_vendor_code.in_(vendor_codes),
+                ImportedProduct.external_id.in_(source_ids),
+                ImportedProduct.supplier_product_id.in_(candidate_supplier_ids),
+            ),
+        )
+        return bool(db.session.query(candidates.exists()).scalar())
+
     def check_enrichment_availability(self, product_ids: List[int], seller_id: int) -> Dict[int, Dict]:
         """
         Быстрая проверка наличия данных поставщика для списка карточек.
@@ -755,6 +799,8 @@ class EnrichmentService:
                 Product.id.in_(missing),
                 Product.seller_id == seller_id,
             ).all()
+            if not self._has_potential_supplier_data(products, seller_id):
+                return result
             for product in products:
                 imp = self.find_supplier_data(product, seller_id)
                 if imp:

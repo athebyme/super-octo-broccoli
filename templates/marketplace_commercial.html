@@ -1,115 +1,45 @@
 {% extends "base.html" %}
-{% from "macros/components.html" import channel_bar %}
+{% from "macros/icons.html" import icon %}
 {% block title %}Цены и остатки Ozon — Seller Hub{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css') }}">{% endblock %}
 {% block content %}
-{% set status_labels = {
-    'pending_review': 'Ждёт решения', 'approved': 'Подтверждено',
-    'applying': 'Проверяем Ozon', 'uncertain': 'Нужна сверка',
-    'applied': 'Применено', 'failed': 'Отклонено Ozon',
-    'conflict': 'Данные изменились', 'rejected': 'Отклонено без записи',
-    'cancelled': 'Отменено'
-} %}
-{% set source_labels = {'user': 'вручную', 'agent': 'ИИ-агент', 'system': 'система', 'rollback': 'откат'} %}
-<div class="sh-page-header">
-    <div class="sh-page-header-content">
-        <div>
-            <h1 class="sh-page-title">Цены, остатки и склады Ozon</h1>
-            <p class="sh-page-subtitle">Каждое изменение цены или остатка — через заявку: предварительная проверка, снимок состояния и сверка после записи.</p>
-        </div>
-        <div class="sh-page-actions">
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('auto_import_pricing') }}">Формула WB</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Открыть каталог</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_operations.index') }}">Журнал операций</a>
-        </div>
-    </div>
-</div>
-
-<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-    {{ channel_bar(
-        active='ozon' if filters.account_id else 'all',
-        account_id=filters.account_id,
-        all_href=url_for('marketplace_commercial.index'),
-        all_label='Все кабинеты Ozon',
-        wb_href=url_for('prices.prices_dashboard'),
-        ozon_href=url_for('marketplace_commercial.index')
-    ) }}
-
-
-    {% if not write_enabled %}
-    <div class="mt-4 rounded-md border px-4 py-3 text-sm" style="border-color:var(--border);color:var(--text-secondary)">
-        Создавать заявки можно, но подтверждение изменений выключено настройкой <code>MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED</code>. Уже начатые операции продолжают сверку.
-    </div>
-    {% endif %}
-
-    <div class="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <div class="sh-card p-4"><div class="text-xs" style="color:var(--accent)">Шаг 1</div><h2 class="mt-1 font-semibold" style="color:var(--text)">Выберите кабинет и синхронизируйте склады</h2><p class="mt-2 text-xs" style="color:var(--text-secondary)">Заявка на изменение остатков всегда привязана к точному складу, которым вы владеете, а не к общей сумме по карточке.</p></div>
-        <div class="sh-card p-4"><div class="text-xs" style="color:var(--accent)">Шаг 2</div><h2 class="mt-1 font-semibold" style="color:var(--text)">Создайте заявку из карточки</h2><p class="mt-2 text-xs" style="color:var(--text-secondary)">Создание только читает текущее состояние в Ozon и сохраняет сравнение; запись в Ozon ещё не выполняется.</p></div>
-        <div class="sh-card p-4"><div class="text-xs" style="color:var(--accent)">Шаг 3</div><h2 class="mt-1 font-semibold" style="color:var(--text)">Сверьте и подтвердите</h2><p class="mt-2 text-xs" style="color:var(--text-secondary)">Перед записью текущее состояние в Ozon проверяется снова. Можно подтвердить одну заявку или набор до 100 сразу.</p></div>
-    </div>
-
-    <form method="get" class="sh-card p-4 mt-5 grid grid-cols-1 sm:grid-cols-4 gap-3">
-        {# Кабинет переключается channel bar-ом выше; форма только сохраняет его #}
-        {% if filters.account_id %}<input type="hidden" name="account_id" value="{{ filters.account_id }}">{% endif %}
-        <label>
-            <span class="block text-xs mb-1" style="color:var(--text-muted)">Тип заявки</span>
-            <select name="proposal_kind" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)">
-                <option value="">Все</option>
-                {% for kind in ['price','stock'] %}<option value="{{ kind }}" {% if filters.proposal_kind == kind %}selected{% endif %}>{{ 'Цена' if kind == 'price' else 'Остатки' }}</option>{% endfor %}
-            </select>
-        </label>
-        <label>
-            <span class="block text-xs mb-1" style="color:var(--text-muted)">Статус</span>
-            <select name="status" class="w-full rounded-md border px-3 py-2 text-sm bg-transparent" style="border-color:var(--border);color:var(--text)">
-                <option value="">Все</option>
-                {% for status in ['pending_review','approved','applying','uncertain','applied','failed','conflict','rejected','cancelled'] %}<option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status_labels.get(status, status) }}</option>{% endfor %}
-            </select>
-        </label>
-        <div class="flex items-end justify-end"><button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">Применить</button></div>
+<script type="application/json" id="oc-bootstrap">{{ {'mode':'list', 'filters':filters, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled} | tojson }}</script>
+<div class="oc-fallback" id="oc-fallback">Загружаем цены и остатки… <a href="{{ url_for('marketplace_commercial.classic', account_id=filters.account_id) }}">Открыть упрощённую версию</a></div>
+<div id="ozon-commercial-app" class="oc-page" v-cloak>
+    <header class="oc-header"><div><h1>Цены и остатки</h1><p>Изменения в Ozon с проверкой и вашим подтверждением.</p></div><button class="sh-btn sh-btn--primary" @click="openCreate">{{ icon('plus',18) }} Изменить цену или остаток</button></header>
+    {% raw %}
+    <nav class="oc-nav" aria-label="Связанные разделы"><a :href="catalogUrl">Каталог Ozon</a><a href="/marketplaces/operations/">Журнал операций</a><a href="/marketplaces/accounts/">Подключение магазинов</a></nav>
+    <p v-if="!writeEnabled" class="oc-notice">Изменения можно подготовить и сохранить. Отправка в Ozon временно выключена администратором.</p>
+    <div v-if="error" class="oc-alert" role="alert"><p>{{ error }}</p><button type="button" class="sh-btn sh-btn--secondary" :disabled="loading || busy || sessionEnded" @click="loadList()">Обновить данные</button><a v-if="sessionEnded" href="/login">Войти снова</a></div>
+    <p v-if="notice" class="oc-notice" role="status">{{ notice }}</p>
+    <form class="oc-filters" @submit.prevent="applyFilters">
+        <label>Магазин<select name="account_id" v-model="filters.account_id" :disabled="busy || loading"><option value="">Все магазины Ozon</option><option v-for="a in accounts" :key="a.id" :value="String(a.id)">{{ a.label }}{{ a.is_active ? '' : ' · отключён' }}</option></select></label>
+        <label>Изменение<select name="proposal_kind" v-model="filters.proposal_kind" :disabled="busy || loading"><option value="">Цены и остатки</option><option value="price">Цены</option><option value="stock">Остатки</option></select></label>
+        <label>Состояние<select name="status" v-model="filters.status" :disabled="busy || loading"><option value="">Все состояния</option><option v-for="(label,key) in statuses" :key="key" :value="key">{{ label }}</option></select></label>
+        <button type="submit" class="sh-btn sh-btn--secondary" :disabled="loading || busy">Показать</button>
     </form>
-
-    {% if filters.account_id %}
-    <section class="sh-card p-4 mt-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-                <h2 class="font-semibold" style="color:var(--text)">Склады выбранного кабинета</h2>
-                <p class="mt-1 text-xs" style="color:var(--text-muted)">Хранятся только служебные идентификаторы и признаки склада; адреса и телефоны не сохраняются.</p>
-            </div>
-            <form method="post" action="{{ url_for('marketplace_commercial.sync_warehouses', account_id=filters.account_id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button class="sh-btn sh-btn--secondary" type="submit">Полная синхронизация складов</button>
-            </form>
-        </div>
-        {% if warehouses %}<div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-            {% for warehouse in warehouses %}<div class="rounded border p-3" style="border-color:var(--border)">
-                <div class="flex items-center justify-between gap-2"><span style="color:var(--text)">{{ warehouse.name }}</span><span class="text-xs" style="color:var(--text-muted)">{{ warehouse.external_warehouse_id }}</span></div>
-                <p class="mt-1 text-xs" style="color:var(--text-secondary)">{{ warehouse.status or 'неизвестно' }} · {{ warehouse.warehouse_type or 'тип неизвестен' }}{% if not warehouse.is_available %} · недоступен{% endif %}</p>
-            </div>{% endfor %}
-        </div>{% else %}<p class="mt-3 text-sm" style="color:var(--text-muted)">Склады ещё не синхронизированы.</p>{% endif %}
-    </section>
-    {% endif %}
-
-    <div class="mt-5 flex items-center justify-between"><p class="text-sm" style="color:var(--text-secondary)">Заявок: {{ pagination.total }}</p><p class="text-xs" style="color:var(--text-muted)">Страница {{ pagination.page }} / {{ pagination.pages or 1 }}</p></div>
-    {% set batch_mode = write_enabled and filters.account_id and filters.proposal_kind in ['price','stock'] and filters.status == 'pending_review' %}
-    {% if write_enabled and proposals and not batch_mode %}<p class="mt-3 text-xs" style="color:var(--text-muted)">Чтобы подтвердить несколько заявок разом, выберите один кабинет, тип заявки и статус «Ждёт решения». Одиночное решение доступно внутри каждой заявки.</p>{% endif %}
-    {% if proposals %}
-    {% if batch_mode %}<form method="post" action="{{ url_for('marketplace_commercial.batch_approve') }}" class="mt-3"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="mb-3 flex flex-col gap-3 rounded border p-3 sm:flex-row sm:items-end sm:justify-between" style="border-color:var(--border)"><div><p class="text-xs" style="color:var(--text-secondary)">Выберите до 100 заявок. Перед одной общей записью весь набор повторно проверяется по текущему состоянию в Ozon.</p><label class="mt-2 flex items-start gap-2 text-xs" style="color:var(--text-secondary)"><input class="mt-0.5" type="checkbox" name="confirm_write" value="1" required><span>Я сверил выбранный набор и подтверждаю одну общую отправку изменений в Ozon.</span></label></div><button class="sh-btn sh-btn--primary" type="submit">Подтвердить выбранные одним запросом</button></div>{% endif %}
-    <div class="space-y-3">
-        {% for proposal in proposals %}
-        {% set before = proposal._json_object(proposal.baseline_state_json) %}
-        {% set proposed = proposal._json_object(proposal.proposed_state_json) %}
-        <article class="sh-card p-4 flex items-start gap-3">
-            {% if batch_mode %}<input class="mt-1" type="checkbox" name="proposal" value="{{ proposal.id }}:{{ proposal.version }}" aria-label="Выбрать заявку {{ proposal.id }}">{% endif %}
-        <a class="block min-w-0 flex-1" href="{{ url_for('marketplace_commercial.detail', proposal_id=proposal.id) }}">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div><div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)"><span style="color:var(--accent)">{{ 'Цена' if proposal.proposal_kind == 'price' else 'Остатки' }}</span><span>{{ source_labels.get(proposal.source, proposal.source) }}</span><span>#{{ proposal.id }}</span><span>{{ proposal.account.label if proposal.account else 'кабинет удалён' }}</span></div>
-                    <p class="mt-2 text-sm break-all" style="color:var(--text)">{{ proposal.listing.offer_id if proposal.listing else 'карточка удалена' }}</p>
-                    <p class="mt-1 text-xs" style="color:var(--text-secondary)">{% if proposal.proposal_kind == 'price' %}{{ before.get('price') }} → {{ proposed.get('price') }} {{ proposed.get('currency_code','') }}{% else %}Остатки: {{ before.get('stock') }} → {{ proposed.get('stock') }} · {{ proposal.warehouse.name if proposal.warehouse else 'склад удалён' }}{% endif %}</p>
-                </div>
-                <div class="sm:text-right"><div class="text-sm" style="color:var(--text)">{{ status_labels.get(proposal.status, proposal.status) }}</div><div class="mt-1 text-xs" style="color:var(--text-muted)">v{{ proposal.version }}</div></div>
-            </div>
-        </a>
-        </article>{% endfor %}
-    </div>{% if batch_mode %}</form>{% endif %}
-    {% else %}<div class="sh-card mt-3 p-10 text-center text-sm" style="color:var(--text-muted)">Заявок пока нет.</div>{% endif %}
+    <details v-if="observedFilters.account_id" class="oc-warehouses"><summary>Склады магазина <span>{{ warehouses.length }}</span></summary>
+        <div class="oc-between"><p>Остатки меняются для выбранного склада FBS/rFBS. Дата ниже — последнее полное обновление списка.</p><button class="sh-btn sh-btn--secondary" :disabled="busy || loading || warehouseRefreshes[observedFilters.account_id]?.active" @click="syncWarehouses(observedFilters.account_id)">{{ busy === 'warehouses' ? 'Ставим в очередь…' : 'Обновить склады' }}</button></div>
+        <p v-if="refreshError" class="oc-alert" role="alert">{{ refreshError }} <button type="button" class="sh-btn sh-btn--secondary" @click="readRefresh('warehouses',Number(observedFilters.account_id))">Проверить состояние</button></p>
+        <p v-if="warehouseRefreshes[observedFilters.account_id]" class="oc-refresh-state" role="status" aria-live="polite">{{ refreshText(warehouseRefreshes[observedFilters.account_id]) }} <a v-if="warehouseRefreshes[observedFilters.account_id]?.code === 'access_denied'" href="/marketplaces/accounts/">Настройки кабинета</a></p>
+        <ul v-if="warehouses.length" class="oc-warehouse-list"><li v-for="w in warehouses" :key="w.id"><strong>{{ w.name }}</strong><span>{{ w.is_available ? (w.warehouse_type || 'Тип не указан') : 'Недоступен' }}</span><small>{{ date(w.last_synced_at) }}</small></li></ul><p v-else>Список складов ещё не загружен. Обновите его перед изменением остатков.</p>
+    </details>
+    <div class="oc-between oc-list-heading"><h2>Заявки на изменение <span>{{ pagination.total }}</span></h2><button v-if="selected.length" class="sh-btn sh-btn--primary" :disabled="loading || busy" @click="openBatch">Проверить выбранные: {{ selected.length }}</button><button v-else class="sh-btn sh-btn--secondary" :disabled="loading || busy" @click="loadList()">Обновить</button></div>
+    <p class="oc-muted" v-if="batchMode">Выберите заявки одного типа для общей отправки. На следующем шаге вы увидите весь выбранный набор.</p>
+    <p v-else-if="items.length && writeEnabled" class="oc-muted">Для общей отправки выберите один магазин, один тип изменения и состояние «Ждёт решения».</p>
+    <div class="oc-list" :aria-busy="loading">
+        <p v-if="loading && !items.length" role="status" class="oc-loading">Загружаем заявки…</p>
+        <article v-for="p in items" :key="p.id" class="oc-row">
+            <input v-if="batchMode" type="checkbox" :value="p.id" v-model="selected" :disabled="loading || busy || !p.target_available || held(p)" :aria-label="'Выбрать ' + title(p)">
+            <a class="oc-product" :href="base + p.id"><span class="oc-photo"><img v-if="photo(p.product)" v-image-deadline :src="photo(p.product)" alt="" width="64" height="72" loading="lazy" @error="imageError(p.product)"><span v-else aria-hidden="true">O</span></span><span><strong>{{ title(p) }}</strong><small>{{ p.product?.offer_id || p.proposed_state.offer_id }}</small><small>{{ p.account_label }} · {{ p.proposal_kind === 'price' ? 'Цена' : p.warehouse_name }}</small></span></a>
+            <div class="oc-row-values"><span>{{ value(p, 'baseline_state') }}</span><span aria-hidden="true">→</span><strong>{{ value(p, 'proposed_state') }}</strong></div>
+            <a class="oc-row-status" :href="base + p.id"><span class="oc-status" :class="statusClass(p.status)">{{ statuses[p.status] || p.status }}</span><small>{{ date(p.created_at) }}</small><small v-if="!p.target_available">{{ p.target_unavailable_reason }}</small><small v-if="held(p)">Новые изменения остановлены решением №{{ p.write_quarantine.id }}</small></a><a v-if="held(p) && reviewUrl(p.write_quarantine)" class="sh-btn sh-btn--secondary" :href="reviewUrl(p.write_quarantine)">Разобрать исход</a>
+        </article>
+    </div>
+    <section v-if="!loading && !items.length && !error" class="oc-empty"><img src="/static/images/ozon-shop-start.webp" alt="" width="180" height="156"><div><h2>{{ pagination.page > 1 ? 'На этой странице нет заявок' : 'Здесь появятся ваши изменения' }}</h2><p>Выберите товар, укажите новую цену или остаток. Сначала мы сохраним сравнение для проверки; отправка — отдельным действием.</p><button class="sh-btn sh-btn--primary" @click="openCreate">Выбрать товар</button><button v-if="hasFilters" class="sh-btn sh-btn--secondary" @click="resetFilters">Сбросить фильтры</button></div></section>
+    <nav v-if="pagination.pages > 1 || pagination.page > 1" class="oc-pagination" aria-label="Страницы заявок"><button class="sh-btn sh-btn--secondary" :disabled="pagination.page <= 1 || loading || busy" @click="loadList(pagination.page - 1)">Назад</button><span>{{ pagination.page }} / {{ pagination.pages || 1 }}</span><button class="sh-btn sh-btn--secondary" :disabled="pagination.page >= pagination.pages || loading || busy" @click="loadList(pagination.page + 1)">Далее</button></nav>
+    {% endraw %}
+    {% include 'partials/ozon_commercial_dialogs.html' %}
 </div>
+{% include 'partials/ozon_commercial_scripts.html' %}
 {% endblock %}

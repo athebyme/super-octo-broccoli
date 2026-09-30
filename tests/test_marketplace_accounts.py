@@ -14,6 +14,7 @@ from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect
 
 from models import (
+    BackgroundJob,
     ImportedProduct,
     Marketplace,
     MarketplaceCanonicalContentProposal,
@@ -116,6 +117,9 @@ class MarketplaceAccountsTest(unittest.TestCase):
 
     def _login_patches(self, seller_id):
         user = self._user(seller_id)
+        if seller_id is not None:
+            with self.app.app_context():
+                user.id = db.session.get(Seller, seller_id).user_id
         return (
             patch("routes.marketplace_accounts.current_user", user),
             patch("flask_login.utils._get_user", return_value=user),
@@ -414,7 +418,7 @@ class MarketplaceAccountsTest(unittest.TestCase):
                     self.assertTrue(account.is_active)
                     self.assertEqual(operation.status, status)
 
-    def test_active_write_blocks_account_edit_and_connection_recheck(self):
+    def test_pending_write_blocks_settings_but_allows_read_only_connection_check(self):
         with self.app.app_context():
             account = self._save()
             operation = self._operation(
@@ -423,6 +427,10 @@ class MarketplaceAccountsTest(unittest.TestCase):
                 attempt_count=1,
             )
             registry = MagicMock()
+            registry.get.return_value.check_connection.return_value = ConnectionCheck(
+                ok=True, status='connected', external_account_id=account.external_account_id,
+                capabilities=frozenset({'catalog_read'}), roles=(),
+            )
 
             with self.assertRaises(MarketplaceAccountConflict):
                 MarketplaceAccountService.save_ozon_account(
@@ -432,19 +440,50 @@ class MarketplaceAccountsTest(unittest.TestCase):
                     label="Изменённое имя",
                     api_key=None,
                 )
-            with self.assertRaises(MarketplaceAccountConflict):
-                MarketplaceAccountService.check_connection(
-                    seller_id=self.seller1_id,
-                    account_id=account.id,
-                    registry=registry,
-                )
+            MarketplaceAccountService.check_connection(
+                seller_id=self.seller1_id, account_id=account.id, registry=registry,
+            )
 
             db.session.refresh(account)
             db.session.refresh(operation)
             self.assertEqual(account.label, "Основной Ozon")
             self.assertTrue(account.has_credentials)
             self.assertEqual(operation.status, "submitted")
-            registry.get.assert_not_called()
+            registry.get.return_value.check_connection.assert_called_once()
+
+    def test_key_recovery_keeps_unknown_outcome_and_settings_and_checks_scope(self):
+        with self.app.app_context():
+            account = self._save(default_vat='0.22')
+            account.credential_expires_at = datetime.utcnow() - timedelta(days=1)
+            operation = self._operation(account, status='uncertain', attempt_count=1)
+            db.session.commit()
+            version = account.version
+            with patch('requests.sessions.Session.request', side_effect=AssertionError('No HTTP')):
+                updated = MarketplaceAccountService.rotate_ozon_key(
+                    seller_id=self.seller1_id, account_id=account.id,
+                    external_account_id=account.external_account_id, api_key='recovery-synthetic-key', expected_version=account.version)
+            self.assertEqual(updated.get_credentials()['api_key'], 'recovery-synthetic-key')
+            self.assertEqual(updated.version, version + 1)
+            self.assertEqual(updated.label, 'Основной Ozon')
+            self.assertEqual(updated.public_settings['default_vat'], '0.22')
+            self.assertEqual(updated.connection_status, 'unchecked')
+            self.assertEqual(updated.capabilities_json, '[]')
+            self.assertIsNone(updated.credential_expires_at)
+            db.session.refresh(operation)
+            self.assertEqual((operation.status, operation.attempt_count), ('uncertain', 1))
+            for seller_id, client_id, expected in [
+                (self.seller2_id, account.external_account_id, MarketplaceAccountNotFound),
+                (self.seller1_id, 'different-client', MarketplaceAccountConflict),
+            ]:
+                with self.assertRaises(expected):
+                    MarketplaceAccountService.rotate_ozon_key(seller_id=seller_id, account_id=account.id,
+                        external_account_id=client_id, api_key='must-not-save', expected_version=account.version)
+            with patch('services.marketplace_accounts.try_account_operation_lock', return_value=None):
+                with self.assertRaises(MarketplaceAccountConflict):
+                    MarketplaceAccountService.rotate_ozon_key(seller_id=self.seller1_id, account_id=account.id,
+                        external_account_id=account.external_account_id, api_key='must-not-save', expected_version=account.version)
+            db.session.refresh(account)
+            self.assertEqual(account.get_credentials()['api_key'], 'recovery-synthetic-key')
 
     def test_json_create_and_list_never_echo_api_key(self):
         user_patch, login_patch = self._login_patches(self.seller1_id)
@@ -478,6 +517,7 @@ class MarketplaceAccountsTest(unittest.TestCase):
             ready = self._save(default_vat="0.22")
             ready.connection_status = "connected"
             ready.credential_expires_at = datetime.utcnow() + timedelta(days=1)
+            db.session.commit()
             expired = self._save(
                 external_account_id="expired-client",
                 label="Истёкший ключ",
@@ -555,7 +595,8 @@ class MarketplaceAccountsTest(unittest.TestCase):
 
     def test_feature_flag_blocks_new_connection_but_allows_disconnect(self):
         with self.app.app_context():
-            account_id = self._save().id
+            account = self._save()
+            account_id, version = account.id, account.version
         self.app.config["MARKETPLACE_OZON_ENABLED"] = False
         user_patch, login_patch = self._login_patches(self.seller1_id)
         with user_patch, login_patch:
@@ -570,7 +611,7 @@ class MarketplaceAccountsTest(unittest.TestCase):
             )
             disconnect = self.client.post(
                 f"/marketplaces/accounts/{account_id}/disconnect",
-                json={},
+                json={"expected_version": version},
             )
         self.assertEqual(create.status_code, 404)
         self.assertEqual(disconnect.status_code, 200)
@@ -588,6 +629,162 @@ class MarketplaceAccountsTest(unittest.TestCase):
                 },
             )
         self.assertEqual(response.status_code, 400)
+
+    def test_one_action_connection_queues_without_http_and_without_vat(self):
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch, patch(
+            'services.ozon_account_sync._BoundedAdapter', side_effect=AssertionError('HTTP in request'),
+        ) as adapter:
+            response = self.client.post('/marketplaces/accounts/ozon/connect', json={
+                'client_id': '321', 'api_key': 'new-connection-secret',
+            })
+        self.assertEqual(response.status_code, 202)
+        payload = response.get_json()
+        self.assertEqual(payload['account']['connection_status'], 'unchecked')
+        self.assertEqual(payload['job']['status'], 'pending')
+        self.assertEqual(payload['job']['phase'], 'check')
+        self.assertNotIn('new-connection-secret', response.get_data(as_text=True))
+        self.assertNotIn('credential_fingerprint', response.get_data(as_text=True))
+        adapter.assert_not_called()
+        with self.app.app_context():
+            self.assertEqual(BackgroundJob.query.count(), 1)
+
+    def test_existing_account_identity_is_immutable_even_without_operations(self):
+        with self.app.app_context():
+            account = self._save()
+            original_key = account._credentials_encrypted
+            with self.assertRaises(MarketplaceAccountConflict):
+                self._save(account_id=account.id, external_account_id='different-shop', api_key='replacement')
+            db.session.refresh(account)
+            self.assertEqual(account.external_account_id, '123456')
+            self.assertEqual(account._credentials_encrypted, original_key)
+            self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_disconnected_account_can_reconnect_without_duplicate_or_lost_history(self):
+        with self.app.app_context():
+            account = self._save()
+            account_id = account.id
+            MarketplaceAccountService.disconnect(seller_id=self.seller1_id, account_id=account_id)
+            expected_version = account.version
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch:
+            result = self.client.post(f'/marketplaces/accounts/{account_id}/reconnect', json={
+                'client_id': '123456', 'api_key': 'reconnect-synthetic-secret', 'expected_version': expected_version,
+            })
+        self.assertEqual(result.status_code, 202)
+        self.assertEqual(result.get_json()['account']['id'], account_id)
+        self.assertTrue(result.get_json()['account']['is_active'])
+        self.assertEqual(result.get_json()['job']['phase'], 'check')
+        self.assertNotIn('reconnect-synthetic-secret', result.get_data(as_text=True))
+        with self.app.app_context():
+            self.assertEqual(SellerMarketplaceAccount.query.count(), 1)
+
+    def test_onboarding_is_strict_tenant_scoped_and_status_get_is_read_only(self):
+        with self.app.app_context():
+            account_id = self._save().id
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch:
+            queued = self.client.post(f'/marketplaces/accounts/{account_id}/connect', json={})
+            duplicate = self.client.post(f'/marketplaces/accounts/{account_id}/connect', json={})
+            status = self.client.get(f'/marketplaces/accounts/{account_id}/setup', headers={'Accept': 'application/json'})
+            smuggled = self.client.post(f'/marketplaces/accounts/{account_id}/connect', json={'seller_id': self.seller1_id})
+        self.assertEqual(queued.status_code, 202)
+        self.assertEqual(duplicate.get_json()['job']['job_uid'], queued.get_json()['job']['job_uid'])
+        self.assertEqual(status.get_json()['job']['status'], 'pending')
+        self.assertNotIn('credential_fingerprint', status.get_data(as_text=True))
+        self.assertEqual(smuggled.status_code, 400)
+        user_patch, login_patch = self._login_patches(self.seller2_id)
+        with user_patch, login_patch:
+            foreign_post = self.client.post(f'/marketplaces/accounts/{account_id}/connect', json={})
+            foreign_get = self.client.get(f'/marketplaces/accounts/{account_id}/setup', headers={'Accept': 'application/json'})
+        self.assertEqual(foreign_post.status_code, 404)
+        self.assertEqual(foreign_get.status_code, 404)
+        with self.app.app_context():
+            job = BackgroundJob.query.one()
+            self.assertEqual(job.status, 'pending')
+            self.assertIsNone(SellerMarketplaceAccount.query.get(account_id).connection_checked_at)
+
+    def test_onboarding_duplicate_flag_csrf_and_scope_validation(self):
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        payload = {'client_id': '321', 'api_key': 'duplicate-connection-secret'}
+        with user_patch, login_patch:
+            first = self.client.post('/marketplaces/accounts/ozon/connect', json=payload)
+            duplicate = self.client.post('/marketplaces/accounts/ozon/connect', json=payload)
+            smuggled = self.client.post('/marketplaces/accounts/ozon/connect', json=dict(payload, seller_id=self.seller2_id))
+            self.app.config['MARKETPLACE_OZON_ENABLED'] = False
+            disabled = self.client.post('/marketplaces/accounts/ozon/connect', json=payload)
+            self.app.config['MARKETPLACE_OZON_ENABLED'] = True
+            self.app.config['WTF_CSRF_ENABLED'] = True
+            csrf = self.client.post('/marketplaces/accounts/ozon/connect', json=payload)
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(smuggled.status_code, 400)
+        self.assertEqual(disabled.status_code, 404)
+        self.assertEqual(csrf.status_code, 400)
+        with self.app.app_context():
+            self.assertEqual(SellerMarketplaceAccount.query.count(), 1)
+            self.assertEqual(BackgroundJob.query.count(), 1)
+
+    def test_connection_version_drift_is_rejected_before_provider(self):
+        with self.app.app_context():
+            account = self._save()
+            registry = MagicMock()
+            with self.assertRaises(MarketplaceAccountConflict):
+                MarketplaceAccountService.check_connection(
+                    seller_id=self.seller1_id, account_id=account.id,
+                    expected_version=account.version + 1, registry=registry,
+                )
+            registry.get.assert_not_called()
+
+
+    def test_existing_key_cannot_bypass_reviewed_rotation_through_settings_route(self):
+        with self.app.app_context():
+            account = self._save()
+            identity, version, encrypted = account.id, account.version, account._credentials_encrypted
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch:
+            response = self.client.post(f'/marketplaces/accounts/{identity}', json={
+                'client_id':'123456', 'label':'Attempted settings replacement',
+                'api_key':'must-not-bypass-review', 'expected_version':version,
+            })
+        self.assertEqual(response.status_code,400)
+        self.assertNotIn('must-not-bypass-review',response.get_data(as_text=True))
+        with self.app.app_context():
+            account = db.session.get(SellerMarketplaceAccount,identity)
+            self.assertEqual((account.version,account._credentials_encrypted),(version,encrypted))
+
+    def test_reconnect_requires_reviewed_version_before_save_or_enqueue(self):
+        with self.app.app_context():
+            account = self._save()
+            identity, version, encrypted = account.id, account.version, account._credentials_encrypted
+        user_patch, login_patch = self._login_patches(self.seller1_id)
+        with user_patch, login_patch, patch('routes.marketplace_accounts.enqueue_account_sync') as enqueue:
+            for supplied, status in [(None,400),(True,400),(0,400),(version+1,409)]:
+                payload={'client_id':'123456','api_key':'must-not-save-stale'}
+                if supplied is not None:payload['expected_version']=supplied
+                response=self.client.post(f'/marketplaces/accounts/{identity}/reconnect',json=payload)
+                self.assertEqual(response.status_code,status)
+                self.assertNotIn('must-not-save-stale',response.get_data(as_text=True))
+            enqueue.assert_not_called()
+        with self.app.app_context():
+            account=db.session.get(SellerMarketplaceAccount,identity)
+            self.assertEqual((account.version,account._credentials_encrypted),(version,encrypted))
+
+    def test_reconnect_stale_hidden_label_gets_reviewable_version_conflict(self):
+        with self.app.app_context():
+            account=self._save()
+            identity, viewed, old_label, encrypted=account.id,account.version,account.label,account._credentials_encrypted
+            account.label='Название после изменения';account.version+=1;db.session.commit()
+        user_patch,login_patch=self._login_patches(self.seller1_id)
+        with user_patch,login_patch,patch('routes.marketplace_accounts.enqueue_account_sync') as enqueue:
+            response=self.client.post(f'/marketplaces/accounts/{identity}/reconnect',json={
+                'client_id':'123456','api_key':'must-not-save-stale','label':old_label,'expected_version':viewed})
+            self.assertEqual(response.status_code,409)
+            self.assertEqual(response.get_json()['code'],'marketplace_account_version_conflict')
+            enqueue.assert_not_called()
+        with self.app.app_context():
+            account=db.session.get(SellerMarketplaceAccount,identity)
+            self.assertEqual((account.version,account._credentials_encrypted),(viewed+1,encrypted))
 
 
 if __name__ == "__main__":

@@ -12,27 +12,38 @@ import re
 import hmac
 import hashlib
 import logging
+import os
 import threading
 import time
 from pathlib import Path
 from io import BytesIO
+from types import SimpleNamespace
 
-from flask import send_file, abort, Response, url_for
-from flask_login import login_required
+from flask import send_file, abort, Response, request, url_for
+from flask_login import current_user, login_required
+from services.source_photo_display import photo_entry_urls as _photo_entry_urls
 
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Общий wall-clock бюджет на скачивание одного фото со всеми fallback URL.
-# requests timeout=N ограничивает только отдельные socket-операции: медленно
-# капающий upstream может держать gunicorn-поток минутами и класть всю
-# платформу (инцидент 2026-07-20). Дедлайн проверяется между чанками, поэтому
-# фактический потолок ~ бюджет + read timeout.
-PHOTO_FETCH_TOTAL_BUDGET = 12.0
-_PHOTO_FETCH_CONNECT_TIMEOUT = 5.0
-_PHOTO_FETCH_READ_TIMEOUT = 10.0
-_PHOTO_FETCH_MAX_BYTES = 10 * 1024 * 1024
+def _bounded_env_int(name, default, minimum, maximum):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+# Публичные signed URL иногда обязаны прогреть cache синхронно для WB/Ozon.
+# Это единственный внешний fetch в web process и он отделён bulkhead-ом:
+# cache-miss из seller UI всегда уходит в background queue.
+PHOTO_PUBLIC_FETCH_CONCURRENCY = _bounded_env_int(
+    'PHOTO_PUBLIC_FETCH_CONCURRENCY', 2, 1, 4,
+)
+_photo_public_fetch_slots = threading.BoundedSemaphore(
+    PHOTO_PUBLIC_FETCH_CONCURRENCY,
+)
 
 # TTL-кэш auth-cookies поставщика: без него каждый промах фото-кэша делает
 # отдельный логин-POST на сайт поставщика, а страница на 30+ фото — шторм
@@ -41,6 +52,70 @@ AUTH_COOKIE_TTL_OK = 1800
 AUTH_COOKIE_TTL_FAIL = 120
 _auth_cookie_cache = {}  # supplier.code -> (cookies_dict, monotonic_expires_at)
 _auth_cookie_lock = threading.Lock()
+
+
+def _supplier_auth_cookies_provider(supplier):
+    """Снимок credential fields для вызова только внутри photo worker."""
+    if (
+        not supplier
+        or supplier.code != 'sexoptovik'
+        or not supplier.auth_login
+        or not supplier.auth_password
+    ):
+        return None
+
+    supplier_code = supplier.code
+    login = supplier.auth_login
+    password = supplier.auth_password
+
+    def _provider():
+        return _get_supplier_auth_cookies(SimpleNamespace(
+            code=supplier_code,
+            auth_login=login,
+            auth_password=password,
+        ))
+
+    return _provider
+
+
+def _pending_ui_photo_response(queued):
+    """Немедленный cache-miss response; внешний I/O уже вынесен из request."""
+    if request.args.get('deferred') == '1':
+        response = Response(status=202, mimetype='image/jpeg')
+    else:
+        response = _generate_placeholder_image()
+    response.cache_control.no_store = True
+    response.cache_control.max_age = 0
+    response.headers['Retry-After'] = '2'
+    response.headers['X-Photo-Cache'] = 'pending'
+    response.headers['X-Photo-Queue'] = 'queued' if queued else 'pending'
+    return response
+
+
+def _warm_public_photo(
+    cache,
+    supplier_type,
+    external_id,
+    url,
+    fallbacks,
+    supplier,
+):
+    """Bounded sync warm для signed marketplace URL; UI сюда не попадает."""
+    if not _photo_public_fetch_slots.acquire(blocking=False):
+        return 'busy'
+    try:
+        auth_cookies = _get_supplier_auth_cookies(supplier)
+        if cache.download_now(
+            supplier_type,
+            external_id,
+            url,
+            auth_cookies=auth_cookies,
+            fallback_urls=fallbacks,
+        ):
+            return 'ready'
+        return 'failed'
+    finally:
+        _photo_public_fetch_slots.release()
 
 
 def _sign_photo_token(secret_key: str, sp_id: int, photo_idx: int) -> str:
@@ -176,10 +251,8 @@ def register_photo_routes(app):
     def serve_supplier_product_photo(supplier_product_id, photo_idx):
         """
         Прокси для фото товаров из каталога поставщика.
-        Отдаёт из кэша или скачивает с сервера поставщика.
+        Cache hit отдаётся сразу; cache miss только ставится в background queue.
         """
-        import requests as _requests
-        from PIL import Image as _Image
         from models import SupplierProduct
         from services.photo_cache import get_photo_cache
 
@@ -196,16 +269,7 @@ def register_photo_routes(app):
         if photo_idx < 0 or photo_idx >= len(photos):
             abort(404)
 
-        ph = photos[photo_idx]
-
-        # Определяем URL — поддерживаем и dict, и строку
-        if isinstance(ph, dict):
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
-        elif isinstance(ph, str):
-            url = ph
-        else:
-            abort(404)
-
+        url, fallbacks = _photo_entry_urls(photos[photo_idx])
         if not url:
             abort(404)
 
@@ -221,58 +285,16 @@ def register_photo_routes(app):
             response.cache_control.private = True
             return response
 
-        # Скачиваем с поставщика
-        auth_cookies = _get_supplier_auth_cookies(product.supplier)
-
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'image/*,*/*;q=0.8',
-        }
-        if 'sexoptovik.ru' in url:
-            headers['Referer'] = 'https://sexoptovik.ru/admin/'
-
-        # Подготовим fallback URLs
-        fallbacks = []
-        if isinstance(ph, dict):
-            if ph.get('blur') and ph['blur'] != url:
-                fallbacks.append(ph['blur'])
-            if ph.get('original') and ph['original'] != url:
-                fallbacks.append(ph['original'])
-
-        from services.url_security import validate_external_url as _validate_url
-
-        deadline = time.monotonic() + PHOTO_FETCH_TOTAL_BUDGET
-        for current_url in [url] + fallbacks:
-            # SSRF protection: проверяем каждый URL перед запросом
-            if _validate_url(current_url) is not None:
-                continue
-            try:
-                content = _download_image_with_deadline(
-                    current_url, headers, auth_cookies, deadline)
-                if content is None:
-                    continue
-
-                img = _Image.open(BytesIO(content))
-                output = BytesIO()
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                img.save(output, format='JPEG', quality=95)
-                image_bytes = output.getvalue()
-
-                # Сохраняем в кэш
-                cache.save_to_cache(supplier_type, external_id, url, image_bytes)
-
-                response = Response(image_bytes, mimetype='image/jpeg')
-                response.cache_control.max_age = 86400
-                response.cache_control.private = True
-                return response
-
-            except Exception as e:
-                logger.debug(f"[PhotoProxy] Failed {current_url[:60]}: {e}")
-                continue
-
-        # Authenticated UI preview may use a visible placeholder.
-        return _generate_placeholder_image()
+        queued = cache.queue_download(
+            supplier_type=supplier_type,
+            external_id=external_id,
+            url=url,
+            fallback_urls=fallbacks,
+            auth_cookies_provider=_supplier_auth_cookies_provider(
+                product.supplier,
+            ),
+        )
+        return _pending_ui_photo_response(queued)
 
     # ==========================================================================
     # Прокси для фото ImportedProduct (через связь с SupplierProduct)
@@ -283,111 +305,85 @@ def register_photo_routes(app):
     def serve_imported_product_photo(product_id, photo_idx):
         """
         Прокси для фото импортированных товаров продавца.
-        Если есть связь с SupplierProduct — переиспользуем его фото.
-        Иначе пытаемся отдать из photo_urls самого ImportedProduct.
+        Без redirect переиспользует SupplierProduct cache key; cache miss
+        немедленно уходит в bounded background queue.
         """
-        from flask import redirect, url_for as _url_for
-        from models import ImportedProduct
+        from models import ImportedProduct, SupplierProduct, db
+        from services.photo_cache import get_photo_cache
 
-        product = ImportedProduct.query.get_or_404(product_id)
+        seller = getattr(current_user, 'seller', None)
+        if not seller:
+            abort(404)
+        product = ImportedProduct.query.filter_by(
+            id=product_id,
+            seller_id=seller.id,
+        ).first_or_404()
+        url = None
+        fallbacks = []
+        source_supplier = None
+        supplier_type = 'imported'
+        external_id = str(product.external_id or product.id)
 
-        # Делегируем в каталог поставщика только если там реально есть фото:
-        # иначе карточка со своими фото отдавала бы 404 просто потому, что
-        # связь с поставщиком существует.
+        # Используем точную supplier projection напрямую, без второго HTTP 302.
         if product.supplier_product_id:
-            from models import SupplierProduct, db
-
-            supplier_photos = db.session.query(
-                SupplierProduct.photo_urls_json
-            ).filter_by(id=product.supplier_product_id).scalar()
-            has_supplier_photos = False
-            if supplier_photos:
+            supplier_product = db.session.get(
+                SupplierProduct, product.supplier_product_id,
+            )
+            if supplier_product and supplier_product.photo_urls_json:
                 try:
-                    parsed = json.loads(supplier_photos)
-                    has_supplier_photos = isinstance(parsed, list) and bool(parsed)
+                    supplier_photos = json.loads(
+                        supplier_product.photo_urls_json,
+                    )
                 except (json.JSONDecodeError, TypeError):
-                    has_supplier_photos = False
-            if has_supplier_photos:
-                return redirect(
-                    _url_for('serve_supplier_product_photo',
-                             supplier_product_id=product.supplier_product_id,
-                             photo_idx=photo_idx)
-                )
+                    supplier_photos = []
+                if 0 <= photo_idx < len(supplier_photos):
+                    url, fallbacks = _photo_entry_urls(
+                        supplier_photos[photo_idx],
+                    )
+                    if url:
+                        source_supplier = supplier_product.supplier
+                        supplier_type = (
+                            source_supplier.code
+                            if source_supplier else 'unknown'
+                        )
+                        external_id = supplier_product.external_id or ''
 
-        # Иначе пробуем photo_urls самого ImportedProduct
-        if not product.photo_urls:
-            abort(404)
+        # Legacy rows без usable exact supplier photo используют свой snapshot.
+        if not url:
+            if not product.photo_urls:
+                abort(404)
+            try:
+                imported_photos = json.loads(product.photo_urls)
+            except (json.JSONDecodeError, TypeError):
+                abort(404)
+            if photo_idx < 0 or photo_idx >= len(imported_photos):
+                abort(404)
+            url, fallbacks = _photo_entry_urls(imported_photos[photo_idx])
+            source_supplier = product.supplier
 
-        try:
-            photos = json.loads(product.photo_urls)
-        except (json.JSONDecodeError, TypeError):
-            abort(404)
-
-        if photo_idx < 0 or photo_idx >= len(photos):
-            abort(404)
-
-        url = photos[photo_idx] if isinstance(photos[photo_idx], str) else None
         if not url:
             abort(404)
 
-        # SSRF protection: запрещаем приватные/loopback адреса и прочие схемы.
-        # `photo_urls` хранится в БД, но изначально мог прийти от пользователя
-        # через импорт CSV/каталог поставщика — доверять нельзя.
-        from services.url_security import validate_external_url
-        if validate_external_url(url) is not None:
-            return _generate_placeholder_image()
-
-        # Прямой прокси для URL с ручным follow-redirect + SSRF-валидацией
-        import requests as _requests
-        from urllib.parse import urljoin
-        try:
-            deadline = time.monotonic() + PHOTO_FETCH_TOTAL_BUDGET
-            current_url = url
-            resp = None
-            for _ in range(5):  # max redirects
-                remaining = deadline - time.monotonic()
-                if remaining <= 0.5:
-                    return _generate_placeholder_image()
-                resp = _requests.get(
-                    current_url,
-                    timeout=(min(_PHOTO_FETCH_CONNECT_TIMEOUT, remaining),
-                             min(_PHOTO_FETCH_READ_TIMEOUT, remaining)),
-                    allow_redirects=False,
-                    headers={'User-Agent': 'Mozilla/5.0'},
-                    stream=True,
-                )
-                if resp.status_code in (301, 302, 303, 307, 308):
-                    redirect_target = resp.headers.get('Location')
-                    resp.close()
-                    if not redirect_target:
-                        return _generate_placeholder_image()
-                    redirect_target = urljoin(current_url, redirect_target)
-                    if validate_external_url(redirect_target) is not None:
-                        return _generate_placeholder_image()
-                    current_url = redirect_target
-                    continue
-                break
-
-            if resp is None:
-                return _generate_placeholder_image()
-            resp.raise_for_status()
-            # Ограничиваем размер ответа (10 МБ), читаем полностью через цикл
-            max_size = 10 * 1024 * 1024
-            chunks = []
-            total = 0
-            for chunk in resp.iter_content(chunk_size=65536):
-                total += len(chunk)
-                if total > max_size or time.monotonic() > deadline:
-                    resp.close()
-                    return _generate_placeholder_image()
-                chunks.append(chunk)
-            content = b''.join(chunks)
-            response = Response(content, mimetype=resp.headers.get('Content-Type', 'image/jpeg'))
+        cache = get_photo_cache()
+        if cache.is_cached(supplier_type, external_id, url):
+            cache_path = cache.get_cache_path(supplier_type, external_id, url)
+            response = send_file(
+                cache_path, mimetype='image/jpeg', conditional=True,
+            )
             response.cache_control.max_age = 86400
             response.cache_control.private = True
             return response
-        except Exception:
-            return _generate_placeholder_image()
+
+        queued = cache.queue_download(
+            supplier_type=supplier_type,
+            external_id=external_id,
+            url=url,
+            fallback_urls=fallbacks,
+            auth_cookies_provider=_supplier_auth_cookies_provider(
+                source_supplier,
+            ),
+        )
+        return _pending_ui_photo_response(queued)
 
     # ==========================================================================
     # API управления скачиванием фото
@@ -463,8 +459,6 @@ def register_photo_routes(app):
         URL: /photos/public/{supplier_product_id}/{photo_idx}.jpg?sig=HMAC
         """
         from flask import request as _req
-        import requests as _requests
-        from PIL import Image as _Image
         from services.photo_cache import get_photo_cache
 
         # Проверяем подпись
@@ -486,18 +480,9 @@ def register_photo_routes(app):
         if idx < 0 or idx >= len(photos):
             abort(404)
 
-        ph = photos[idx]
         supplier_type = product.supplier.code if product.supplier else 'unknown'
         external_id = product.external_id or ''
-
-        # Определяем URL
-        if isinstance(ph, dict):
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
-        elif isinstance(ph, str):
-            url = ph
-        else:
-            abort(404)
-
+        url, fallbacks = _photo_entry_urls(photos[idx])
         if not url:
             abort(404)
 
@@ -511,51 +496,27 @@ def register_photo_routes(app):
             response.cache_control.public = True
             return response
 
-        # Скачиваем с поставщика
-        auth_cookies = _get_supplier_auth_cookies(product.supplier)
+        warm_status = _warm_public_photo(
+            cache,
+            supplier_type,
+            external_id,
+            url,
+            fallbacks,
+            product.supplier,
+        )
+        if warm_status == 'busy':
+            response = Response('photo fetch busy', status=503)
+            response.cache_control.no_store = True
+            response.headers['Retry-After'] = '2'
+            return response
+        if warm_status != 'ready':
+            abort(502)
 
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'image/*,*/*;q=0.8',
-        }
-        if 'sexoptovik.ru' in url:
-            headers['Referer'] = 'https://sexoptovik.ru/admin/'
-
-        fallbacks = []
-        if isinstance(ph, dict):
-            if ph.get('blur') and ph['blur'] != url:
-                fallbacks.append(ph['blur'])
-            if ph.get('original') and ph['original'] != url:
-                fallbacks.append(ph['original'])
-
-        deadline = time.monotonic() + PHOTO_FETCH_TOTAL_BUDGET
-        for current_url in [url] + fallbacks:
-            try:
-                content = _download_image_with_deadline(
-                    current_url, headers, auth_cookies, deadline)
-                if content is None:
-                    continue
-
-                img = _Image.open(BytesIO(content))
-                output = BytesIO()
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                img.save(output, format='JPEG', quality=95)
-                image_bytes = output.getvalue()
-
-                cache.save_to_cache(supplier_type, external_id, url, image_bytes)
-
-                response = Response(image_bytes, mimetype='image/jpeg')
-                response.cache_control.max_age = 86400
-                response.cache_control.public = True
-                return response
-
-            except Exception as e:
-                logger.debug(f"[PublicPhoto] Failed {current_url[:60]}: {e}")
-                continue
-
-        # Do not let WB/Ozon persist the UI placeholder as a product photo.
-        abort(502)
+        cache_path = cache.get_cache_path(supplier_type, external_id, url)
+        response = send_file(cache_path, mimetype='image/jpeg', conditional=True)
+        response.cache_control.max_age = 86400
+        response.cache_control.public = True
+        return response
 
     # ==========================================================================
     # Публичный маршрут для фото ImportedProduct (без SupplierProduct)
@@ -570,8 +531,6 @@ def register_photo_routes(app):
         Защищён HMAC-подписью.
         """
         from flask import request as _req
-        import requests as _requests
-        from PIL import Image as _Image
 
         sig = _req.args.get('sig', '')
         expected = _sign_imported_photo_token(app.config['SECRET_KEY'], ip, idx)
@@ -591,16 +550,7 @@ def register_photo_routes(app):
         if idx < 0 or idx >= len(photos):
             abort(404)
 
-        ph = photos[idx]
-
-        # Определяем URL — поддерживаем dict и строку
-        if isinstance(ph, dict):
-            url = ph.get('sexoptovik') or ph.get('original') or ph.get('blur')
-        elif isinstance(ph, str):
-            url = ph
-        else:
-            abort(404)
-
+        url, fallbacks = _photo_entry_urls(photos[idx])
         if not url:
             abort(404)
 
@@ -617,55 +567,29 @@ def register_photo_routes(app):
             response.cache_control.public = True
             return response
 
-        # Собираем auth cookies если есть supplier
-        auth_cookies = {}
-        if product.supplier:
-            auth_cookies = _get_supplier_auth_cookies(product.supplier)
+        warm_status = _warm_public_photo(
+            cache,
+            cache_supplier_type,
+            cache_external_id,
+            url,
+            fallbacks,
+            product.supplier,
+        )
+        if warm_status == 'busy':
+            response = Response('photo fetch busy', status=503)
+            response.cache_control.no_store = True
+            response.headers['Retry-After'] = '2'
+            return response
+        if warm_status != 'ready':
+            abort(502)
 
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'image/*,*/*;q=0.8',
-        }
-        if 'sexoptovik.ru' in url:
-            headers['Referer'] = 'https://sexoptovik.ru/admin/'
-
-        # Фолбэк URLs
-        fallbacks = []
-        if isinstance(ph, dict):
-            if ph.get('blur') and ph['blur'] != url:
-                fallbacks.append(ph['blur'])
-            if ph.get('original') and ph['original'] != url:
-                fallbacks.append(ph['original'])
-
-        deadline = time.monotonic() + PHOTO_FETCH_TOTAL_BUDGET
-        for current_url in [url] + fallbacks:
-            try:
-                content = _download_image_with_deadline(
-                    current_url, headers, auth_cookies, deadline)
-                if content is None:
-                    continue
-
-                img = _Image.open(BytesIO(content))
-                output = BytesIO()
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                img.save(output, format='JPEG', quality=95)
-                image_bytes = output.getvalue()
-
-                cache.save_to_cache(cache_supplier_type, cache_external_id, url, image_bytes)
-
-                response = Response(image_bytes, mimetype='image/jpeg')
-                response.cache_control.max_age = 86400
-                response.cache_control.public = True
-                return response
-
-            except Exception as e:
-                logger.debug(f"[ImportedPublicPhoto] Failed {current_url[:60]}: {e}")
-                continue
-
-        # Public marketplace URLs must never disguise a failed source fetch as
-        # a valid product image.
-        abort(502)
+        cache_path = cache.get_cache_path(
+            cache_supplier_type, cache_external_id, url,
+        )
+        response = send_file(cache_path, mimetype='image/jpeg', conditional=True)
+        response.cache_control.max_age = 86400
+        response.cache_control.public = True
+        return response
 
 
 def _get_supplier_auth_cookies(supplier) -> dict:
@@ -707,45 +631,6 @@ def _get_supplier_auth_cookies(supplier) -> dict:
 
         _auth_cookie_cache[supplier.code] = (cookies, time.monotonic() + ttl)
         return dict(cookies)
-
-
-def _download_image_with_deadline(url, headers, cookies, deadline,
-                                  max_bytes=_PHOTO_FETCH_MAX_BYTES):
-    """
-    Скачивает изображение, укладываясь в общий wall-clock дедлайн.
-
-    Возвращает bytes либо None (таймаут/не изображение/слишком большой ответ).
-    Дедлайн проверяется между чанками, поэтому превышение ограничено
-    read timeout одной socket-операции.
-    """
-    import requests as _requests
-
-    remaining = deadline - time.monotonic()
-    if remaining <= 0.5:
-        return None
-
-    resp = _requests.get(
-        url, headers=headers, cookies=cookies,
-        timeout=(min(_PHOTO_FETCH_CONNECT_TIMEOUT, remaining),
-                 min(_PHOTO_FETCH_READ_TIMEOUT, remaining)),
-        allow_redirects=True, stream=True,
-    )
-    try:
-        resp.raise_for_status()
-        content_type = resp.headers.get('Content-Type', '')
-        chunks = []
-        total = 0
-        for chunk in resp.iter_content(chunk_size=65536):
-            total += len(chunk)
-            if total > max_bytes or time.monotonic() > deadline:
-                return None
-            chunks.append(chunk)
-        content = b''.join(chunks)
-        if not content_type.startswith('image/') and len(content) < 1024:
-            return None
-        return content
-    finally:
-        resp.close()
 
 
 def _generate_placeholder_image():

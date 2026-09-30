@@ -11,7 +11,8 @@ from flask_wtf.csrf import CSRFProtect
 from models import (
     Marketplace,
     MarketplaceCancellation,
-    MarketplacePosting,
+    MarketplacePosting, MarketplacePostingItem, MarketplacePostingStatusEvent,
+    MarketplaceListing, MarketplaceFulfillmentSync,
     MarketplaceReturn,
     Seller,
     SellerMarketplaceAccount,
@@ -216,29 +217,169 @@ class MarketplaceFulfillmentRoutesTest(unittest.TestCase):
         sync.assert_not_called()
 
     def test_sync_passes_only_authenticated_query_scope(self):
-        run = SimpleNamespace(to_public_dict=lambda: {
-            "id": 900,
-            "account_id": self.own_account_id,
-            "status": "completed",
-        })
+        result = {"id": 900, "status": "pending", "active": True}
         user_patch, login_patch = self._auth()
-        with user_patch, login_patch, patch.object(
-            MarketplaceFulfillmentService,
-            "sync_account",
-            return_value=run,
+        with user_patch, login_patch, patch(
+            "routes.marketplace_fulfillment.enqueue_read",
+            return_value=result,
         ) as sync:
             response = self.client.post(
                 f"/marketplaces/api/fulfillment/sync?account_id={self.own_account_id}",
                 json={"period": "7d", "force": True, "max_pages": 4},
             )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         sync.assert_called_once_with(
             seller_id=self.seller1_id,
             account_id=self.own_account_id,
             period_code="7d",
             force=True,
-            max_pages=4,
+            domain="fulfillment",
         )
+
+    def _seed_lines(self, count=121):
+        account = db.session.get(SellerMarketplaceAccount, self.own_account_id)
+        own = MarketplaceListing(seller_id=self.seller1_id, marketplace_id=account.marketplace_id,
+            account_id=account.id, offer_id='own', external_product_id='1001', title='Наш товар',
+            media_json=json.dumps({'primary_image':'https://cdn.example.test/own.jpg'}), sync_fingerprint='a'*64)
+        foreign = MarketplaceListing(seller_id=self.seller2_id, marketplace_id=account.marketplace_id,
+            account_id=self.foreign_account_id, offer_id='foreign', external_product_id='1002',
+            title='Foreign private title', media_json=json.dumps({'primary_image':'https://cdn.example.test/foreign.jpg'}), sync_fingerprint='b'*64)
+        db.session.add_all([own, foreign]); db.session.flush()
+        for i in range(count):
+            db.session.add(MarketplacePostingItem(posting_id=self.own_posting_id,
+                seller_id=self.seller1_id, account_id=account.id, listing_id=own.id if i != 1 else foreign.id,
+                identity_key=str(i), offer_id='own-'+str(i), name='Товар 100%_Хлопок '+str(i),
+                quantity=1, unit_price=0 if i==0 else None, currency='RUB' if i==0 else None))
+        # Corrupt legacy child scope must not leak even though its parent FK is ours.
+        db.session.add(MarketplacePostingItem(posting_id=self.own_posting_id,
+            seller_id=self.seller2_id, account_id=self.foreign_account_id, identity_key='bad-scope',
+            name='Foreign private search text', quantity=1))
+        now=datetime.utcnow()
+        for i in range(102):
+            db.session.add(MarketplacePostingStatusEvent(posting_id=self.own_posting_id,
+                seller_id=self.seller1_id, account_id=account.id, status='delivered',
+                event_fingerprint=str(i).zfill(64), observed_at=now))
+        db.session.add(MarketplacePostingStatusEvent(posting_id=self.own_posting_id,
+            seller_id=self.seller2_id, account_id=self.foreign_account_id, status='FOREIGN',
+            event_fingerprint='f'*64, observed_at=now))
+        db.session.commit()
+
+    def test_compact_preview_and_paged_detail_are_bounded_and_exact_scoped(self):
+        with self.app.app_context(): self._seed_lines()
+        a,b=self._auth()
+        with a,b:
+            response=self.client.get(f'/marketplaces/api/orders?account_id={self.own_account_id}&view=compact')
+            self.assertEqual(response.status_code,200)
+            row=response.json['data']['items'][0]
+            self.assertEqual((len(row['items']),row['item_count'],row['quantity']),(3,121,121))
+            self.assertTrue(row['items_truncated'])
+            self.assertNotIn('status_history',row)
+            self.assertEqual(row['items'][0]['listing']['title'],'Наш товар')
+            self.assertEqual(row['items'][0]['unit_price'],'0.0000')
+            self.assertIsNone(row['items'][1]['listing'])
+            self.assertIsNone(row['items'][1]['listing_id'])
+            self.assertNotIn('foreign',json.dumps(row))
+            ids=[]
+            for page in (1,2,3):
+                detail=self.client.get(f'/marketplaces/api/orders/{self.own_posting_id}?account_id={self.own_account_id}&view=compact&item_page={page}')
+                self.assertEqual(detail.status_code,200)
+                data=detail.json['data'];ids += [x['id'] for x in data['items']]
+                self.assertEqual(data['item_pagination']['total'],121)
+                self.assertEqual(data['item_pagination']['pages'],3)
+                self.assertEqual(len(data['status_history']),100)
+                self.assertTrue(data['history_truncated'])
+                self.assertNotIn('FOREIGN',json.dumps(data))
+            self.assertEqual(len(set(ids)),121)
+            self.assertEqual(self.client.get(f'/marketplaces/api/orders/{self.own_posting_id}?account_id={self.foreign_account_id}&view=compact').status_code,404)
+
+    def test_compact_search_is_literal_unicode_and_cannot_match_foreign_child(self):
+        with self.app.app_context(): self._seed_lines(count=2)
+        a,b=self._auth()
+        with a,b:
+            for term,total in [('тОвАр',1),('100%_хлопок',1),('%_',1),('Foreign private search',0),('100Xхлопок',0)]:
+                with self.subTest(term=term):
+                    response=self.client.get('/marketplaces/api/orders',query_string={
+                        'account_id':self.own_account_id,'view':'compact','search':term})
+                    self.assertEqual(response.status_code,200)
+                    self.assertEqual(response.json['data']['pagination']['total'],total)
+            response=self.client.get('/marketplaces/api/orders',query_string={
+                'account_id':self.own_account_id,'view':'compact','status':'cancelled','fulfillment':'fbs'})
+            self.assertEqual(response.json['data']['status_counts'],{'delivered':1})
+            self.assertEqual(response.json['data']['pagination']['total'],0)
+
+    def test_return_and_cancel_links_require_exact_owned_posting(self):
+        a,b=self._auth()
+        with a,b:
+            for path in ('returns','cancellations'):
+                response=self.client.get(f'/marketplaces/api/{path}?account_id={self.own_account_id}&view=compact')
+                self.assertEqual(response.json['data']['items'][0]['posting_url'],
+                    f'/marketplaces/orders?account_id={self.own_account_id}&posting_id={self.own_posting_id}')
+            with self.app.app_context():
+                foreign=MarketplacePosting.query.filter_by(account_id=self.foreign_account_id).one()
+                for model in (MarketplaceReturn,MarketplaceCancellation):
+                    model.query.filter_by(account_id=self.own_account_id).one().posting_id=foreign.id
+                db.session.commit()
+            for path in ('returns','cancellations'):
+                response=self.client.get(f'/marketplaces/api/{path}?account_id={self.own_account_id}&view=compact')
+                self.assertIsNone(response.json['data']['items'][0]['posting_url'])
+
+    def test_strict_queries_fail_without_reading_other_scopes(self):
+        a,b=self._auth()
+        with a,b:
+            for path in ('orders','returns','cancellations','fulfillment/sync'):
+                for extra in ('&account_id=2','&seller_id=2','&period=7d&period=30d'):
+                    with self.subTest(path=path,extra=extra):
+                        self.assertEqual(self.client.get(f'/marketplaces/api/{path}?account_id={self.own_account_id}'+extra).status_code,400)
+            for field in ('page','per_page'):
+                for value in ('0','01','1.0','-1','١','9999999999999999999'):
+                    with self.subTest(field=field,value=value):
+                        self.assertEqual(self.client.get(f'/marketplaces/api/orders?account_id={self.own_account_id}&{field}={value}').status_code,400)
+
+    def test_compact_freshness_does_not_claim_running_as_completed_or_other_period(self):
+        from datetime import timedelta
+        with self.app.app_context():
+            account=db.session.get(SellerMarketplaceAccount,self.own_account_id);now=datetime.utcnow()
+            for period,status,stamp in [('30d','completed',now-timedelta(hours=2)),('7d','completed',now-timedelta(hours=1)),('30d','running',now)]:
+                db.session.add(MarketplaceFulfillmentSync(seller_id=self.seller1_id,marketplace_id=account.marketplace_id,
+                    account_id=account.id,period_code=period,period_start=now.date(),period_end=now.date(),
+                    status=status,completed_at=stamp if status=='completed' else None,request_fingerprint=(period+status).ljust(64,'0')))
+            db.session.commit()
+        a,b=self._auth()
+        with a,b:
+            for path in ('orders','returns','cancellations'):
+                response=self.client.get(f'/marketplaces/api/{path}?account_id={self.own_account_id}&view=compact')
+                self.assertEqual(response.status_code,200)
+                data=response.json['data']
+                self.assertEqual(data['last_completed_sync']['period_code'],'30d')
+                self.assertEqual(data['last_completed_sync']['status'],'completed')
+                self.assertEqual(data['sync']['status'],'running')
+
+    def test_preview_query_count_does_not_grow_per_posting(self):
+        from sqlalchemy import event
+        from services.marketplace_fulfillment_display import posting_previews
+        with self.app.app_context():
+            self._seed_lines(count=5)
+            account=db.session.get(SellerMarketplaceAccount,self.own_account_id)
+            posting=db.session.get(MarketplacePosting,self.own_posting_id)
+            others=[]
+            for i in range(12):
+                row=MarketplacePosting(seller_id=account.seller_id,marketplace_id=account.marketplace_id,account_id=account.id,
+                    posting_number='batch-'+str(i),fulfillment_kind='fbs',status='delivered',source_endpoint='/v4/posting/fbs/list',sync_fingerprint='a'*64,last_seen_at=datetime.utcnow())
+                db.session.add(row);others.append(row)
+            db.session.commit()
+            # Materialize scalar rows before counting presentation queries.
+            for row in [posting]+others:row.to_public_dict()
+            _ = account.id, account.seller_id, account.marketplace_id
+            calls=[]
+            def count(*args):calls.append(args[2])
+            event.listen(db.engine,'before_cursor_execute',count)
+            try:
+                posting_previews([posting],account=account);one=len(calls);calls.clear()
+                result=posting_previews([posting]+others,account=account)
+                self.assertEqual(len(calls),one)
+                self.assertLessEqual(one,4)
+                self.assertEqual(len(result),13)
+            finally:event.remove(db.engine,'before_cursor_execute',count)
 
     def test_feature_flag_blocks_api(self):
         self.app.config["MARKETPLACE_OZON_ENABLED"] = False

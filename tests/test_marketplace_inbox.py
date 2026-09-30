@@ -22,6 +22,7 @@ from models import (
 )
 from services.marketplace_adapters import MarketplaceCredentials
 from services.marketplace_inbox import (
+    MarketplaceInboxAccessDenied,
     MarketplaceInboxConfigurationError,
     MarketplaceInboxConflict,
     MarketplaceInboxNotFound,
@@ -174,6 +175,13 @@ class BulkInboxAdapter(SyntheticInboxAdapter):
 
 class MarketplaceInboxServiceTest(unittest.TestCase):
     def setUp(self):
+        class InboxClock(datetime):
+            @classmethod
+            def utcnow(cls):
+                return datetime(2026, 7, 15, 12, 30)
+        clock_patch = patch('services.marketplace_inbox.datetime', InboxClock)
+        clock_patch.start()
+        self.addCleanup(clock_patch.stop)
         self.app = Flask(__name__)
         self.app.config.update(
             TESTING=True,
@@ -293,6 +301,7 @@ class MarketplaceInboxServiceTest(unittest.TestCase):
         review_public = review.to_public_dict()
         self.assertEqual(set(review_public["listing"]), {
             "id", "offer_id", "title", "normalized_status", "is_available",
+            "image", "url",
         })
         public = json.dumps(
             [review_public, question.to_public_dict()],
@@ -412,9 +421,12 @@ class MarketplaceInboxServiceTest(unittest.TestCase):
 
     def test_provider_access_denial_sets_durable_scheduler_cooldown(self):
         now = datetime(2026, 7, 15, 12, 0, 0)
-        with self.assertRaises(MarketplaceInboxProtocolError):
+        with self.assertRaises(MarketplaceInboxAccessDenied) as raised:
             self._sync(AccessDeniedInboxAdapter(), now=now)
 
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(raised.exception.code, "ozon_inbox_access_denied")
+        self.assertNotIn("synthetic subscription denial", str(raised.exception))
         run = MarketplaceInboxSync.query.one()
         self.assertEqual(run.status, "failed")
         self.assertEqual(

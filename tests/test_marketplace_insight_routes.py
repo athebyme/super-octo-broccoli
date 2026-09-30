@@ -199,13 +199,7 @@ class MarketplaceInsightRoutesTest(unittest.TestCase):
         self.assertNotIn("Foreign Secret Label", response.get_data(as_text=True))
 
     def test_analytics_routes_pass_only_authenticated_query_scope(self):
-        run = SimpleNamespace(
-            to_public_dict=lambda: {
-                "id": 900,
-                "account_id": self.own_account_id,
-                "status": "completed",
-            },
-        )
+        run = {"id": 900, "status": "pending", "active": True}
         summary_data = {
             "account_id": self.own_account_id,
             "period": "7d",
@@ -225,9 +219,8 @@ class MarketplaceInsightRoutesTest(unittest.TestCase):
             MarketplaceAnalyticsService,
             "get_products",
             return_value=products_data,
-        ) as products, patch.object(
-            MarketplaceAnalyticsService,
-            "sync_account",
+        ) as products, patch(
+            "routes.marketplace_insights.enqueue_read",
             return_value=run,
         ) as sync:
             summary_response = self.client.get(
@@ -250,7 +243,7 @@ class MarketplaceInsightRoutesTest(unittest.TestCase):
             ["cross_marketplace_comparable"],
         )
         self.assertEqual(products_response.status_code, 200)
-        self.assertEqual(sync_response.status_code, 200)
+        self.assertEqual(sync_response.status_code, 202)
         summary.assert_called_once_with(
             seller_id=self.seller1_id,
             account_id=self.own_account_id,
@@ -271,7 +264,7 @@ class MarketplaceInsightRoutesTest(unittest.TestCase):
             account_id=self.own_account_id,
             period_code="7d",
             force=True,
-            max_pages=2,
+            domain="analytics",
         )
 
     def test_master_flag_closes_all_new_endpoints(self):

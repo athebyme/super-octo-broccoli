@@ -17,6 +17,12 @@ logger = logging.getLogger("marketplace_inbox_routes")
 marketplace_inbox_bp = Blueprint("marketplace_inbox", __name__)
 
 
+@marketplace_inbox_bp.after_request
+def private_inbox_response(response):
+    response.headers['Cache-Control'] = 'private, no-store'
+    return response
+
+
 def _feature_enabled() -> bool:
     return bool(current_app.config.get("MARKETPLACE_OZON_ENABLED", False))
 
@@ -129,7 +135,7 @@ def page():
     if not _feature_enabled():
         return redirect(url_for("reviews_page"))
     try:
-        _validate_query({"account_id", "source_kind"})
+        _validate_query({'account_id', 'source_kind', 'status', 'search', 'page', 'item', 'listing_id'})
         if request.args.get("source_kind") not in (None, "review", "question"):
             raise MarketplaceInboxValidationError(
                 "source_kind должен быть review или question"
@@ -176,33 +182,38 @@ def list_api():
         return jsonify({"error": "Не удалось загрузить отзывы Ozon"}), 500
 
 
-@marketplace_inbox_bp.post("/marketplaces/api/reviews/sync")
+@marketplace_inbox_bp.route('/marketplaces/api/reviews/sync', methods=['GET', 'POST'])
+@marketplace_inbox_bp.route('/marketplaces/api/questions/sync', methods=['GET', 'POST'])
 @login_required
 def sync_api():
+    """Persist an exact-kind intent, or read its state; never call Ozon in HTTP."""
     if not _feature_enabled():
-        return jsonify({"error": "Поддержка Ozon выключена"}), 404
+        return jsonify({'error': 'Поддержка Ozon выключена'}), 404
     try:
-        _validate_query({"account_id"})
-        payload = _body({"source_kind", "force", "max_pages"})
-        force = _strict_bool(payload.get("force", False), "force")
-        max_pages = payload.get("max_pages", 5)
-        if not isinstance(max_pages, int) or isinstance(max_pages, bool):
-            raise MarketplaceInboxValidationError(
-                "max_pages должен быть целым числом"
-            )
-        run = MarketplaceInboxService.sync_kind(
-            seller_id=_seller_id(),
-            account_id=_positive_query("account_id"),
-            source_kind=payload.get("source_kind", "review"),
-            force=force,
-            max_pages=max_pages,
-        )
-        return jsonify({"success": True, "data": run.to_public_dict()})
+        from services.ozon_read_requests import enqueue_read, read_status
+        _validate_query({'account_id', 'period'} if request.method == 'GET' else {'account_id'})
+        domain = 'questions' if '/questions/' in request.path else 'reviews'
+        scope = dict(seller_id=_seller_id(), account_id=_positive_query('account_id'))
+        if request.method == 'GET':
+            data = read_status(**scope, domain=domain, period_code=request.args.get('period', '90d'))
+            return jsonify({'success': True, 'data': data})
+        payload = _body({'source_kind', 'force', 'max_pages', 'period'})
+        # The legacy body is accepted as an enqueue only. Page budget is worker-owned.
+        if 'max_pages' in payload:
+            MarketplaceInboxService._positive_integer(payload['max_pages'], 'max_pages', maximum=10)
+        if 'source_kind' in payload:
+            kind = MarketplaceInboxService._kind(payload['source_kind'])
+            if domain == 'questions' and kind != 'question':
+                raise MarketplaceInboxValidationError('Этот адрес обновляет только вопросы')
+            domain = 'reviews' if kind == 'review' else 'questions'
+        data = enqueue_read(**scope, domain=domain, period_code=payload.get('period', '90d'),
+                            force=_strict_bool(payload.get('force', False), 'force'))
+        return jsonify({'success': True, 'data': data}), 202
     except (MarketplaceInboxError, MarketplaceAccountError) as exc:
         return _known_error(exc)
     except Exception as exc:
-        logger.exception("Ozon inbox sync failed: %s", type(exc).__name__)
-        return jsonify({"error": "Не удалось синхронизировать отзывы Ozon"}), 500
+        logger.exception('Ozon inbox enqueue/status failed: %s', type(exc).__name__)
+        return jsonify({'error': 'Не удалось получить состояние обновления'}), 500
 
 
 @marketplace_inbox_bp.post("/marketplaces/api/reviews/<int:item_id>/draft")
@@ -212,13 +223,14 @@ def draft_api(item_id):
         return jsonify({"error": "Поддержка Ozon выключена"}), 404
     try:
         _validate_query({"account_id"})
-        payload = _body({"generation_mode"})
+        payload = _body({'generation_mode', 'expected_draft_id'})
         draft = MarketplaceInboxService.create_reply_draft(
             seller_id=_seller_id(),
             account_id=_positive_query("account_id"),
             item_id=item_id,
             generation_mode=payload.get("generation_mode", "ai"),
             created_by_user_id=current_user.id,
+            **({'expected_draft_id': payload['expected_draft_id']} if 'expected_draft_id' in payload else {}),
         )
         return jsonify({"success": True, "data": draft.to_public_dict()})
     except (MarketplaceInboxError, MarketplaceAccountError) as exc:
@@ -226,6 +238,41 @@ def draft_api(item_id):
     except Exception as exc:
         logger.exception("Ozon reply draft failed: %s", type(exc).__name__)
         return jsonify({"error": "Не удалось подготовить черновик"}), 500
+
+
+@marketplace_inbox_bp.get('/marketplaces/api/reviews/<int:item_id>')
+@login_required
+def detail_api(item_id):
+    if not _feature_enabled():
+        return jsonify({'error': 'Поддержка Ozon выключена'}), 404
+    try:
+        _validate_query({'account_id'})
+        data = MarketplaceInboxService.get_item(
+            seller_id=_seller_id(), account_id=_positive_query('account_id'), item_id=item_id,
+        )
+        response = jsonify({'success': True, 'data': data})
+        response.headers['Cache-Control'] = 'private, no-store'
+        return response
+    except (MarketplaceInboxError, MarketplaceAccountError) as exc:
+        return _known_error(exc)
+
+
+@marketplace_inbox_bp.post('/marketplaces/api/reviews/<int:item_id>/draft/save')
+@login_required
+def save_draft_api(item_id):
+    if not _feature_enabled():
+        return jsonify({'error': 'Поддержка Ozon выключена'}), 404
+    try:
+        _validate_query({'account_id'})
+        payload = _body({'draft_id', 'expected_content_hash', 'text'})
+        draft = MarketplaceInboxService.save_reply_draft(
+            seller_id=_seller_id(), account_id=_positive_query('account_id'), item_id=item_id,
+            draft_id=payload.get('draft_id'), expected_content_hash=payload.get('expected_content_hash'),
+            text=payload.get('text'), created_by_user_id=current_user.id,
+        )
+        return jsonify({'success': True, 'data': draft.to_public_dict()})
+    except (MarketplaceInboxError, MarketplaceAccountError) as exc:
+        return _known_error(exc)
 
 
 def register_marketplace_inbox_routes(app):

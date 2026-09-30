@@ -1,262 +1,110 @@
 {% extends "base.html" %}
 {% from "macros/components.html" import channel_bar %}
 {% from "macros/icons.html" import icon %}
-
-{% set page_titles = {
-  'orders': ('Заказы Ozon', 'Отправления FBO и FBS без персональных данных покупателей'),
-  'returns': ('Возвраты Ozon', 'Единая read-only лента FBO/FBS и rFBS возвратов'),
-  'cancellations': ('Отмены Ozon', 'Отменённые отправления и заявки rFBS на согласование')
-} %}
-{% set current_title = page_titles[page_kind] %}
+{% set titles = {'orders': ('Заказы Ozon', 'Отправления, товары и ход доставки'), 'returns': ('Возвраты Ozon', 'Товары, причины и состояние возврата'), 'cancellations': ('Отмены Ozon', 'Отменённые отправления и заявки на согласование')} %}
+{% set current_title = titles[page_kind] %}
 {% block title %}{{ current_title[0] }} — Seller Hub{% endblock %}
-
 {% block content %}
-<style>
-  /* Переключатель периода на тёмном hero page-header (обе темы: header всегда тёмный) */
-  .mp-period-seg { display: flex; gap: 2px; padding: 3px; background: rgba(255,255,255,.12); border-radius: var(--r-sm); }
-  .mp-period-btn {
-    border: none; background: transparent; cursor: pointer;
-    padding: 5px 12px; border-radius: var(--r-xs);
-    font-size: 13px; font-weight: 500; color: rgba(255,255,255,.72);
-    transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
-  }
-  .mp-period-btn:hover { color: var(--text-on-accent); }
-  .mp-period-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
-  .mp-period-btn:active { opacity: .85; }
-  .mp-period-btn--active { background: var(--text-on-accent); color: var(--bg-sidebar); box-shadow: var(--shadow-1); }
-  .mp-feed-table td { vertical-align: top; }
-</style>
-
-<div x-data="ozonFulfillmentPage()" x-init="init()">
-  <div class="sh-page-header">
-    <div class="sh-page-header-content">
-      <div>
-        <h1 class="sh-page-title">{{ current_title[0] }}</h1>
-        <p class="sh-page-subtitle">{{ current_title[1] }}</p>
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-read-refresh.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-fulfillment.css') }}">
+<div id="of-fallback" class="of-page" role="status"><h1>{{ current_title[0] }}</h1><p>Загружаем рабочий экран… Если он не открылся, обновите страницу.</p><noscript>Для списка отправлений включите JavaScript.</noscript></div>
+<div id="of-app" class="of-page" x-ignore v-cloak>
+  <header class="of-header">
+    <div><h1>{{ current_title[0] }}</h1><p>{{ current_title[1] }}</p></div>
+    <div class="of-actions">
+      <div class="of-period" role="group" aria-label="Период">
+        <button type="button" v-for="p in ['7d','30d']" :key="p" :aria-pressed="period===p" @click="changePeriod(p)" v-text="p==='7d' ? '7 дней' : '30 дней'"></button>
       </div>
-      <div class="sh-page-actions">
-        <div class="mp-period-seg" role="group" aria-label="Период">
-          <button type="button" @click="changePeriod('7d')" class="mp-period-btn" :class="period==='7d' ? 'mp-period-btn--active' : ''" :aria-pressed="period==='7d' ? 'true' : 'false'">7 дней</button>
-          <button type="button" @click="changePeriod('30d')" class="mp-period-btn" :class="period==='30d' ? 'mp-period-btn--active' : ''" :aria-pressed="period==='30d' ? 'true' : 'false'">30 дней</button>
-        </div>
-        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="sync()" :disabled="syncing">
-          <span x-text="syncing ? 'Читаем Ozon…' : (syncState && syncState.status==='running' ? 'Продолжить sync' : 'Обновить из Ozon')"></span>
-        </button>
-      </div>
+      <button type="button" class="sh-btn sh-btn--primary" @click="requestRefresh()" :disabled="refreshing || refreshUncertain || refreshSessionEnded || sessionEnded">
+        {{ icon('refresh', size=16) }}<span v-text="refreshUncertain ? 'Проверяем заявку…' : refreshing ? 'Обновление идёт…' : 'Обновить из Ozon'"></span>
+      </button>
     </div>
-  </div>
-
-  <div style="max-width:1380px;margin:0 auto;padding:0 24px 40px">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-      {{ channel_bar(active='ozon', account_id=selected_account.id, ozon_href=url_for(request.endpoint), carry='period') }}
-      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
-        <a href="{{ url_for('marketplace_finance.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Финансы</a>
-        <a href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы</a>
-      </div>
-    </div>
-
-    <nav class="sh-tabs" aria-label="Разделы фулфилмента">
-      <a href="{{ url_for('marketplace_fulfillment.orders_page', account_id=selected_account.id) }}"
-         class="sh-tab {{ 'sh-tab--active' if page_kind == 'orders' }}"
-         {% if page_kind == 'orders' %}aria-current="page"{% endif %}>Заказы</a>
-      <a href="{{ url_for('marketplace_fulfillment.returns_page', account_id=selected_account.id) }}"
-         class="sh-tab {{ 'sh-tab--active' if page_kind == 'returns' }}"
-         {% if page_kind == 'returns' %}aria-current="page"{% endif %}>Возвраты</a>
-      <a href="{{ url_for('marketplace_fulfillment.cancellations_page', account_id=selected_account.id) }}"
-         class="sh-tab {{ 'sh-tab--active' if page_kind == 'cancellations' }}"
-         {% if page_kind == 'cancellations' %}aria-current="page"{% endif %}>Отмены</a>
+  </header>
+  {{ channel_bar(active='ozon', account_id=selected_account.id, ozon_href=url_for(request.endpoint), carry='period') }}
+  <div class="of-navigation">
+    <nav class="sh-tabs" aria-label="Заказы, возвраты и отмены">
+      {% for kind, label in [('orders','Заказы'),('returns','Возвраты'),('cancellations','Отмены')] %}
+      <a class="sh-tab {{ 'sh-tab--active' if kind==page_kind }}" href="{{ url_for('marketplace_fulfillment.'+kind+'_page', account_id=selected_account.id) }}" :href="withRefreshPeriod(config.pages.{{ kind }}+'?account_id='+config.accountId)" {% if kind==page_kind %}aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
     </nav>
-
-    <div class="sh-alert sh-alert--info" role="note">
-      <div class="sh-alert-icon">{{ icon('shield', size=18) }}</div>
-      <div class="sh-alert-content">Это отдельный Ozon-контур. Данные WB не смешиваются с ним. Синхронизация только читает Seller API; данные покупателя, адреса, телефоны и свободные комментарии не сохраняются. Суммы из карточек отправления не считаются прибылью — финансовая сверка живёт отдельно.</div>
-    </div>
-
-    <template x-if="error">
-      <div class="sh-alert sh-alert--error" role="alert">
-        <div class="sh-alert-icon">{{ icon('x-circle', size=18) }}</div>
-        <div class="sh-alert-content" x-text="error"></div>
-      </div>
-    </template>
-
-    <div class="sh-card" style="padding:16px;margin-bottom:20px">
-      <div style="display:grid;grid-template-columns:minmax(240px,1fr) minmax(170px,220px) auto;gap:12px;align-items:center">
-        <input class="sh-input" x-model="search" @keyup.enter="applyFilters()" :placeholder="searchPlaceholder">
-        <select class="sh-input" x-model="source" @change="applyFilters()">
-          <option value="">Все источники</option>
-          <template x-for="option in sourceOptions" :key="option.value"><option :value="option.value" x-text="option.label"></option></template>
-        </select>
-        <button class="sh-btn sh-btn--secondary" @click="applyFilters()">Найти</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px;color:var(--text-muted);font-size:12px">
-        <span x-text="totalLabel"></span>
-        <span aria-hidden="true">•</span>
-        <span x-text="syncLabel"></span>
-        <template x-if="syncState && syncState.unmatched_item_count"><span style="color:var(--warn)" x-text="'Не сопоставлено с каталогом: '+syncState.unmatched_item_count"></span></template>
-      </div>
-    </div>
-
-    <div x-show="loading" class="sh-card" style="padding:52px;text-align:center;color:var(--text-muted)">
-      <span class="sh-spinner sh-spinner--lg" role="status" aria-label="Загрузка"></span>
-      <div style="margin-top:12px">Загрузка…</div>
-    </div>
-
-    <div x-show="!loading && !items.length" class="sh-card">
-      <div class="sh-empty">
-        <div class="sh-empty-icon">{{ icon('package', size=44, stroke=1.2) }}</div>
-        <p class="sh-empty-title">Данных пока нет</p>
-        <p class="sh-empty-desc">Запустите read-only синхронизацию выбранного кабинета Ozon.</p>
-        <button class="sh-btn sh-btn--primary sh-btn--sm" style="margin-top:16px" @click="sync()" :disabled="syncing">Получить данные</button>
-      </div>
-    </div>
-
-    <div x-show="!loading && items.length" class="sh-table-wrap">
-      <table class="sh-table mp-feed-table" style="min-width:980px">
-        <thead>
-          <tr>
-            <template x-if="kind==='orders'"><th>Отправление и товары</th></template>
-            <template x-if="kind!=='orders'"><th>Событие и товар</th></template>
-            <th>Источник</th>
-            <th>Статус</th>
-            <th>Дата</th>
-            <th>Причина / связь</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template x-for="item in items" :key="kind+'-'+item.id">
-            <tr>
-              <td style="min-width:340px">
-                <div style="font-weight:700" x-text="item.posting_number || ('Возврат '+item.external_return_id)"></div>
-                <template x-if="kind==='orders'">
-                  <div style="margin-top:7px;display:flex;flex-direction:column;gap:5px">
-                    <template x-for="line in item.items" :key="line.id">
-                      <div style="font-size:13px">
-                        <span x-text="line.name || line.offer_id || ('SKU '+line.external_sku)"></span>
-                        <span style="color:var(--text-muted)" x-text="' · '+line.quantity+' шт.'+(line.unit_price ? ' · '+money(line.unit_price,line.currency) : '')"></span>
-                        <span x-show="line.listing_id" style="margin-left:5px;color:var(--ok)">связано</span>
-                        <span x-show="!line.listing_id" style="margin-left:5px;color:var(--warn)">нет карточки</span>
-                      </div>
-                    </template>
-                  </div>
-                </template>
-                <template x-if="kind==='returns'">
-                  <div style="font-size:13px;color:var(--text-muted);margin-top:5px" x-text="(item.product_name || item.offer_id || ('SKU '+item.external_sku))+' · '+item.quantity+' шт.'+(item.unit_price ? ' · '+money(item.unit_price,item.currency) : '')"></div>
-                </template>
-                <template x-if="kind==='cancellations'">
-                  <div style="font-size:12px;color:var(--text-muted);margin-top:5px" x-text="'ID '+item.external_cancellation_id"></div>
-                </template>
-              </td>
-              <td><span class="sh-badge" x-text="sourceLabel(item)"></span></td>
-              <td>
-                <div style="font-weight:600" x-text="item.status_label || item.status"></div>
-                <div x-show="item.status_label" style="font-size:11px;color:var(--text-muted);margin-top:3px" x-text="item.status"></div>
-              </td>
-              <td style="white-space:nowrap" x-text="dateLabel(item)"></td>
-              <td style="max-width:310px">
-                <div x-text="item.reason || item.cancellation_reason || '—'"></div>
-                <div x-show="kind==='returns'" style="font-size:12px;margin-top:5px" :style="'color:'+(item.listing_id?'var(--ok)':'var(--warn)')" x-text="item.listing_id?'Карточка каталога найдена':'Товар пока не сопоставлен'"></div>
-                <div x-show="kind==='cancellations' && item.initiator" style="font-size:12px;color:var(--text-muted);margin-top:5px" x-text="'Инициатор: '+item.initiator"></div>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </div>
-
-    <div x-show="!loading && items.length && pages > 1" style="display:flex;justify-content:center;align-items:center;gap:10px;padding:2px 0 8px">
-      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page<=1" @click="page--;load()">Назад</button>
-      <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="page+' / '+pages"></span>
-      <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="page>=pages" @click="page++;load()">Далее</button>
-    </div>
+    <a class="of-link" href="{{ url_for('marketplace_finance.page', account_id=selected_account.id) }}" :href="withRefreshPeriod({{ url_for('marketplace_finance.page', account_id=selected_account.id)|tojson|forceescape }})">Начисления и удержания {{ icon('arrow-right', size=15) }}</a>
   </div>
+  <section v-if="refreshState && refreshState.status!=='idle'" class="sh-card ozon-read-status" role="status" aria-live="polite" :data-state="refreshState.status">
+    <div><strong v-text="refreshTitle()"></strong><span class="ozon-read-status__dates" v-text="refreshPeriodLabel()"></span><p v-text="refreshState.message"></p><p v-if="refreshDueLabel()" class="ozon-read-status__due" v-text="refreshDueLabel()"></p><p v-if="refreshState.active" class="ozon-read-status__hint">Пока обновляем, доступны последние сохранённые данные.</p></div>
+    <a v-if="['access_denied','account_unavailable','credentials_changed'].includes(refreshState.error_code)" class="sh-btn sh-btn--secondary sh-btn--sm" href="/api-settings#ozon-api-settings-title">Настройки подключения</a>
+  </section>
+  <div v-if="refreshStatusError" class="of-notice of-warning" role="alert"><span v-text="refreshStatusError"></span><a v-if="refreshSessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else class="sh-btn sh-btn--secondary" type="button" @click="loadRefreshStatus()">Проверить состояние</button></div>
+  <div class="of-handoff"><span>{{ icon('package', size=18) }} Сборка, этикетки, отгрузка и решения по заявкам доступны в кабинете Ozon.</span><a href="https://seller.ozon.ru/" target="_blank" rel="noopener noreferrer">Открыть Ozon {{ icon('external', size=14) }}<span class="of-sr"> в новой вкладке; выберите нужный магазин</span></a></div>
+  <form class="of-filters" @submit.prevent="applyFilters()" role="search" aria-label="Поиск в списке">
+    <label class="of-search">{{ 'Номер отправления, артикул или товар' if page_kind!='cancellations' else 'Номер отправления или причина' }}<span><input v-model="searchDraft" type="search" maxlength="200" name="search" autocomplete="off" placeholder="Найти в выбранном периоде"><button type="submit" class="sh-btn sh-btn--secondary" aria-label="Найти">{{ icon('search', size=18) }}</button></span></label>
+    <label>Схема<select name="source" :value="filters.source" @change="navigate({source:$event.target.value,page:1})"><option value="">Все схемы</option><option v-for="option in sourceOptions" :key="option.value" :value="option.value" v-text="option.label"></option></select></label>
+    <label>Статус<select name="status" :value="filters.status" @change="navigate({status:$event.target.value,page:1})"><option value="">Все статусы</option><option v-for="option in statusOptions" :key="option.value" :value="option.value" v-text="option.label+' ('+option.count+')'"></option></select></label>
+  </form>
+  <div class="of-list-heading"><div><strong v-if="loaded" v-text="resultsLabel"></strong><span v-else>Загружаем список…</span><span class="of-muted" v-text="freshness"></span></div><button v-if="hasFilters" class="of-text-button" type="button" @click="resetFilters()">Сбросить фильтры</button></div>
+  <div v-if="error" class="of-notice of-error" role="alert"><div><strong v-text="error"></strong><p v-if="loaded" v-text="staleScope ? 'Ниже остаётся предыдущий список. Новые условия поиска ещё не загружены.' : 'Показываем последний загруженный список.'"></p></div><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else class="sh-btn sh-btn--secondary" type="button" @click="load()">Повторить загрузку</button></div>
+  <div v-if="loading && !loaded" class="of-loading" role="status">Загружаем сохранённые данные…<div v-for="n in 3" :key="n" class="sh-skeleton of-skeleton"></div></div>
+  <div v-else-if="loaded && !items.length && !error && !loading" class="of-empty">
+    {{ icon('package', size=40) }}
+    <h2 v-text="filters.page>1 ? 'На этой странице нет записей' : hasFilters ? 'Ничего не нашлось' : 'За этот период записей пока нет'"></h2>
+    <p v-text="hasFilters ? 'Попробуйте другой номер, артикул или статус.' : 'Выберите другой период или загрузите данные из Ozon.'"></p>
+    <button v-if="filters.page>1" type="button" class="sh-btn sh-btn--secondary" @click="navigate({page:1})">На первую страницу</button>
+    <button v-else-if="hasFilters" type="button" class="sh-btn sh-btn--secondary" @click="resetFilters()">Сбросить фильтры</button>
+    <button v-else type="button" class="sh-btn sh-btn--secondary" @click="requestRefresh()" :disabled="refreshing || refreshUncertain || refreshSessionEnded">Загрузить из Ozon</button>
+  </div>
+  <section v-if="items.length" class="of-results" :aria-busy="loading" aria-label="Сохранённые данные">
+    <p v-if="loading" class="of-muted" role="status">Загружаем выбранный список…</p>
+    <article v-for="item in items" :key="item.id" class="of-row">
+      <div class="of-row-main">
+        <div class="of-row-title"><button v-if="kind==='orders'" type="button" class="of-number" @click="openDetail(item.id)" :aria-label="'Открыть отправление '+item.posting_number" v-text="item.posting_number"></button><a v-else class="of-number" :href="item.posting_url ? withRefreshPeriod(item.posting_url) : orderSearchURL(item.posting_number)" v-text="item.posting_number"></a><span class="of-source" v-text="sourceLabel(item)"></span></div>
+        <template v-if="kind==='orders'">
+          <div class="of-products">
+            <div v-for="line in item.items" :key="line.id" class="of-product">
+              <span class="of-photo"><img v-if="safeImage(line.listing?.image) && !failedImages['line'+line.id]" :src="safeImage(line.listing.image)" alt="" width="48" height="56" loading="lazy" v-image-deadline @error="failedImages['line'+line.id]=true"><span v-else>{{ icon('image', size=20) }}<span class="of-sr">Фото недоступно</span></span></span>
+              <div><a v-if="line.listing" :href="line.listing.url" class="of-product-name" v-text="lineName(line)"></a><span v-else class="of-product-name" v-text="lineName(line)"></span><small><span v-text="line.quantity+' шт.'"></span><span v-if="line.offer_id" v-text="' · '+line.offer_id"></span></small></div>
+            </div>
+          </div>
+          <button v-if="item.items_truncated" type="button" class="of-text-button of-more" @click="openDetail(item.id)" v-text="'Весь состав: '+item.item_count+' позиций'"></button><p v-if="!item.items.length" class="of-muted">Состав ещё не получен</p>
+        </template>
+        <div v-else-if="kind==='returns'" class="of-product of-return-product"><span class="of-photo"><img v-if="safeImage(item.listing?.image) && !failedImages['return'+item.id]" :src="safeImage(item.listing.image)" alt="" width="48" height="56" loading="lazy" v-image-deadline @error="failedImages['return'+item.id]=true"><span v-else>{{ icon('image', size=20) }}<span class="of-sr">Фото недоступно</span></span></span><div><a v-if="item.listing" :href="item.listing.url" class="of-product-name" v-text="lineName(item)"></a><span v-else class="of-product-name" v-text="lineName(item)"></span><small v-text="(item.quantity ?? '—')+' шт. · '+money(item.unit_price,item.currency)+' за шт.'"></small><small v-if="item.offer_id" v-text="item.offer_id"></small></div></div>
+        <p v-if="kind!=='orders'" class="of-reason" v-text="item.reason || 'Причина не указана Ozon'"></p>
+        <small v-if="kind==='cancellations' && item.initiator" v-text="'Инициатор: '+item.initiator"></small>
+      </div>
+      <div class="of-row-state"><span class="of-status" :class="'is-'+tone(item.status)" v-text="statusLabel(item.status,item.status_label)"></span><small v-if="item.substatus" v-text="item.substatus"></small><span class="of-muted">{{ 'Создано' if page_kind=='orders' else 'Дата изменения / наблюдения' }}</span><time v-text="rowDate(item)"></time><button v-if="kind==='orders'" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="openDetail(item.id)" :aria-label="'Подробности отправления '+item.posting_number">Подробности {{ icon('chevron-right', size=14) }}</button></div>
+    </article>
+  </section>
+  <nav v-if="pagination.pages>1" class="of-pagination" aria-label="Страницы списка"><a v-if="filters.page>1" class="sh-btn sh-btn--secondary" :href="url({...filters,page:filters.page-1})" @click="pageLink($event,filters.page-1)">Назад</a><span v-text="'Страница '+filters.page+' из '+pagination.pages"></span><a v-if="filters.page<pagination.pages" class="sh-btn sh-btn--secondary" :href="url({...filters,page:filters.page+1})" @click="pageLink($event,filters.page+1)">Далее</a></nav>
+  <button v-if="Object.keys(failedImages).length" type="button" class="of-text-button of-retry-photos" @click="retryImages()">Повторить загрузку фотографий</button>
+  <dialog ref="drawer" class="of-drawer" aria-labelledby="of-detail-title" @cancel.prevent="dismissDetail()" @click.self="dismissDetail()">
+    <div class="of-drawer-inner">
+      <header class="of-drawer-header"><div><p>Отправление</p><h2 id="of-detail-title" v-text="detail?.posting_number || 'Подробности заказа'"></h2></div><button type="button" class="sh-btn sh-btn--secondary" aria-label="Закрыть подробности" @click="dismissDetail()">{{ icon('close', size=20) }}</button></header>
+      <div class="of-drawer-body">
+        <div v-if="detailError" class="of-notice of-error" role="alert"><span v-text="detailError"></span><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" @click="openDetail(detailId,false,detailPage)">Повторить загрузку</button></div>
+        <p v-if="detailLoading" role="status">Загружаем отправление…</p>
+        <template v-if="detail">
+          <div class="of-detail-status"><span class="of-status" :class="'is-'+tone(detail.status)" v-text="statusLabel(detail.status)"></span><span class="of-source" v-text="sourceLabel(detail)"></span><span v-if="detail.substatus" class="of-muted" v-text="detail.substatus"></span></div>
+          <dl class="of-facts"><div><dt>Создано</dt><dd v-text="date(detail.upstream_created_at)"></dd></div><div v-if="detail.shipment_at"><dt>Дата отгрузки по данным Ozon</dt><dd v-text="date(detail.shipment_at)"></dd></div><div v-if="detail.delivered_at"><dt>Доставлено</dt><dd v-text="date(detail.delivered_at)"></dd></div><div v-if="detail.cancelled_at"><dt>Отменено</dt><dd v-text="date(detail.cancelled_at)"></dd></div><div><dt>Последнее наблюдение</dt><dd v-text="date(detail.last_seen_at)"></dd></div></dl>
+          <p v-if="detail.cancellation_reason" class="of-notice" v-text="detail.cancellation_reason"></p>
+          <h3>Товары <span class="of-muted" v-text="detail.item_pagination.total"></span></h3>
+          <p class="of-muted">Цена позиции из отправления. Итоговые начисления и удержания смотрите в финансах.</p>
+          <div :aria-busy="detailLoading">
+            <div v-for="line in detail.items" :key="line.id" class="of-detail-line">
+              <div class="of-product"><span class="of-photo"><img v-if="safeImage(line.listing?.image) && !failedImages['line'+line.id]" :src="safeImage(line.listing.image)" alt="" width="48" height="56" loading="lazy" v-image-deadline @error="failedImages['line'+line.id]=true"><span v-else>{{ icon('image', size=20) }}</span></span><div><a v-if="line.listing" :href="line.listing.url" class="of-product-name" v-text="lineName(line)"></a><span v-else class="of-product-name" v-text="lineName(line)"></span><small v-if="line.offer_id" v-text="'Артикул '+line.offer_id"></small><small v-if="line.external_sku" v-text="'SKU '+line.external_sku"></small></div></div>
+              <div class="of-line-price"><strong v-text="money(line.unit_price,line.currency)"></strong><small v-text="'за шт. · '+line.quantity+' шт.'"></small></div>
+            </div>
+          </div>
+          <p v-if="!detail.items.length" class="of-muted">На этой странице состава нет позиций.</p>
+          <nav v-if="detail.item_pagination.pages>1 || detail.item_pagination.page>1" class="of-pagination" aria-label="Страницы состава"><button v-if="detail.item_pagination.page>1" type="button" class="sh-btn sh-btn--secondary" :disabled="detailLoading" @click="changeLinePage(detail.item_pagination.page-1)">Назад</button><span v-text="detail.item_pagination.page+' / '+detail.item_pagination.pages"></span><button v-if="detail.item_pagination.page<detail.item_pagination.pages" type="button" class="sh-btn sh-btn--secondary" :disabled="detailLoading" @click="changeLinePage(detail.item_pagination.page+1)">Далее</button></nav>
+          <button v-if="Object.keys(failedImages).length" type="button" class="of-text-button of-retry-photos" @click="retryImages()">Повторить загрузку фотографий</button>
+          <h3>История наблюдений</h3><p class="of-muted">Время, когда Seller Hub получил статус. Оно может отличаться от времени события в Ozon.</p>
+          <ol class="of-history"><li v-for="(event,index) in detail.status_history" :key="index"><span v-text="statusLabel(event.status)"></span><small v-if="event.substatus" v-text="event.substatus"></small><time v-text="date(event.observed_at)"></time></li></ol><p v-if="!detail.status_history?.length" class="of-muted">История ещё не накоплена.</p><p v-if="detail.history_truncated" class="of-muted">Показаны последние 100 наблюдений.</p>
+        </template>
+      </div>
+    </div>
+  </dialog>
 </div>
-
-<script>
-function ozonFulfillmentPage() {
-  const kind = {{ page_kind|tojson }};
-  const accountId = {{ selected_account.id|tojson }};
-  const paths = {
-    orders: '/marketplaces/api/orders',
-    returns: '/marketplaces/api/returns',
-    cancellations: '/marketplaces/api/cancellations'
-  };
-  return {
-    kind, accountId, period: '30d', items: [], page: 1, pages: 0, total: 0,
-    search: '', source: '', loading: true, syncing: false, error: '', syncState: null,
-    get sourceOptions() {
-      if (this.kind === 'orders') return [{value:'fbo',label:'FBO'},{value:'fbs',label:'FBS'}];
-      if (this.kind === 'returns') return [{value:'fbo_fbs',label:'FBO + FBS'},{value:'rfbs',label:'rFBS'}];
-      return [{value:'posting_fbo',label:'Отправления FBO'},{value:'posting_fbs',label:'Отправления FBS'},{value:'rfbs_conditional',label:'Заявки rFBS'}];
-    },
-    get searchPlaceholder() {
-      return this.kind === 'orders' ? 'Номер, offer ID, SKU или товар' : (this.kind === 'returns' ? 'Номер, возврат, offer ID, SKU' : 'Номер отправления или причина');
-    },
-    get totalLabel() {
-      const labels={orders:'отправлений',returns:'возвратов',cancellations:'отмен'};
-      return this.total.toLocaleString('ru-RU')+' '+labels[this.kind];
-    },
-    get syncLabel() {
-      if (!this.syncState) return 'Синхронизация ещё не запускалась';
-      if (this.syncState.status === 'running') return 'Sync продолжается · фаза '+this.syncState.phase+' · '+this.syncState.page_count+' стр.';
-      if (this.syncState.status === 'failed') return 'Последний sync завершился ошибкой';
-      return this.syncState.completed_at ? 'Обновлено '+new Date(this.syncState.completed_at).toLocaleString('ru-RU') : 'Синхронизировано';
-    },
-    async init() {
-      const q=new URLSearchParams(location.search);
-      if (['7d','30d'].includes(q.get('period'))) this.period=q.get('period');
-      await this.load();
-    },
-    changePeriod(value) { this.period=value; this.page=1; const u=new URL(location); u.searchParams.set('period',value); history.replaceState(null,'',u); this.load(); },
-    applyFilters() { this.page=1; this.load(); },
-    async load() {
-      this.loading=true; this.error='';
-      try {
-        let u=paths[this.kind]+'?account_id='+this.accountId+'&period='+this.period+'&page='+this.page+'&per_page=50';
-        if (this.search.trim()) u+='&search='+encodeURIComponent(this.search.trim());
-        if (this.source) u+='&'+(this.kind==='orders'?'fulfillment':'source')+'='+encodeURIComponent(this.source);
-        const r=await fetch(u); const d=await r.json();
-        if (!r.ok) throw new Error(d.error||'Не удалось загрузить данные');
-        const data=d.data||{}; this.items=data.items||[];
-        this.total=(data.pagination&&data.pagination.total)||0;
-        this.pages=(data.pagination&&data.pagination.pages)||0;
-        if (data.sync) this.syncState=data.sync;
-      } catch(e) { this.error=e.message; }
-      finally { this.loading=false; }
-    },
-    async sync() {
-      this.syncing=true; this.error='';
-      try {
-        let force=!(this.syncState&&this.syncState.status==='running');
-        for (let attempt=0; attempt<2; attempt++) {
-          const r=await fetch('/marketplaces/api/fulfillment/sync?account_id='+this.accountId,{
-            method:'POST', headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},
-            body:JSON.stringify({period:this.period,force:force,max_pages:5})
-          });
-          const d=await r.json(); if(!r.ok) throw new Error(d.error||'Ошибка синхронизации');
-          this.syncState=d.data; force=false;
-          if(this.syncState.status!=='running') break;
-        }
-        await this.load();
-        if(this.syncState&&this.syncState.status==='running') this.$store.toasts.info('Большой кабинет: sync сохранён и продолжится со следующей страницы');
-        else this.$store.toasts.success('Заказы и возвраты Ozon обновлены');
-      } catch(e) { this.error=e.message; }
-      finally { this.syncing=false; }
-    },
-    sourceLabel(item) {
-      const raw=item.fulfillment_kind||item.source_kind||'';
-      const labels={fbo:'FBO',fbs:'FBS',rfbs:'rFBS',fbo_fbs:'FBO + FBS',posting_fbo:'FBO posting',posting_fbs:'FBS posting',rfbs_conditional:'rFBS заявка'};
-      return labels[raw]||raw||'Ozon';
-    },
-    dateLabel(item) {
-      const raw=item.status_changed_at||item.requested_at||item.upstream_created_at||item.last_seen_at;
-      return raw ? new Date(raw).toLocaleString('ru-RU') : '—';
-    },
-    money(value,currency) {
-      const code=(currency&&currency.length===3)?currency:'RUB';
-      try { return new Intl.NumberFormat('ru-RU',{style:'currency',currency:code}).format(Number(value)); }
-      catch(e) { return Number(value).toLocaleString('ru-RU')+' '+code; }
-    }
-  };
-}
-</script>
+<script id="of-bootstrap" type="application/json">{{ {'accountId':selected_account.id, 'kind':page_kind, 'csrfToken':csrf_token(), 'api':{'orders':url_for('marketplace_fulfillment.orders_api'), 'returns':url_for('marketplace_fulfillment.returns_api'), 'cancellations':url_for('marketplace_fulfillment.cancellations_api')}, 'pages':{'orders':url_for('marketplace_fulfillment.orders_page'), 'returns':url_for('marketplace_fulfillment.returns_page'), 'cancellations':url_for('marketplace_fulfillment.cancellations_page')}}|tojson }}</script>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
+<script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}"></script>
+<script src="{{ url_for('static', filename='ozon-read-refresh.js') }}"></script>
+<script src="{{ url_for('static', filename='ozon-fulfillment.js') }}"></script>
 {% endblock %}

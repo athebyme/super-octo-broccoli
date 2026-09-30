@@ -1,5 +1,8 @@
-"""Seller-facing one-click bulk upload runs for Ozon."""
+"""Seller-scoped local preparation and explicitly reviewed Ozon publication."""
 
+import json
+import re
+import secrets
 from io import BytesIO
 from typing import Any, Optional
 
@@ -15,6 +18,7 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
+from flask_wtf.csrf import generate_csrf
 
 from models import db
 from services.ozon_bulk_upload import (
@@ -63,9 +67,9 @@ def _integer(value: Any, field_name: str) -> int:
         raise OzonBulkUploadValidationError(
             f"{field_name} должен быть целым числом"
         )
-    if parsed <= 0:
+    if not 0 < parsed <= 9223372036854775807:
         raise OzonBulkUploadValidationError(
-            f"{field_name} должен быть положительным"
+            f"{field_name} должен быть положительным целым в пределах int64"
         )
     return parsed
 
@@ -75,7 +79,7 @@ def _bounded_integer_list(values: Any, field_name: str) -> list[int]:
         raise OzonBulkUploadValidationError(
             f"{field_name} должен быть массивом"
         )
-    if len(values) > OzonBulkUploadService.MAX_ITEMS:
+    if not values or len(values) > OzonBulkUploadService.MAX_ITEMS:
         raise OzonBulkUploadValidationError(
             "За один запуск можно загрузить не более "
             f"{OzonBulkUploadService.MAX_ITEMS} карточек"
@@ -83,7 +87,78 @@ def _bounded_integer_list(values: Any, field_name: str) -> list[int]:
     singular = (
         "draft_id" if field_name == "draft_ids" else "imported_product_id"
     )
-    return [_integer(value, singular) for value in values]
+    parsed = [_integer(value, singular) for value in values]
+    if len(parsed) != len(set(parsed)):
+        raise OzonBulkUploadValidationError("Выбранные карточки не должны повторяться")
+    return parsed
+
+
+def _unique_json_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise OzonBulkUploadValidationError("Поля JSON не должны повторяться")
+        result[key] = value
+    return result
+
+
+def _request_payload(allowed: set[str], *, list_fields=()) -> dict:
+    if request.args:
+        raise OzonBulkUploadValidationError("Параметры запуска передаются только в body")
+    if request.is_json:
+        body = request.get_data(cache=True)
+        if len(body) > 65536:
+            raise OzonBulkUploadValidationError("Запрос загрузки превышает 64 KiB")
+        try:
+            data = json.loads(body, object_pairs_hook=_unique_json_pairs)
+        except (ValueError, UnicodeError):
+            raise OzonBulkUploadValidationError("Некорректный JSON body") from None
+        if not isinstance(data, dict):
+            raise OzonBulkUploadValidationError("JSON body должен быть объектом")
+    else:
+        data = {
+            key: request.form.getlist(key) if key in list_fields else _single_form_value(key)
+            for key in request.form if key != "csrf_token"
+        }
+    if set(data) - allowed:
+        raise OzonBulkUploadValidationError("Переданы неизвестные поля запуска")
+    return data
+
+
+def _request_key(value: Any) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{24,128}", value):
+        raise OzonBulkUploadValidationError("request_key должен содержать 24–128 URL-safe символов")
+    return value
+
+
+def _require_prepare_confirmation(value: Any) -> None:
+    if not (value is True if request.is_json else value == "1"):
+        raise OzonBulkUploadValidationError("Подтвердите локальную подготовку черновиков")
+
+
+def _review_required(message: str) -> None:
+    error = OzonBulkUploadValidationError(message)
+    error.code = "draft_review_required"
+    error.status_code = 409
+    raise error
+
+
+def _reviewed_versions(value: Any, draft_ids: list[int]) -> dict:
+    if not request.is_json and isinstance(value, str):
+        try:
+            value = json.loads(value, object_pairs_hook=_unique_json_pairs)
+        except (ValueError, TypeError):
+            value = None
+        # A no-JS page posts the rendered page's version map plus checked IDs.
+        # Extra unchecked rows are never selected or sent to the worker.
+        if isinstance(value, dict) and len(value) <= 20:
+            value = {str(pk): value[str(pk)] for pk in draft_ids if str(pk) in value}
+    if not isinstance(value, dict) or set(value) != {str(pk) for pk in draft_ids}:
+        _review_required("Просмотрите выбранные карточки и подтвердите их актуальные версии")
+    if any(type(version) is not int or not 0 < version <= 9223372036854775807
+           for version in value.values()):
+        raise OzonBulkUploadValidationError("Версии должны быть положительными целыми числами")
+    return value
 
 
 def _require_write_confirmation(value: Any) -> None:
@@ -111,27 +186,27 @@ def _error_response(error: OzonBulkUploadError):
     return redirect(url_for("seller_my_products"))
 
 
-def _created_response(job):
+def _created_response(acceptance):
+    job = acceptance.job
     document = OzonBulkUploadService.public_document(job, detail=True)
+    location = url_for("ozon_bulk_uploads.detail", job_uid=job.job_uid)
     if _wants_json():
-        return jsonify({
+        response = jsonify({
             "success": True,
             "run": document,
-        }), 202 if job.status == "running" else 200
-    summary = document["summary"]
+            "replayed": acceptance.replayed,
+        })
+        response.status_code = 202
+        response.headers["Location"] = location
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
     flash(
-        (
-            f"Синхронизация Ozon запущена: "
-            f"{summary.get('active', 0)} в работе, "
-            f"{summary.get('needs_input', 0)} требуют данных. "
-            "Итог и причины сохранены в одном запуске."
-        ),
-        "success" if not summary.get("needs_input") else "warning",
+        "Подготовка черновиков начата. После неё проверьте карточки перед отправкой."
+        if document.get("mode") == "source_prepare" else
+        "Проверенные версии карточек приняты в очередь отправки Ozon.",
+        "success",
     )
-    return redirect(url_for(
-        "ozon_bulk_uploads.detail",
-        job_uid=job.job_uid,
-    ))
+    return redirect(location, code=303)
 
 
 def _single_form_value(key: str, *, required: bool = False) -> str:
@@ -302,9 +377,13 @@ def index():
     if seller_id is None:
         return "Seller account required", 403
     try:
+        if set(request.args) - {'account_id'} or len(request.args.getlist('account_id')) > 1:
+            raise OzonBulkUploadValidationError('Допустим только один account_id')
+        account_id = _integer(request.args.get('account_id'), 'account_id') if request.args.get('account_id') else None
         runs = OzonBulkUploadService.list_runs(
             seller_id=seller_id,
             limit=50,
+            account_id=account_id,
         )
         documents = [
             OzonBulkUploadService.public_document(run)
@@ -317,6 +396,7 @@ def index():
     return render_template(
         "ozon_bulk_uploads.html",
         runs=documents,
+        selected_account_id=account_id,
         ozon_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
         ),
@@ -336,44 +416,20 @@ def create():
     if seller_id is None:
         return jsonify({"success": False, "error": "Seller account required"}), 403
     try:
-        if request.is_json:
-            data = request.get_json(silent=True)
-            if not isinstance(data, dict):
-                raise OzonBulkUploadValidationError(
-                    "JSON body должен быть объектом"
-                )
-            if set(data) - {
-                "account_id",
-                "imported_product_ids",
-                "confirm_write",
-            }:
-                raise OzonBulkUploadValidationError(
-                    "Допустимы только account_id, imported_product_ids "
-                    "и confirm_write"
-                )
-            _require_write_confirmation(data.get("confirm_write"))
-            raw_ids = data.get("imported_product_ids")
-            account_id = _integer(data.get("account_id"), "account_id")
-            product_ids = _bounded_integer_list(
-                raw_ids,
-                "imported_product_ids",
-            )
-        else:
-            _require_write_confirmation(
-                request.form.get("confirm_write"),
-            )
-            account_id = _integer(
-                request.form.get("account_id"),
-                "account_id",
-            )
-            product_ids = _bounded_integer_list(
-                request.form.getlist("imported_product_ids"),
-                "imported_product_ids",
-            )
-        job = OzonBulkUploadService.create_run(
+        if (request.is_json and isinstance(request.get_json(silent=True), dict)
+                and "confirm_write" in request.get_json(silent=True)) or (
+                not request.is_json and "confirm_write" in request.form):
+            _review_required("Сначала подготовьте черновики, затем проверьте их перед отправкой")
+        data = _request_payload(
+            {"account_id", "imported_product_ids", "confirm_prepare", "request_key"},
+            list_fields={"imported_product_ids"},
+        )
+        _require_prepare_confirmation(data.get("confirm_prepare"))
+        acceptance = OzonBulkUploadService.accept_source_prepare(
             seller_id=seller_id,
-            account_id=account_id,
-            imported_product_ids=product_ids,
+            account_id=_integer(data.get("account_id"), "account_id"),
+            imported_product_ids=_bounded_integer_list(data.get("imported_product_ids"), "imported_product_ids"),
+            request_key=_request_key(data.get("request_key")),
             created_by_user_id=getattr(current_user, "id", None),
         )
     except OzonBulkUploadError as exc:
@@ -390,7 +446,7 @@ def create():
         error.status_code = 500
         error.code = "ozon_bulk_upload_start_failed"
         return _error_response(error)
-    return _created_response(job)
+    return _created_response(acceptance)
 
 
 @ozon_bulk_uploads_bp.route("/from-drafts", methods=["POST"])
@@ -400,36 +456,23 @@ def create_from_drafts():
     if seller_id is None:
         return jsonify({"success": False, "error": "Seller account required"}), 403
     try:
-        if request.is_json:
-            data = request.get_json(silent=True)
-            if not isinstance(data, dict):
-                raise OzonBulkUploadValidationError(
-                    "JSON body должен быть объектом"
-                )
-            if set(data) - {"account_id", "draft_ids", "confirm_write"}:
-                raise OzonBulkUploadValidationError(
-                    "Допустимы только account_id, draft_ids и confirm_write"
-                )
-            _require_write_confirmation(data.get("confirm_write"))
-            raw_ids = data.get("draft_ids")
-            account_id = _integer(data.get("account_id"), "account_id")
-            draft_ids = _bounded_integer_list(raw_ids, "draft_ids")
-        else:
-            _require_write_confirmation(
-                request.form.get("confirm_write"),
-            )
-            account_id = _integer(
-                request.form.get("account_id"),
-                "account_id",
-            )
-            draft_ids = _bounded_integer_list(
-                request.form.getlist("draft_ids"),
-                "draft_ids",
-            )
-        job = OzonBulkUploadService.create_run_from_drafts(
+        data = _request_payload(
+            {"account_id", "draft_ids", "expected_versions", "confirm_write", "request_key", "parent_prepare_job_uid"},
+            list_fields={"draft_ids"},
+        )
+        _require_write_confirmation(data.get("confirm_write"))
+        draft_ids = _bounded_integer_list(data.get("draft_ids"), "draft_ids")
+        expected_versions = _reviewed_versions(data.get("expected_versions"), draft_ids)
+        parent_uid = data.get("parent_prepare_job_uid") or None
+        if parent_uid is not None and (not isinstance(parent_uid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", parent_uid)):
+            raise OzonBulkUploadValidationError("Некорректный parent_prepare_job_uid")
+        acceptance = OzonBulkUploadService.accept_reviewed_publish(
             seller_id=seller_id,
-            account_id=account_id,
+            account_id=_integer(data.get("account_id"), "account_id"),
             draft_ids=draft_ids,
+            expected_versions=expected_versions,
+            request_key=_request_key(data.get("request_key")),
+            parent_prepare_job_uid=parent_uid,
             created_by_user_id=getattr(current_user, "id", None),
         )
     except OzonBulkUploadError as exc:
@@ -446,7 +489,7 @@ def create_from_drafts():
         error.status_code = 500
         error.code = "ozon_bulk_upload_start_failed"
         return _error_response(error)
-    return _created_response(job)
+    return _created_response(acceptance)
 
 
 def _detail_response(job_uid: str, *, force_json: bool = False):
@@ -488,6 +531,7 @@ def detail(job_uid: str):
 
 
 @ozon_bulk_uploads_bp.route("/<job_uid>/repair", methods=["GET"])
+@ozon_bulk_uploads_bp.route("/<job_uid>/repair/classic", methods=["GET"], endpoint="repair_editor_classic")
 @login_required
 def repair_editor(job_uid: str):
     """Render the primary, platform-native mass repair flow."""
@@ -508,10 +552,13 @@ def repair_editor(job_uid: str):
             job_uid=job_uid,
         ))
     if _wants_json():
-        return jsonify({"success": True, "editor": editor})
+        response = jsonify({"success": True, "editor": editor, "csrf": generate_csrf()})
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
     return render_template(
-        "ozon_bulk_repair.html",
+        "ozon_bulk_repair_classic.html" if request.endpoint.endswith("_classic") else "ozon_bulk_repair.html",
         editor=editor,
+        ozon_enabled=bool(current_app.config.get("MARKETPLACE_OZON_ENABLED", False)),
     )
 
 
@@ -522,6 +569,8 @@ def apply_repair_editor(job_uid: str):
     seller_id = _seller_id()
     if seller_id is None:
         return jsonify({"success": False, "error": "Seller account required"}), 403
+    back_endpoint = ("ozon_bulk_uploads.repair_editor_classic" if request.args.get("view") == "classic"
+                     else "ozon_bulk_uploads.repair_editor")
     try:
         if not current_app.config.get(
             "MARKETPLACE_OZON_ENABLED",
@@ -557,7 +606,7 @@ def apply_repair_editor(job_uid: str):
             return _error_response(exc)
         flash(str(exc), "danger")
         return redirect(url_for(
-            "ozon_bulk_uploads.repair_editor",
+            back_endpoint,
             job_uid=job_uid,
         ))
     except Exception:
@@ -576,10 +625,14 @@ def apply_repair_editor(job_uid: str):
             return _error_response(error)
         flash(str(error), "danger")
         return redirect(url_for(
-            "ozon_bulk_uploads.repair_editor",
+            back_endpoint,
             job_uid=job_uid,
         ))
 
+    if _wants_json():
+        response = jsonify({"success": True, "report": report})
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
     category = (
         "success"
         if report["ready_to_retry"] and not report["failed"]
@@ -597,7 +650,7 @@ def apply_repair_editor(job_uid: str):
         category,
     )
     return redirect(url_for(
-        "ozon_bulk_uploads.repair_editor",
+        back_endpoint,
         job_uid=job_uid,
     ))
 
@@ -788,24 +841,12 @@ def retry(job_uid: str):
     if seller_id is None:
         return jsonify({"success": False, "error": "Seller account required"}), 403
     try:
-        if request.is_json:
-            data = request.get_json(silent=True)
-            if not isinstance(data, dict):
-                raise OzonBulkUploadValidationError(
-                    "JSON body должен быть объектом"
-                )
-            if set(data) - {"confirm_write"}:
-                raise OzonBulkUploadValidationError(
-                    "Допустим только confirm_write"
-                )
-            _require_write_confirmation(data.get("confirm_write"))
-        else:
-            _require_write_confirmation(
-                request.form.get("confirm_write"),
-            )
-        job = OzonBulkUploadService.retry_run(
+        data = _request_payload({"confirm_prepare", "request_key"})
+        _require_prepare_confirmation(data.get("confirm_prepare"))
+        acceptance = OzonBulkUploadService.retry_run(
             seller_id=seller_id,
             job_uid=job_uid,
+            request_key=_request_key(data.get("request_key")),
             created_by_user_id=getattr(current_user, "id", None),
         )
     except OzonBulkUploadError as exc:
@@ -835,7 +876,81 @@ def retry(job_uid: str):
             "ozon_bulk_uploads.detail",
             job_uid=job_uid,
         ))
-    return _created_response(job)
+    return _created_response(acceptance)
+
+
+@ozon_bulk_uploads_bp.route("/review", methods=["GET"])
+@ozon_bulk_uploads_bp.route("/api/review", methods=["GET"])
+@login_required
+def review():
+    from services.ozon_upload_review import OzonUploadReviewService
+    seller_id = _seller_id()
+    as_json = request.path.endswith("/api/review") or _wants_json()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        allowed = {"account_id", "draft_ids", "parent_prepare_job_uid", "page"}
+        if set(request.args) - allowed or any(len(request.args.getlist(key)) != 1 for key in request.args):
+            raise OzonBulkUploadValidationError("Неизвестный или повторяющийся параметр просмотра")
+        raw_ids = request.args.get("draft_ids", "")
+        if len(raw_ids) > 4200:
+            raise OzonBulkUploadValidationError("Слишком большой список черновиков")
+        draft_ids = _bounded_integer_list(raw_ids.split(","), "draft_ids")
+        parent_uid = request.args.get("parent_prepare_job_uid") or None
+        if parent_uid is not None and not re.fullmatch(r"ozon-upload-[0-9a-f]{32}", parent_uid):
+            raise OzonBulkUploadValidationError("Некорректный запуск подготовки")
+        document = OzonUploadReviewService.document(
+            seller_id=seller_id,
+            account_id=_integer(request.args.get("account_id"), "account_id"),
+            draft_ids=draft_ids,
+            page=_integer(request.args.get("page", "1"), "page"),
+            parent_prepare_job_uid=parent_uid,
+        )
+        document["csrf_token"] = generate_csrf()
+        if as_json:
+            response = jsonify({"success": True, "review": document})
+        else:
+            from flask import make_response
+            document["request_key"] = secrets.token_urlsafe(24)
+            document["expected_versions"] = {
+                str(item["draft_id"]): item["version"] for item in document["items"]
+                if item["selectable"]
+            }
+            response = make_response(render_template("ozon_upload_review.html", review=document))
+    except OzonBulkUploadError as exc:
+        if not as_json:
+            return _error_response(exc)
+        response = jsonify({"success": False, "error": str(exc), "code": exc.code})
+        response.status_code = exc.status_code
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@ozon_bulk_uploads_bp.route("/api/by-request", methods=["GET"])
+@login_required
+def find_by_request():
+    seller_id = _seller_id()
+    if seller_id is None:
+        return jsonify({"success": False, "error": "Seller account required"}), 403
+    try:
+        if set(request.args) != {"account_id"} or len(request.args.getlist("account_id")) != 1:
+            raise OzonBulkUploadValidationError("Укажите один account_id")
+        job = OzonBulkUploadService.find_by_request_key(
+            seller_id=seller_id,
+            account_id=_integer(request.args.get("account_id"), "account_id"),
+            request_key=_request_key(request.headers.get("X-Upload-Request-Key")),
+        )
+        response = jsonify({
+            "success": True,
+            "run": OzonBulkUploadService.public_document(job, detail=True),
+            "csrf_token": generate_csrf(),
+        })
+    except OzonBulkUploadError as exc:
+        response = jsonify({"success": False, "error": str(exc), "code": exc.code,
+                            "csrf_token": generate_csrf()})
+        response.status_code = exc.status_code
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @ozon_bulk_uploads_bp.route("/api/<job_uid>", methods=["GET"])

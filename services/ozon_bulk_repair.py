@@ -26,6 +26,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import joinedload
 
 from models import (
+    ImportedProduct,
     MarketplaceAttributeDefinition,
     MarketplaceAttributeValue,
     MarketplaceListing,
@@ -38,6 +39,7 @@ from services.marketplace_drafts import (
     MarketplaceDraftService,
     MarketplaceDraftValidationError,
 )
+from services.source_photo_display import imported_photo_previews
 from services.marketplace_operation_locks import (
     release_account_operation_lock,
     try_account_operation_lock,
@@ -190,7 +192,9 @@ class OzonBulkRepairService:
         draft_ids = [item["draft_id"] for item in items]
         rows = MarketplaceProductDraft.query.options(
             joinedload(MarketplaceProductDraft.account),
-            joinedload(MarketplaceProductDraft.imported_product),
+            joinedload(MarketplaceProductDraft.imported_product).joinedload(
+                ImportedProduct.supplier_product
+            ),
             joinedload(MarketplaceProductDraft.product_type).joinedload(
                 MarketplaceProductType.category
             ),
@@ -211,6 +215,8 @@ class OzonBulkRepairService:
             if (
                 draft.imported_product_id != item.get("imported_product_id")
                 or draft.account_id != account_id
+                or draft.imported_product is None
+                or draft.imported_product.seller_id != seller_id
             ):
                 raise cls._conflict(
                     "ozon_repair_draft_identity_changed",
@@ -239,6 +245,8 @@ class OzonBulkRepairService:
             else cls._stored_json(draft.validation_result_json, {})
         )
         errors = value.get("errors") if isinstance(value, dict) else []
+        if not isinstance(errors, list):
+            return []
         return [
             item
             for item in errors
@@ -795,6 +803,11 @@ class OzonBulkRepairService:
                         definition is not None
                         and definition.is_collection
                     ),
+                    "max_values": min(
+                        (definition.max_value_count or cls.MAX_ATTRIBUTE_VALUES)
+                        if definition is not None and definition.is_collection else 1,
+                        cls.MAX_ATTRIBUTE_VALUES,
+                    ),
                     "replaces_invalid": replaces_invalid,
                     "suggestions": (
                         OzonComplianceSuggestionService.tnved_suggestions(
@@ -874,6 +887,13 @@ class OzonBulkRepairService:
                 "repair_error": item.get("repair_error") or "",
                 "action": action,
                 "product_type_id": draft.product_type_id,
+                "product_type_name": draft.product_type.name if draft.product_type else "",
+                "photo_url": next(iter(imported_photo_previews(draft.imported_product).values()), None),
+                "type_change_impact": {
+                    "attributes": len(raw_attributes) if isinstance(raw_attributes, list) else 0,
+                    "complex_groups": len(cls._stored_json(draft.complex_attributes_json, [])),
+                    "removals": len(cls._stored_json(draft.attribute_removals_json, [])),
+                },
                 "price_rub": commercial.get("price", ""),
                 "description": content.get("description", ""),
                 **cls._physical_export_values(draft),
@@ -924,7 +944,7 @@ class OzonBulkRepairService:
             public_groups.append(group)
 
         bulk_fields = [
-            {"key": "price_rub", "label": "Цена, ₽"},
+            {"key": "price_rub", "label": "Цена продавца, ₽"},
             {
                 "key": "package_width_mm",
                 "label": "Ширина упаковки, мм",
@@ -961,7 +981,7 @@ class OzonBulkRepairService:
             )
             bulk_fields.append({
                 "key": f"attribute:{external_id}",
-                "label": f"{label} · Ozon {external_id}",
+                "label": label,
             })
         if len(bulk_fields) > cls.MAX_COLUMNS:
             raise cls._conflict(
@@ -1022,7 +1042,22 @@ class OzonBulkRepairService:
             account_id=document["account_id"],
             items=[item],
         )[draft_id]
-        if external_attribute_id not in cls._missing_attribute_ids(draft):
+        # The editor derives its fields from current local facts. Search must
+        # use that same projection, including replacements after schema drift;
+        # an older (or absent) saved validation is not the current form.
+        validation_result = MarketplaceDraftService._build_validation_result(draft)
+        editable_ids = set(cls._missing_attribute_ids(
+            draft, validation_result=validation_result,
+        ))
+        editable_ids.update(
+            candidate["attribute_id"]
+            for candidate in cls._schema_cleanup_candidates(
+                draft=draft, definitions=cls._definition_map([draft]),
+                validation_result=validation_result,
+            )
+            if candidate["replacement_required"]
+        )
+        if external_attribute_id not in editable_ids:
             raise OzonBulkUploadValidationError(
                 "Атрибут не относится к недостающим полям этой строки"
             )
@@ -2004,6 +2039,7 @@ class OzonBulkRepairService:
             "excluded": 0,
             "failed": 0,
             "errors": [],
+            "rows": [],
         }
         try:
             # Re-read after the account claim. A stale editor/workbook must not
@@ -2026,6 +2062,8 @@ class OzonBulkRepairService:
                 item = item_by_draft.get(row["draft_id"])
                 if item is None:
                     report["failed"] += 1
+                    report["rows"].append({"draft_id": row["draft_id"], "status": "failed",
+                        "message": "Статус строки изменился; обновите страницу"})
                     report["errors"].append({
                         "row": row.get("row_number"),
                         "draft_id": row["draft_id"],
@@ -2077,6 +2115,8 @@ class OzonBulkRepairService:
                         item.pop("repair_error", None)
                         report["excluded"] += 1
                         OzonBulkUploadService._persist(job, document)
+                        report["rows"].append({"draft_id": draft.id, "status": "excluded",
+                                               "version": draft.version})
                         continue
 
                     attribute_keys = row.get(
@@ -2133,6 +2173,9 @@ class OzonBulkRepairService:
                             expected_version=draft.version,
                             patch=patch,
                             corrected_by_user_id=corrected_by_user_id,
+                            # This batch already validated its own reviewed
+                            # category/reset contract above; no single-draft token.
+                            category_review_required=False,
                         )
                         report["updated"] += 1
                     draft = MarketplaceDraftService.validate_draft(
@@ -2147,10 +2190,14 @@ class OzonBulkRepairService:
                     item.pop("repair_error", None)
                     report[outcome["status"]] += 1
                     OzonBulkUploadService._persist(job, document)
+                    report["rows"].append({"draft_id": draft.id, "status": outcome["status"],
+                                           "version": draft.version})
                 except MarketplaceDraftError as exc:
                     db.session.rollback()
                     report["failed"] += 1
                     safe_message = cls._safe_text(exc, 500)
+                    report["rows"].append({"draft_id": row["draft_id"], "status": "failed",
+                                           "message": safe_message})
                     if len(report["errors"]) < 30:
                         report["errors"].append({
                             "row": row.get("row_number"),

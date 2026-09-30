@@ -1,0 +1,37 @@
+<section id="ozon-reference-review" class="orv" x-ignore v-cloak v-show="review || error"
+         data-url="{{ url_for('marketplaces.ozon_attribute_review', attribute_id=attribute.id) }}"
+         aria-label="Проверка изменений справочника">
+    <div class="orv-head">
+        <h2 v-text="title || 'Проверка справочника'"></h2>
+        <button class="sh-btn sh-btn--secondary sh-btn--sm" type="button" @click="load" :disabled="loading || confirming || stopped" v-text="loading ? 'Загрузка…' : 'Обновить данные'"></button>
+    </div>
+    <p v-if="error" class="orv-error" role="alert" v-text="error"></p>
+    <template v-if="review">
+        <p>Полный ответ Ozon содержит существенно меньше значений. Проверьте изменения для этого типа товара. Подтверждение запускает повторную сверку: новый список применяется только при точном совпадении.</p>
+        <p>Получено <time :datetime="review.observed_at" v-text="date(review.observed_at)"></time>. Подтверждение до <time :datetime="review.expires_at" v-text="date(review.expires_at)"></time>.</p>
+        <div class="orv-counts"><span>В сохранённом словаре<strong v-text="review.previous_count"></strong></span><span>В новом ответе Ozon<strong v-text="review.candidate_count"></strong></span></div>
+        <p v-if="review.status === 'approved'" class="orv-note" role="status">Подтверждение сохранено. Фоновая задача повторно загрузит словарь из Ozon. Эту страницу можно закрыть.</p>
+        <p v-else-if="review.status === 'applied'" class="orv-note" role="status">Повторная сверка завершена. <a href="">Открыть обновлённый словарь</a></p>
+        <p v-else-if="(!review.current || !review.can_approve) && !error" class="orv-note">Это сравнение больше нельзя подтвердить. Обновите словарь кнопкой в заголовке страницы и проверьте новый результат.</p>
+        <template v-if="review.current && ['pending_review', 'approved'].includes(review.status)">
+            <div class="orv-tabs" role="group" aria-label="Списки значений">
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="loading || confirming || stopped" :aria-pressed="mode === 'removed'" @click="setMode('removed')">Исчезли из Ozon</button>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="loading || confirming || stopped" :aria-pressed="mode === 'current'" @click="setMode('current')">Новый список</button>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="loading || confirming || stopped" :aria-pressed="mode === 'changed'" @click="setMode('changed')">Изменились названия</button>
+            </div>
+            <div class="orv-list" tabindex="0" aria-label="Значения справочника" :aria-busy="loading">
+                <ul><li v-for="row in review.rows" :key="row.id"><small v-text="row.id"></small><span><span v-text="row.value"></span><small v-if="row.previous"><br>Раньше: <span v-text="row.previous"></span></small><small v-if="row.added"> · Новое</small></span></li></ul>
+                <p v-if="!review.rows.length">В этом списке нет значений.</p>
+            </div>
+            <nav v-if="pages > 1" class="orv-nav" aria-label="Страницы сравнения">
+                <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" :disabled="page <= 1 || loading || confirming" @click="move(-1)">Назад</button>
+                <span v-text="`${page} / ${pages}`"></span>
+                <button type="button" class="sh-btn sh-btn--ghost sh-btn--sm" :disabled="page >= pages || loading || confirming" @click="move(1)">Дальше</button>
+            </nav>
+            <template v-if="review.can_approve">
+                <label class="orv-confirm"><input type="checkbox" v-model="confirmed" :disabled="confirming"><span>Я проверил изменения для этого типа товара. Разрешаю применить новый список после повторной сверки с Ozon.</span></label>
+                <button type="button" class="sh-btn sh-btn--accent sh-btn--md" :disabled="!confirmed || loading || confirming" @click="approve" v-text="confirming ? 'Сохраняем подтверждение…' : 'Подтвердить и повторно сверить'"></button>
+            </template>
+        </template>
+    </template>
+</section>

@@ -1,0 +1,72 @@
+.oai[v-cloak] { display:none; }
+.oai,.oai-boot { max-width:1100px; margin:0 auto; padding:28px 20px 70px; color:var(--text); }
+.oai-head { max-width:760px; }
+.oai-back { color:var(--accent); text-decoration:underline; text-underline-offset:3px; font-size:13px; }
+.oai-eyebrow { margin:28px 0 8px; color:var(--accent); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; }
+.oai h1 { margin:0; font-size:clamp(30px,4vw,46px); line-height:1.12; letter-spacing:-.035em; }
+.oai-head p:last-child { color:var(--text-secondary); line-height:1.6; font-size:14px; }
+.oai-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:27px 0 16px; }
+.oai-summary > div { min-width:0; padding:17px; border:1px solid var(--border); border-radius:9px; background:var(--bg-card); }
+.oai-summary span,.oai-summary strong { display:block; overflow-wrap:anywhere; }
+.oai-summary span { color:var(--text-secondary); font-size:11px; }
+.oai-summary strong { margin-top:6px; font-size:17px; }
+.oai-actions { display:flex; flex-wrap:wrap; gap:9px; margin:16px 0; }
+.oai-help { color:var(--text-secondary); font-size:12px; line-height:1.5; }
+.oai-message { margin:16px 0; padding:13px 16px; background:var(--bg-card); border:1px solid var(--border); border-left:3px solid var(--warn); border-radius:7px; font-size:13px; overflow-wrap:anywhere; }
+.oai-message--error { border-left-color:var(--danger); }
+.oai-list { margin:22px 0; padding:0; list-style:none; border:1px solid var(--border); border-radius:9px; background:var(--bg-card); overflow:hidden; }
+.oai-list li { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 17px; }
+.oai-list li + li { border-top:1px solid var(--border); }
+.oai-list li > div { display:flex; align-items:start; gap:13px; min-width:0; }
+.oai-list strong,.oai-list small { display:block; overflow-wrap:anywhere; }
+.oai-list strong { font-size:13px; }
+.oai-list small { margin-top:3px; font-size:11px; color:var(--text-secondary); }
+.oai-list .sh-btn { flex-shrink:0; }
+.oai-number { display:grid; place-items:center; min-width:40px; height:40px; padding:0 5px; border-radius:6px; background:var(--bg-hover); font-size:11px; color:var(--text-secondary); }
+.oai-dialog { width:min(94vw,520px); max-height:90vh; padding:24px; border:1px solid var(--border); border-radius:10px; background:var(--bg-card); color:var(--text); overscroll-behavior:contain; }
+.oai-dialog::backdrop { background:#111a; }
+.oai-dialog h2 { margin:0; font-size:22px; }
+.oai-dialog p { color:var(--text-secondary); font-size:13px; line-height:1.55; }
+.oai-dialog label { display:flex; gap:10px; align-items:start; font-size:13px; line-height:1.5; }
+.oai-dialog input { width:18px; height:18px; flex:0 0 18px; accent-color:var(--accent); }
+.oai :is(a,button,input):focus-visible,.oai-dialog :is(a,button,input):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.oai button,.oai-dialog button { touch-action:manipulation; }
+@media(max-width:700px) { .oai-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } .oai-list li { align-items:start; flex-direction:column; } }
+@media(max-width:380px) { .oai,.oai-boot { padding:20px 12px 58px; } .oai-summary > div { padding:12px; } .oai-summary strong { font-size:15px; } .oai-list .sh-btn { width:100%; } }
+
+.ode-ai-review { scroll-margin-top:90px; }
+.ode-ai-review .ode-section-heading { align-items:center; }
+.ode-ai-review .ode-section-heading > div { min-width:0; }
+.ode-ai-review .ode-section-heading .sh-btn { flex:0 0 auto; }
+.ode-ai-review .ode-message { flex-wrap:wrap; }
+.ode-ai-review .ode-message > span { flex:1 1 230px; }
+.ode-ai-review .ode-message .ode-actions { flex-wrap:wrap; }
+.ode-ai-list { display:grid; gap:10px; margin-top:16px; }
+.ode-ai-item { display:grid; grid-template-columns:44px minmax(0,1fr); align-items:start; gap:9px; padding:15px; border:1px solid var(--border); border-radius:8px; background:var(--bg-card); min-width:0; }
+.ode-ai-item.is-proposed { border-left:3px solid var(--accent); }
+.ode-ai-item.is-accepted { border-left:3px solid var(--ok); }
+.ode-ai-item > div { min-width:0; overflow-wrap:anywhere; }
+.ode-ai-check { display:grid; place-items:center; width:44px; height:44px; cursor:pointer; }
+.ode-ai-check input { width:18px; height:18px; accent-color:var(--accent); }
+.ode-ai-check-spacer { display:block; width:44px; }
+.ode-ai-item-head { display:flex; justify-content:space-between; align-items:start; flex-wrap:wrap; gap:6px 14px; }
+.ode-ai-item-head strong { font-size:13px; }
+.ode-ai-item-head span,.ode-ai-field-badge { color:var(--accent); font-size:11px; font-weight:650; }
+.ode-ai-item p { margin:8px 0; font-size:12px; line-height:1.5; }
+.ode-ai-item small { color:var(--text-secondary); font-size:11px; }
+.ode-ai-item details { margin-top:10px; font-size:12px; }
+.ode-ai-item summary { cursor:pointer; color:var(--accent); }
+.ode-ai-item ul { margin:9px 0 0; padding-left:20px; }
+.ode-ai-item li { margin:8px 0; overflow-wrap:anywhere; }
+.ode-ai-item li span { display:block; color:var(--text-secondary); font-size:10px; }
+.ode-ai-item q { quotes:"«" "»"; }
+.ode-ai-actions { display:flex; align-items:center; flex-wrap:wrap; gap:9px; margin-top:15px; }
+.ode-ai-actions > span { margin-right:auto; font-size:12px; color:var(--text-secondary); }
+.ode-ai-dialog { overscroll-behavior:contain; overflow-wrap:anywhere; }
+.ode-ai-dialog .ode-checkbox { min-height:44px; align-items:center; font-size:12px; line-height:1.5; }
+.ode-ai-dialog .ode-checkbox input { width:18px; height:18px; }
+.ode-ai-review :is(button,input,summary,a):focus-visible,.ode-ai-dialog :is(button,input):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.ode-ai-review button,.ode-ai-dialog button { touch-action:manipulation; }
+.ode-attribute--ai { background:color-mix(in srgb,var(--accent) 5%,transparent); padding-inline:10px; border-radius:6px; }
+@media(max-width:700px) { .ode-ai-review .ode-section-heading { align-items:stretch; flex-direction:column; } .ode-ai-review .ode-section-heading .sh-btn { align-self:start; } }
+@media(max-width:380px) { .ode-ai-item { padding:10px 8px; gap:5px; } .ode-ai-actions .sh-btn { width:100%; } .ode-ai-dialog { padding:15px; } }

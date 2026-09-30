@@ -270,6 +270,49 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    # One explicit connect/sync request survives page closure and restarts.
+    # No new thread pool: one account / one fully validated read page per tick.
+    from services.ozon_account_sync import run_account_sync_tick
+    scheduler.add_job(
+        func=lambda: run_account_sync_tick(flask_app),
+        trigger=IntervalTrigger(seconds=10),
+        id='ozon_account_sync',
+        name='Check Ozon connection and load requested catalog in background',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    from services.ozon_quality_queue import run_quality_tick
+    scheduler.add_job(
+        func=lambda: run_quality_tick(flask_app),
+        trigger=IntervalTrigger(seconds=10),
+        id='ozon_quality_recompute',
+        name='Recompute requested Ozon quality from local facts',
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+
+    from services.ozon_credential_notices import run_credential_notice_tick
+    scheduler.add_job(
+        func=lambda: run_credential_notice_tick(flask_app),
+        trigger=IntervalTrigger(minutes=15),
+        id='ozon_credential_notices',
+        next_run_time=datetime.utcnow() + timedelta(seconds=60),
+        name='Warn sellers before observed Ozon key expiry (local only)',
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+
+    from services.ozon_catalog_scheduler import run_catalog_discovery_tick
+    scheduler.add_job(
+        func=lambda: run_catalog_discovery_tick(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='ozon_catalog_discovery',
+        name='Refresh stale Ozon catalogs through the durable read queue',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     # Первый reference refresh не должен ждать сутки после нового deploy.
     scheduler.add_job(
         func=lambda: sync_marketplaces(flask_app),
@@ -400,6 +443,28 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         coalesce=True,
     )
 
+    # Local-only preparation has a separate short cadence: it neither occupies
+    # the provider poll's minute slot nor starts its own thread or executor.
+    scheduler.add_job(
+        func=lambda: prepare_ozon_uploads(flask_app),
+        trigger=IntervalTrigger(seconds=10),
+        id='prepare_ozon_uploads',
+        name='Prepare reviewed Ozon card batches locally',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    scheduler.add_job(
+        func=lambda: process_ozon_draft_ai_completions(flask_app),
+        trigger=IntervalTrigger(seconds=10),
+        id='process_ozon_draft_ai_completions',
+        name='Process optional local Ozon AI suggestions',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.add_job(
         func=lambda: reconcile_ozon_auto_publish_runs(flask_app),
         trigger=IntervalTrigger(minutes=1),
@@ -473,6 +538,17 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         id='wb_analytics_sync',
         name='Sync WB analytics data (sales, orders, feedbacks, realization)',
         replace_existing=True
+    )
+
+    # Explicit seller refreshes share the durable schedule/cooldown with cron.
+    scheduler.add_job(
+        func=lambda: sync_ozon_requested_reads(flask_app),
+        trigger=IntervalTrigger(seconds=10),
+        id='ozon_requested_reads',
+        name='Process requested Ozon refreshes (read-only)',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
     )
 
     # Ozon analytics is a separate account-scoped read model. A ten-minute
@@ -599,12 +675,42 @@ def init_scheduler(flask_app, *, retry_if_locked=True):
         replace_existing=True
     )
 
+    from services.wb_stock_sync import run_stock_sync_tick
+    scheduler.add_job(
+        func=lambda: run_stock_sync_tick(flask_app),
+        trigger=IntervalTrigger(minutes=1),
+        id='wb_warehouse_stocks',
+        name='Read bounded WB warehouse stock page',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    from services.scheduler_heartbeat import INTERVAL_SECONDS
+    scheduler.add_job(
+        func=publish_scheduler_heartbeat,
+        trigger=IntervalTrigger(seconds=INTERVAL_SECONDS),
+        id='scheduler_heartbeat', name='Observe scheduler executor progress',
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # Запускаем планировщик
     scheduler.start()
+    publish_scheduler_heartbeat()
 
     logger.info("✅ Product sync scheduler started")
 
     return scheduler
+
+
+def publish_scheduler_heartbeat():
+    if scheduler is None or not scheduler.running or _scheduler_lock_handle is None:
+        return
+    try:
+        from services.scheduler_heartbeat import publish
+        publish(_scheduler_lock_handle)
+    except Exception as exc:
+        logger.warning('Scheduler heartbeat unavailable: %s', type(exc).__name__)
 
 
 def process_marketplace_media_publications(flask_app):
@@ -1567,6 +1673,24 @@ def poll_ozon_marketplace_operations(flask_app, limit: int = 20):
         return result
 
 
+def prepare_ozon_uploads(flask_app):
+    """Short local-only work in the existing singleton scheduler pool."""
+    from models import db
+    from services.ozon_bulk_upload import OzonBulkUploadService
+
+    with flask_app.app_context():
+        try:
+            return OzonBulkUploadService.run_due_preparation(
+                run_limit=20, item_limit=40, seconds_budget=8,
+            )
+        except Exception:
+            db.session.rollback()
+            logger.exception('Ozon local upload preparation failed')
+            return {'selected': 0, 'processed_items': 0, 'failed': 1}
+        finally:
+            db.session.remove()
+
+
 def reconcile_ozon_auto_publish_runs(flask_app, limit: int = 50):
     """Update async auto-publish items from durable Ozon operation state."""
     from services.marketplace_auto_publish import OzonAutoPublishService
@@ -1632,86 +1756,137 @@ def poll_ozon_commercial_operations(flask_app, limit: int = 20):
             )
         return result
 
-def sync_ozon_analytics_accounts(flask_app, limit=3):
-    """Resume/start a bounded set of Ozon 30-day analytics snapshots."""
-    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 10:
-        return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 1}
+def sync_ozon_requested_reads(flask_app, limit=1):
+    """Advance one due period/warehouse/FBS read in the existing shared slot."""
     with flask_app.app_context():
         if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
-            return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0}
-        from models import Marketplace, SellerMarketplaceAccount, db
-        from services.marketplace_analytics import MarketplaceAnalyticsService
+            return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0, 'unavailable': 0}
+        from services.ozon_read_scheduler import run_requested_reads
+        return run_requested_reads(limit=limit)
+
+
+def sync_ozon_analytics_accounts(flask_app, limit=3):
+    """Resume analytics and rotate bounded local quality assessments."""
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 10:
+        return {
+            'selected': 0,
+            'completed': 0,
+            'running': 0,
+            'failed': 1,
+            'quality_selected': 0,
+            'quality_processed': 0,
+            'quality_failed': 0,
+        }
+    with flask_app.app_context():
+        if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
+            return {
+                'selected': 0,
+                'completed': 0,
+                'running': 0,
+                'failed': 0,
+                'quality_selected': 0,
+                'quality_processed': 0,
+                'quality_failed': 0,
+            }
+        from sqlalchemy import case, func
+        from models import (
+            Marketplace,
+            MarketplaceListing,
+            MarketplaceQualityAssessment,
+            SellerMarketplaceAccount,
+            db,
+        )
+        from services.ozon_read_scheduler import run_due_reads
         from services.marketplace_quality import MarketplaceQualityService
 
-        candidates = SellerMarketplaceAccount.query.join(Marketplace).filter(
+        current_time = datetime.utcnow()
+        result = run_due_reads(domain='analytics', limit=limit, now=current_time)
+        result.update(quality_selected=0, quality_processed=0, quality_failed=0)
+
+        last_quality_at = db.session.query(
+            func.min(MarketplaceQualityAssessment.evaluated_at)
+        ).join(
+            MarketplaceListing,
+            MarketplaceListing.id == MarketplaceQualityAssessment.listing_id,
+        ).filter(
+            MarketplaceQualityAssessment.seller_id
+            == SellerMarketplaceAccount.seller_id,
+            MarketplaceQualityAssessment.marketplace_id
+            == SellerMarketplaceAccount.marketplace_id,
+            MarketplaceQualityAssessment.account_id
+            == SellerMarketplaceAccount.id,
+            MarketplaceListing.seller_id
+            == SellerMarketplaceAccount.seller_id,
+            MarketplaceListing.marketplace_id
+            == SellerMarketplaceAccount.marketplace_id,
+            MarketplaceListing.account_id == SellerMarketplaceAccount.id,
+            MarketplaceListing.is_available.is_(True),
+            MarketplaceListing.is_archived.is_(False),
+        ).correlate(SellerMarketplaceAccount).scalar_subquery()
+        active_listing_exists = db.session.query(
+            MarketplaceListing.id
+        ).filter(
+            MarketplaceListing.seller_id
+            == SellerMarketplaceAccount.seller_id,
+            MarketplaceListing.marketplace_id
+            == SellerMarketplaceAccount.marketplace_id,
+            MarketplaceListing.account_id == SellerMarketplaceAccount.id,
+            MarketplaceListing.is_available.is_(True),
+            MarketplaceListing.is_archived.is_(False),
+        ).exists()
+        quality_accounts = SellerMarketplaceAccount.query.join(
+            Marketplace
+        ).filter(
             Marketplace.code == 'ozon',
             Marketplace.is_active.is_(True),
             SellerMarketplaceAccount.is_active.is_(True),
             SellerMarketplaceAccount.connection_status == 'connected',
+            active_listing_exists,
         ).order_by(
+            case((last_quality_at.is_(None), 0), else_=1).asc(),
+            last_quality_at.asc(),
             SellerMarketplaceAccount.is_default.desc(),
             SellerMarketplaceAccount.id.asc(),
-        ).limit(50).all()
-        due = []
-        current_time = datetime.utcnow()
-        for account in candidates:
-            running = MarketplaceAnalyticsService._running_run(
-                seller_id=account.seller_id,
-                account_id=account.id,
-                period_code='30d',
-                now=current_time,
-            )
-            if running is not None:
-                due.append(account)
-            else:
-                cached = MarketplaceAnalyticsService._fresh_cached_sync(
-                    seller_id=account.seller_id,
-                    account_id=account.id,
-                    period_code='30d',
-                    now=current_time,
-                    today=current_time.date(),
-                )
-                if cached is None:
-                    due.append(account)
-            if len(due) >= limit:
-                break
-
-        result = {'selected': len(due), 'completed': 0, 'running': 0, 'failed': 0}
-        for account in due:
+        ).limit(limit).all()
+        result['quality_selected'] = len(quality_accounts)
+        for account in quality_accounts:
             try:
-                run = MarketplaceAnalyticsService.sync_account(
-                    seller_id=account.seller_id,
-                    account_id=account.id,
-                    period_code='30d',
-                    force=False,
-                    max_pages=2,
-                    now=current_time,
-                    today=current_time.date(),
-                )
-                result['completed' if run.status == 'completed' else 'running'] += 1
-                if (
-                    run.status == 'completed'
-                    and run.completed_at
-                    and run.completed_at >= current_time - timedelta(minutes=2)
-                ):
-                    MarketplaceQualityService.recompute_account(
+                quality_result = (
+                    MarketplaceQualityService.recompute_next_account_batch(
                         seller_id=account.seller_id,
                         account_id=account.id,
-                        limit=500,
+                        limit=MarketplaceQualityService.MAX_BATCH,
                         now=current_time,
                     )
+                )
+                result['quality_processed'] += int(
+                    quality_result.get('processed') or 0
+                )
             except Exception as exc:
                 db.session.rollback()
-                result['failed'] += 1
+                result['quality_failed'] += 1
                 logger.error(
-                    'Ozon analytics scheduler failed for account=%s: %s',
+                    'Ozon quality scheduler failed for account=%s: %s',
                     account.id,
                     type(exc).__name__,
                 )
-        if result['selected'] or result['failed']:
+        if (
+            result['selected']
+            or result['failed']
+            or result['quality_selected']
+            or result['quality_failed']
+        ):
             logger.info(
-                'Ozon analytics scheduler: selected=%s completed=%s running=%s failed=%s',
-                result['selected'], result['completed'], result['running'], result['failed'],
+                'Ozon analytics scheduler: selected=%s completed=%s running=%s '
+                'failed=%s quality_selected=%s quality_processed=%s '
+                'quality_failed=%s',
+                result['selected'],
+                result['completed'],
+                result['running'],
+                result['failed'],
+                result['quality_selected'],
+                result['quality_processed'],
+                result['quality_failed'],
             )
         return result
 
@@ -1723,72 +1898,9 @@ def sync_ozon_fulfillment_accounts(flask_app, limit=2):
     with flask_app.app_context():
         if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
             return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0}
-        from models import (
-            Marketplace,
-            MarketplaceFulfillmentSync,
-            SellerMarketplaceAccount,
-            db,
-        )
-        from services.marketplace_fulfillment import MarketplaceFulfillmentService
+        from services.ozon_read_scheduler import run_due_reads
 
-        current_time = datetime.utcnow()
-        current_date = current_time.date()
-        candidates = SellerMarketplaceAccount.query.join(Marketplace).filter(
-            Marketplace.code == 'ozon',
-            Marketplace.is_active.is_(True),
-            SellerMarketplaceAccount.is_active.is_(True),
-            SellerMarketplaceAccount.connection_status == 'connected',
-        ).order_by(
-            SellerMarketplaceAccount.is_default.desc(),
-            SellerMarketplaceAccount.id.asc(),
-        ).limit(50).all()
-        due = []
-        for account in candidates:
-            running = MarketplaceFulfillmentSync.query.filter_by(
-                seller_id=account.seller_id,
-                account_id=account.id,
-                status='running',
-            ).first()
-            latest = MarketplaceFulfillmentService._latest_completed(
-                seller_id=account.seller_id,
-                account_id=account.id,
-                period_code='30d',
-            )
-            period_start = current_date - timedelta(days=29)
-            fresh = (
-                latest is not None
-                and latest.period_start == period_start
-                and latest.period_end == current_date
-                and latest.completed_at is not None
-                and latest.completed_at
-                >= current_time - MarketplaceFulfillmentService.CACHE_TTL
-            )
-            if running is not None or not fresh:
-                due.append(account)
-            if len(due) >= limit:
-                break
-
-        result = {'selected': len(due), 'completed': 0, 'running': 0, 'failed': 0}
-        for account in due:
-            try:
-                run = MarketplaceFulfillmentService.sync_account(
-                    seller_id=account.seller_id,
-                    account_id=account.id,
-                    period_code='30d',
-                    force=False,
-                    max_pages=5,
-                    now=current_time,
-                    today=current_date,
-                )
-                result['completed' if run.status == 'completed' else 'running'] += 1
-            except Exception as exc:
-                db.session.rollback()
-                result['failed'] += 1
-                logger.error(
-                    'Ozon fulfillment scheduler failed for account=%s: %s',
-                    account.id,
-                    type(exc).__name__,
-                )
+        result = run_due_reads(domain='fulfillment', limit=limit)
         if result['selected'] or result['failed']:
             logger.info(
                 'Ozon fulfillment scheduler: selected=%s completed=%s running=%s failed=%s',
@@ -1807,77 +1919,9 @@ def sync_ozon_finance_accounts(flask_app, limit=2):
     with flask_app.app_context():
         if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
             return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0}
-        from models import (
-            Marketplace,
-            MarketplaceFinanceSync,
-            SellerMarketplaceAccount,
-            db,
-        )
-        from services.marketplace_finance import MarketplaceFinanceService
+        from services.ozon_read_scheduler import run_due_reads
 
-        current_time = datetime.utcnow()
-        current_date = current_time.date()
-        candidates = SellerMarketplaceAccount.query.join(Marketplace).filter(
-            Marketplace.code == 'ozon',
-            Marketplace.is_active.is_(True),
-            SellerMarketplaceAccount.is_active.is_(True),
-            SellerMarketplaceAccount.connection_status == 'connected',
-        ).order_by(
-            SellerMarketplaceAccount.is_default.desc(),
-            SellerMarketplaceAccount.id.asc(),
-        ).limit(50).all()
-        due = []
-        period_start = current_date - timedelta(days=29)
-        for account in candidates:
-            running = MarketplaceFinanceSync.query.filter_by(
-                seller_id=account.seller_id,
-                account_id=account.id,
-                status='running',
-            ).first()
-            latest = MarketplaceFinanceService._latest_completed(
-                seller_id=account.seller_id,
-                account_id=account.id,
-                period_code='30d',
-            )
-            fresh = (
-                latest is not None
-                and latest.period_start == period_start
-                and latest.period_end == current_date
-                and latest.completed_at is not None
-                and latest.completed_at
-                >= current_time - MarketplaceFinanceService.CACHE_TTL
-                and latest.request_fingerprint
-                == MarketplaceFinanceService._run_fingerprint(
-                    period_start,
-                    current_date,
-                )
-            )
-            if running is not None or not fresh:
-                due.append(account)
-            if len(due) >= limit:
-                break
-
-        result = {'selected': len(due), 'completed': 0, 'running': 0, 'failed': 0}
-        for account in due:
-            try:
-                run = MarketplaceFinanceService.sync_account(
-                    seller_id=account.seller_id,
-                    account_id=account.id,
-                    period_code='30d',
-                    force=False,
-                    max_pages=5,
-                    now=current_time,
-                    today=current_date,
-                )
-                result['completed' if run.status == 'completed' else 'running'] += 1
-            except Exception as exc:
-                db.session.rollback()
-                result['failed'] += 1
-                logger.error(
-                    'Ozon finance scheduler failed for account=%s: %s',
-                    account.id,
-                    type(exc).__name__,
-                )
+        result = run_due_reads(domain='finance', limit=limit)
         if result['selected'] or result['failed']:
             logger.info(
                 'Ozon finance scheduler: selected=%s completed=%s running=%s failed=%s',
@@ -1892,9 +1936,9 @@ def sync_ozon_finance_accounts(flask_app, limit=2):
 def sync_ozon_inbox_accounts(flask_app, limit=2):
     """Resume/start bounded capability-proven Ozon inbox read sweeps."""
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 10:
-        return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 1}
+        return {'selected': 0, 'completed': 0, 'running': 0, 'unavailable': 0, 'failed': 1}
     with flask_app.app_context():
-        from models import Marketplace, SellerMarketplaceAccount, db
+        from models import db
         from services.marketplace_inbox import MarketplaceInboxService
 
         current_time = datetime.utcnow()
@@ -1913,88 +1957,11 @@ def sync_ozon_inbox_accounts(flask_app, limit=2):
                 type(exc).__name__,
             )
         if not flask_app.config.get('MARKETPLACE_OZON_ENABLED', False):
-            return {'selected': 0, 'completed': 0, 'running': 0, 'failed': 0}
-        period_start, period_end = MarketplaceInboxService._period(
-            today=current_date,
-        )
-        candidates = SellerMarketplaceAccount.query.join(Marketplace).filter(
-            Marketplace.code == 'ozon',
-            Marketplace.is_active.is_(True),
-            SellerMarketplaceAccount.is_active.is_(True),
-            SellerMarketplaceAccount.connection_status == 'connected',
-        ).order_by(
-            SellerMarketplaceAccount.is_default.desc(),
-            SellerMarketplaceAccount.id.asc(),
-        ).limit(50).all()
-        due = []
-        for account in candidates:
-            capabilities = set(account.capabilities)
-            for source_kind, required in (
-                ('review', 'reviews_read'),
-                ('question', 'questions_read'),
-            ):
-                if required not in capabilities:
-                    continue
-                if MarketplaceInboxService.access_denied_retry_after(
-                    seller_id=account.seller_id,
-                    account_id=account.id,
-                    source_kind=source_kind,
-                    now=current_time,
-                ) is not None:
-                    continue
-                running = MarketplaceInboxService._running_run(
-                    seller_id=account.seller_id,
-                    account_id=account.id,
-                    source_kind=source_kind,
-                    now=current_time,
-                )
-                fresh = None if running is not None else (
-                    MarketplaceInboxService._fresh_completed(
-                        seller_id=account.seller_id,
-                        account_id=account.id,
-                        source_kind=source_kind,
-                        period_start=period_start,
-                        period_end=period_end,
-                        now=current_time,
-                    )
-                )
-                if running is not None or fresh is None:
-                    due.append((account, source_kind))
-                if len(due) >= limit:
-                    break
-            if len(due) >= limit:
-                break
-
-        result = {'selected': len(due), 'completed': 0, 'running': 0, 'failed': 0}
-        for account, source_kind in due:
-            try:
-                run = MarketplaceInboxService.sync_kind(
-                    seller_id=account.seller_id,
-                    account_id=account.id,
-                    source_kind=source_kind,
-                    force=False,
-                    max_pages=3,
-                    now=current_time,
-                    today=current_date,
-                )
-                result['completed' if run.status == 'completed' else 'running'] += 1
-            except Exception as exc:
-                db.session.rollback()
-                result['failed'] += 1
-                logger.error(
-                    'Ozon inbox scheduler failed for account=%s kind=%s: %s',
-                    account.id,
-                    source_kind,
-                    type(exc).__name__,
-                )
-        if result['selected'] or result['failed']:
-            logger.info(
-                'Ozon inbox scheduler: selected=%s completed=%s running=%s failed=%s',
-                result['selected'],
-                result['completed'],
-                result['running'],
-                result['failed'],
-            )
+            return {'selected': 0, 'completed': 0, 'running': 0, 'unavailable': 0, 'failed': 0}
+        from services.ozon_read_scheduler import run_due_inbox_reads
+        result = run_due_inbox_reads(limit=limit, now=current_time)
+        if result['selected']:
+            logger.info('Ozon inbox durable reads: %s', result)
         return result
 
 
@@ -2195,3 +2162,19 @@ def reconcile_submitted_prices(flask_app):
                     api_client.close()
                 except Exception:  # noqa: BLE001
                     pass
+
+
+def process_ozon_draft_ai_completions(flask_app):
+    """A short coordinator tick; model HTTP runs in three bounded futures."""
+    with flask_app.app_context():
+        from models import db
+        try:
+            from services.ozon_draft_ai_worker import tick
+            return tick(seconds_budget=8,
+                allow_new=bool(flask_app.config.get('MARKETPLACE_OZON_ENABLED', False)))
+        except Exception as exc:
+            db.session.rollback()
+            flask_app.logger.error('Ozon AI coordinator deferred type=%s', type(exc).__name__)
+            return {'error': 'ai_coordinator_deferred'}
+        finally:
+            db.session.remove()

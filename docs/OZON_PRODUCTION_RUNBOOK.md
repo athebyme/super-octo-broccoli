@@ -367,6 +367,8 @@ dictionary search endpoints привязаны к тому же seller/run/draft
 `confirm_write`. После статуса `ready_to_retry` оператор отдельно нажимает
 «Повторить готовые» и ещё раз подтверждает возможный provider write.
 
+Основной repair UI работает на Vue; `/repair/classic` сохраняет прежнюю форму. JSON GET возвращает bounded editor и актуальный CSRF с `private, no-store`. Form-urlencoded apply с Accept JSON возвращает outcome/version каждой строки; новый GET после commit отделён от результата POST. После неизвестного ответа запрещён автоматический повтор: сначала сверка, затем явное разрешение conflicts. При повторном входе новый scoped GET обновляет CSRF без сброса ввода. Никакой repair GET не вызывает Ozon/LLM. Подробнее: `docs/design/ozon-bulk-repair-vue.md` и release receipt.
+
 ## 6. Проверка одного write
 
 Первый production-like smoke выполняется только на одной заранее выбранной
@@ -441,6 +443,16 @@ item означает partial/uncertain, а не success.
 
 ## 8. Аварийное отключение и восстановление
 
+### Предупреждения о сроке ключа и замена из двух вкладок
+
+`ozon_credential_notices` выполняет только локальную проверку наблюдённого срока: первый tick через 60 секунд после старта scheduler, затем раз в 15 минут. Один tick выбирает до 100 due accounts и создаёт до 25 seller-scoped уведомлений за 5 секунд. Пороги: 14/7/1 сутки и expired; после downtime создаётся только текущая степень. Неизвестный срок не даёт уведомления и не считается бессрочным. Проверка не расшифровывает ключи и не вызывает Ozon, LLM или Telegram.
+
+`marketplace_credential_notices` хранит dedup для текущей credential version и наблюдённой даты, независимо от прочтения/удаления Notification. Обе записи коммитятся вместе под account lock. SQLite writer захватывается с timeout 200 ms; прежний timeout восстанавливается до возврата соединения в pool. Не чистить journal ради повторного предупреждения.
+
+Замена ключа того же Client-Id проходит через `POST /marketplaces/accounts/<id>/reconnect` с обязательным `expected_version` просмотренного кабинета. Stale version возвращает 409 до изменения ключа. UI предлагает явное перечитывание и отдельную повторную отправку; фоновое обновление не заменяет просмотренную версию. Обычный endpoint настроек не принимает новый ключ существующего магазина. Старые ручные клиенты должны передавать версию из актуального account response.
+
+Durable uncertain операции сохраняются и не блокируют восстановление доступа. Занятый physical account lock временно блокирует замену. После замены права/срок сброшены в unknown, штатная фоновая проверка заново наблюдает доступ. Повторная публикация, коммерческая операция или сброс попыток из этого потока запрещены.
+
 ### Provider outage или подозрение на ошибочный write
 
 1. Выключить в указанном порядке:
@@ -455,6 +467,18 @@ item означает partial/uncertain, а не success.
 5. Для `uncertain` использовать manual stop только если бизнес принимает, что
    upstream outcome остаётся неизвестным. Эта кнопка освобождает local quota, но
    не превращает outcome в success/failed.
+
+### Кандидат: разбор исхода и карантин новых записей (ещё не production)
+
+Эта процедура относится к **коду рабочего дерева до приёмки и выпуска**. На текущем production `29a5f754e159…` действует прежняя остановка проверки из пункта 5 выше: она не запрещает новые price/stock/product операции того же товара. Не объявлять новый экран или карантин действующим на production до отдельного release receipt и read-only smoke.
+
+После выпуска владелец откроет исходную Ozon operation из `/marketplaces/operations/` и экран `/marketplaces/operations/<id>/review` («Разбор результата»). Страница сначала показывает сохранённые факты и исход Ozon, затем отдельное локальное решение. Остановка доступна только при `uncertain` после одной физической попытки и требует причины 10–1000 символов, просмотра области и явного подтверждения. Если точный offer/product ID из сохранённой отправки не согласуется, область будет **весь выбранный кабинет**; оператор обязан прочитать это до подтверждения. Товарная область останавливает новые create/update, archive/rollback, price и stock этого товара на всех складах, включая фото внутри полной карточки. Другие кабинеты и WB не затрагиваются. Новая idempotency key, queued job, batch, смена черновика или ключа запрет не обходят.
+
+Постановка решения оставляет исход Ozon `uncertain`, попытку и snapshots без изменений, прекращает автоматическую сверку исходной операции и освобождает только локальную квоту. Позже оператор может отдельно добавить запись в журнал. Для выяснения исхода допустима ручная **read**-сверка уже attempted операции; кнопка остановки, примечание и снятие сами не делают provider write. Снятие появляется только когда существующий typed workflow доказал исход **той же** операции и пользователь просмотрел свежие версии решения/операции. Чужая успешная price operation, текст «проверено», истекшее время и смена ключа не являются доказательством. При неизвестном исходе карантин остаётся активным; не обнулять attempt_count и не создавать blind repeat. После потерянного POST сначала перечитать `/review`; повторное сохранение не делать наугад.
+
+Модель и миграция кандидата: [модели](../models.py) (`MarketplaceWriteQuarantine`, `MarketplaceWriteQuarantineEvent`), [миграция](../migrations/migrate_add_marketplace_write_quarantine.py), [сервис решений](../services/ozon_write_quarantine.py) и [определение области](../services/ozon_quarantine_scope.py). Миграция добавляется **после** `migrate_add_marketplace_media_publications.py` во все три пути старта, без backfill исторических решений. Достаточная локальная проверка схемы и доказательств без сети: `venv/bin/python -m pytest -q tests/test_marketplace_write_quarantine_migration.py tests/test_ozon_write_quarantine.py tests/test_ozon_quarantine_outcome_contracts.py`. Это проверка кандидата, не команда деплоя; внешние backups владелец отложил, текущий порядок production backup выше самовольно не менять.
+
+Перед приёмкой читать число `active` карантинов и записей журнала через SQLite `mode=ro`/`PRAGMA query_only=ON`; ожидаются нули, потому что production smoke не принимает реальных решений. Если владелец сам поставил карантин, остановить автоматическую приёмку и изучить его решение — не удалять и не переписывать строки. Предыдущий runtime image `29a5f754e159…` не применяет новый запрет. Для rollback сначала остановить новые operator decisions и provider mutations (web, scheduler и другие writers), затем под этой паузой повторно прочитать persisted `active` holds и только после этого переключать runtime. Read-only count `0` до паузы не годится: новый hold мог появиться после чтения. Более простой безопасный rollback на старый image — заранее установить `MARKETPLACE_OZON_PUBLICATION_ENABLED=0`, `MARKETPLACE_OZON_COMMERCIAL_WRITES_ENABLED=0` и `MARKETPLACE_OZON_AUTO_PUBLISH_ENABLED=0` независимо от предварительного count; при любом active hold оставить все три write-флага выключенными до возвращения runtime с guard или отдельного принятого решения по запрету. При откате не удалять hold/event tables, SQLite WAL или общий Ozon rate ledger.
 
 ### Повреждение/потеря DB
 
@@ -556,3 +580,38 @@ Production defaults:
 `Content-Type: image/jpeg`, `X-Content-Type-Options: nosniff`, cache policy
 `public, max-age=31536000, immutable`. Неверная подпись обязана вернуть 403,
 несуществующий либо повреждённый digest — 404.
+
+
+## Локальные копии и host observer (26.09.2026)
+
+Внешнее хранилище отложено владельцем. Локальные ежедневные copies и observer работают отдельно от Flask/scheduler; потерю всего хоста этот контур не покрывает. Старые архивы не включены в автоматическую ротацию.
+
+```bash
+systemctl list-timers seller-local-\* --no-pager
+systemctl show seller-local-observer.service seller-local-backup.service -p Result -p ExecMainStatus
+venv/bin/python scripts/local_operations.py probe
+sudo systemctl start --no-block seller-local-backup.service
+```
+
+Backup timer: 03:15–03:20 Europe/Moscow ежедневно, Persistent catch-up. Его запуск не означает успешную копию: проверяйте private `~/.local/share/seller-hub/local-operations/backup-run.json`, где только `status=complete` и `round_trip_verified=true` подтверждают завершение. Manifest остаётся в `/app/data/backups/managed-daily`. Первая копия проходит фактическую распаковку в отдельный файл, проверку SHA/размера и полный `quick_check`; никакого cutover/replay/API write. Две последние managed copies сохраняются после накопления, старые archives в родительском каталоге остаются.
+
+Observer timer: примерно каждую минуту; `observation.json` содержит последнюю read-only проверку, `observer.json` — streak/confirmed incident и результат единственной попытки уведомления. Три последовательных bad samples вызывают агрегированное сообщение всем активным подписчикам deployment-бота, два healthy samples — recovery. Docker starting grace 15 минут не является healthy recovery. `notification.status=reserved|unconfirmed` не повторяется вручную без проверки доставки. `--no-notify` меняет state без отправки: используйте отдельный `--state-dir` для drills, иначе можно подавить настоящее событие.
+
+Для копирования нужно `размер SQLite по page_count + 4 GiB` свободного места (gzip cap 2 GiB + reserve 2 GiB). Перед запуском выполняется maintenance только восстанавливаемого JPEG cache: max 1 GiB, low-water 512 MiB. Web environment не меняется. Cache refill и рост БД могут исчерпать запас; observer это показывает. Во время реально захваченного `.backup.lock` учитывается рабочее место snapshot, но reserve ниже 2 GiB и длительность >35 минут остаются ошибками.
+
+При failed backup изучите безопасные `backup-run.json`, `observation.json` и status service; не заменяйте live DB/WAL и не удаляйте старые архивы. Container SIGALRM 1860s ограничивает exec даже после потери host Docker CLI, однако kill может оставить непринятый `.sqlite-backup-*`. Наличие папки не доказывает копию или отсутствие живой работы: сначала проверить flock/exec, ownership и доступный restore, затем отдельно решать судьбу конкретного временного каталога. Не использовать blanket prune. Повреждённый ownership journal не сбрасывать и чужие архивы в него не добавлять.
+
+Установка/обновление units: `sudo bash scripts/install-local-operations.sh`; она не restart-ит приложение. Сами helper sources находятся в host checkout, права записи в него дают operational control; не менять их во время backup. Services ограничены user/UMask/ProtectSystem/ProtectHome/ReadWritePaths/MemoryMax/TasksMax, но требуют доступа к Docker. Отказ самого observer виден в systemd journal; независимый внешний наблюдатель пока отсутствует.
+
+
+## Настройки магазина и журнал (принято 26.09, 18:38 МСК)
+
+План: `docs/design/ozon-account-settings-history.md`. `POST /marketplaces/accounts/<id>` теперь меняет только label/default VAT и требует exact Client-Id + `expected_version`. Для key replacement используется отдельный `/reconnect`. Default selection требует просмотренную пару `expected_default_id/version`, disconnect — просмотренную `expected_version`. 409 означает перечитать и проверить состояние, а не повторить тот же POST. Фоновые статусы не дают согласия изменить скрытую просмотренную версию формы.
+
+`GET /marketplaces/accounts/<id>/history?before_id=<cursor>` читает до 30 событий exact seller/account/marketplace с keyset cursor. История начинается с этого выпуска; её отсутствие не доказывает, что старых изменений не было. Key event не содержит ключа и не подтверждает доступ к API. `credential_version` — формат envelope; account version — ревизия состояния. Наружу не выдаются actor ID, crypto, fingerprint, raw provider body или внутренние версии из журнала.
+
+Миграция `migrate_add_marketplace_account_events.py` additive/fail-fast и включена во все startup paths. Mutation и audit в одной транзакции; ошибка audit откатывает account/default fan-out. При неработающей записи не вставлять события вручную и не отключать gate. Caller-owned dirty/flushed session должна завершиться до account service. Group lock + sorted account locks исключают одновременную смену основного кабинета и physical provider operation. Durable uncertain не блокирует безвредные настройки; запрет удаления ключа при attempted operations сохранён.
+
+Rollback приложения сохраняет новую таблицу: прежний образ её игнорирует. Не удалять журнал и не откатывать live DB ради runtime rollback. Production-проверка должна читать реальные формы/историю и сверять fingerprints; ключ, label и НДС владельца ради smoke не меняются. Внешнее backup-хранилище отложено, проверка миграции использует локальный подтверждённый архив.
+
+Приёмка этого пакета: `docs/operations/2026-09-26-ozon-account-settings-history.md`. Runtime `29a5f754e159…`; rollback `e81fd556ead03…`. Локальный verified backup/rehearsal и реальный read-only browser приняты; source keys/label/VAT ради проверки не менялись.

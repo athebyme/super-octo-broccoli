@@ -1095,20 +1095,26 @@ class ContentFactoryService:
         summary = cls._stored_object(listing.price_summary_json)
         values = summary.get('values')
         values = values if isinstance(values, dict) else {}
+        if summary.get('available') is False:
+            raise ContentFactoryScopeError("Цена товара Ozon не подтверждена. Обновите каталог перед подготовкой контента.")
         current = next((
             cls._finite_number(values.get(key))
-            for key in ('marketing_seller_price', 'price', 'retail_price')
+            for key in ('marketing_seller_price', 'price')
             if cls._finite_number(values.get(key)) is not None
-        ), 0.0)
+            and 0 < cls._finite_number(values.get(key)) <= 10**15
+        ), None)
+        if current is None:
+            raise ContentFactoryScopeError("Цена товара Ozon не подтверждена. Обновите каталог перед подготовкой контента.")
         old = next((
             cls._finite_number(values.get(key))
-            for key in ('old_price', 'retail_price')
+            for key in ('old_price',)
             if cls._finite_number(values.get(key)) is not None
+            and 0 < cls._finite_number(values.get(key)) <= 10**15
         ), 0.0)
         currency = summary.get('currency')
-        if currency not in (None, 'RUB'):
+        if currency != 'RUB':
             raise ContentFactoryScopeError(
-                "Контент-фабрика поддерживает Ozon-цены только в RUB"
+                "Для контента нужна подтверждённая цена Ozon в RUB"
             )
         return max(current or 0.0, 0.0), max(old or 0.0, 0.0), 'RUB'
 

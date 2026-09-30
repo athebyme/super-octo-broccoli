@@ -54,34 +54,29 @@ def _client(documents, *, retries=0):
         session=session,
         read_retries=retries,
         sleep_fn=sleeps.append,
+        rate_budget=None,
     )
     return client, session, sleeps
 
 
-def test_rate_limit_fixture_honors_retry_after_but_stays_bounded():
+def test_rate_limit_fixture_is_deferred_without_transport_sleep_or_retry():
     success = {
         "status_code": 200,
         "headers": {},
         "body": {"operation_limits": []},
     }
-    client, session, sleeps = _client(
-        [FIXTURE["rate_limit"], success],
-        retries=1,
-    )
-    assert client.get_product_operation_limits() == {"operation_limits": []}
-    assert len(session.calls) == 2
-    assert sleeps == [12.0]
-
-    client, session, _ = _client([FIXTURE["rate_limit"]], retries=0)
-    with pytest.raises(OzonRateLimitError) as caught:
-        client.get_product_operation_limits()
-    assert caught.value.retry_after == 12.0
-    assert caught.value.request_id == "fixture-rate-1"
-    assert len(session.calls) == 1
+    for retries in (0, 1, 5):
+        client, session, sleeps = _client([FIXTURE["rate_limit"], success], retries=retries)
+        with pytest.raises(OzonRateLimitError) as caught:
+            client.get_product_operation_limits()
+        assert caught.value.retry_after == 12.0
+        assert caught.value.request_id == "fixture-rate-1"
+        assert len(session.calls) == 1
+        assert sleeps == []
+        assert len(session.responses) == 1
 
     write_client, write_session, write_sleeps = _client(
-        [FIXTURE["rate_limit"]],
-        retries=5,
+        [FIXTURE["rate_limit"]], retries=5,
     )
     with pytest.raises(OzonRateLimitError):
         write_client.submit_products({"items": []})

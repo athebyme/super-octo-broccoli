@@ -4,6 +4,7 @@
 from datetime import datetime, timedelta
 import json
 import unittest
+from unittest.mock import patch, MagicMock
 
 from flask import Flask
 
@@ -278,6 +279,111 @@ class MarketplaceCommercialServiceTest(unittest.TestCase):
         self.assertEqual(duplicate.id, proposal.id)
         self.assertEqual(MarketplaceCommercialProposal.query.count(), 1)
 
+    def test_fractional_input_is_rounded_before_review_and_exactly_applied(self):
+        proposal = self.price_proposal(price="1323.75")
+        self.assertEqual(self.adapter.price_writes, [])
+        self.assertEqual(json.loads(proposal.baseline_state_json)["price"], "1000")
+        self.assertEqual(json.loads(proposal.proposed_state_json)["price"], "1324")
+        review = json.loads(proposal.guardrails_json)["price_review"]
+        self.assertEqual(review["requested_price"], "1323.75")
+        self.assertEqual(review["price"], "1324")
+        self.assertTrue(review["rounded"])
+        self.assertEqual(self.approve(proposal).status, "applied")
+        self.assertEqual(self.adapter.price_writes[0]["prices"][0]["price"], "1324")
+        self.assertEqual(self.adapter.price, "1324")
+
+    def test_rounding_checks_limits_using_the_actual_reviewed_amount(self):
+        self.adapter.old_price = "1500"
+        self.adapter.min_price = "1100.25"
+        for price in ("1100.49", "1499.50"):
+            with self.subTest(price=price):
+                with self.assertRaises(MarketplaceCommercialValidationError):
+                    self.price_proposal(price=price)
+                self.assertEqual(MarketplaceCommercialProposal.query.count(), 0)
+        with patch.object(self.adapter, "read_prices", side_effect=AssertionError("No API for out-of-range rounding")):
+            for price in ("0.49", "999999999.50"):
+                with self.assertRaises(MarketplaceCommercialValidationError):
+                    self.price_proposal(price=price)
+        self.assertEqual(self.adapter.price_writes, [])
+
+    def test_legacy_fractional_review_cannot_be_silently_rounded_at_approval(self):
+        proposal = self.price_proposal()
+        proposed = json.loads(proposal.proposed_state_json)
+        proposed["price"] = "1100.25"
+        proposal.proposed_state_json = json.dumps(proposed)
+        proposal.proposed_fingerprint = MarketplaceCommercialService._fingerprint(proposed)
+        db.session.commit()
+        with patch.object(self.adapter, "read_prices", side_effect=AssertionError("No API for obsolete review")):
+            with self.assertRaises(MarketplaceCommercialConflict):
+                self.approve(proposal)
+            with self.assertRaises(MarketplaceCommercialConflict):
+                MarketplaceCommercialService.approve_proposals(
+                    seller_id=self.seller.id,
+                    items=[{"proposal_id":proposal.id,"expected_version":proposal.version}],
+                    reviewed_by_user_id=self.user.id, adapter=self.adapter,
+                    credentials=SYNTHETIC_CREDENTIALS,
+                )
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+        self.assertEqual(self.adapter.price_writes, [])
+        self.assertEqual(json.loads(proposal.proposed_state_json)["price"], "1100.25")
+
+    def test_legacy_queued_fractional_price_stops_without_provider_attempt(self):
+        proposal = self.price_proposal()
+        proposed = json.loads(proposal.proposed_state_json)
+        proposed["price"] = "1100.25"
+        proposal.proposed_state_json = json.dumps(proposed)
+        proposal.proposed_fingerprint = MarketplaceCommercialService._fingerprint(proposed)
+        operation = MarketplaceCommercialService._create_operation(
+            proposal=proposal, reviewer_id=self.user.id, now=datetime.utcnow(),
+        )
+        with patch.object(self.adapter, "read_prices", side_effect=AssertionError("No read for invalid queued price")):
+            result = MarketplaceCommercialService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation.id,
+                adapter=self.adapter, credentials=SYNTHETIC_CREDENTIALS,
+                allow_submission=True,
+            )
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.attempt_count, 0)
+        self.assertIsNone(result.next_poll_at)
+        self.assertEqual(result.error_code, "commercial_review_requires_refresh")
+        self.assertEqual(self.adapter.price_writes, [])
+
+    def test_attempted_legacy_fractional_price_still_reconciles_exactly(self):
+        proposal = self.price_proposal()
+        proposed = json.loads(proposal.proposed_state_json)
+        proposed["price"] = "1100.25"
+        proposal.proposed_state_json = json.dumps(proposed)
+        proposal.proposed_fingerprint = MarketplaceCommercialService._fingerprint(proposed)
+        operation = MarketplaceCommercialService._create_operation(
+            proposal=proposal, reviewer_id=self.user.id, now=datetime.utcnow(),
+        )
+        operation.attempt_count = 1
+        operation.status = "uncertain"
+        proposal.status = "uncertain"
+        db.session.commit()
+        self.adapter.price = "1100.25"
+        result = MarketplaceCommercialService.poll_operation(
+            seller_id=self.seller.id, operation_id=operation.id,
+            adapter=self.adapter, credentials=SYNTHETIC_CREDENTIALS,
+            allow_submission=False,
+        )
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(result.attempt_count, 1)
+        self.assertEqual(self.adapter.price_writes, [])
+
+    def test_exact_rollback_never_rounds_a_historical_fractional_baseline(self):
+        self.adapter.price = "1000.25"
+        applied = self.approve(self.price_proposal(price="1100"))
+        with self.assertRaisesRegex(MarketplaceCommercialConflict, "точный откат недоступен"):
+            MarketplaceCommercialService.create_rollback_proposal(
+                seller_id=self.seller.id, operation_id=applied.operation_id,
+                created_by_user_id=self.user.id, adapter=self.adapter,
+                credentials=SYNTHETIC_CREDENTIALS,
+            )
+        self.assertEqual(MarketplaceCommercialProposal.query.count(), 1)
+        self.assertEqual(len(self.adapter.price_writes), 1)
+        self.assertEqual(json.loads(applied.baseline_state_json)["price"], "1000.25")
+
     def test_price_approval_commits_snapshot_before_exact_single_write(self):
         proposal = self.price_proposal()
         applied = self.approve(proposal)
@@ -306,6 +412,101 @@ class MarketplaceCommercialServiceTest(unittest.TestCase):
             json.loads(operation.snapshot.submitted_state_json)["price"],
             "1100",
         )
+
+    def test_price_terminal_zero_total_supports_review_apply_and_restore(self):
+        original_read = self.adapter.read_prices
+        cursors = []
+
+        def paginated(credentials, payload):
+            cursors.append(payload["cursor"])
+            if payload["cursor"]:
+                self.assertEqual(payload["cursor"], "observed-last-price")
+                return {"items": [], "total": 0, "cursor": ""}
+            return {**original_read(credentials, payload), "cursor": "observed-last-price"}
+
+        with patch.object(self.adapter, "read_prices", side_effect=paginated):
+            proposal = self.price_proposal(price="1250")
+            self.assertEqual(self.adapter.price_writes, [])
+            applied = self.approve(proposal)
+            self.assertEqual(applied.status, "applied")
+            rollback = MarketplaceCommercialService.create_rollback_proposal(
+                seller_id=self.seller.id,
+                operation_id=applied.operation_id,
+                created_by_user_id=self.user.id,
+                adapter=self.adapter,
+                credentials=SYNTHETIC_CREDENTIALS,
+            )
+            restored = self.approve(rollback)
+        self.assertEqual(restored.status, "applied")
+        self.assertEqual(self.adapter.price, "1000")
+        self.assertEqual(len(self.adapter.price_writes), 2)
+        self.assertEqual(cursors, ["", "observed-last-price"] * (len(cursors) // 2))
+        self.assertGreaterEqual(len(cursors), 12)
+
+    def test_price_empty_end_never_admits_incomplete_or_inconsistent_sets(self):
+        page = self.adapter.read_prices(SYNTHETIC_CREDENTIALS, {})
+        item = page["items"][0]
+        end = {"items": [], "total": 0, "cursor": ""}
+        cases = [
+            [end],
+            [{**page, "total": 2, "cursor": "last"}, end],
+            [{**page, "items": [], "cursor": "last"}, end],
+            [{**page, "items": [{**item, "product_id": 102}], "cursor": "last"}, end],
+            [{**page, "cursor": "next"}, page],
+            [{**page, "cursor": "next"}, {**page, "total": 2}],
+            [{**page, "cursor": "next"}, {"items": [], "total": 0, "cursor": "again"}],
+        ]
+        for pages in cases:
+            with self.subTest(pages=pages):
+                with patch.object(self.adapter, "read_prices", side_effect=pages):
+                    with self.assertRaises(MarketplaceCommercialConflict):
+                        self.price_proposal()
+                self.assertEqual(MarketplaceCommercialProposal.query.count(), 0)
+                self.assertEqual(MarketplaceOperation.query.count(), 0)
+                self.assertEqual(self.adapter.price_writes, [])
+
+    def test_unavailable_listing_blocks_single_and_batch_before_provider_io(self):
+        proposal = self.price_proposal()
+        for field in ('is_archived', 'is_available'):
+            self.listing.is_archived = field == 'is_archived'
+            self.listing.is_available = field != 'is_available'
+            db.session.commit()
+            with patch.object(self.adapter, 'read_prices', side_effect=AssertionError('No read for unavailable target')):
+                with self.assertRaises(MarketplaceCommercialConflict):
+                    self.approve(proposal)
+                with self.assertRaises(MarketplaceCommercialConflict):
+                    MarketplaceCommercialService.approve_proposals(seller_id=self.seller.id,
+                        items=[{'proposal_id':proposal.id,'expected_version':proposal.version}],
+                        reviewed_by_user_id=self.user.id, adapter=self.adapter, credentials=SYNTHETIC_CREDENTIALS)
+            self.assertEqual(self.adapter.price_writes, [])
+            self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_unavailable_warehouse_blocks_pending_stock(self):
+        proposal = MarketplaceCommercialService.create_stock_proposal(seller_id=self.seller.id,
+            listing_id=self.listing.id, warehouse_id=self.warehouse.id, stock=0,
+            created_by_user_id=self.user.id, adapter=self.adapter, credentials=SYNTHETIC_CREDENTIALS)
+        self.warehouse.is_available = False
+        db.session.commit()
+        with patch.object(self.adapter, 'read_stocks_by_warehouse_fbs', side_effect=AssertionError('No read for missing warehouse')):
+            with self.assertRaises(MarketplaceCommercialConflict):
+                self.approve(proposal)
+        self.assertEqual(self.adapter.stock_writes, [])
+        self.assertIn('Склад',MarketplaceCommercialService.target_unavailable_reason(proposal))
+
+    def test_archival_does_not_stop_attempted_operation_reconciliation(self):
+        self.adapter.ambiguous_mode = 'no_apply'
+        proposal = self.price_proposal()
+        result = self.approve(proposal)
+        self.assertEqual(result.status, 'uncertain')
+        self.listing.is_archived = True
+        self.listing.is_available = False
+        db.session.commit()
+        self.adapter.price = result._json_object(result.proposed_state_json)['price']
+        operation = MarketplaceCommercialService.poll_operation(seller_id=self.seller.id,
+            operation_id=result.operation_id, adapter=self.adapter, credentials=SYNTHETIC_CREDENTIALS,
+            now=datetime(2026, 7, 15, 12, 6, 0), allow_submission=False)
+        self.assertEqual(operation.status, 'succeeded')
+        self.assertEqual(len(self.adapter.price_writes), 1)
 
     def test_drift_before_approval_blocks_write(self):
         proposal = self.price_proposal()
@@ -496,6 +697,66 @@ class MarketplaceCommercialServiceTest(unittest.TestCase):
         ).one()
         self.assertEqual(operation.status, "submitted")
         self.assertEqual(operation.attempt_count, 1)
+
+    def test_price_reconciliation_cooldown_survives_reload_and_manual_poll(self):
+        proposal = self.price_proposal()
+        original = self.adapter.read_prices
+        def read(credentials, payload):
+            if self.adapter.price_writes:
+                raise OzonAPIError("synthetic throttling", retry_after=7200.25)
+            return original(credentials, payload)
+        self.adapter.read_prices = MagicMock(side_effect=read)
+        now = datetime(2026, 7, 15, 12, 5)
+        result = self.approve(proposal, now=now)
+        operation = db.session.get(MarketplaceOperation, result.operation_id)
+        self.assertEqual(operation.next_poll_at, now + timedelta(seconds=7201))
+        calls = self.adapter.read_prices.call_count
+        db.session.expire_all()
+        MarketplaceCommercialService.poll_operation(
+            seller_id=self.seller.id, operation_id=operation.id,
+            adapter=self.adapter, credentials=SYNTHETIC_CREDENTIALS,
+            now=now + timedelta(minutes=20),
+        )
+        self.assertEqual(self.adapter.read_prices.call_count, calls)
+        self.adapter.read_prices = original
+        completed = MarketplaceCommercialService.poll_operation(
+            seller_id=self.seller.id, operation_id=operation.id,
+            adapter=self.adapter, credentials=SYNTHETIC_CREDENTIALS,
+            now=now + timedelta(seconds=7201),
+        )
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(completed.attempt_count, 1)
+        self.assertEqual(len(self.adapter.price_writes), 1)
+
+    def test_stock_cooldown_past_deadline_stops_and_does_not_repeat_write(self):
+        proposal = MarketplaceCommercialService.create_stock_proposal(
+            seller_id=self.seller.id, listing_id=self.listing.id,
+            warehouse_id=self.warehouse.id, stock=7, source="user",
+            created_by_user_id=self.user.id, adapter=self.adapter,
+            credentials=SYNTHETIC_CREDENTIALS,
+            now=datetime(2026, 7, 15, 12, 0),
+        )
+        original = self.adapter.read_stocks_by_warehouse_fbs
+        def read(credentials, payload):
+            if self.adapter.stock_writes:
+                raise OzonAPIError("synthetic throttling", retry_after=172800)
+            return original(credentials, payload)
+        self.adapter.read_stocks_by_warehouse_fbs = MagicMock(side_effect=read)
+        now = datetime(2026, 7, 15, 12, 5)
+        result = self.approve(proposal, now=now)
+        operation = db.session.get(MarketplaceOperation, result.operation_id)
+        self.assertEqual(result.status, "uncertain")
+        self.assertEqual(operation.status, "uncertain")
+        self.assertIsNone(operation.next_poll_at)
+        calls = self.adapter.read_stocks_by_warehouse_fbs.call_count
+        MarketplaceCommercialService.poll_operation(
+            seller_id=self.seller.id, operation_id=operation.id,
+            adapter=self.adapter, credentials=SYNTHETIC_CREDENTIALS,
+            now=now + timedelta(days=1),
+        )
+        self.assertEqual(self.adapter.read_stocks_by_warehouse_fbs.call_count, calls)
+        self.assertEqual(operation.attempt_count, 1)
+        self.assertEqual(len(self.adapter.stock_writes), 1)
 
     def test_tenant_scope_hides_proposal_and_listing(self):
         proposal = self.price_proposal()

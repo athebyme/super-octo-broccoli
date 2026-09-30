@@ -22,7 +22,7 @@ class MarketplaceFactPackError(ValueError):
 
 
 class MarketplaceFactPackBuilder:
-    VERSION = 2
+    VERSION = 3
     WB_PACKAGE_HARD_TTL = timedelta(hours=48)
     MAX_SERIALIZED_BYTES = 256 * 1024
     MAX_TEXT = 20_000
@@ -426,6 +426,19 @@ class MarketplaceFactPackBuilder:
                 description,
                 source="imported_product.description",
                 trust="seller_current",
+            )
+        source_description = original_text(
+            "description",
+            cls.MAX_DESCRIPTION,
+        )
+        if source_description and source_description != description:
+            cls._record(
+                facts,
+                provenance,
+                "identity.source_description",
+                source_description,
+                source=f"{original_source}.description",
+                trust="observed",
             )
         brand = original_text("brand", 200)
         if brand:

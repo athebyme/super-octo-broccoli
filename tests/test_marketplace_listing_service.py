@@ -139,6 +139,12 @@ class SyntheticCatalogAdapter:
                         "dictionary_value_id": 9001,
                         "value": "Бренд",
                     }],
+                }, {
+                    "id": 4191,
+                    "complex_id": 0,
+                    "values": [{
+                        "value": "Подробное наблюдаемое описание товара",
+                    }],
                 }],
                 "complex_attributes": [],
                 "depth": 10,
@@ -459,6 +465,10 @@ class MarketplaceListingServiceTest(unittest.TestCase):
             page["items"]["101"]["attributes"][0]["values"][0]["value"],
             live_sized_value,
         )
+        self.assertEqual(
+            page["items"]["101"]["description"],
+            live_sized_value,
+        )
 
         blank_page = MarketplaceListingService.normalize_product_attributes_page(
             response(" \r\n\t ")
@@ -466,6 +476,18 @@ class MarketplaceListingServiceTest(unittest.TestCase):
         self.assertIsNone(
             blank_page["items"]["101"]["attributes"][0]["values"][0]["value"]
         )
+        self.assertEqual(blank_page["items"]["101"]["description"], "")
+
+        empty_response = response('unused')
+        empty_response['result'][0]['attributes'][0]['values'] = []
+        empty_page = MarketplaceListingService.normalize_product_attributes_page(empty_response)
+        self.assertEqual(empty_page['items']['101']['description'], '')
+        self.assertEqual(empty_page['items']['101']['attributes'][0]['values'], [])
+        for invalid_values in (None, [{"value":"one"}, {"value":"two"}], [{"dictionary_value_id":123,"value":"one"}]):
+            with self.subTest(invalid_values=invalid_values):
+                empty_response['result'][0]['attributes'][0]['values'] = invalid_values
+                with self.assertRaises(MarketplaceCatalogProtocolError):
+                    MarketplaceListingService.normalize_product_attributes_page(empty_response)
 
         empty_complex_page = (
             MarketplaceListingService.normalize_product_attributes_page(
@@ -517,6 +539,33 @@ class MarketplaceListingServiceTest(unittest.TestCase):
         self.assertNotIn("premium_price", summary["values"])
         self.assertNotIn("recommended_price", summary["values"])
 
+    def test_successful_sweep_supersedes_older_failed_resume_checkpoint(self):
+        old = MarketplaceCatalogSync(
+            seller_id=self.seller1.id, marketplace_id=self.ozon.id,
+            account_id=self.account1.id, status='failed', phase='active',
+            cursor='historical-cursor', phase_seen_count=2,
+            phase_expected_total=100, error_code='ozon_catalog_protocol_error',
+        )
+        db.session.add(old)
+        db.session.commit()
+        completed = MarketplaceListingService.sync_ozon_account(
+            seller_id=self.seller1.id, account_id=self.account1.id,
+            adapter=SyntheticCatalogAdapter(), credentials=SYNTHETIC_CREDENTIALS,
+            force_restart=True,
+        )
+        self.assertEqual(completed.status, 'completed')
+        adapter = SyntheticCatalogAdapter()
+        newest = MarketplaceListingService.sync_ozon_account(
+            seller_id=self.seller1.id, account_id=self.account1.id,
+            adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+            max_pages=1,
+        )
+        self.assertGreater(newest.id, completed.id)
+        self.assertEqual(newest.status, 'paused')
+        self.assertEqual(adapter.list_payloads[0]['last_id'], '')
+        self.assertEqual(db.session.get(MarketplaceCatalogSync, old.id).cursor, 'historical-cursor')
+        self.assertEqual(db.session.get(MarketplaceCatalogSync, old.id).status, 'failed')
+
     def test_paused_run_resumes_and_only_complete_sweep_marks_missing(self):
         stale = self._stale_listing()
         adapter = SyntheticCatalogAdapter()
@@ -562,6 +611,10 @@ class MarketplaceListingServiceTest(unittest.TestCase):
         self.assertEqual(active.primary_sku, "1101")
         self.assertEqual(active.product_type.external_type_id, "777")
         self.assertEqual(active.normalized_status, "active")
+        self.assertEqual(
+            active.description,
+            "Подробное наблюдаемое описание товара",
+        )
         self.assertEqual(active.to_public_dict()["stock_summary"]["present"], 4)
         self.assertEqual(archived.normalized_status, "archived")
         self.assertTrue(archived.is_available)

@@ -24,7 +24,7 @@
     <header class="sh-page-header">
         <div class="sh-page-header-content">
             <div>
-                <h1 class="sh-page-title">Массовое обогащение каталога</h1>
+                <h1 class="sh-page-title">{{ 'Проверка выбора для Flash' if handoff else 'Массовое обогащение каталога' }}</h1>
                 <p class="sh-page-subtitle">Исправление WB-категорий и дополнение общей карточки поставщика по актуальному справочнику</p>
             </div>
             <div class="sh-page-actions">
@@ -36,9 +36,20 @@
     <div class="sh-alert sh-alert--info" role="note">
         <div class="sh-alert-content">
             <strong>Как это работает</strong>
-            <div>Агент может выбрать только конечную категорию из свежего справочника WB. Надёжные совпадения обновляются автоматически, спорные попадают на ручную проверку. Публикации в WB здесь нет.</div>
+            <div>Для характеристик используется отдельный профиль DeepSeek V4.1 Flash. Агент выбирает конечную категорию из свежего справочника WB; спорные значения требуют проверки. Публикации в WB здесь нет.</div>
         </div>
     </div>
+
+    {% if handoff %}
+    <div class="sh-alert {{ 'sh-alert--warning' if handoff.error else 'sh-alert--info' }}" role="{{ 'alert' if handoff.error else 'note' }}">
+        <div class="sh-alert-content">
+            <strong>Выбор из прежнего AI-парсера: {{ handoff.count }} товаров</strong>
+            <div>Прежние поля «спарсено», «заполнение» и модель служат здесь только условиями отбора. Они не подтверждают актуальные характеристики Ozon или результат Flash. Выбранные товары будут проверены ещё раз при запуске.</div>
+            {% if handoff.error %}<div>{{ handoff.error }}</div>{% endif %}
+            <a class="inline-block mt-2 underline" href="{{ url_for('admin_supplier_ai_parser', supplier_id=supplier.id) }}">Изменить прежний выбор</a>
+        </div>
+    </div>
+    {% endif %}
 
     {% if not reference_status.usable %}
     <div class="sh-alert sh-alert--warning" role="alert">
@@ -80,6 +91,7 @@
         </div>
     </section>
 
+    {% if not handoff %}
     <form method="GET" class="sh-filter-bar" aria-label="Фильтры товаров">
         <input class="min-w-[220px] flex-1" type="search" name="search" value="{{ filters.search }}" placeholder="Название, артикул, бренд…" aria-label="Поиск товаров">
         <select name="wb_category" aria-label="Категория WB">
@@ -102,37 +114,56 @@
         </select>
         <button class="sh-btn sh-btn--primary sh-btn--sm" type="submit">Показать</button>
     </form>
+    {% endif %}
 
     <form method="POST" action="{{ url_for('admin_supplier_catalog_enrichment_create', supplier_id=supplier.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if handoff %}
+        <input type="hidden" name="handoff" value="{{ handoff.kind }}">
+        {% if handoff.kind == 'ids' %}
+        <input type="hidden" name="product_ids" value="{{ handoff.ids|join(',') }}">
+        {% else %}
+        {% for key, value in handoff.filters.items() %}<input type="hidden" name="legacy_{{ key }}" value="{{ value }}">{% endfor %}
+        {% endif %}
+        {% endif %}
+        {% if not handoff %}
         {% for key, value in filters.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+        {% endif %}
 
         <div class="sh-filter-bar" style="justify-content:space-between" aria-label="Настройки запуска">
             <div class="flex flex-wrap items-center gap-3">
+                {% if not handoff %}
                 <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
                     <input type="checkbox" x-model="allPage" @change="selected = allPage ? Array.from(document.querySelectorAll('.sce-product-check')).map(el => el.value) : []" aria-label="Выбрать все товары на странице">
                     Все на странице
                 </label>
                 <span class="text-sm" style="color:var(--text-muted)" x-text="selected.length + ' выбрано'"></span>
+                {% endif %}
                 <select name="mode" aria-label="Режим обогащения">
-                    <option value="category_only">Исправить категории · до {{ max_selection }}</option>
                     <option value="category_and_characteristics">Категории + характеристики · до {{ max_characteristic_selection }}</option>
+                    {% if not handoff %}
+                    <option value="category_only">Исправить категории · до {{ max_selection }}</option>
+                    {% endif %}
                     <option value="characteristics_inference">Предположения (словарные, через ревью) · до {{ max_characteristic_selection }}</option>
                 </select>
             </div>
             <div class="flex flex-wrap gap-2">
+                {% if handoff %}
+                <button type="submit" name="selection_scope" value="handoff" class="sh-btn sh-btn--primary sh-btn--sm" {% if handoff.error or handoff.count == 0 or active_run or not reference_status.usable %}disabled{% endif %}>Запустить Flash · {{ handoff.count }}</button>
+                {% else %}
                 <button type="submit" name="selection_scope" value="selected" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="selected.length === 0" onclick="return confirm('Запустить обработку выбранных товаров?')" {% if active_run or not reference_status.usable %}disabled{% endif %}>Обработать выбранные</button>
                 <button type="submit" name="selection_scope" value="filtered" class="sh-btn sh-btn--primary sh-btn--sm" onclick="return confirm('Запустить обработку всех {{ pagination.total }} товаров по текущему фильтру?')" {% if active_run or not reference_status.usable or pagination.total == 0 %}disabled{% endif %}>Все по фильтру · {{ pagination.total }}</button>
+                {% endif %}
             </div>
         </div>
 
         <div class="sh-table-wrap">
             <table class="sh-table">
-                <thead><tr><th style="width:42px"></th><th>Товар</th><th>Категория поставщика</th><th>Сейчас в WB</th><th>Версия</th></tr></thead>
+                <thead><tr>{% if not handoff %}<th style="width:42px"></th>{% endif %}<th>Товар</th><th>Категория поставщика</th><th>Сейчас в WB</th><th>Версия</th></tr></thead>
                 <tbody>
                 {% for product in pagination.items %}
                     <tr>
-                        <td><input type="checkbox" class="sce-product-check" name="product_ids" value="{{ product.id }}" :checked="selected.includes('{{ product.id }}')" @change="selected = $event.target.checked ? Array.from(new Set([...selected, '{{ product.id }}'])) : selected.filter(id => id !== '{{ product.id }}')" aria-label="Выбрать товар {{ product.title or product.id }}"></td>
+                        {% if not handoff %}<td><input type="checkbox" class="sce-product-check" name="product_ids" value="{{ product.id }}" :checked="selected.includes('{{ product.id }}')" @change="selected = $event.target.checked ? Array.from(new Set([...selected, '{{ product.id }}'])) : selected.filter(id => id !== '{{ product.id }}')" aria-label="Выбрать товар {{ product.title or product.id }}"></td>{% endif %}
                         <td style="min-width:260px">
                             <a class="font-medium hover:underline" href="{{ url_for('admin_supplier_product_detail', supplier_id=supplier.id, product_id=product.id) }}">{{ product.title or 'Без названия' }}</a>
                             <div class="mt-1 text-xs" style="color:var(--text-muted)">ID {{ product.id }}{% if product.external_id %} · {{ product.external_id }}{% endif %}</div>
@@ -147,7 +178,7 @@
                         <td>v{{ product.content_revision or 1 }}</td>
                     </tr>
                 {% else %}
-                    <tr><td colspan="5"><div class="sh-empty"><p class="sh-empty-title">По фильтру товаров нет</p><p class="sh-empty-desc">Измените условия поиска или сбросьте фильтры.</p></div></td></tr>
+                    <tr><td colspan="{{ 4 if handoff else 5 }}"><div class="sh-empty"><p class="sh-empty-title">По выбору товаров нет</p><p class="sh-empty-desc">Измените условия поиска или сбросьте фильтры.</p></div></td></tr>
                 {% endfor %}
                 </tbody>
             </table>
@@ -156,11 +187,11 @@
 
     {% if pagination.pages > 1 %}
     <nav class="sh-pagination" aria-label="Страницы товаров">
-        <span class="sh-pagination-info">{{ pagination.total }} товаров</span>
+        <span class="sh-pagination-info">{{ handoff.count if handoff else pagination.total }} товаров{% if handoff and handoff.error %} · показаны первые 100{% endif %}</span>
         <div class="sh-pagination-buttons">
-            {% if pagination.has_prev %}<a class="sh-pagination-btn" href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, page=pagination.prev_num, **filters) }}">Назад</a>{% endif %}
+            {% if pagination.has_prev %}<a class="sh-pagination-btn" href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, page=pagination.prev_num, **(handoff_page_args if handoff else filters)) }}">Назад</a>{% endif %}
             <span class="sh-pagination-btn sh-pagination-btn--active" aria-current="page">{{ pagination.page }} / {{ pagination.pages }}</span>
-            {% if pagination.has_next %}<a class="sh-pagination-btn" href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, page=pagination.next_num, **filters) }}">Дальше</a>{% endif %}
+            {% if pagination.has_next %}<a class="sh-pagination-btn" href="{{ url_for('admin_supplier_catalog_enrichment', supplier_id=supplier.id, page=pagination.next_num, **(handoff_page_args if handoff else filters)) }}">Дальше</a>{% endif %}
         </div>
     </nav>
     {% endif %}

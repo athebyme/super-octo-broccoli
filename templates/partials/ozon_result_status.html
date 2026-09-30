@@ -1,0 +1,13 @@
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-result-status.css') }}">
+<script type="application/json" id="ozon-result-bootstrap">{{ result_config | tojson }}</script>
+<div id="ozon-result-status" x-ignore v-cloak>
+{% raw %}
+    <div v-if="active || changed || error || automaticStopped || cooldownLabel" class="ozon-result-status" role="status">
+        <div><strong>{{ automaticStopped ? 'Автоматическая проверка остановлена' : changed ? 'Новый статус: ' + label : cooldownLabel ? 'Ожидаем доступ к Ozon' : 'Следим за выполнением' }}</strong><p v-if="error">{{ error }}</p><p v-else-if="automaticStopped">Результат пока не подтверждён. Повторная отправка не выполняется. Сверку можно запустить кнопкой «Проверить сейчас»{{ cooldownLabel ? ' после окончания паузы Ozon' : '' }}.</p><p v-else-if="changed">Есть изменения. Откройте новый результат, когда закончите работу с текущей страницей.</p><p v-else-if="!cooldownLabel">Проверяем статус автоматически. Ввод и открытые разделы сохраняются.</p><p v-if="cooldownLabel">{{ cooldownLabel }}</p></div>
+        <a v-if="changed" href="" class="sh-btn sh-btn--primary">Показать новый результат</a>
+        <button v-else-if="error" type="button" class="sh-btn sh-btn--secondary" :disabled="busy" @click="refresh">Проверить статус</button>
+    </div>
+{% endraw %}
+</div>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-result-status.js') }}" defer></script>

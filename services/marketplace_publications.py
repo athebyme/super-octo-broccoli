@@ -10,12 +10,13 @@ import secrets
 from typing import Any, Optional, Tuple
 
 from flask import current_app, has_app_context
-from sqlalchemy import case, func
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm.exc import StaleDataError
 
 from models import (
+    BackgroundJob,
     Marketplace,
     MarketplaceAttributeDefinition,
     MarketplaceAttributeValue,
@@ -25,6 +26,8 @@ from models import (
     MarketplaceOperation,
     MarketplaceProductDraft,
     MarketplaceProductType,
+    OzonBulkUploadItem,
+    OzonBulkUploadRun,
     ImportedProduct,
     Seller,
     SellerMarketplaceAccount,
@@ -51,6 +54,7 @@ from services.marketplace_operation_locks import (
     release_account_operation_lock,
     try_account_operation_lock,
 )
+from services.marketplace_operation_retry import provider_read_deferred, read_retry_at
 from services.marketplace_image_assets import (
     ASSET_CONTRACT_VERSION,
     MarketplaceImageAssetError,
@@ -69,6 +73,8 @@ from services.ozon_product_state import (
     OzonProductStateContract,
     OzonProductStateError,
 )
+from services import ozon_write_quarantine as write_quarantine
+from services.ozon_quarantine_scope import incoming_scope
 
 
 class MarketplacePublicationError(RuntimeError):
@@ -136,6 +142,37 @@ class MarketplacePublicationService:
     MEDIA_ASSET_MAX_FAILURES = 3
     OZON_IMPORT_ONLY_TYPE_ATTRIBUTE_ID = "8229"
     OZON_PROVIDER_OFFER_ATTRIBUTE_ID = "9024"
+
+    @classmethod
+    def _stop_quarantined_write(cls, operation, *, now):
+        """Fence attempt zero while the caller owns the account lock."""
+        if operation.attempt_count != 0:
+            return False
+        hold = write_quarantine.operation_hold(operation)
+        if hold is None:
+            return False
+        cls._mark_failed(
+            operation,
+            code="ozon_write_quarantined",
+            message=write_quarantine.hold_message(hold),
+            now=now,
+        )
+        return True
+
+    @classmethod
+    def _queued_payload_hold(cls, *, draft, payload, kind, listing=None):
+        """Advisory enqueue check; dispatch repeats it under the account lock."""
+        summary = cls._request_summary(draft=draft, payload=payload)
+        if listing is not None:
+            summary["external_product_id"] = listing.external_product_id
+        scope = incoming_scope(
+            kind=kind, summary_json=cls._json(summary, dict),
+            submitted_json=cls._json(payload, dict),
+        )
+        return write_quarantine.matching_hold(
+            seller_id=draft.seller_id, marketplace_id=draft.marketplace_id,
+            account_id=draft.account_id, scope=scope,
+        )
 
     @staticmethod
     def _positive_integer(value: Any, field_name: str) -> int:
@@ -965,6 +1002,7 @@ class MarketplacePublicationService:
         listing: Optional[MarketplaceListing] = None,
         parent_operation: Optional[MarketplaceOperation] = None,
         expected_before_fingerprint: Optional[str] = None,
+        commit: bool = True,
     ) -> MarketplaceOperation:
         if operation_kind not in cls.ASYNC_IMPORT_KINDS:
             raise MarketplacePublicationValidationError(
@@ -1106,9 +1144,16 @@ class MarketplacePublicationService:
         )
         db.session.add(snapshot)
         try:
-            db.session.commit()
+            if commit:
+                db.session.commit()
+            else:
+                db.session.flush()
         except IntegrityError:
             db.session.rollback()
+            if not commit:
+                raise MarketplacePublicationConflict(
+                    "Параллельная публикация уже изменила состояние"
+                ) from None
             existing = MarketplaceOperation.query.filter_by(
                 account_id=draft.account_id,
                 operation_kind=operation_kind,
@@ -1134,6 +1179,8 @@ class MarketplacePublicationService:
                 seller_id=draft.seller_id,
                 operation_id=existing.id,
             )
+        if not commit:
+            return operation
         return cls._owned_operation(
             seller_id=draft.seller_id,
             operation_id=operation.id,
@@ -1216,7 +1263,7 @@ class MarketplacePublicationService:
         granted only for one official type-scoped dictionary value whose display
         is byte-for-byte equal to the selected official product type name.
         """
-        if operation.operation_kind not in cls.UPDATE_KINDS:
+        if operation.operation_kind not in cls.ASYNC_IMPORT_KINDS:
             return ()
         draft = operation.draft
         product_type = draft.product_type if draft is not None else None
@@ -1342,7 +1389,7 @@ class MarketplacePublicationService:
         submitted_payload: dict,
     ) -> tuple[str, ...]:
         """Allow only official optional ``Код продавца`` canonicalization."""
-        if operation.operation_kind not in cls.UPDATE_KINDS:
+        if operation.operation_kind not in cls.ASYNC_IMPORT_KINDS:
             return ()
         draft = operation.draft
         product_type = draft.product_type if draft is not None else None
@@ -1666,11 +1713,18 @@ class MarketplacePublicationService:
         message: str,
         now: datetime,
         request_id: Optional[str] = None,
+        retry_after=None,
     ) -> None:
         operation.status = "uncertain"
         operation.error_code = cls._safe_text(code, maximum=100)
         operation.error_message = cls._safe_text(message, maximum=1000)
-        operation.next_poll_at = now + cls.RECONCILE_INTERVAL
+        due = read_retry_at(
+            operation, now=now, interval=cls.RECONCILE_INTERVAL,
+            retry_after=retry_after,
+        )
+        operation.next_poll_at = (
+            None if operation.deadline_at and due >= operation.deadline_at else due
+        )
         cls._append_request_id(operation, request_id)
         db.session.commit()
 
@@ -1683,13 +1737,25 @@ class MarketplacePublicationService:
         message: str,
         now: datetime,
         request_id: Optional[str] = None,
+        retry_after=None,
     ) -> None:
         """Keep a definitely-not-submitted operation safely retryable."""
         operation.status = "queued"
         operation.error_code = cls._safe_text(code, maximum=100)
         operation.error_message = cls._safe_text(message, maximum=1000)
         operation.quota_reserved = 0
-        operation.next_poll_at = now + cls.RECONCILE_INTERVAL
+        due = read_retry_at(
+            operation, now=now, interval=cls.RECONCILE_INTERVAL,
+            retry_after=retry_after,
+        )
+        if operation.deadline_at and due >= operation.deadline_at:
+            cls._mark_failed(
+                operation, code="prewrite_retry_deadline_exceeded",
+                message="Пауза перед проверкой Ozon превышает срок операции; запись не отправлена",
+                now=now,
+            )
+            return
+        operation.next_poll_at = due
         cls._append_request_id(operation, request_id)
         db.session.commit()
 
@@ -1901,6 +1967,8 @@ class MarketplacePublicationService:
         credentials: MarketplaceCredentials,
         now: datetime,
     ) -> bool:
+        if cls._stop_quarantined_write(operation, now=now):
+            return False
         try:
             response = adapter.get_operation_limits(credentials)
             quota = OzonProductImportContract.normalize_quota(
@@ -1912,13 +1980,30 @@ class MarketplacePublicationService:
                 ),
             )
         except OzonAPIError as exc:
-            cls._mark_failed(
-                operation,
-                code="quota_preflight_failed",
-                message="Не удалось получить текущую квоту Ozon",
-                now=now,
-                request_id=exc.request_id,
-            )
+            if (
+                exc.status_code == 429
+                or (exc.status_code is not None and exc.status_code >= 500)
+                or exc.retriable
+            ):
+                cls._defer_prewrite(
+                    operation,
+                    code="quota_preflight_unavailable",
+                    message="Ожидаем доступности квоты Ozon перед отправкой карточки",
+                    now=now,
+                    request_id=exc.request_id,
+                    retry_after=exc.retry_after,
+                )
+            else:
+                cls._mark_failed(
+                    operation,
+                    code="quota_preflight_failed",
+                    message=(
+                        "Ozon отклонил проверку квоты; проверьте права и "
+                        "подключение кабинета"
+                    ),
+                    now=now,
+                    request_id=exc.request_id,
+                )
             return False
         except (OzonProductImportProtocolError, MarketplaceAdapterError):
             cls._mark_failed(
@@ -2010,6 +2095,10 @@ class MarketplacePublicationService:
         credentials: MarketplaceCredentials,
         now: datetime,
     ) -> MarketplaceOperation:
+        if cls._stop_quarantined_write(operation, now=now):
+            return cls._owned_operation(
+                seller_id=operation.seller_id, operation_id=operation.id,
+            )
         if operation.deadline_at and now >= operation.deadline_at:
             cls._mark_failed(
                 operation,
@@ -2049,6 +2138,10 @@ class MarketplacePublicationService:
             seller_id=seller_id,
             operation_id=operation_id,
         )
+        if cls._stop_quarantined_write(operation, now=now):
+            return cls._owned_operation(
+                seller_id=seller_id, operation_id=operation_id,
+            )
         try:
             cls._operation_summary(operation)
             payload = cls._submitted_payload(operation)
@@ -2077,6 +2170,7 @@ class MarketplacePublicationService:
                 message="Не удалось проверить offer_id в Ozon до публикации",
                 now=now,
                 request_id=exc.request_id,
+                retry_after=exc.retry_after,
             )
             return cls._owned_operation(
                 seller_id=operation.seller_id,
@@ -2187,6 +2281,10 @@ class MarketplacePublicationService:
             raise MarketplacePublicationValidationError(
                 "Archive submit получил неверный operation_kind"
             )
+        if cls._stop_quarantined_write(operation, now=now):
+            return cls._owned_operation(
+                seller_id=operation.seller_id, operation_id=operation.id,
+            )
         if operation.deadline_at and now >= operation.deadline_at:
             cls._mark_failed(
                 operation,
@@ -2275,6 +2373,7 @@ class MarketplacePublicationService:
                 message="Не удалось проверить карточку перед archive",
                 now=now,
                 request_id=exc.request_id,
+                retry_after=exc.retry_after,
             )
             return cls._owned_operation(
                 seller_id=operation.seller_id,
@@ -2318,6 +2417,10 @@ class MarketplacePublicationService:
             "fingerprint": live["fingerprint"],
         }, dict)
         snapshot.before_fingerprint = live["fingerprint"]
+        if cls._stop_quarantined_write(operation, now=now):
+            return cls._owned_operation(
+                seller_id=operation.seller_id, operation_id=operation.id,
+            )
         operation.status = "submitting"
         operation.attempt_count = 1
         operation.submitted_at = now
@@ -2482,6 +2585,7 @@ class MarketplacePublicationService:
         account_id: int,
         draft_ids: Any,
         created_by_user_id: Optional[int],
+        expected_versions: Optional[Dict[int, int]] = None,
         now: Optional[datetime] = None,
     ) -> dict:
         """Поставить до 50 готовых черновиков в durable-очередь публикации.
@@ -2556,8 +2660,15 @@ class MarketplacePublicationService:
                 draft, payload, _ = cls._publication_payload(
                     seller_id=seller_id,
                     draft_id=draft_id,
-                    expected_version=draft.version,
+                    expected_version=(expected_versions.get(draft_id)
+                                      if expected_versions is not None else draft.version),
                 )
+                hold = cls._queued_payload_hold(
+                    draft=draft, payload=payload, kind="product_import",
+                )
+                if hold is not None:
+                    _skip(draft_id, write_quarantine.hold_message(hold))
+                    continue
                 operation = cls._create_operation(
                     draft=draft,
                     payload=payload,
@@ -2586,6 +2697,7 @@ class MarketplacePublicationService:
         account_id: int,
         draft_ids: Any,
         created_by_user_id: Optional[int],
+        expected_versions: Optional[Dict[int, int]] = None,
         now: Optional[datetime] = None,
     ) -> dict:
         """Queue up to 50 exact full-state updates without provider I/O.
@@ -2673,8 +2785,16 @@ class MarketplacePublicationService:
                 draft, payload, validation = cls._publication_payload(
                     seller_id=seller_id,
                     draft_id=draft_id,
-                    expected_version=draft.version,
+                    expected_version=(expected_versions.get(draft_id)
+                                      if expected_versions is not None else draft.version),
                 )
+                hold = cls._queued_payload_hold(
+                    draft=draft, payload=payload, kind="product_update",
+                    listing=listing,
+                )
+                if hold is not None:
+                    _skip(draft_id, write_quarantine.hold_message(hold))
+                    continue
                 operation = cls._create_operation(
                     draft=draft,
                     payload=payload,
@@ -2699,6 +2819,277 @@ class MarketplacePublicationService:
                 "operation_id": operation.id,
             })
         return {"queued": queued, "skipped": skipped}
+
+    @classmethod
+    def enqueue_reviewed_upload_item(
+        cls, *, seller_id: int, account_id: int, draft_id: int,
+        expected_version: int, run_item_id: int, lease_token: str,
+        created_by_user_id: Optional[int], now: datetime,
+    ) -> MarketplaceOperation:
+        """Atomically attach one reviewed v3 item to a queued operation.
+
+        All expensive local validation happens before the short write
+        transaction.  The current run lease and draft version are checked again
+        inside that transaction.  No provider or media I/O occurs here.
+        """
+        seller_id = cls._positive_integer(seller_id, "seller_id")
+        account_id = cls._positive_integer(account_id, "account_id")
+        draft_id = cls._positive_integer(draft_id, "draft_id")
+        expected_version = cls._positive_integer(expected_version, "expected_version")
+        run_item_id = cls._positive_integer(run_item_id, "run_item_id")
+        if not isinstance(lease_token, str) or len(lease_token) != 32:
+            raise MarketplacePublicationBusy("Lease загрузки Ozon изменился")
+        item = OzonBulkUploadItem.query.filter_by(id=run_item_id).first()
+        run = (
+            OzonBulkUploadRun.query.filter_by(id=item.run_id).first()
+            if item is not None else None
+        )
+        if (
+            item is None or run is None or run.mode != "reviewed_drafts"
+            or run.seller_id != seller_id or run.account_id != account_id
+            or item.reviewed_draft_id != draft_id
+            or item.reviewed_version != expected_version
+        ):
+            raise MarketplacePublicationConflict(
+                "Подтверждённая карточка не соответствует запуску"
+            )
+        if item.operation_id is not None:
+            operation = cls._owned_operation(
+                seller_id=seller_id, operation_id=item.operation_id,
+            )
+            if (
+                operation.account_id == account_id
+                and operation.draft_id == draft_id
+            ):
+                return operation
+            raise MarketplacePublicationConflict(
+                "Операция карточки имеет другую identity"
+            )
+        if item.phase != "reviewed":
+            raise MarketplacePublicationConflict(
+                "Карточка больше не ожидает подтверждённую отправку"
+            )
+        draft, payload, validation = cls._publication_payload(
+            seller_id=seller_id, draft_id=draft_id,
+            expected_version=expected_version,
+        )
+        if draft.account_id != account_id or draft.imported_product_id != item.imported_product_id:
+            raise MarketplacePublicationConflict(
+                "Черновик сменил кабинет или исходный товар"
+            )
+        kind = "product_update" if draft.published_listing_id is not None else "product_import"
+        listing = None
+        if kind == "product_update":
+            listing = MarketplaceListing.query.filter_by(
+                id=draft.published_listing_id,
+                seller_id=seller_id,
+                account_id=account_id,
+            ).first()
+            if (
+                listing is None or listing.marketplace_id != draft.marketplace_id
+                or listing.offer_id != draft.offer_id
+                or not listing.external_product_id
+                or not listing.is_available or listing.is_archived
+            ):
+                raise MarketplacePublicationConflict(
+                    "Связанный Ozon listing изменил exact identity"
+                )
+        hold = cls._queued_payload_hold(
+            draft=draft, payload=payload, kind=kind, listing=listing,
+        )
+        if hold is not None:
+            error = MarketplacePublicationConflict(
+                write_quarantine.hold_message(hold)
+            )
+            error.code = "ozon_write_quarantined"
+            raise error
+
+        existing = MarketplaceOperation.query.filter(
+            MarketplaceOperation.seller_id == seller_id,
+            MarketplaceOperation.account_id == account_id,
+            MarketplaceOperation.draft_id == draft_id,
+            MarketplaceOperation.status.in_(cls.ACTIVE_STATUSES),
+        ).first()
+        if existing is not None:
+            error = MarketplacePublicationConflict(
+                "По черновику уже выполняется операция Ozon"
+            )
+            error.code = "already_in_progress"
+            error.operation_id = existing.id
+            raise error
+
+        # End any read transaction before taking SQLite's short writer lock.
+        run_id = run.id
+        run_job_id = run.job_id
+        listing_id = listing.id if listing is not None else None
+        expected_operation_key = f"ozon-upload-v3-{run_item_id:016x}"
+        reviewed_payload_json = cls._json(payload, dict)
+        reviewed_baseline = validation.get("update_baseline")
+        db.session.rollback()
+        check_now = datetime.utcnow()
+        try:
+            updated = OzonBulkUploadRun.query.filter(
+                OzonBulkUploadRun.id == run_id,
+                OzonBulkUploadRun.seller_id == seller_id,
+                OzonBulkUploadRun.account_id == account_id,
+                OzonBulkUploadRun.state == "active",
+                OzonBulkUploadRun.lease_token == lease_token,
+                OzonBulkUploadRun.lease_until.isnot(None),
+                OzonBulkUploadRun.lease_until > check_now,
+            ).update({
+                OzonBulkUploadRun.updated_at: check_now,
+            }, synchronize_session=False)
+            if updated != 1:
+                raise MarketplacePublicationBusy("Lease загрузки Ozon изменился")
+            item = OzonBulkUploadItem.query.filter_by(
+                id=run_item_id, run_id=run_id,
+            ).first()
+            account = SellerMarketplaceAccount.query.filter_by(
+                id=account_id, seller_id=seller_id,
+            ).first()
+            if not (
+                current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
+                and current_app.config.get(
+                    "MARKETPLACE_OZON_PUBLICATION_ENABLED", False,
+                )
+                and account is not None and account.is_active
+                and account.connection_status == "connected"
+                and account.has_credentials
+                and (
+                    account.credential_expires_at is None
+                    or account.credential_expires_at > check_now
+                )
+            ):
+                raise MarketplacePublicationConfigurationError(
+                    "Кабинет Ozon или публикация больше не готовы к отправке"
+                )
+            # The writer claim serializes local drift checks with operation
+            # creation. Source facts, official schema and quarantine may
+            # change without incrementing the reviewed draft version.
+            draft, fresh_payload, fresh_validation = cls._publication_payload(
+                seller_id=seller_id, draft_id=draft_id,
+                expected_version=expected_version,
+            )
+            fresh_listing = None
+            if kind == "product_update":
+                fresh_listing = MarketplaceListing.query.filter_by(
+                    id=listing_id, seller_id=seller_id,
+                    account_id=account_id,
+                ).first()
+                if (
+                    fresh_listing is None
+                    or fresh_listing.marketplace_id != draft.marketplace_id
+                    or fresh_listing.offer_id != draft.offer_id
+                    or not fresh_listing.external_product_id
+                    or not fresh_listing.is_available
+                    or fresh_listing.is_archived
+                ):
+                    raise MarketplacePublicationConflict(
+                        "Связанный Ozon listing изменил exact identity"
+                    )
+            fresh_kind = (
+                "product_update" if draft.published_listing_id is not None
+                else "product_import"
+            )
+            if (
+                fresh_kind != kind
+                or cls._json(fresh_payload, dict) != reviewed_payload_json
+                or fresh_validation.get("update_baseline") != reviewed_baseline
+                or cls._queued_payload_hold(
+                    draft=draft, payload=fresh_payload, kind=kind,
+                    listing=fresh_listing,
+                ) is not None
+            ):
+                raise MarketplacePublicationConflict(
+                    "Исходные данные, схема или карантин изменились после проверки"
+                )
+            active = MarketplaceOperation.query.filter(
+                MarketplaceOperation.seller_id == seller_id,
+                MarketplaceOperation.account_id == account_id,
+                MarketplaceOperation.draft_id == draft_id,
+                MarketplaceOperation.status.in_(cls.ACTIVE_STATUSES),
+            ).first()
+            if active is not None:
+                error = MarketplacePublicationConflict(
+                    "По черновику уже выполняется операция Ozon"
+                )
+                error.code = "already_in_progress"
+                error.operation_id = active.id
+                raise error
+            if (
+                item is None or item.phase != "reviewed"
+                or item.operation_id is not None
+                or item.reviewed_draft_id != draft_id
+                or item.reviewed_version != expected_version
+                or item.imported_product_id != draft.imported_product_id
+                or draft is None or draft.version != expected_version
+                or draft.status != "ready" or draft.validation_status != "valid"
+                or draft.schema_hash != fresh_validation["schema"]["hash"]
+                or draft.schema_version != fresh_validation["schema"]["version"]
+                or draft.published_listing_id != (
+                    listing_id
+                )
+            ):
+                raise MarketplacePublicationConflict(
+                    "Черновик изменился после просмотра; отправка остановлена"
+                )
+            operation = cls._create_operation(
+                draft=draft, payload=fresh_payload,
+                idempotency_key=expected_operation_key,
+                created_by_user_id=cls._validate_author(
+                    seller_id=seller_id,
+                    created_by_user_id=created_by_user_id,
+                ),
+                now=check_now, operation_kind=kind, listing=fresh_listing,
+                expected_before_fingerprint=(
+                    fresh_validation["update_baseline"]["fingerprint"]
+                    if kind == "product_update" else None
+                ),
+                commit=False,
+            )
+            already_linked = OzonBulkUploadItem.query.filter(
+                OzonBulkUploadItem.operation_id == operation.id,
+                OzonBulkUploadItem.id != item.id,
+            ).first()
+            if (
+                already_linked is not None
+                or operation.idempotency_key != expected_operation_key
+            ):
+                error = MarketplacePublicationConflict(
+                    "Операция уже принадлежит другому запуску"
+                )
+                error.code = "already_in_progress"
+                error.operation_id = operation.id
+                raise error
+            item.draft_id = draft.id
+            item.prepared_version = draft.version
+            item.operation_id = operation.id
+            item.phase = "operation_linked"
+            item.next_due_at = None
+            item.error_code = None
+            item.error_message = None
+            item.updated_at = check_now
+            job = BackgroundJob.query.filter_by(
+                id=run_job_id, seller_id=seller_id,
+                job_type="ozon_bulk_upload",
+            ).first()
+            if job is None:
+                raise MarketplacePublicationConflict(
+                    "Журнал загрузки Ozon исчез до отправки"
+                )
+            job.updated_at = check_now
+            db.session.commit()
+            return operation
+        except IntegrityError:
+            db.session.rollback()
+            error = MarketplacePublicationConflict(
+                "Параллельная операция изменила карточку до отправки"
+            )
+            error.code = "already_in_progress"
+            raise error from None
+        except Exception:
+            db.session.rollback()
+            raise
 
     @classmethod
     def start_update(
@@ -3306,22 +3697,24 @@ class MarketplacePublicationService:
             live_payload = confirmed_live.get("payload")
             live_fingerprint = confirmed_live.get("fingerprint")
             if (
-                operation.operation_kind not in cls.UPDATE_KINDS
-                or not isinstance(identity, dict)
+                not isinstance(identity, dict)
                 or not isinstance(live_payload, dict)
                 or not isinstance(live_fingerprint, str)
                 or identity.get("offer_id") != summary.get("offer_id")
-                or identity.get("product_id")
-                != summary.get("external_product_id")
                 or item_result.get("offer_id") != summary.get("offer_id")
                 or item_result.get("product_id")
-                != summary.get("external_product_id")
+                != identity.get("product_id")
+                or (
+                    operation.operation_kind in cls.UPDATE_KINDS
+                    and identity.get("product_id")
+                    != summary.get("external_product_id")
+                )
             ):
                 cls._mark_uncertain(
                     operation,
-                    code="update_live_identity_unconfirmed",
+                    code="publication_live_identity_unconfirmed",
                     message=(
-                        "Ozon update завершён, но подтверждённый live-state "
+                        "Ozon обработал задачу, но подтверждённый live-state "
                         "не совпадает с exact target identity"
                     ),
                     now=now,
@@ -3344,15 +3737,23 @@ class MarketplacePublicationService:
                     now=now,
                 )
                 return
-            if live_fingerprint != operation.request_fingerprint:
+            expected_fingerprint = (
+                operation.request_fingerprint
+                if operation.operation_kind in cls.UPDATE_KINDS
+                else OzonProductStateContract.fingerprint(submitted_payload)
+            )
+            if live_fingerprint != expected_fingerprint:
                 proven_adjustments = cls._provider_roundtrip_adjustments(
                     operation,
                     live_payload=live_payload,
                 )
-                if not proven_adjustments:
+                if not proven_adjustments or (
+                    operation.operation_kind == "product_import"
+                    and not operation.external_task_id
+                ):
                     cls._mark_uncertain(
                         operation,
-                        code="update_postwrite_drift",
+                        code="publication_postwrite_drift",
                         message=(
                             "Live карточка не совпадает с отправленным полным "
                             "payload вне разрешённой нормализации Ozon"
@@ -3363,6 +3764,14 @@ class MarketplacePublicationService:
                 roundtrip_adjustments = proven_adjustments
             payload = live_payload
             confirmed_live_fingerprint = live_fingerprint
+        elif operation.operation_kind == "product_import":
+            cls._mark_uncertain(
+                operation,
+                code="create_live_state_missing",
+                message="Ozon обработал import task, но полный live-state ещё не подтверждён",
+                now=now,
+            )
+            return
         state = cls._outgoing_to_listing_state(
             payload=payload,
             item_result=item_result,
@@ -3442,7 +3851,7 @@ class MarketplacePublicationService:
                 product_type_id=product_type_id,
                 offer_id=state["offer_id"],
                 external_product_id=state["external_product_id"],
-                normalized_status="moderation",
+                normalized_status="unknown",
                 provider_status=item_result["status"],
                 is_available=True,
                 is_archived=False,
@@ -3489,7 +3898,9 @@ class MarketplacePublicationService:
         listing.external_type_id = state["external_type_id"]
         listing.title = state["title"]
         listing.description = state["description"]
-        listing.normalized_status = "moderation"
+        # Task import and full content readback do not prove moderation or
+        # sale visibility; a later catalog observation owns those statuses.
+        listing.normalized_status = "unknown"
         listing.provider_status = item_result["status"]
         listing.is_available = True
         listing.is_archived = False
@@ -3518,7 +3929,8 @@ class MarketplacePublicationService:
         listing.info_synced_at = now
         listing.attributes_synced_at = now
         listing.prices_synced_at = now
-        listing.list_synced_at = now
+        if source == "live_full_state_reconciliation":
+            listing.list_synced_at = now
         listing.last_seen_at = now
         listing.sync_fingerprint = OzonProductImportContract.fingerprint(state)
         db.session.flush()
@@ -3654,6 +4066,95 @@ class MarketplacePublicationService:
             )
 
     @classmethod
+    def _confirm_create_live(
+        cls,
+        operation: MarketplaceOperation,
+        *,
+        normalized: dict,
+        adapter,
+        credentials: MarketplaceCredentials,
+        now: datetime,
+        source: str,
+    ) -> None:
+        """Confirm an imported task from exact, complete provider observations."""
+        summary = cls._operation_summary(operation)
+        items = normalized.get("items")
+        item_result = items[0] if isinstance(items, list) and len(items) == 1 else None
+        product_id = item_result.get("product_id") if isinstance(item_result, dict) else None
+        if not product_id or item_result.get("offer_id") != summary["offer_id"]:
+            cls._mark_uncertain(
+                operation,
+                code="create_task_identity_unconfirmed",
+                message="Ozon не подтвердил exact offer_id и product_id созданной карточки",
+                now=now,
+            )
+            return
+        try:
+            live = OzonProductStateContract.read_full_payload(
+                adapter=adapter,
+                credentials=credentials,
+                product_id=product_id,
+                offer_id=summary["offer_id"],
+            )
+        except OzonAPIError as exc:
+            cls._defer_task_poll(
+                operation,
+                code="create_live_read_unavailable",
+                message="Ozon обработал import task; ожидается полная карточка",
+                now=now,
+                delay=cls.RECONCILE_INTERVAL,
+                retry_after=exc.retry_after,
+                request_id=exc.request_id,
+                deadline_code="create_live_read_deadline_exceeded",
+            )
+            return
+        except OzonProductStateError:
+            cls._defer_task_poll(
+                operation,
+                code="create_live_state_pending",
+                message="Ozon обработал import task; полный согласованный live-state пока недоступен",
+                now=now,
+                delay=cls.RECONCILE_INTERVAL,
+                deadline_code="create_live_read_deadline_exceeded",
+            )
+            return
+        if live["identity"] != {
+            "offer_id": summary["offer_id"],
+            "product_id": product_id,
+        }:
+            cls._mark_uncertain(
+                operation,
+                code="create_live_identity_conflict",
+                message="Live карточка не совпадает с exact import task identity",
+                now=now,
+            )
+            return
+        submitted_payload = cls._submitted_payload(operation)
+        expected_fingerprint = OzonProductStateContract.fingerprint(submitted_payload)
+        if live["fingerprint"] != expected_fingerprint:
+            adjustments = cls._provider_roundtrip_adjustments(
+                operation,
+                live_payload=live["payload"],
+            ) if operation.external_task_id else None
+            if not adjustments:
+                cls._defer_task_poll(
+                    operation,
+                    code="create_live_state_pending",
+                    message="Import task завершён; live карточка ещё не совпадает с отправленной",
+                    now=now,
+                    delay=cls.RECONCILE_INTERVAL,
+                    deadline_code="create_live_state_deadline_exceeded",
+                )
+                return
+        cls._finalize_success(
+            operation,
+            normalized=normalized,
+            now=now,
+            source=source,
+            confirmed_live=live,
+        )
+
+    @classmethod
     def _confirm_update_live(
         cls,
         operation: MarketplaceOperation,
@@ -3674,14 +4175,13 @@ class MarketplacePublicationService:
                 offer_id=summary["offer_id"],
             )
         except OzonAPIError as exc:
-            operation.status = "polling"
-            operation.error_code = cls._safe_text(exc.code, maximum=100)
-            operation.error_message = (
-                "Ozon принял update, но live read-after-write пока недоступен"
+            cls._defer_task_poll(
+                operation, code=exc.code,
+                message="Ozon принял обновление, но проверить карточку пока не удалось",
+                now=now, delay=cls.RECONCILE_INTERVAL,
+                retry_after=exc.retry_after, request_id=exc.request_id,
+                deadline_code="update_live_read_deadline_exceeded",
             )
-            operation.next_poll_at = now + cls.RECONCILE_INTERVAL
-            cls._append_request_id(operation, exc.request_id)
-            db.session.commit()
             return
         except OzonProductStateError:
             if operation.deadline_at and now >= operation.deadline_at:
@@ -3786,11 +4286,11 @@ class MarketplacePublicationService:
             db.session.commit()
             return
         if aggregate == "succeeded":
+            if adapter is None or credentials is None:
+                raise MarketplacePublicationValidationError(
+                    "Publication confirmation requires adapter and credentials"
+                )
             if operation.operation_kind in cls.UPDATE_KINDS:
-                if adapter is None or credentials is None:
-                    raise MarketplacePublicationValidationError(
-                        "Update confirmation requires adapter and credentials"
-                    )
                 cls._confirm_update_live(
                     operation,
                     normalized=normalized,
@@ -3800,11 +4300,13 @@ class MarketplacePublicationService:
                     source="task_status_and_live_state",
                 )
                 return
-            cls._finalize_success(
+            cls._confirm_create_live(
                 operation,
                 normalized=normalized,
+                adapter=adapter,
+                credentials=credentials,
                 now=now,
-                source="task_status",
+                source="task_status_and_live_state",
             )
             return
 
@@ -3857,20 +4359,25 @@ class MarketplacePublicationService:
         now: datetime,
         delay: timedelta,
         request_id: Optional[str] = None,
+        retry_after=None,
+        deadline_code: str = "ozon_task_poll_deadline_exceeded",
     ) -> None:
-        if operation.deadline_at and now >= operation.deadline_at:
+        due = read_retry_at(
+            operation, now=now, interval=delay, retry_after=retry_after,
+        )
+        if operation.deadline_at and due >= operation.deadline_at:
             operation.status = "uncertain"
-            operation.error_code = "ozon_task_poll_deadline_exceeded"
+            operation.error_code = deadline_code
             operation.error_message = (
-                "Статус Ozon import task не удалось подтвердить за отведённое "
-                "время; автоматический polling остановлен"
+                "Результат Ozon не подтверждён. Срок автоматической проверки "
+                "истёк или пауза API выходит за его пределы; запись не повторяется"
             )
             operation.next_poll_at = None
         else:
             operation.status = "polling"
             operation.error_code = cls._safe_text(code, maximum=100)
             operation.error_message = cls._safe_text(message, maximum=1000)
-            operation.next_poll_at = now + delay
+            operation.next_poll_at = due
         cls._append_request_id(operation, request_id)
         db.session.commit()
 
@@ -3916,9 +4423,8 @@ class MarketplacePublicationService:
                 code=exc.code,
                 message="Не удалось получить статус задачи Ozon",
                 now=now,
-                delay=timedelta(
-                    seconds=max(15, min(int(exc.retry_after or 60), 600))
-                ),
+                delay=cls.RECONCILE_INTERVAL,
+                retry_after=exc.retry_after,
                 request_id=exc.request_id,
             )
             return
@@ -3974,7 +4480,14 @@ class MarketplacePublicationService:
                 credentials=credentials,
                 offer_id=summary["offer_id"],
             )
-        except (OzonAPIError, MarketplacePublicationError):
+        except OzonAPIError as exc:
+            cls._mark_uncertain(
+                operation, code="archive_reconciliation_read_failed",
+                message="Проверка архива Ozon временно недоступна; запись не повторяется",
+                now=now, retry_after=exc.retry_after, request_id=exc.request_id,
+            )
+            return
+        except MarketplacePublicationError:
             found = None
         except Exception:
             found = None
@@ -4157,7 +4670,14 @@ class MarketplacePublicationService:
                 credentials=credentials,
                 offer_id=summary["offer_id"],
             )
-        except (OzonAPIError, MarketplacePublicationError):
+        except OzonAPIError as exc:
+            cls._mark_uncertain(
+                operation, code="reconciliation_read_failed",
+                message="Проверка товара Ozon временно недоступна; запись не повторяется",
+                now=now, retry_after=exc.retry_after, request_id=exc.request_id,
+            )
+            return
+        except MarketplacePublicationError:
             found = None
         except Exception:
             found = None
@@ -4174,11 +4694,13 @@ class MarketplacePublicationService:
                     "reconciled_without_task_id": True,
                 }],
             }
-            cls._finalize_success(
+            cls._confirm_create_live(
                 operation,
                 normalized=normalized,
+                adapter=adapter,
+                credentials=credentials,
                 now=now,
-                source="live_offer_reconciliation",
+                source="live_full_state_reconciliation",
             )
             return
 
@@ -4239,6 +4761,13 @@ class MarketplacePublicationService:
             )
             if operation.status in cls.TERMINAL_STATUSES:
                 return operation
+            if operation.status == "queued" and allow_submission:
+                if cls._stop_quarantined_write(operation, now=current_time):
+                    return cls._owned_operation(
+                        seller_id=seller_id, operation_id=operation_id,
+                    )
+            if provider_read_deferred(operation, current_time):
+                return operation
             if operation.status == "queued" and not allow_submission:
                 return operation
             _, resolved_adapter, resolved_credentials = (
@@ -4290,6 +4819,7 @@ class MarketplacePublicationService:
                     credentials=resolved_credentials,
                     now=current_time,
                 )
+            write_quarantine.keep_reconciliation_stopped(operation)
             return cls._owned_operation(
                 seller_id=seller_id,
                 operation_id=operation_id,
@@ -4315,15 +4845,13 @@ class MarketplacePublicationService:
                 f"limit не может быть больше {cls.MAX_DUE_OPERATIONS}"
             )
         current_time = now or datetime.utcnow()
-        due_statuses = {
+        reconciling_statuses = {
             "submitting",
             "submitted",
             "polling",
             "uncertain",
         }
-        if allow_submission:
-            due_statuses.add("queued")
-        operations = MarketplaceOperation.query.join(Marketplace).filter(
+        due_query = MarketplaceOperation.query.join(Marketplace).filter(
             Marketplace.code == "ozon",
             MarketplaceOperation.operation_kind.in_((
                 "product_import",
@@ -4331,25 +4859,56 @@ class MarketplacePublicationService:
                 "product_update",
                 "product_update_rollback",
             )),
-            MarketplaceOperation.status.in_(due_statuses),
+            write_quarantine.automatic_reconciliation_allowed(),
             MarketplaceOperation.next_poll_at.isnot(None),
             MarketplaceOperation.next_poll_at <= current_time,
         ).order_by(
-            case(
-                (
-                    MarketplaceOperation.status.in_((
-                        "submitting",
-                        "submitted",
-                        "polling",
-                        "uncertain",
-                    )),
-                    0,
-                ),
-                else_=1,
-            ),
+            func.coalesce(
+                MarketplaceOperation.last_polled_at,
+                MarketplaceOperation.submitted_at,
+                MarketplaceOperation.created_at,
+            ).asc(),
             MarketplaceOperation.next_poll_at.asc(),
             MarketplaceOperation.id.asc(),
+        )
+        reconciling = due_query.filter(
+            MarketplaceOperation.status.in_(reconciling_statuses),
         ).limit(limit).all()
+        queued = (
+            due_query.filter(MarketplaceOperation.status == "queued")
+            .limit(limit).all()
+            if allow_submission else []
+        )
+        if reconciling and queued and limit > 1:
+            # Reconciliation remains the larger share, while one safe new
+            # submission cannot be hidden by a full page of pending tasks.
+            operations = reconciling[:limit - 1]
+            operations += queued[:limit - len(operations)]
+        elif reconciling and queued:
+            # A single-slot caller uses the last service time already stored
+            # on each operation. A polled task moves behind an untouched card;
+            # ties still favor reconciliation.
+            def last_service(operation):
+                return (
+                    operation.last_polled_at or operation.submitted_at
+                    or operation.created_at or datetime.min
+                )
+
+            pending = reconciling[0]
+            waiting = queued[0]
+            newly_submitted = (
+                pending.last_polled_at is None
+                and waiting.created_at is not None
+                and pending.created_at is not None
+                and waiting.created_at >= pending.created_at - timedelta(seconds=1)
+            )
+            operations = [
+                pending
+                if newly_submitted or last_service(pending) <= last_service(waiting)
+                else waiting
+            ]
+        else:
+            operations = (reconciling or queued)[:limit]
         result = {
             "selected": len(operations),
             "processed": 0,

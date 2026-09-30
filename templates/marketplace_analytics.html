@@ -1,154 +1,49 @@
-{% extends "base.html" %}
-{% from "macros/components.html" import channel_bar %}
-
+{% extends 'base.html' %}
+{% from 'macros/components.html' import channel_bar %}
+{% from 'macros/icons.html' import icon %}
 {% block title %}Аналитика Ozon — Seller Hub{% endblock %}
-
 {% block content %}
-<div x-data="ozonAnalyticsPage()" x-init="init()">
-  <div class="sh-page-header">
-    <div class="sh-page-header-content">
-      <div>
-        <h1 class="sh-page-title">Аналитика Ozon</h1>
-        <p class="sh-page-subtitle">Read-only снимок выбранного кабинета с явными определениями метрик</p>
-      </div>
-      <div class="sh-page-actions" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <button class="sh-btn sh-btn--white-outline sh-btn--sm" @click="refreshData()" :disabled="refreshing">
-          <span x-text="refreshing ? 'Синхронизация…' : 'Обновить из Ozon'"></span>
-        </button>
-        <div class="sh-segmented" role="tablist" aria-label="Период">
-          <button type="button" role="tab" class="sh-segmented-item" :class="{'sh-segmented-item--active': period==='7d'}" :aria-selected="period==='7d' ? 'true' : 'false'" @click="changePeriod('7d')">7 дней</button>
-          <button type="button" role="tab" class="sh-segmented-item" :class="{'sh-segmented-item--active': period==='30d'}" :aria-selected="period==='30d' ? 'true' : 'false'" @click="changePeriod('30d')">30 дней</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div style="max-width:1280px;margin:0 auto;padding:0 24px 40px">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-      {{ channel_bar(active='ozon', account_id=selected_account.id, wb_href=url_for('analytics_page'), ozon_href=url_for('marketplace_analytics_page'), carry='period') }}
-      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
-        <a href="{{ url_for('marketplace_quality_page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Качество Ozon</a>
-        <a href="{{ url_for('marketplace_inbox.page', account_id=selected_account.id) }}" class="sh-btn sh-btn--secondary sh-btn--sm">Отзывы</a>
-      </div>
-    </div>
-
-    <div class="sh-alert sh-alert--info" role="note">
-      Текущий контракт Ozon `/v1/analytics/data` возвращает только сумму и количество заказов. Просмотры, корзина, доставки, отмены и возвраты удалены провайдером и здесь не показываются — это отсутствие данных, а не нули. Данные не объединяются с WB: comparison scope — только этот Ozon account.
-    </div>
-
-    <template x-if="error"><div class="sh-alert sh-alert--error" role="alert" x-text="error"></div></template>
-    <template x-if="data.status === 'stale'"><div class="sh-alert sh-alert--warning" role="status">Показан последний завершённый снимок. Обновите данные, чтобы получить текущий период.</div></template>
-    <template x-if="data.status === 'no_data' || data.status === 'syncing'">
-      <div class="sh-card" style="padding:40px;text-align:center;margin-bottom:24px">
-        <div style="font-size:18px;font-weight:700" x-text="data.status === 'syncing' ? 'Снимок собирается' : 'Снимка аналитики ещё нет'"></div>
-        <div style="color:var(--text-muted);margin:8px 0 18px">Синхронизация читает только Ozon analytics API и сохраняет результат после полного прохода.</div>
-        <button class="sh-btn sh-btn--primary" @click="refreshData()" :disabled="refreshing" x-text="refreshing?'Синхронизация…':'Получить данные'"></button>
-      </div>
-    </template>
-
-    <div class="sh-stat-grid sh-stat-grid--3" style="margin-bottom:24px">
-      <div class="sh-stat-card"><div class="sh-stat-label">Заказы, ₽</div><div class="sh-stat-value" x-text="money(kpi.revenue)"></div></div>
-      <div class="sh-stat-card"><div class="sh-stat-label">Заказано, шт.</div><div class="sh-stat-value" x-text="number(kpi.orders)"></div></div>
-      <div class="sh-stat-card"><div class="sh-stat-label">Средний чек</div><div class="sh-stat-value" x-text="money(kpi.avgCheck)"></div></div>
-    </div>
-
-    <div class="sh-card" style="padding:20px;margin-bottom:24px">
-      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
-        <h2 style="font-size:18px;font-weight:700">Динамика по дням</h2>
-        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-secondary)">
-          <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:var(--chart-1)" aria-hidden="true"></span>Заказы, ₽</span>
-          <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:var(--chart-2)" aria-hidden="true"></span>Заказы, шт.</span>
-          <span style="color:var(--text-muted)" x-text="syncLabel"></span>
-        </div>
-      </div>
-      <div style="height:300px"><canvas x-ref="dailyChart"></canvas></div>
-    </div>
-
-    <div class="sh-card" style="overflow:hidden">
-      <div style="padding:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--border)">
-        <h2 style="font-size:18px;font-weight:700">Товары</h2>
-        <input class="sh-input" style="margin-left:auto;min-width:260px" x-model="search" @keyup.enter="loadProducts()" placeholder="Название, offer ID или SKU">
-        <select class="sh-input" x-model="sortBy" @change="loadProducts()">
-          <option value="ordered_revenue_rub">По сумме заказов</option>
-          <option value="ordered_units">По количеству заказов</option>
-        </select>
-      </div>
-      <div x-show="productsLoading" style="padding:40px;text-align:center;color:var(--text-muted)">Загрузка товаров…</div>
-      <div x-show="!productsLoading && !products.length" class="sh-empty" style="padding:40px 24px">
-        <p class="sh-empty-title">Нет товарных строк</p>
-        <p class="sh-empty-desc">В завершённом снимке нет данных по товарам за выбранный период.</p>
-      </div>
-      <div x-show="!productsLoading && products.length" style="overflow-x:auto">
-        <table class="sh-table">
-          <thead><tr>
-            <th>Товар</th><th>Заказы, ₽</th><th>Шт.</th><th>Статус связи</th>
-          </tr></thead>
-          <tbody><template x-for="item in products" :key="item.sku"><tr>
-            <td style="min-width:260px"><div style="font-weight:600" x-text="item.title || ('SKU '+item.sku)"></div><div style="font-size:12px;color:var(--text-muted)" x-text="'SKU '+item.sku+(item.offer_id?' · '+item.offer_id:'')"></div></td>
-            <td x-text="money(item.metrics.ordered_revenue_rub)"></td>
-            <td x-text="number(item.metrics.ordered_units)"></td>
-            <td><span class="sh-badge sh-badge--sm" :class="item.matched ? 'sh-badge--green' : 'sh-badge--yellow'" x-text="item.matched?'Карточка найдена':'SKU не сопоставлен'"></span></td>
-          </tr></template></tbody>
-        </table>
-      </div>
-      <div x-show="productPages > 1" style="padding:14px;display:flex;justify-content:center;align-items:center;gap:10px;border-top:1px solid var(--border)">
-        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="productPage<=1" @click="productPage--;loadProducts()">Назад</button>
-        <span style="padding:7px 10px;color:var(--text-muted);font-size:13px" x-text="productPage+' / '+productPages"></span>
-        <button class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="productPage>=productPages" @click="productPage++;loadProducts()">Далее</button>
-      </div>
-    </div>
-  </div>
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-read-refresh.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-analytics.css') }}">
+<div id="oan-fallback" class="oan-page" role="status"><h1>Аналитика заказов</h1><p>Загружаем показатели Ozon… Если раздел не открылся, обновите страницу.</p><noscript>Для аналитики включите JavaScript.</noscript></div>
+<div id="oan-app" class="oan-page" x-ignore v-cloak>
+  <header class="oan-header"><div><h1>Аналитика заказов</h1><p>Динамика спроса и товары, которые заказывают</p></div><div class="oan-actions"><div class="oan-segment" role="group" aria-label="Период"><button v-for="p in ['7d','30d']" :key="p" type="button" :aria-pressed="period===p" @click="changePeriod(p)" v-text="p==='7d'?'7 дней':'30 дней'"></button></div><button type="button" class="sh-btn sh-btn--primary" @click="requestRefresh()" :disabled="refreshing || refreshUncertain || refreshSessionEnded || sessionEnded">{{ icon('refresh', size=16) }}<span v-text="refreshUncertain?'Проверяем заявку…':refreshing?'Обновление идёт…':'Обновить из Ozon'"></span></button></div></header>
+  {{ channel_bar(active='ozon', account_id=selected_account.id, wb_href=url_for('analytics_page'), ozon_href=url_for('marketplace_analytics_page'), carry='period') }}
+  <nav class="oan-nav" aria-label="Связанные разделы"><a :href="withRefreshPeriod(config.orders+'?account_id='+config.accountId)">Заказы {{ icon('arrow-right', size=15) }}</a><a :href="withRefreshPeriod(config.finance+'?account_id='+config.accountId)">Начисления {{ icon('arrow-right', size=15) }}</a><a :href="config.quality+'?account_id='+config.accountId">Качество карточек {{ icon('arrow-right', size=15) }}</a></nav>
+  <section v-if="refreshState && refreshState.status!=='idle'" class="sh-card ozon-read-status" role="status" aria-live="polite" :data-state="refreshState.status"><div><strong v-text="refreshTitle()"></strong><span class="ozon-read-status__dates" v-text="refreshPeriodLabel()"></span><p v-text="refreshState.message"></p><p v-if="refreshDueLabel()" class="ozon-read-status__due" v-text="refreshDueLabel()"></p><p v-if="refreshState.active" class="ozon-read-status__hint">Пока обновляем, доступны последние сохранённые данные.</p></div><a v-if="['access_denied','account_unavailable','credentials_changed'].includes(refreshState.error_code)" href="/api-settings#ozon-api-settings-title" class="sh-btn sh-btn--secondary">Настройки подключения</a></section>
+  <div v-if="refreshStatusError" class="oan-notice oan-warning" role="alert"><span v-text="refreshStatusError"></span><a v-if="refreshSessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" @click="loadRefreshStatus()">Проверить состояние</button></div>
+  <p class="oan-explanation">{{ icon('info-circle', size=18) }}<span>Здесь сумма заказанных товаров и количество единиц по данным Ozon. Начисления, выплаты и прибыль считаются отдельно. Данные о просмотрах и корзине этому разделу недоступны.</span></p>
+  <div v-if="error" class="oan-notice oan-error" role="alert"><span v-text="error"></span><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><button v-else type="button" class="sh-btn sh-btn--secondary" :disabled="loading" @click="load()">Повторить загрузку</button><button v-if="filters.snapshotId && !sessionEnded" type="button" class="oan-text-button" :disabled="loading" @click="openLatest()">Открыть актуальные данные</button></div>
+  <div v-if="staleScope" class="oan-notice oan-warning" role="status">Пока показана предыдущая выборка. Новые фильтры будут применены после успешной загрузки.</div>
+  <div v-if="loading" class="oan-loading" role="status" aria-live="polite">Загружаем аналитику…</div>
+  <section v-if="loaded && !snapshot" class="oan-empty"><h2>Снимка аналитики ещё нет</h2><p>Получите данные из Ozon за выбранный период. Загрузка продолжится, даже если закрыть страницу.</p><button type="button" class="sh-btn sh-btn--primary" @click="requestRefresh()" :disabled="refreshing || refreshUncertain || refreshSessionEnded || sessionEnded" v-text="refreshUncertain?'Проверяем заявку…':refreshing?'Обновление идёт…':'Получить данные'"></button></section>
+  <template v-if="snapshot">
+    <section class="oan-context" aria-label="Период и актуальность"><div><strong v-text="periodLabel"></strong><span class="oan-muted" v-text="'Обновлено '+instant(snapshot.completed_at)"></span></div><button type="button" class="oan-text-button" :disabled="loading || sessionEnded" @click="openLatest()">Открыть последние данные</button></section>
+    <div v-if="!snapshot.period_matches_request" class="oan-notice oan-warning" role="status"><span>За выбранные даты нет завершённой загрузки. Ниже показан целиком последний доступный период: <strong v-text="periodLabel"></strong>. Его суммы не пересчитываются на пересечение дат.</span></div>
+    <p v-else-if="status==='stale'" class="oan-muted oan-stale">Сохранённые показатели могли устареть. Обновите их из Ozon, чтобы получить изменения.</p>
+    <dl class="oan-totals" aria-label="Показатели всего периода"><div><dt>Заказано на сумму</dt><dd v-text="decimal(totals[REVENUE],true)"></dd></div><div><dt>Заказано, единиц</dt><dd v-text="decimal(totals[UNITS])"></dd></div><div><dt>В среднем за единицу</dt><dd v-text="decimal(totals.average_unit_rub,true)"></dd></div></dl>
+    <section class="oan-dynamics" aria-labelledby="oan-dynamics-title">
+      <header><div><h2 id="oan-dynamics-title">Динамика по дням</h2><p class="oan-muted">Выберите показатель и день, чтобы увидеть точные значения.</p></div><div class="oan-segment" role="group" aria-label="Показатель графика"><button type="button" :aria-pressed="metric===REVENUE" @click="changeMetric(REVENUE)">Сумма</button><button type="button" :aria-pressed="metric===UNITS" @click="changeMetric(UNITS)">Единицы</button></div></header>
+      <figure v-if="chart.known" class="oan-chart" :aria-label="metricLabel+' за '+periodLabel"><figcaption><span v-text="metricLabel"></span><span v-text="'Максимум за день: '+metricValue(chart.maximum)"></span></figcaption><svg viewBox="0 0 600 170" preserveAspectRatio="none" aria-hidden="true"><line x1="0" x2="600" y1="164" y2="164" class="oan-baseline"/><line x1="0" x2="600" y1="89" y2="89" class="oan-gridline"/><g v-for="bar in chart.bars" :key="bar.date"><rect v-if="bar.known && !bar.zero" :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" rx="2" class="oan-bar" :class="{'is-selected':bar.date===selectedDay}"/><circle v-else-if="bar.zero" :cx="bar.x+bar.width/2" cy="164" r="2" class="oan-zero"/><path v-else :d="'M'+bar.x+' 161h'+bar.width" class="oan-gap"/></g></svg><div class="oan-chart-dates"><span v-text="day(daily[0]?.date,true)"></span><span v-text="day(daily[Math.floor((daily.length-1)/2)]?.date,true)"></span><span v-text="day(daily.at(-1)?.date,true)"></span></div></figure>
+      <div v-else class="oan-chart-empty"><p>По этому показателю нет наблюдений за отдельные дни.</p><span class="oan-muted">Пропуски не означают нулевые заказы. Общий итог выше показан отдельно, если Ozon его вернул.</span></div>
+      <div class="oan-day-detail"><label>День<select name="day" v-model="selectedDay" @change="displayChanged()"><option v-for="d in daily" :key="d.date" :value="d.date" v-text="day(d.date)"></option></select></label><dl v-if="selected"><div><dt>Заказано на сумму</dt><dd v-text="decimal(selected[REVENUE],true)"></dd></div><div><dt>Заказано, единиц</dt><dd v-text="decimal(selected[UNITS])"></dd></div></dl></div>
+      <div class="oan-day-footer"><p class="oan-muted">Пропуск и «—» означают отсутствие наблюдения. Ноль показываем только там, где его вернул Ozon.</p><button type="button" class="oan-text-button" :aria-expanded="showDailyTable" aria-controls="oan-days-table" @click="toggleDays()" v-text="showDailyTable?'Скрыть таблицу':'Таблица по дням'"></button></div>
+      <table v-if="showDailyTable" id="oan-days-table" class="oan-days-table"><caption class="sr-only">Наблюдённые показатели по дням</caption><thead><tr><th scope="col">День</th><th scope="col">Сумма заказанных товаров</th><th scope="col">Единиц</th></tr></thead><tbody><tr v-for="d in daily" :key="d.date" :class="{'is-selected':d.date===selectedDay}"><th scope="row" v-text="day(d.date,true)"></th><td v-text="decimal(d[REVENUE],true)"></td><td v-text="decimal(d[UNITS])"></td></tr></tbody></table>
+    </section>
+    <section class="oan-products" aria-labelledby="oan-products-title" :aria-busy="loading">
+      <header class="oan-products-heading"><div><h2 id="oan-products-title">Товары <span v-text="'· '+pagination.total.toLocaleString('ru-RU')"></span></h2><p class="oan-muted">Строки по SKU. Один товар может иметь несколько SKU.</p></div><button v-if="Object.keys(failedImages).length" type="button" class="oan-text-button" @click="retryImages()">Повторить загрузку фото</button></header>
+      <form class="oan-filters" role="search" aria-label="Поиск товаров" @submit.prevent="applySearch()"><label class="oan-search">Название, артикул или SKU<span><input name="search" type="search" v-model="searchDraft" autocomplete="off" maxlength="200" placeholder="Найти товар…"><button type="submit" class="sh-btn sh-btn--secondary" aria-label="Найти">{{ icon('search', size=18) }}</button></span></label><label>Сортировка<select name="sort_by" v-model="filters.sortBy" @change="navigate({sortBy:filters.sortBy,page:1})"><option :value="REVENUE">По сумме заказанных товаров</option><option :value="UNITS">По количеству единиц</option></select></label><label>Порядок<select name="sort_dir" v-model="filters.sortDir" @change="navigate({sortDir:filters.sortDir,page:1})"><option value="desc">По убыванию</option><option value="asc">По возрастанию</option></select></label></form>
+      <div class="oan-filter-note"><span class="oan-muted">Поиск меняет список товаров. Общие показатели и доли считаются по всему периоду.</span><button v-if="filters.search" type="button" class="oan-text-button" @click="resetSearch()">Сбросить поиск</button></div>
+      <div v-if="!products.length" class="oan-empty"><h3 v-text="pagination.total?'Эта страница пуста':filters.search?'Ничего не нашлось':'В снимке нет товарных строк'"></h3><p v-text="pagination.total?'Вернитесь к началу списка.':filters.search?'Проверьте название, артикул или SKU либо сбросьте поиск.':'Ozon не вернул строки по товарам за этот период. Это не означает, что другие показатели равны нулю.'"></p><button v-if="pagination.total" type="button" class="sh-btn sh-btn--secondary" @click="navigate({page:1})">К первой странице</button><button v-else-if="filters.search" type="button" class="sh-btn sh-btn--secondary" @click="resetSearch()">Показать все товары</button></div>
+      <div v-else class="oan-product-list"><div class="oan-row-head" aria-hidden="true"><span>Товар</span><span>Сумма заказанных товаров</span><span>Единиц</span><span v-text="shareLabel"></span></div><article v-for="item in products" :key="item.sku" class="oan-product-row"><div class="oan-product-name"><span class="oan-photo"><img v-if="imageURL(item.image) && !failedImages[item.sku]" :src="imageURL(item.image)" alt="" width="48" height="58" loading="lazy" v-image-deadline @error="failedImages[item.sku]=true">{{ icon('image', size=20) }}</span><div><a v-if="item.url" :href="item.url" v-text="item.title||'SKU '+item.sku"></a><strong v-else v-text="item.title||'SKU '+item.sku"></strong><small v-text="'SKU '+item.sku+(item.offer_id?' · '+item.offer_id:'')"></small><small v-if="!item.matched" class="oan-unmatched">Связь с карточкой не найдена</small></div></div><div class="oan-row-value"><span class="oan-mobile-label">Сумма заказанных товаров</span><strong v-text="decimal(item.metrics[REVENUE],true)"></strong></div><div class="oan-row-value"><span class="oan-mobile-label">Единиц</span><strong v-text="decimal(item.metrics[UNITS])"></strong></div><div class="oan-share"><span class="oan-mobile-label" v-text="shareLabel"></span><strong v-text="shareText(item)"></strong><span v-if="share(item)!==null" class="oan-share-track" aria-hidden="true"><i :style="{width:share(item)+'%'}"></i></span><span v-else class="sr-only">Долю нельзя рассчитать по доступным значениям</span></div></article></div>
+      <nav v-if="pagination.pages>1" class="oan-pagination" aria-label="Страницы товаров"><a v-if="pagination.page>1" :href="url({...filters,page:pagination.page-1})" @click="pageLink($event,pagination.page-1)">Назад</a><span v-else aria-disabled="true">Назад</span><span v-text="'Страница '+pagination.page+' из '+pagination.pages"></span><a v-if="pagination.page<pagination.pages" :href="url({...filters,page:pagination.page+1})" @click="pageLink($event,pagination.page+1)">Далее</a><span v-else aria-disabled="true">Далее</span></nav>
+    </section>
+    <details class="oan-definitions"><summary>Как считаются показатели</summary><p>Сумма и единицы — наблюдённые итоги аналитики Ozon за указанные даты. Средняя сумма за единицу — сумма, разделённая на количество единиц; при нуле или отсутствии данных она не рассчитывается. Дневные и товарные показатели не прибавляются повторно к итогу.</p><p>Доля относится к выбранному показателю всего периода. При нулевом, неизвестном или несопоставимом итоге она не рассчитывается. Названия, артикулы и фотографии берутся из текущих точно связанных карточек.</p><p>Источник: <code>/v1/analytics/data</code>. Метрики <code>revenue</code> (рубли) и <code>ordered_units</code> (единицы). Данные Wildberries и начисления сюда не включены.</p></details>
+  </template>
 </div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script>
-function ozonAnalyticsPage() {
-  const accountId = {{ selected_account.id|tojson }};
-  return {
-    accountId, period:'30d', data:{status:'loading'}, kpi:{}, error:'', loading:true, refreshing:false,
-    products:[], productsLoading:false, productPage:1, productPages:0, search:'', sortBy:'ordered_revenue_rub', chart:null,
-    get syncLabel() { const s=this.data.sync||{}; return s.completed_at ? ('Снимок '+new Date(s.completed_at).toLocaleString('ru-RU')) : ''; },
-    async init(){ const p=new URLSearchParams(location.search).get('period'); if(['7d','30d'].includes(p))this.period=p; await this.loadSummary(); await this.loadProducts(); },
-    changePeriod(p){ this.period=p; this.productPage=1; const u=new URL(location);u.searchParams.set('period',p);history.replaceState(null,'',u);this.loadSummary();this.loadProducts(); },
-    async loadSummary(){ this.loading=true;this.error='';try{const r=await fetch('/marketplaces/api/analytics/summary?account_id='+this.accountId+'&period='+this.period);const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка аналитики');this.data=d.data||{};this.kpi=this.data.kpi||{};this.$nextTick(()=>this.renderChart());}catch(e){this.error=e.message;}finally{this.loading=false;} },
-    async loadProducts(){ this.productsLoading=true;try{let u='/marketplaces/api/analytics/products?account_id='+this.accountId+'&period='+this.period+'&page='+this.productPage+'&per_page=20&sort_by='+encodeURIComponent(this.sortBy)+'&sort_dir=desc';if(this.search.trim())u+='&search='+encodeURIComponent(this.search.trim());const r=await fetch(u);const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка товаров');this.products=(d.data&&d.data.items)||[];this.productPages=(d.data&&d.data.pages)||0;}catch(e){this.error=e.message;}finally{this.productsLoading=false;} },
-    async refreshData(){ this.refreshing=true;this.error='';try{let force=true;for(let i=0;i<12;i++){const r=await fetch('/marketplaces/api/analytics/sync?account_id='+this.accountId,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':'{{ csrf_token() }}'},body:JSON.stringify({period:this.period,force})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка синхронизации');force=false;if(d.data.status!=='running')break;}await this.loadSummary();await this.loadProducts();this.$store.toasts.success('Снимок аналитики Ozon обновлён');}catch(e){this.error=e.message;}finally{this.refreshing=false;} },
-    renderChart(){
-      const el=this.$refs.dailyChart;
-      if(!el||typeof Chart==='undefined'||typeof window.shChart==='undefined')return;
-      if(this.chart){this.chart.destroy();this.chart=null;}
-      const rows=this.data.dailyData||[];
-      const P=window.shChart;
-      this.chart=P.register(new Chart(el,{
-        type:'line',
-        data:{
-          labels:rows.map(r=>new Date(r.date).toLocaleDateString('ru-RU',{day:'2-digit',month:'short'})),
-          datasets:[
-            {label:'Заказы, ₽',data:rows.map(r=>r.ordered_revenue_rub||0),borderColor:P.color(1),backgroundColor:P.fade(P.color(1),.08),fill:true,tension:.35,yAxisID:'y'},
-            {label:'Заказы, шт.',data:rows.map(r=>r.ordered_units||0),borderColor:P.color(2),backgroundColor:P.fade(P.color(2),.08),tension:.35,yAxisID:'y1'}
-          ]
-        },
-        options:{
-          responsive:true,maintainAspectRatio:false,
-          interaction:{mode:'index',intersect:false},
-          plugins:{legend:{display:false}},
-          scales:{
-            x:{grid:{display:false},ticks:{color:P.textMuted()}},
-            y:{beginAtZero:true,grid:{color:P.grid()},ticks:{color:P.textMuted()}},
-            y1:{beginAtZero:true,position:'right',grid:{display:false},ticks:{color:P.textMuted()}}
-          }
-        }
-      }),(c,p)=>{
-        c.data.datasets[0].borderColor=p.color(1);c.data.datasets[0].backgroundColor=p.fade(p.color(1),.08);
-        c.data.datasets[1].borderColor=p.color(2);c.data.datasets[1].backgroundColor=p.fade(p.color(2),.08);
-        c.options.scales.x.ticks.color=p.textMuted();
-        c.options.scales.y.ticks.color=p.textMuted();c.options.scales.y.grid.color=p.grid();
-        c.options.scales.y1.ticks.color=p.textMuted();
-      });
-    },
-    money(v){if(v===null||v===undefined)return '—';return new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:0}).format(Number(v));},
-    number(v,d=0){if(v===null||v===undefined)return '—';return Number(v).toLocaleString('ru-RU',{maximumFractionDigits:d,minimumFractionDigits:d});},
-  };
-}
-</script>
+<script type="application/json" id="oan-bootstrap">{{ {'accountId':selected_account.id,'csrfToken':csrf_token(),'page':url_for('marketplace_analytics_page'),'api':url_for('marketplace_analytics_workspace_api'),'orders':url_for('marketplace_fulfillment.orders_page'),'finance':url_for('marketplace_finance.page'),'quality':url_for('marketplace_quality_page')}|tojson }}</script>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static', filename='marketplace-beta-shared.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-read-refresh.js') }}" defer></script>
+<script src="{{ url_for('static', filename='ozon-analytics.js') }}" defer></script>
 {% endblock %}

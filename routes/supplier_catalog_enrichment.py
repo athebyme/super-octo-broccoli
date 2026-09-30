@@ -2,6 +2,7 @@
 """Admin UI and HTTP boundary for shared supplier catalog enrichment."""
 
 import json
+import math
 from functools import wraps
 
 from flask import (
@@ -55,12 +56,150 @@ def _filters(source):
 def _positive_form_ids(values):
     prepared = []
     for value in values:
-        if not isinstance(value, str) or not value.isdigit() or int(value) <= 0:
+        if (not isinstance(value, str) or len(value) > 20 or
+                not value.isdigit() or int(value) <= 0):
             raise SupplierCatalogEnrichmentError(
                 'invalid_product_ids', 'Некорректный ID товара.',
             )
         prepared.append(int(value))
     return prepared
+
+
+_LEGACY_FILTER_KEYS = (
+    'search', 'stock_status', 'parse_status', 'fill_max', 'category',
+    'brand', 'ai_model', 'has_description', 'price_min', 'price_max',
+    'limit',
+)
+
+
+def _legacy_filters(source):
+    """Preserve the old parser's selection predicates, not its completion claim."""
+    filters = {}
+    for key in _LEGACY_FILTER_KEYS:
+        value = (source.get(f'legacy_{key}') or '').strip()
+        if len(value) > 300:
+            raise SupplierCatalogEnrichmentError(
+                'filter_too_long',
+                'Фильтр слишком длинный; сократите значение до 300 символов.',
+            )
+        filters[key] = value
+    return filters
+
+
+def _legacy_filter_query(supplier_id, filters):
+    query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
+    search = filters['search']
+    if search:
+        term = f'%{search}%'
+        query = query.filter(db.or_(
+            SupplierProduct.title.ilike(term),
+            SupplierProduct.external_id.ilike(term),
+            SupplierProduct.brand.ilike(term),
+        ))
+    if filters['stock_status'] == 'in_stock':
+        query = query.filter(SupplierProduct.supplier_status == 'in_stock')
+    elif filters['stock_status'] == 'out_of_stock':
+        query = query.filter(SupplierProduct.supplier_status == 'out_of_stock')
+    if filters['parse_status'] == 'not_parsed':
+        query = query.filter(SupplierProduct.ai_parsed_data_json.is_(None))
+    elif filters['parse_status'] == 'parsed':
+        query = query.filter(SupplierProduct.ai_parsed_data_json.isnot(None))
+    elif filters['parse_status'] == 'fill_below' and filters['fill_max']:
+        try:
+            threshold = float(filters['fill_max'])
+        except ValueError:
+            threshold = None
+        if threshold is not None and math.isfinite(threshold):
+            query = query.filter(db.or_(
+                SupplierProduct.ai_fill_pct.is_(None),
+                SupplierProduct.ai_fill_pct < threshold,
+            ))
+    if filters['category']:
+        term = f"%{filters['category']}%"
+        query = query.filter(db.or_(
+            SupplierProduct.wb_category_name.ilike(term),
+            SupplierProduct.category.ilike(term),
+        ))
+    if filters['brand']:
+        query = query.filter(SupplierProduct.brand.ilike(f"%{filters['brand']}%"))
+    if filters['ai_model']:
+        query = query.filter(SupplierProduct.ai_model_used.ilike(
+            f"%{filters['ai_model']}%"
+        ))
+    if filters['has_description'] == 'yes':
+        query = query.filter(
+            SupplierProduct.description.isnot(None),
+            SupplierProduct.description != '',
+        )
+    elif filters['has_description'] == 'no':
+        query = query.filter(db.or_(
+            SupplierProduct.description.is_(None),
+            SupplierProduct.description == '',
+        ))
+    for key, operator in (
+        ('price_min', 'min'), ('price_max', 'max'),
+    ):
+        if not filters[key]:
+            continue
+        try:
+            value = float(filters[key])
+        except ValueError:
+            continue
+        if not math.isfinite(value):
+            continue
+        query = query.filter(
+            SupplierProduct.supplier_price >= value if operator == 'min'
+            else SupplierProduct.supplier_price <= value
+        )
+    return query
+
+
+def _legacy_selection(supplier_id, kind, source):
+    """Recompute an exact, bounded handoff at preview and launch time."""
+    if kind == 'ids':
+        raw = (source.get('product_ids') or '').split(',')
+        if len(raw) > MAX_CHARACTERISTIC_SELECTION:
+            raise SupplierCatalogEnrichmentError(
+                'selection_too_large',
+                'Выбрано больше 5000 товаров. Разделите выбор.',
+            )
+        ids = _positive_form_ids(raw)
+        if len(set(ids)) != len(ids):
+            raise SupplierCatalogEnrichmentError(
+                'duplicate_product_ids', 'В выборе есть повторяющиеся товары.',
+            )
+        owned_count = SupplierProduct.query.filter(
+            SupplierProduct.supplier_id == supplier_id,
+            SupplierProduct.id.in_(ids),
+        ).count()
+        if owned_count != len(ids):
+            raise SupplierCatalogEnrichmentError(
+                'product_scope_mismatch',
+                'Часть товаров больше не принадлежит выбранному поставщику.',
+            )
+        return ids, {}, len(ids)
+    if kind != 'filter':
+        raise SupplierCatalogEnrichmentError(
+            'invalid_selection_scope', 'Неизвестный способ выбора.',
+        )
+    filters = _legacy_filters(source)
+    raw_limit = filters['limit']
+    if raw_limit and (not raw_limit.isdigit() or int(raw_limit) < 0):
+        raise SupplierCatalogEnrichmentError(
+            'invalid_limit', 'Лимит должен быть неотрицательным числом.',
+        )
+    limit = int(raw_limit or 0)
+    query = _legacy_filter_query(supplier_id, filters)
+    count = query.count()
+    count = min(count, limit) if limit else count
+    if count > MAX_CHARACTERISTIC_SELECTION:
+        return [], filters, count
+    rows = query.with_entities(SupplierProduct.id).order_by(
+        SupplierProduct.title.asc(), SupplierProduct.id.asc(),
+    )
+    if limit:
+        rows = rows.limit(limit)
+    return [row[0] for row in rows.all()], filters, count
 
 
 def register_supplier_catalog_enrichment_routes(app):
@@ -71,10 +210,53 @@ def register_supplier_catalog_enrichment_routes(app):
         supplier = _supplier_or_404(supplier_id)
         filters = _filters(request.args)
         page = max(1, request.args.get('page', 1, type=int))
+        handoff_page_args = {
+            key: value for key, value in request.args.items() if key != 'page'
+        }
         per_page = min(max(request.args.get('per_page', 50, type=int), 20), 100)
-        query = SupplierCatalogEnrichmentService.selection_query(
-            supplier_id, filters,
-        )
+        handoff_kind = (request.args.get('handoff') or '').strip()
+        handoff = None
+        if handoff_kind:
+            try:
+                ids, legacy_filters, count = _legacy_selection(
+                    supplier_id, handoff_kind, request.args,
+                )
+                handoff = {
+                    'kind': handoff_kind,
+                    'ids': ids,
+                    'filters': legacy_filters,
+                    'count': count,
+                    'error': (
+                        'По выбору найдено больше 5000 товаров. Сузьте '
+                        'фильтр или разделите запуск.'
+                        if count > MAX_CHARACTERISTIC_SELECTION else None
+                    ),
+                }
+            except SupplierCatalogEnrichmentError as exc:
+                handoff = {
+                    'kind': handoff_kind, 'ids': [], 'filters': {},
+                    'count': 0, 'error': str(exc),
+                }
+            if (handoff['kind'] == 'filter' and handoff['error']
+                    and handoff['filters'] and not handoff['ids']):
+                preview_ids = [row[0] for row in _legacy_filter_query(
+                    supplier_id, handoff['filters'],
+                ).with_entities(SupplierProduct.id).order_by(
+                    SupplierProduct.title.asc(), SupplierProduct.id.asc(),
+                ).limit(100).all()]
+                query = SupplierProduct.query.filter(
+                    SupplierProduct.supplier_id == supplier_id,
+                    SupplierProduct.id.in_(preview_ids),
+                )
+            else:
+                query = SupplierProduct.query.filter(
+                    SupplierProduct.supplier_id == supplier_id,
+                    SupplierProduct.id.in_(handoff['ids']),
+                )
+        else:
+            query = SupplierCatalogEnrichmentService.selection_query(
+                supplier_id, filters,
+            )
         pagination = query.order_by(
             SupplierProduct.id.asc(),
         ).paginate(page=page, per_page=per_page, error_out=False)
@@ -133,6 +315,8 @@ def register_supplier_catalog_enrichment_routes(app):
             adult_parent_count=adult_parent_count,
             max_selection=MAX_SELECTION,
             max_characteristic_selection=MAX_CHARACTERISTIC_SELECTION,
+            handoff=handoff,
+            handoff_page_args=handoff_page_args,
         )
 
     @app.route(
@@ -147,10 +331,28 @@ def register_supplier_catalog_enrichment_routes(app):
         scope = (request.form.get('selection_scope') or 'selected').strip()
         filters = _filters(request.form)
         try:
-            if scope == 'filtered':
+            if scope == 'handoff':
+                kind = (request.form.get('handoff') or '').strip()
+                product_ids, legacy_filters, count = _legacy_selection(
+                    supplier_id, kind, request.form,
+                )
+                if count > MAX_CHARACTERISTIC_SELECTION:
+                    raise SupplierCatalogEnrichmentError(
+                        'selection_too_large',
+                        'По выбору найдено больше 5000 товаров. Сузьте фильтр.',
+                    )
+                if mode not in (
+                    'category_and_characteristics', 'characteristics_inference',
+                ):
+                    raise SupplierCatalogEnrichmentError(
+                        'invalid_mode', 'Выберите режим обогащения характеристик.',
+                    )
+            elif scope == 'filtered':
                 limit = (
                     MAX_CHARACTERISTIC_SELECTION
-                    if mode == 'category_and_characteristics'
+                    if mode in (
+                        'category_and_characteristics', 'characteristics_inference',
+                    )
                     else MAX_SELECTION
                 )
                 rows = SupplierCatalogEnrichmentService.selection_query(
@@ -178,10 +380,21 @@ def register_supplier_catalog_enrichment_routes(app):
                 admin_user_id=current_user.id,
                 product_ids=product_ids,
                 mode=mode,
-                selection={'scope': scope, 'filters': filters},
+                selection={
+                    'scope': scope,
+                    'filters': legacy_filters if scope == 'handoff' else filters,
+                },
             )
         except SupplierCatalogEnrichmentError as exc:
             flash(str(exc), 'danger')
+            if scope == 'handoff':
+                return redirect(url_for(
+                    'admin_supplier_catalog_enrichment',
+                    supplier_id=supplier_id,
+                    **{key: value for key, value in request.form.items()
+                       if key == 'handoff' or key == 'product_ids'
+                       or key.startswith('legacy_')},
+                ))
             return redirect(url_for(
                 'admin_supplier_catalog_enrichment',
                 supplier_id=supplier_id,

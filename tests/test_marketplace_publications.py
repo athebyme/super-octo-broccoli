@@ -85,9 +85,12 @@ class SyntheticPublicationAdapter:
         self.preflight_error = preflight_error
         self.status = status
         self.cursor_on_exact = cursor_on_exact
+        self.archived = False
         self.list_calls = []
         self.submitted_payloads = []
         self.status_calls = []
+        self.live_payload = None
+        self.full_read_calls = []
 
     def require_capability(self, capability):
         if capability not in self.capabilities:
@@ -140,6 +143,7 @@ class SyntheticPublicationAdapter:
         self.submitted_payloads.append(payload)
         if self.ambiguous:
             self.offer_exists = True
+            self.live_payload = deepcopy(payload)
             raise OzonAmbiguousWriteError(
                 "synthetic ambiguous write",
                 code="synthetic_ambiguous_write",
@@ -152,6 +156,9 @@ class SyntheticPublicationAdapter:
         self.status_calls.append(payload)
         errors = []
         product_id = 987654 if self.status == "imported" else 0
+        if self.status == "imported" and self.submitted_payloads:
+            self.live_payload = deepcopy(self.submitted_payloads[-1])
+            self.offer_exists = True
         if self.status in {"failed", "skipped"}:
             errors = [{
                 "code": "SYNTHETIC_REJECT",
@@ -168,6 +175,35 @@ class SyntheticPublicationAdapter:
                 "total": 1,
             }
         }
+
+    def _item(self):
+        if self.live_payload is None:
+            raise AssertionError("synthetic live payload is unavailable")
+        return self.live_payload["items"][0]
+
+    @staticmethod
+    def _media(item):
+        return SyntheticFullStateAdapter._media(item)
+
+    @staticmethod
+    def _description(item):
+        return SyntheticFullStateAdapter._description(item)
+
+    def get_products(self, credentials, payload):
+        return SyntheticFullStateAdapter.get_products(self, credentials, payload)
+
+    def get_product_attributes(self, credentials, payload):
+        return SyntheticFullStateAdapter.get_product_attributes(
+            self, credentials, payload,
+        )
+
+    def read_prices(self, credentials, payload):
+        return SyntheticFullStateAdapter.read_prices(self, credentials, payload)
+
+    def get_product_pictures(self, credentials, payload):
+        return SyntheticFullStateAdapter.get_product_pictures(
+            self, credentials, payload,
+        )
 
 
 class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
@@ -1162,6 +1198,28 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
                 created_by_user_id=self.user.id,
             )
 
+    def test_history_filters_owned_account_before_limit_and_ignores_bad_json(self):
+        other = SellerMarketplaceAccount(seller_id=self.seller.id, marketplace_id=self.marketplace.id,
+                                        external_account_id='second-owned', label='Second', is_active=True)
+        foreign = SellerMarketplaceAccount(seller_id=self.foreign_seller.id, marketplace_id=self.marketplace.id,
+                                          external_account_id='foreign-owned', label='Foreign', is_active=True)
+        db.session.add_all([other, foreign])
+        db.session.flush()
+        for uid, seller_id, progress in [
+            ('history-own', self.seller.id, json.dumps({'account_id': self.account.id, 'items': []})),
+            ('history-second', self.seller.id, json.dumps({'account_id': other.id, 'items': []})),
+            ('history-invalid', self.seller.id, '{invalid json'),
+            ('history-foreign', self.foreign_seller.id, json.dumps({'account_id': self.account.id, 'items': []})),
+        ]:
+            db.session.add(BackgroundJob(job_uid=uid, seller_id=seller_id,
+                                         job_type=OzonBulkUploadService.JOB_TYPE, progress_data=progress))
+        db.session.commit()
+        rows = OzonBulkUploadService.list_runs(seller_id=self.seller.id, account_id=self.account.id, limit=1)
+        self.assertEqual([row.job_uid for row in rows], ['history-own'])
+        with self.assertRaises(OzonBulkUploadError) as error:
+            OzonBulkUploadService.list_runs(seller_id=self.seller.id, account_id=foreign.id)
+        self.assertEqual(error.exception.status_code, 404)
+
     def test_create_run_prepares_and_queues_without_provider_io(self):
         with patch(
             "services.supplier_service."
@@ -1636,10 +1694,15 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
             OzonBulkUploadService.MAX_PROGRESS_BYTES,
         )
 
-    def test_reconcile_recovers_operation_committed_before_journal_link(self):
+    def test_legacy_missing_operation_link_requires_manual_review(self):
         job = self._create_run()
         document = job.get_progress()
         operation_id = document["items"][0].pop("operation_id")
+        document["items"][0]["updated_at"] = (
+            datetime.utcnow() - timedelta(
+                seconds=OzonBulkUploadService.PREPARATION_STALE_SECONDS + 1,
+            )
+        ).isoformat()
         job.set_progress(document)
         db.session.commit()
 
@@ -1652,10 +1715,11 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
             detail=True,
         )["items"][0]
 
-        self.assertEqual(item["operation_id"], operation_id)
-        self.assertEqual(item["status"], "queued")
+        self.assertIsNone(item.get("operation_id"))
+        self.assertEqual(item["status"], "needs_manual_reconciliation")
+        self.assertNotEqual(item.get("operation_id"), operation_id)
 
-    def test_reconcile_without_state_change_does_not_rewrite_run_journal(self):
+    def test_reconcile_without_state_change_rotates_run_without_rewriting_progress(self):
         job = self._create_run()
         result_before = job.result_data
         progress_before = job.progress_data
@@ -1664,13 +1728,14 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
         reconciled = OzonBulkUploadService.reconcile_run(
             seller_id=self.seller.id,
             job_uid=job.job_uid,
+            rotate=True,
         )
 
         self.assertEqual(reconciled.result_data, result_before)
         self.assertEqual(reconciled.progress_data, progress_before)
-        self.assertEqual(reconciled.updated_at, updated_before)
+        self.assertGreaterEqual(reconciled.updated_at, updated_before)
 
-    def test_reconcile_closes_stale_interrupted_preparation_for_safe_retry(self):
+    def test_reconcile_closes_stale_interrupted_preparation_for_manual_review(self):
         stale_at = datetime.utcnow() - timedelta(
             seconds=OzonBulkUploadService.PREPARATION_STALE_SECONDS + 1,
         )
@@ -1712,8 +1777,8 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
         )["items"][0]
 
         self.assertEqual(reconciled.status, "completed")
-        self.assertEqual(item["status"], "failed")
-        self.assertEqual(item["code"], "upload_preparation_interrupted")
+        self.assertEqual(item["status"], "needs_manual_reconciliation")
+        self.assertEqual(item["code"], "legacy_upload_review_required")
 
     def test_reconcile_closes_run_after_success(self):
         job = self._create_run()
@@ -1778,12 +1843,14 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
         self.assertTrue(
             document["items"][0]["reconciliation_stopped"],
         )
-        with self.assertRaises(OzonBulkUploadValidationError):
+        with self.assertRaises(OzonBulkUploadError) as retry_error:
             OzonBulkUploadService.retry_run(
                 seller_id=self.seller.id,
                 job_uid=job.job_uid,
+                request_key="t" * 24,
                 created_by_user_id=self.user.id,
             )
+        self.assertEqual(retry_error.exception.code, "draft_review_required")
 
     def test_reconcile_exposes_normalized_provider_item_reason(self):
         job = self._create_run()
@@ -1854,7 +1921,7 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
         self.assertIn("Материал", document["items"][0]["message"])
         self.assertIsNone(document["items"][0].get("operation_id"))
 
-    def test_stale_reference_waits_and_then_queues_without_second_click(self):
+    def test_legacy_stale_reference_wait_requires_new_review_without_enqueue(self):
         stale = {
             "publishable": False,
             "errors": [{
@@ -1883,11 +1950,11 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
             job,
             detail=True,
         )
-        self.assertEqual(job.status, "running")
-        self.assertEqual(waiting["summary"]["waiting_reference"], 1)
+        self.assertEqual(job.status, "completed")
+        self.assertEqual(waiting["summary"]["waiting_reference"], 0)
         self.assertEqual(
             waiting["items"][0]["status"],
-            "waiting_reference",
+            "needs_manual_reconciliation",
         )
         self.assertIsNone(waiting["items"][0].get("operation_id"))
 
@@ -1898,7 +1965,7 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
         ):
             result = OzonBulkUploadService.reconcile_active_runs(limit=20)
 
-        self.assertEqual(result["reconciled"], 1)
+        self.assertEqual(result["reconciled"], 0)
         resumed = OzonBulkUploadService.public_document(
             OzonBulkUploadService.get_run(
                 seller_id=self.seller.id,
@@ -1908,15 +1975,13 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
             detail=True,
         )
         self.assertEqual(resumed["summary"]["waiting_reference"], 0)
-        self.assertEqual(resumed["items"][0]["status"], "queued")
-        operation = db.session.get(
-            MarketplaceOperation,
-            resumed["items"][0]["operation_id"],
+        self.assertEqual(
+            resumed["items"][0]["status"], "needs_manual_reconciliation",
         )
-        self.assertEqual(operation.status, "queued")
-        self.assertEqual(operation.attempt_count, 0)
+        self.assertIsNone(resumed["items"][0].get("operation_id"))
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
 
-    def test_published_card_resumes_from_reference_wait_as_update(self):
+    def test_legacy_update_reference_wait_requires_new_review(self):
         self.attach_listing(self.prior_payload())
         stale = {
             "publishable": False,
@@ -1940,7 +2005,7 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
                 created_by_user_id=self.user.id,
             )
         waiting = OzonBulkUploadService.public_document(job, detail=True)
-        self.assertEqual(waiting["items"][0]["status"], "waiting_reference")
+        self.assertEqual(waiting["items"][0]["status"], "needs_manual_reconciliation")
         self.assertEqual(waiting["items"][0]["action"], "update")
 
         with patch.object(
@@ -1957,13 +2022,12 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
             ),
             detail=True,
         )
-        self.assertEqual(resumed["items"][0]["status"], "queued")
-        self.assertEqual(resumed["items"][0]["action"], "update")
-        operation = db.session.get(
-            MarketplaceOperation,
-            resumed["items"][0]["operation_id"],
+        self.assertEqual(
+            resumed["items"][0]["status"], "needs_manual_reconciliation",
         )
-        self.assertEqual(operation.operation_kind, "product_update")
+        self.assertEqual(resumed["items"][0]["action"], "update")
+        self.assertIsNone(resumed["items"][0].get("operation_id"))
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
 
     def test_account_error_is_translated_and_foreign_product_is_rejected(self):
         with self.assertRaises(OzonBulkUploadError) as account_error:
@@ -2048,7 +2112,61 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
                 draft_ids=[self.draft.id],
             )
 
-    def test_retry_requeues_only_explicit_terminal_problem_items(self):
+    def test_reviewed_drafts_keep_exact_content_and_version_without_defaults(self):
+        version = self.draft.version
+        content = self.draft.content_json
+        with patch.object(MarketplaceDraftService, "_build_validation_result",
+                          return_value=self.validation_result()), \
+                patch.object(MarketplaceDraftService, "create_draft",
+                             side_effect=AssertionError("Must not prepare reviewed content")), \
+                patch.object(MarketplaceDraftService, "apply_account_defaults",
+                             side_effect=AssertionError("Must not change reviewed defaults")):
+            job = OzonBulkUploadService.create_run_from_drafts(
+                seller_id=self.seller.id, account_id=self.account.id,
+                draft_ids=[self.draft.id], created_by_user_id=self.user.id,
+                expected_versions={str(self.draft.id): version},
+            )
+        operation = MarketplaceOperation.query.one()
+        self.assertEqual(operation.draft_version, version)
+        self.assertEqual(operation.attempt_count, 0)
+        self.assertEqual(self.draft.version, version)
+        self.assertEqual(self.draft.content_json, content)
+        document = OzonBulkUploadService.public_document(job, detail=True)
+        self.assertEqual(document["items"][0]["status"], "queued")
+        self.assertEqual(document["summary"]["source"], "drafts")
+
+    def test_reviewed_drafts_reject_stale_or_incomplete_versions_before_job(self):
+        for versions in [{}, {str(self.draft.id): True},
+                         {str(self.draft.id): str(self.draft.version)},
+                         {str(self.draft.id): self.draft.version + 1},
+                         {str(self.draft.id): self.draft.version, "9999": 1}]:
+            with self.subTest(versions=versions), self.assertRaises(OzonBulkUploadError):
+                OzonBulkUploadService.create_run_from_drafts(
+                    seller_id=self.seller.id, account_id=self.account.id,
+                    draft_ids=[self.draft.id], created_by_user_id=self.user.id,
+                    expected_versions=versions,
+                )
+        self.assertEqual(BackgroundJob.query.count(), 0)
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_reviewed_draft_changed_between_review_and_enqueue_is_not_submitted(self):
+        enqueue = OzonBulkUploadService._enqueue_ready_items
+        def changed(**kwargs):
+            self.draft.content_json = json.dumps({"name": "Changed after review"})
+            db.session.commit()
+            return enqueue(**kwargs)
+        with patch.object(OzonBulkUploadService, "_enqueue_ready_items", side_effect=changed):
+            job = OzonBulkUploadService.create_run_from_drafts(
+                seller_id=self.seller.id, account_id=self.account.id,
+                draft_ids=[self.draft.id], created_by_user_id=self.user.id,
+                expected_versions={str(self.draft.id): self.draft.version},
+            )
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+        item = OzonBulkUploadService.public_document(job, detail=True)["items"][0]
+        self.assertEqual(item["status"], "needs_input")
+        self.assertIn("изменился", item["message"])
+
+    def test_legacy_retry_requires_new_review_even_for_terminal_problem_items(self):
         invalid = {
             "publishable": False,
             "errors": [{
@@ -2071,47 +2189,17 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
                 created_by_user_id=self.user.id,
             )
 
-        with patch.object(
-            MarketplaceDraftService,
-            "_build_validation_result",
-            return_value=self.validation_result(),
-        ):
-            retried = OzonBulkUploadService.retry_run(
-                seller_id=self.seller.id,
-                job_uid=first.job_uid,
-                created_by_user_id=self.user.id,
-            )
-        self.assertNotEqual(first.job_uid, retried.job_uid)
-        self.assertEqual(
-            OzonBulkUploadService.public_document(
-                retried,
-                detail=True,
-            )["items"][0]["status"],
-            "queued",
-        )
-
-        operation = db.session.get(
-            MarketplaceOperation,
-            OzonBulkUploadService.public_document(
-                retried,
-                detail=True,
-            )["items"][0]["operation_id"],
-        )
-        operation.status = "uncertain"
-        operation.error_code = "ambiguous_write"
-        db.session.commit()
-        OzonBulkUploadService.reconcile_run(
-            seller_id=self.seller.id,
-            job_uid=retried.job_uid,
-        )
-        with self.assertRaises(OzonBulkUploadValidationError):
+        with self.assertRaises(OzonBulkUploadError) as retry_error:
             OzonBulkUploadService.retry_run(
                 seller_id=self.seller.id,
-                job_uid=retried.job_uid,
+                job_uid=first.job_uid,
+                request_key="u" * 24,
                 created_by_user_id=self.user.id,
             )
+        self.assertEqual(retry_error.exception.code, "draft_review_required")
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
 
-    def test_retry_reuses_one_confirmed_category_for_untyped_siblings(self):
+    def test_legacy_category_review_does_not_authorize_implicit_retry_write(self):
         def product(index):
             original = {
                 "external_id": f"category-retry-{index}",
@@ -2167,6 +2255,15 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
             seller_id=self.seller.id,
             draft_id=first_document["items"][0]["draft_id"],
         )
+        self.app.secret_key = 'synthetic-category-review-test'
+        review = MarketplaceDraftService.category_impact(
+            seller_id=self.seller.id,
+            draft_id=representative_draft.id,
+            expected_version=representative_draft.version,
+            target_product_type_id=self.product_type.id,
+            save_mapping=True,
+            actor_user_id=self.user.id,
+        )
         confirmed = MarketplaceDraftService.update_draft(
             seller_id=self.seller.id,
             draft_id=representative_draft.id,
@@ -2176,6 +2273,7 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
                 "save_mapping": True,
             },
             corrected_by_user_id=self.user.id,
+            category_review_token=review['review_token'],
         )
         self.assertIsNotNone(confirmed.category_mapping_id)
         self.assertEqual(
@@ -2186,36 +2284,15 @@ class OzonBulkUploadServiceTest(OzonPublicationFixture, unittest.TestCase):
             1,
         )
 
-        retried = OzonBulkUploadService.retry_run(
-            seller_id=self.seller.id,
-            job_uid=first.job_uid,
-            created_by_user_id=self.user.id,
-        )
-        retried_document = OzonBulkUploadService.public_document(
-            retried,
-            detail=True,
-        )
-        self.assertEqual(
-            [item["status"] for item in retried_document["items"]],
-            ["queued", "queued"],
-        )
-        sibling_draft = MarketplaceDraftService.get_draft(
-            seller_id=self.seller.id,
-            draft_id=retried_document["items"][1]["draft_id"],
-        )
-        self.assertEqual(sibling_draft.product_type_id, self.product_type.id)
-        self.assertEqual(
-            sibling_draft.category_mapping_id,
-            confirmed.category_mapping_id,
-        )
-        self.assertEqual(
-            MarketplaceOperation.query.filter(
-                MarketplaceOperation.draft_id.in_(
-                    [item["draft_id"] for item in retried_document["items"]]
-                )
-            ).count(),
-            2,
-        )
+        with self.assertRaises(OzonBulkUploadError) as retry_error:
+            OzonBulkUploadService.retry_run(
+                seller_id=self.seller.id,
+                job_uid=first.job_uid,
+                request_key="v" * 24,
+                created_by_user_id=self.user.id,
+            )
+        self.assertEqual(retry_error.exception.code, "draft_review_required")
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
 
 
 class OzonBulkRepairServiceTest(OzonPublicationFixture, unittest.TestCase):
@@ -2797,12 +2874,14 @@ class OzonBulkRepairServiceTest(OzonPublicationFixture, unittest.TestCase):
         )
         self.assertEqual(document["items"][0]["status"], "excluded")
         self.assertEqual(document["summary"]["excluded"], 1)
-        with self.assertRaises(OzonBulkUploadValidationError):
+        with self.assertRaises(OzonBulkUploadError) as retry_error:
             OzonBulkUploadService.retry_run(
                 seller_id=self.seller.id,
                 job_uid=self.job.job_uid,
+                request_key="forbidden-brand-retry-0001",
                 created_by_user_id=self.user.id,
             )
+        self.assertEqual(retry_error.exception.code, "draft_review_required")
 
     def test_stale_row_does_not_overwrite_newer_draft(self):
         _filename, payload = OzonBulkRepairService.export_workbook(
@@ -2969,14 +3048,17 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
                 json={
                     "account_id": self.account.id,
                     "imported_product_ids": [self.source.id],
-                    "confirm_write": True,
+                    "confirm_prepare": True,
+                    "request_key": "route-prepare-exact-0123456789abcdef",
                 },
             )
         self.assertEqual(created.status_code, 202)
         body = created.get_json()
         self.assertTrue(body["success"])
         job_uid = body["run"]["job_uid"]
-        self.assertEqual(body["run"]["items"][0]["status"], "queued")
+        self.assertEqual(body["run"]["mode"], "source_prepare")
+        self.assertEqual(body["run"]["items"][0]["status"], "pending")
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
 
         user_patch, login_patch = self._auth_patches(
             self.seller,
@@ -3021,6 +3103,8 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
                     "account_id": self.account.id,
                     "draft_ids": [self.draft.id],
                     "confirm_write": True,
+                    "expected_versions": {str(self.draft.id): self.draft.version},
+                    "request_key": "route-review-exact-0123456789abcdef",
                 },
             )
         self.assertEqual(response.status_code, 202)
@@ -3029,7 +3113,28 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
             run["items"][0]["imported_product_id"],
             self.source.id,
         )
-        self.assertEqual(run["items"][0]["status"], "queued")
+        self.assertEqual(run["mode"], "reviewed_drafts")
+        self.assertEqual(run["items"][0]["status"], "reviewed")
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
+
+    def test_reviewed_bulk_route_rejects_changed_version_and_null_contract(self):
+        user_patch, login_patch = self._auth_patches(self.seller, self.user.id)
+        with user_patch, login_patch:
+            for versions, expected_status in [
+                (None, 409), ({}, 409),
+                ({str(self.draft.id): self.draft.version + 1}, 409),
+            ]:
+                with self.subTest(versions=versions):
+                    response = self.client.post(
+                        "/marketplaces/ozon/uploads/from-drafts",
+                        json={"account_id": self.account.id,
+                              "draft_ids": [self.draft.id], "confirm_write": True,
+                              "expected_versions": versions,
+                              "request_key": "route-review-conflict-0123456789abcdef"},
+                    )
+                    self.assertEqual(response.status_code, expected_status)
+        self.assertEqual(BackgroundJob.query.count(), 0)
+        self.assertEqual(MarketplaceOperation.query.count(), 0)
 
     def test_repair_xlsx_route_is_local_only_and_needs_no_write_confirmation(self):
         invalid = {
@@ -3258,13 +3363,14 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
         )
         with user_patch, login_patch, patch.object(
             OzonBulkUploadService,
-            "create_run",
+            "accept_source_prepare",
         ) as create_run:
             response = self.client.post(
                 "/marketplaces/ozon/uploads/",
                 json={
                     "account_id": self.account.id,
-                    "confirm_write": True,
+                    "confirm_prepare": True,
+                    "request_key": "route-oversized-0123456789abcdef",
                     "imported_product_ids": list(range(
                         1,
                         OzonBulkUploadService.MAX_ITEMS + 2,
@@ -3284,7 +3390,7 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
         )
         with user_patch, login_patch, patch.object(
             OzonBulkUploadService,
-            "create_run_from_drafts",
+            "accept_reviewed_publish",
         ) as create_from_drafts:
             response = self.client.post(
                 "/marketplaces/ozon/uploads/from-drafts",
@@ -3312,10 +3418,12 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
         )
         with user_patch, login_patch:
             response = self.client.post(
-                "/marketplaces/ozon/uploads/",
+                "/marketplaces/ozon/uploads/from-drafts",
                 json={
                     "account_id": self.account.id,
-                    "imported_product_ids": [self.source.id],
+                    "draft_ids": [self.draft.id],
+                    "expected_versions": {str(self.draft.id): self.draft.version},
+                    "request_key": "route-disabled-0123456789abcdef",
                     "confirm_write": True,
                 },
             )
@@ -3331,20 +3439,21 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
             0,
         )
 
-    def test_json_write_requires_strict_explicit_confirmation(self):
+    def test_json_preparation_requires_strict_explicit_confirmation(self):
         user_patch, login_patch = self._auth_patches(
             self.seller,
             self.user.id,
         )
         with user_patch, login_patch, patch.object(
             OzonBulkUploadService,
-            "create_run",
+            "accept_source_prepare",
         ) as create_run:
             missing = self.client.post(
                 "/marketplaces/ozon/uploads/",
                 json={
                     "account_id": self.account.id,
                     "imported_product_ids": [self.source.id],
+                    "request_key": "route-confirm-0123456789abcdef",
                 },
             )
             string_value = self.client.post(
@@ -3352,7 +3461,8 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
                 json={
                     "account_id": self.account.id,
                     "imported_product_ids": [self.source.id],
-                    "confirm_write": "true",
+                    "request_key": "route-confirm-0123456789abcdef",
+                    "confirm_prepare": "true",
                 },
             )
 
@@ -3637,6 +3747,152 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
             submitted.id,
         )
 
+    def test_due_poll_serves_queue_behind_twenty_pending_tasks(self):
+        now = datetime.utcnow()
+        operations = []
+        for index in range(20):
+            operations.append(MarketplaceOperation(
+                seller_id=self.seller.id,
+                marketplace_id=self.marketplace.id,
+                account_id=self.account.id,
+                operation_kind="product_import",
+                status="polling",
+                idempotency_key=f"fair-pending-operation-{index:02d}",
+                request_fingerprint="a" * 64,
+                contract_version="ozon-product-import-v3-2026-07-10",
+                request_summary_json="{}",
+                quota_snapshot_json="{}",
+                provider_request_ids_json="[]",
+                item_results_json="[]",
+                attempt_count=1,
+                created_at=now - timedelta(minutes=2),
+                next_poll_at=now - timedelta(minutes=1),
+            ))
+        queued = MarketplaceOperation(
+            seller_id=self.seller.id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account.id,
+            operation_kind="product_import",
+            status="queued",
+            idempotency_key="fair-queued-operation-21",
+            request_fingerprint="b" * 64,
+            contract_version="ozon-product-import-v3-2026-07-10",
+            request_summary_json="{}",
+            quota_snapshot_json="{}",
+            provider_request_ids_json="[]",
+            item_results_json="[]",
+            created_at=now,
+            next_poll_at=now - timedelta(minutes=1),
+        )
+        db.session.add_all([*operations, queued])
+        db.session.commit()
+        pending_ids = {operation.id for operation in operations}
+
+        with patch.object(MarketplacePublicationService, "poll_operation") as poll:
+            selected = MarketplacePublicationService.poll_due_operations(
+                limit=20, now=now,
+            )
+            selected_ids = [call.kwargs["operation_id"] for call in poll.call_args_list]
+        self.assertEqual(selected["selected"], 20)
+        self.assertEqual(len(pending_ids.intersection(selected_ids)), 19)
+        self.assertIn(queued.id, selected_ids)
+
+        # The one-slot caller also makes progress after each pending task has
+        # been served once; no transient in-memory lane counter is needed.
+        seen = []
+        for tick in range(21):
+            current = now + timedelta(seconds=tick + 1)
+
+            def record_poll(*, operation_id, **_kwargs):
+                seen.append(operation_id)
+                if operation_id in pending_ids:
+                    db.session.get(MarketplaceOperation, operation_id).last_polled_at = current
+                    db.session.commit()
+
+            with patch.object(
+                MarketplacePublicationService, "poll_operation",
+                side_effect=record_poll,
+            ):
+                MarketplacePublicationService.poll_due_operations(
+                    limit=1, now=current,
+                )
+            if queued.id in seen:
+                break
+        self.assertIn(queued.id, seen)
+
+        # Available slots are not discarded when the pending lane is short.
+        for operation in operations[1:]:
+            operation.status = 'queued'
+        db.session.commit()
+        with patch.object(MarketplacePublicationService, 'poll_operation') as poll:
+            selected = MarketplacePublicationService.poll_due_operations(limit=20, now=now)
+        self.assertEqual(selected['selected'], 20)
+        self.assertEqual(poll.call_count, 20)
+
+    def test_quota_rate_limit_defers_without_provider_write(self):
+        adapter = SyntheticPublicationAdapter()
+        before = datetime.utcnow()
+        with patch.object(
+            adapter, "get_operation_limits",
+            side_effect=OzonAPIError(
+                "rate limit", code="ozon_rate_limited",
+                status_code=429, retry_after=3600.25,
+                retriable=True,
+            ),
+        ):
+            deferred = self.start(adapter, key="quota-rate-limit-001")
+        self.assertEqual(deferred.status, "queued")
+        self.assertEqual(deferred.attempt_count, 0)
+        self.assertEqual(adapter.submitted_payloads, [])
+        self.assertGreaterEqual(
+            deferred.next_poll_at, before + timedelta(seconds=3601),
+        )
+        self.assertEqual(
+            json.loads(deferred.request_summary_json)["provider_read_not_before"],
+            deferred.next_poll_at.isoformat(),
+        )
+        still_deferred = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id, operation_id=deferred.id,
+            adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+            now=before + timedelta(minutes=10),
+        )
+        self.assertEqual(still_deferred.status, "queued")
+        self.assertEqual(adapter.submitted_payloads, [])
+        submitted = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id, operation_id=deferred.id,
+            adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+            now=deferred.next_poll_at + timedelta(seconds=1),
+        )
+        self.assertEqual(submitted.status, "submitted")
+        self.assertEqual(submitted.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_quota_permission_failure_requires_action_before_write(self):
+        adapter = SyntheticPublicationAdapter()
+        with patch.object(
+            adapter, "get_operation_limits",
+            side_effect=OzonAPIError(
+                "forbidden", code="ozon_auth_error", status_code=403,
+            ),
+        ):
+            failed = self.start(adapter, key="quota-forbidden-001")
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.attempt_count, 0)
+        self.assertEqual(adapter.submitted_payloads, [])
+
+    def test_quota_server_error_defers_before_write(self):
+        adapter = SyntheticPublicationAdapter()
+        with patch.object(
+            adapter, "get_operation_limits",
+            side_effect=OzonAPIError(
+                "server error", code="ozon_server_error", status_code=503,
+            ),
+        ):
+            deferred = self.start(adapter, key="quota-server-error-001")
+        self.assertEqual(deferred.status, "queued")
+        self.assertEqual(deferred.attempt_count, 0)
+        self.assertEqual(adapter.submitted_payloads, [])
+
     def test_account_quota_capacity_subtracts_local_active_reservations(self):
         adapter = SyntheticPublicationAdapter()
         operation = self.start(adapter, key="publication-key-quota-capacity")
@@ -3687,6 +3943,103 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         repeated = self.start(adapter)
         self.assertEqual(repeated.id, completed.id)
         self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_imported_task_waits_for_complete_live_observation(self):
+        adapter = SyntheticPublicationAdapter()
+        operation = self.start(adapter, key="create-full-read-pending-001")
+        now = datetime.utcnow()
+        with patch.object(
+            adapter, "get_product_attributes",
+            side_effect=OzonAPIError(
+                "rate limit", code="ozon_rate_limited", status_code=429,
+                retry_after=90.5, retriable=True,
+            ),
+        ):
+            pending = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation.id,
+                adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+                now=now,
+            )
+        self.assertEqual(pending.status, "polling")
+        self.assertEqual(pending.attempt_count, 1)
+        self.assertEqual(pending.error_code, "create_live_read_unavailable")
+        self.assertGreaterEqual(
+            pending.next_poll_at, now + timedelta(seconds=91),
+        )
+        self.assertEqual(pending.snapshot.confirmed_state_json, "{}")
+        self.assertEqual(MarketplaceListing.query.count(), 0)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+        completed = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id, operation_id=operation.id,
+            adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+            now=pending.next_poll_at + timedelta(seconds=1),
+        )
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+        self.assertEqual(
+            {name for name, _ in adapter.full_read_calls},
+            {"info", "attributes", "prices", "pictures"},
+        )
+        listing = MarketplaceListing.query.one()
+        self.assertIsNotNone(listing.info_synced_at)
+        self.assertEqual(
+            json.loads(completed.snapshot.confirmed_state_json)["source"],
+            "task_status_and_live_state",
+        )
+
+    def test_imported_task_with_live_price_drift_remains_unconfirmed(self):
+        adapter = SyntheticPublicationAdapter()
+        operation = self.start(adapter, key="create-live-price-drift-001")
+        actual_read_prices = adapter.read_prices
+
+        def changed_price(credentials, payload):
+            response = actual_read_prices(credentials, payload)
+            response["items"][0]["price"]["price"] = "999"
+            return response
+
+        now = datetime.utcnow()
+        with patch.object(adapter, "read_prices", side_effect=changed_price):
+            pending = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation.id,
+                adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+                now=now,
+            )
+        self.assertEqual(pending.status, "polling")
+        self.assertEqual(pending.error_code, "create_live_state_pending")
+        self.assertEqual(MarketplaceListing.query.count(), 0)
+        self.assertEqual(pending.snapshot.confirmed_state_json, "{}")
+
+        completed = MarketplacePublicationService.poll_operation(
+            seller_id=self.seller.id, operation_id=operation.id,
+            adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+            now=pending.next_poll_at + timedelta(seconds=1),
+        )
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_imported_task_readback_cooldown_past_deadline_is_uncertain(self):
+        adapter = SyntheticPublicationAdapter()
+        operation = self.start(adapter, key="create-readback-deadline-001")
+        now = operation.deadline_at - timedelta(seconds=70)
+        with patch.object(
+            adapter, "get_products",
+            side_effect=OzonAPIError(
+                "rate limit", code="ozon_rate_limited", status_code=429,
+                retry_after=120, retriable=True,
+            ),
+        ):
+            unresolved = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation.id,
+                adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+                now=now,
+            )
+        self.assertEqual(unresolved.status, "uncertain")
+        self.assertEqual(unresolved.error_code, "create_live_read_deadline_exceeded")
+        self.assertIsNone(unresolved.next_poll_at)
+        self.assertEqual(unresolved.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+        self.assertEqual(MarketplaceListing.query.count(), 0)
 
     def test_existing_offer_fails_before_quota_and_write(self):
         adapter = SyntheticPublicationAdapter(offer_exists=True)
@@ -3801,6 +4154,103 @@ class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCas
         )
         self.assertIsNone(stopped.next_poll_at)
         self.assertEqual(stopped.poll_count, 1)
+
+    def test_task_cooldown_survives_reload_and_manual_poll_without_rewrite(self):
+        adapter = SyntheticPublicationAdapter()
+        operation = self.start(adapter)
+        operation_id = operation.id
+        now = operation.submitted_at + timedelta(seconds=20)
+        original = adapter.get_submission
+        adapter.get_submission = MagicMock(side_effect=OzonAPIError(
+            "synthetic throttling", status_code=429, retry_after=7200.25,
+        ))
+        def poll(at):
+            return MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation_id,
+                adapter=adapter, credentials=SYNTHETIC_CREDENTIALS, now=at,
+                allow_submission=False,
+            )
+        pending = poll(now)
+        self.assertEqual(pending.next_poll_at, now + timedelta(seconds=7201))
+        db.session.expire_all()
+        poll(now + timedelta(minutes=30))
+        adapter.get_submission.assert_called_once()
+        adapter.get_submission = original
+        completed = poll(now + timedelta(seconds=7201))
+        self.assertEqual(completed.status, "succeeded")
+        self.assertEqual(completed.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_task_cooldown_past_deadline_stops_but_keeps_manual_read_gate(self):
+        adapter = SyntheticPublicationAdapter()
+        operation = self.start(adapter)
+        now = operation.submitted_at + timedelta(seconds=20)
+        adapter.get_submission = MagicMock(side_effect=OzonAPIError(
+            "synthetic throttling", status_code=429, retry_after=172800,
+        ))
+        for at in (now, now + timedelta(days=1)):
+            operation = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation.id,
+                adapter=adapter, credentials=SYNTHETIC_CREDENTIALS, now=at,
+            )
+            self.assertEqual(operation.status, "uncertain")
+            self.assertIsNone(operation.next_poll_at)
+        adapter.get_submission.assert_called_once()
+        self.assertEqual(operation.attempt_count, 1)
+
+    def test_update_accepted_task_read_outage_respects_deadline(self):
+        prior = self.prior_payload()
+        self.attach_listing(prior)
+        adapter = SyntheticFullStateAdapter(prior)
+        operation = self.start_update(adapter)
+        with patch.object(OzonProductStateContract, "read_full_payload",
+                          side_effect=OzonAPIError("synthetic outage")):
+            operation = MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation.id,
+                adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+                now=operation.deadline_at + timedelta(seconds=1),
+            )
+        self.assertEqual(operation.status, "uncertain")
+        self.assertEqual(operation.error_code, "update_live_read_deadline_exceeded")
+        self.assertIsNone(operation.next_poll_at)
+        self.assertEqual(operation.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_update_live_read_cooldown_then_exact_success(self):
+        prior = self.prior_payload()
+        self.attach_listing(prior)
+        adapter = SyntheticFullStateAdapter(prior)
+        operation = self.start_update(adapter)
+        now = operation.submitted_at + timedelta(seconds=20)
+        def poll(at):
+            return MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation.id,
+                adapter=adapter, credentials=SYNTHETIC_CREDENTIALS, now=at,
+            )
+        with patch.object(OzonProductStateContract, "read_full_payload",
+                          side_effect=OzonAPIError("throttled", retry_after=7200)) as read:
+            pending = poll(now)
+            self.assertEqual(pending.next_poll_at, now + timedelta(hours=2))
+            poll(now + timedelta(minutes=30))
+            read.assert_called_once()
+        self.assertEqual(poll(now + timedelta(hours=2)).status, "succeeded")
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+
+    def test_prewrite_cooldown_does_not_allow_early_manual_submission(self):
+        adapter = SyntheticPublicationAdapter()
+        with patch.object(adapter, "list_products", side_effect=OzonAPIError(
+            "synthetic throttling", retry_after=7200,
+        )) as read:
+            operation = self.start(adapter)
+            self.assertEqual(operation.status, "queued")
+            self.assertEqual(operation.attempt_count, 0)
+            MarketplacePublicationService.poll_operation(
+                seller_id=self.seller.id, operation_id=operation.id,
+                adapter=adapter, credentials=SYNTHETIC_CREDENTIALS,
+                now=operation.next_poll_at - timedelta(seconds=1),
+            )
+            read.assert_called_once()
+        self.assertEqual(adapter.submitted_payloads, [])
 
     def test_active_operation_blocks_draft_mutation_and_foreign_read(self):
         operation = self.start(

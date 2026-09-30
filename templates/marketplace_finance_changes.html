@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% from 'macros/icons.html' import icon %}
+{% block title %}История начислений Ozon — Seller Hub{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static',filename='ozon-finance.css') }}">
+<link rel="stylesheet" href="{{ url_for('static',filename='ozon-finance-changes.css') }}">
+<div id="ofc-fallback" class="ofn-page" role="status"><h1>История начислений</h1><p>Открываем сохранённые загрузки…</p><noscript>Включите JavaScript для сравнения.</noscript><a href="{{ url_for('marketplace_finance.page',account_id=account_id) }}">К журналу начислений</a></div>
+<div id="ofc-app" class="ofn-page ofc-page" x-ignore v-cloak>
+  <header class="ofn-header"><div><h1>История начислений</h1><p>{{ account_label }} · Сравнение сохранённых загрузок Ozon</p></div><a :href="financeUrl" class="sh-btn sh-btn--secondary">{{ icon('arrow-left',size=16) }} К журналу</a></header>
+  <p class="ofc-intro">Посмотрите, какие начисления появились или изменились между двумя загрузками. Сравниваем только общие даты. Сравнение помогает найти изменения; для бухгалтерской сверки нужен отчёт Ozon.</p>
+  <form class="ofc-pair" @submit.prevent="run()" aria-label="Загрузки для сравнения">
+    <label>Раньше<select name="older" v-model="selection.older" :disabled="busy || sessionEnded"><option value="">Выберите загрузку</option><option v-for="row in history" :key="row.id" :value="String(row.id)" v-text="snapshotLabel(row)"></option></select><small v-if="selectedPeriod('older')" v-text="'Данные за '+selectedPeriod('older')"></small></label>
+    <label>Позже<select name="newer" v-model="selection.newer" :disabled="busy || sessionEnded"><option value="">Выберите загрузку</option><option v-for="row in history" :key="row.id" :value="String(row.id)" v-text="snapshotLabel(row)"></option></select><small v-if="selectedPeriod('newer')" v-text="'Данные за '+selectedPeriod('newer')"></small></label>
+    <button type="submit" class="sh-btn sh-btn--primary" :disabled="busy || sessionEnded || !selection.older || !selection.newer">{{ icon('clock',size=17) }}<span v-text="loading?'Сравниваем…':'Сравнить загрузки'"></span></button>
+  </form>
+  <p v-if="historyTruncated" class="ofn-muted">Показаны последние 16 сохранённых загрузок. Более ранние версии могут быть недоступны.</p>
+  <p v-if="historyLoaded && history.length<2" class="ofc-empty" role="status">Для сравнения нужны две завершённые загрузки. Откройте финансовый журнал и дождитесь следующего обновления.</p>
+  <p v-if="historyLoaded && history.length>=2 && !selection.older && !error" class="ofc-empty" role="status">Для выбранной поздней загрузки нет более ранней версии с общими датами. Выберите другую пару.</p>
+  <p v-if="busy" role="status" class="ofn-muted" v-text="historyLoading?'Читаем историю загрузок…':'Сравниваем начисления и расшифровку…'"></p>
+  <div v-if="error" role="alert" class="ofn-notice ofn-error"><div><strong v-text="error"></strong><p v-if="data">Ниже остаётся предыдущее сравнение с указанными датами загрузки.</p></div><a v-if="sessionEnded" :href="loginUrl" class="sh-btn sh-btn--secondary">Войти снова</a><template v-else><button class="sh-btn sh-btn--secondary" type="button" :disabled="busy" @click="loadHistory()">Повторить проверку</button><a :href="resetUrl">Открыть историю заново</a></template></div>
+  <p v-if="data && stale" role="status" class="ofc-stale">Выбраны другие условия. Нажмите «Сравнить загрузки». Пока показано предыдущее сравнение.</p>
+  <section v-if="data" :aria-busy="loading" aria-label="Сохранённое сравнение" class="ofc-result">
+    <div class="ofc-observed"><h2>Общие даты: <span v-text="day(data.period.start)+' — '+day(data.period.end)"></span></h2><p>Раньше: <strong v-text="date(data.older.completed_at)"></strong>. Позже: <strong v-text="date(data.newer.completed_at)"></strong>.</p><p class="ofn-muted">Услуги в расшифровке не прибавляются к итогу второй раз. Исчезнувшая строка не подтверждает отмену или возврат денег.</p></div>
+    <div class="ofc-totals" v-for="row in data.totals" :key="row.currency"><h3 v-text="row.currency"></h3><dl><div><dt>Раньше</dt><dd v-text="money(row.older,row.currency)"></dd><small v-text="'Начислений: '+row.older_count"></small></div><div><dt>Позже</dt><dd v-text="money(row.newer,row.currency)"></dd><small v-text="'Начислений: '+row.newer_count"></small></div><div><dt>Разница</dt><dd v-text="money(row.delta,row.currency)"></dd><small>Только итоговые суммы начислений</small></div></dl></div>
+    <p v-if="!data.totals.length" class="ofc-empty">За общие даты обе загрузки не содержат начислений.</p>
+    <nav class="ofc-kinds" aria-label="Различия начислений"><button type="button" :disabled="busy || stale || sessionEnded" :aria-pressed="!selection.kind" @click="filter('')" v-text="'Все различия · '+(data.counts.added+data.counts.missing+data.counts.changed)"></button><button v-for="(label,kind) in kinds" :key="kind" type="button" :disabled="busy || stale || sessionEnded" :aria-pressed="selection.kind===kind" @click="filter(kind)" v-text="label+' · '+data.counts[kind]"></button></nav>
+    <p class="ofn-muted" v-text="'Без изменений: '+data.counts.unchanged+'. Суммы выше относятся ко всем начислениям за общие даты.'"></p>
+    <div v-if="!data.items.length" class="ofc-empty"><h3 v-text="data.pagination.total?'На этой странице нет различий':selection.kind?'Таких различий нет':'В сохранённых начислениях различий нет'"></h3><p>Это результат сравнения двух загрузок, а не подтверждение правильности бухгалтерского отчёта.</p></div>
+    <ul class="ofc-changes"><li v-for="row in data.items" :key="row.accrual_id"><div class="ofc-change-title"><span class="ofc-kind" v-text="kindLabel(row.kind)"></span><h3>Начисление <span v-text="row.accrual_id"></span></h3><p v-if="row.fields.length">Изменились: <span v-text="fieldLabel(row.fields)"></span>.</p></div><div v-for="side in ['older','newer']" :key="side" class="ofc-version"><small v-text="side==='older'?'Раньше':'Позже'"></small><template v-if="row[side]"><strong v-text="money(row[side].amount,row[side].currency)"></strong><time v-text="day(row[side].date)"></time><small v-if="row[side].number">Отправление <span v-text="row[side].number"></span></small><a :href="factUrl(side,row[side])" v-text="side==='older'?'Открыть прежнюю версию':'Открыть новую версию'"></a></template><p v-else>Нет в этой загрузке за общие даты</p></div></li></ul>
+    <nav v-if="data.pagination.pages>1" class="ofc-pagination" aria-label="Страницы различий"><a v-if="data.pagination.page>1 && !busy && !stale" :href="url({...selection,page:String(data.pagination.page-1)})" @click="pageLink($event,data.pagination.page-1)">Назад</a><span v-text="'Страница '+data.pagination.page+' из '+data.pagination.pages"></span><a v-if="data.pagination.page<data.pagination.pages && !busy && !stale" :href="url({...selection,page:String(data.pagination.page+1)})" @click="pageLink($event,data.pagination.page+1)">Далее</a></nav>
+  </section>
+</div>
+<script type="application/json" id="ofc-bootstrap">{{ {'accountId':account_id,'page':url_for('marketplace_finance.changes_page'),'api':url_for('marketplace_finance.changes_api'),'historyApi':url_for('marketplace_finance.history_api')}|tojson }}</script>
+<script src="{{ url_for('static',filename='vendor/vue-3.4.38.global.prod.js') }}" defer></script>
+<script src="{{ url_for('static',filename='ozon-finance.js') }}" defer></script>
+<script src="{{ url_for('static',filename='ozon-finance-changes.js') }}" defer></script>
+{% endblock %}

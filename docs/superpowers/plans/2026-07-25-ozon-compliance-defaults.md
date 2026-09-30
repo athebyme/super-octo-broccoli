@@ -14,6 +14,7 @@
 - ID атрибутов: ТН ВЭД `"22232"`, маркировка `"23536"`. `MarketplaceAttributeDefinition.external_attribute_id` — `db.String(100)`, сравнивать строками.
 - Форма элемента списка атрибутов черновика: `{"attribute_id": <str>, "complex_id": <str>, "values": [{"dictionary_value_id": <str>, "value": <str>}]}`; для значения без словаря — `{"value": <str>}`.
 - Ни один новый код не вызывает Ozon API и не создаёт `MarketplaceOperation`.
+- Любой констрейнт новой таблицы объявляется И в модели (`__table_args__`), И в миграции. `docker-entrypoint.sh` вызывает `db.create_all()` до скриптов из `migrations/`, поэтому таблицу почти всегда создаёт ORM, а `CREATE TABLE IF NOT EXISTS` миграции становится no-op; в SQLite CHECK нельзя добавить через `ALTER TABLE`, так что объявленный только в миграции констрейнт не применится нигде.
 - Seller-edited значение атрибута не перезаписывается никогда.
 - Отсутствующий/несвежий/неоднозначный источник — fail-closed: не ставим ничего, черновик остаётся `blocked` с явной причиной.
 - Свежесть словаря проверять только через `OzonReferenceService.dictionary_is_fresh(attribute)`; свежесть типа — `OzonReferenceService.reference_is_fresh(product_type)`.
@@ -134,6 +135,26 @@ class OzonComplianceDefault(db.Model):
 
     product_type = db.relationship('MarketplaceProductType')
 
+    # КРИТИЧНО: constraints обязаны быть и здесь, и в миграции. entrypoint
+    # вызывает db.create_all() ДО скриптов из migrations/, поэтому таблицу
+    # почти всегда создаёт ORM, а CREATE TABLE IF NOT EXISTS миграции потом
+    # становится no-op. В SQLite CHECK нельзя добавить через ALTER TABLE —
+    # объявленный только в миграции констрейнт не применится никогда.
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('active', 'retired')",
+            name='ck_ozon_compliance_default_status',
+        ),
+        db.Index(
+            'uq_ozon_compliance_default_active',
+            'marketplace_id',
+            'product_type_id',
+            unique=True,
+            sqlite_where=db.text("status = 'active'"),
+            postgresql_where=db.text("status = 'active'"),
+        ),
+    )
+
     __mapper_args__ = {'version_id_col': version}
 
     def __repr__(self):
@@ -166,6 +187,22 @@ class OzonMarkingRegistryVersion(db.Model):
 
     rules = db.relationship(
         'OzonMarkingRule', backref='registry_version', lazy='dynamic',
+    )
+
+    # Та же причина, что у OzonComplianceDefault: ORM и миграция обязаны
+    # давать идентичный набор констрейнтов.
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('active', 'superseded')",
+            name='ck_ozon_marking_registry_status',
+        ),
+        db.Index(
+            'uq_ozon_marking_registry_active',
+            'status',
+            unique=True,
+            sqlite_where=db.text("status = 'active'"),
+            postgresql_where=db.text("status = 'active'"),
+        ),
     )
 
     def __repr__(self):
@@ -405,7 +442,7 @@ git commit -m "feat(ozon): модели и миграция админских c
   - `TNVED_ATTRIBUTE_ID = "22232"`, `MARKING_ATTRIBUTE_ID = "23536"`
   - `normalize_code(value) -> str` — только цифры
   - `dictionary_code(value) -> str` — ведущие цифры значения словаря
-  - `resolve_tnved(product_type_id) -> dict | None` с ключами `code`, `display`, `external_value_id`, `default_id`, `dictionary_version`
+  - `resolve_tnved(product_type_id) -> dict | None` с ключами `code`, `value`, `external_value_id`, `default_id`, `dictionary_version`. Ключ называется именно `value` (не `display`) — так его читает `apply_to_attributes` в Task 4.
 
 - [ ] **Step 1: Написать падающие тесты нормализации и разбора**
 
@@ -1006,7 +1043,7 @@ Expected: PASS (4 теста)
 
 - [ ] **Step 6: Проверить, что существующие тесты черновиков не сломались**
 
-Run: `SKIP_SCHEDULER=1 ./venv/bin/python -m pytest -q tests/test_marketplace_drafts.py tests/test_ozon_bulk_upload.py`
+Run: `SKIP_SCHEDULER=1 ./venv/bin/python -m pytest -q tests/test_marketplace_drafts.py tests/test_marketplace_draft_bulk_prepare.py tests/test_marketplace_draft_routes.py tests/test_seller_ozon_preparation_ui.py`
 Expected: PASS. Если какой-то тест падает из-за появления новых атрибутов — это ожидаемо только когда в тестовой БД есть активный `OzonComplianceDefault`; при пустых новых таблицах `resolve_type_defaults` возвращает `tnved=None` и слой не добавляет ничего.
 
 - [ ] **Step 7: Прогнать полный набор**
@@ -1029,7 +1066,7 @@ git commit -m "feat(ozon): применение админских compliance-д
 
 **Files:**
 - Modify: `services/ozon_compliance_suggestions.py:147-159`
-- Test: `tests/test_ozon_compliance_suggestions.py` (создать, если отсутствует)
+- Test: `tests/test_ozon_compliance_suggestions.py` — **файл уже существует (274 строки)**, дописать новый класс в конец, ничего не удаляя. Существующий `test_non_vibrating_tpr_shows_material_alternatives_not_vibration` использует `"TPR (Термопластичная резина)"` и обязан продолжать проходить.
 
 **Interfaces:**
 - Consumes: ничего нового.
@@ -1133,7 +1170,7 @@ git commit -m "fix(ozon): распознавать кириллические Т
 - Consumes: модели Task 1, `resolve_marking` (Task 3).
 - Produces:
   - `list_type_rows() -> list[dict]` — задействованные типы с текущим решением и вычисленной маркировкой
-  - `save_decision(*, product_type_id, tnved_code, rationale, user_id, expected_version=None) -> OzonComplianceDefault`
+  - `save_decision(*, product_type_id, tnved_code, rationale, user_id) -> OzonComplianceDefault`. Отдельный `expected_version` не нужен: конкурентную правку ловит `version_id_col` модели, а сервис превращает `StaleDataError` в `OzonComplianceAdminError` с человекочитаемым текстом.
   - `activate_registry_version(*, version_id, user_id) -> OzonMarkingRegistryVersion`
   - `preview_registry_switch(version_id) -> dict` — сколько типов поменяют флаг
 
@@ -1410,7 +1447,12 @@ git commit -m "feat(ozon): админский сервис compliance-решен
 
 **Interfaces:**
 - Consumes: `OzonComplianceAdminService` (Task 6).
-- Produces: маршруты `GET /admin/ozon/compliance`, `POST /admin/ozon/compliance/decision`, `POST /admin/ozon/compliance/registry/activate`.
+- Produces: маршруты `GET /admin/ozon/compliance`, `POST /admin/ozon/compliance/decision`, `POST /admin/ozon/compliance/registry`, `POST /admin/ozon/compliance/registry/activate`.
+- Также добавляет в `services/ozon_compliance_admin.py` функцию `create_registry_version(*, label, is_complete, rules_text, user_id)`.
+
+**Дыра в плане, обнаруженная при исполнении.** Task 6 дал только `activate_registry_version`, переключающую статус УЖЕ существующей строки. Функции, создающей `OzonMarkingRegistryVersion` и `OzonMarkingRule`, во всём плане не было ни в одной задаче. Последствие серьёзнее неработающей формы: без активной версии перечня `resolve_marking` всегда возвращает `None`, атрибут маркировки не заполняется никогда, и вся фича остаётся инертной. Поэтому область Task 7 расширена на сервисный слой.
+
+`rules_text` — textarea, одно правило на строку, поля через `;`, обязательно только первое: `code_prefix;normative_ref;valid_from;note`. Пустые строки и начинающиеся с `#` пропускаются. `code_prefix` нормализуется `normalize_code` и обязан дать от 2 до 10 цифр — пустой или однозначный префикс отклоняется, потому что через `startswith` он совпал бы с любым кодом и сделал бы маркируемым весь каталог. Дубликаты префиксов внутри версии отклоняются внятной ошибкой, а не `IntegrityError`. Лимит 5000 правил. Новая версия создаётся со `status='superseded'`: активация остаётся отдельным явным шагом, которому предшествует превью последствий через `preview_registry_switch`.
 
 SQL задействованных типов уже объявлен константой `TYPE_ROWS_SQL` в Task 6.
 
@@ -1749,6 +1791,202 @@ git commit -m "feat(ozon): локальный прогон compliance-дефол
 
 ---
 
+### Task 8b: Провенанс compliance-значений и обновление уже заполненных черновиков
+
+**Files:**
+- Modify: `services/ozon_compliance_defaults.py`
+- Modify: `services/marketplace_drafts.py` (сохранение провенанса в точках создания/привязки типа)
+- Modify: `services/ozon_compliance_admin.py` (`apply_to_existing_drafts` — режим обновления)
+- Test: `tests/test_ozon_compliance_defaults.py`, `tests/test_ozon_compliance_admin.py`
+
+**Зачем эта задача.** После Task 4 админское исправление не доходит до уже созданных черновиков ни одним путём: `rebase_source_defaults` compliance-атрибуты намеренно не трогает, `apply_reference_defaults` добавляет только отсутствующие идентичности, а `apply_to_existing_drafts` заполняет только пустые поля. Для фичи «задал один раз — дальше под капотом» это означает, что первое же исправление ошибочного кода ТН ВЭД не сработает.
+
+Обновлять вслепую нельзя: значение могло быть вписано продавцом вручную на экране массовой починки, и затирать его запрещено.
+
+**Правило, снимающее неоднозначность.** Обновлять разрешено ТОЛЬКО значение, побайтово равное тому, которое слой сам записал в прошлый раз. Поэтому провенанс хранит не только источник, но и точное записанное значение. Продавец, изменивший значение, автоматически выпадает из-под обновления — и это не требует, чтобы `update_draft` умел поддерживать провенанс.
+
+**Неймспейс провенанса.** `provenance_json` уже содержит факты источника с ключами вида `attributes.colors`, `commercial.price`. Compliance-записи кладутся под отдельный префикс `compliance.` и с фактами не смешиваются:
+
+```python
+{
+  "compliance.22232": {
+    "source": "admin_compliance_default",
+    "default_id": 7,
+    "code": "3307900008",
+    "external_value_id": "971397758",
+    "dictionary_version": 3
+  },
+  "compliance.23536": {
+    "source": "admin_marking_registry",
+    "registry_version_id": 1,
+    "value": "false"
+  }
+}
+```
+
+- [ ] **Step 1: Написать падающий тест на построение провенанса**
+
+```python
+class ComplianceProvenanceTestCase(unittest.TestCase):
+    def test_provenance_records_written_values(self):
+        from services.ozon_compliance_defaults import build_provenance_entries
+
+        report = {
+            'applied': ['22232', '23536'],
+            'unresolved': [],
+            'evidence': {'tnved_default_id': 7, 'dictionary_version': 3,
+                         'registry_version_id': 1},
+        }
+        defaults = {
+            'tnved': {'code': '3307900008', 'value': '3307900008 - X',
+                      'external_value_id': '971397758', 'default_id': 7,
+                      'dictionary_version': 3},
+            'marking': False,
+        }
+        entries = build_provenance_entries(report, defaults)
+        self.assertEqual(entries['compliance.22232']['source'],
+                         'admin_compliance_default')
+        self.assertEqual(entries['compliance.22232']['external_value_id'],
+                         '971397758')
+        self.assertEqual(entries['compliance.23536']['value'], 'false')
+
+    def test_nothing_recorded_for_unapplied_attributes(self):
+        from services.ozon_compliance_defaults import build_provenance_entries
+
+        report = {'applied': [], 'unresolved': ['22232', '23536'],
+                  'evidence': {}}
+        entries = build_provenance_entries(report, {'tnved': None,
+                                                    'marking': None})
+        self.assertEqual(entries, {})
+```
+
+- [ ] **Step 2: Убедиться, что падает**
+
+Run: `SKIP_SCHEDULER=1 ./venv/bin/python -m pytest -q tests/test_ozon_compliance_defaults.py::ComplianceProvenanceTestCase`
+Expected: FAIL — `cannot import name 'build_provenance_entries'`
+
+- [ ] **Step 3: Реализовать построение провенанса**
+
+`apply_to_attributes` дополнительно кладёт в `report` ключ `defaults` с разрешёнными значениями, чтобы вызывающий не резолвил повторно. Затем:
+
+```python
+def build_provenance_entries(report, defaults) -> dict:
+    """Провенанс заполненных compliance-атрибутов.
+
+    Записывается точное значение, которое слой поставил: обновлять его позже
+    разрешено только пока оно побайтово равно записанному. Любая правка
+    продавца автоматически выводит атрибут из-под автоматического обновления.
+    """
+    applied = set((report or {}).get("applied") or [])
+    evidence = (report or {}).get("evidence") or {}
+    entries: dict = {}
+
+    tnved = (defaults or {}).get("tnved")
+    if TNVED_ATTRIBUTE_ID in applied and tnved:
+        entries[f"compliance.{TNVED_ATTRIBUTE_ID}"] = {
+            "source": "admin_compliance_default",
+            "default_id": tnved.get("default_id"),
+            "code": tnved.get("code"),
+            "external_value_id": tnved.get("external_value_id"),
+            "dictionary_version": tnved.get("dictionary_version"),
+        }
+
+    marking = (defaults or {}).get("marking")
+    if MARKING_ATTRIBUTE_ID in applied and marking is not None:
+        entries[f"compliance.{MARKING_ATTRIBUTE_ID}"] = {
+            "source": "admin_marking_registry",
+            "registry_version_id": evidence.get("registry_version_id"),
+            "value": "true" if marking else "false",
+        }
+
+    return entries
+```
+
+- [ ] **Step 4: Прогнать тесты провенанса**
+
+Run: `SKIP_SCHEDULER=1 ./venv/bin/python -m pytest -q tests/test_ozon_compliance_defaults.py::ComplianceProvenanceTestCase`
+Expected: PASS
+
+- [ ] **Step 5: Сохранять провенанс в точках создания и привязки типа**
+
+В `services/marketplace_drafts.py` в местах, где `attributes_json` перезаписывается результатом `_auto_map_attributes` (строки около 3541, 4112, 4337, 4709), после присвоения атрибутов слить `build_provenance_entries(...)` в существующий `provenance_json` черновика, не затирая ключи фактов. `rebase_source_defaults` провенанс compliance-ключей не трогает — он их и не пересчитывает.
+
+- [ ] **Step 6: Написать падающий тест на режим обновления**
+
+```python
+class RefreshExistingDraftsTestCase(unittest.TestCase):
+    def test_only_value_we_wrote_is_refreshed(self):
+        from services.ozon_compliance_admin import compliance_value_is_ours
+
+        provenance = {'compliance.22232': {'external_value_id': '971397758'}}
+        stored = {'attribute_id': '22232',
+                  'values': [{'dictionary_value_id': '971397758',
+                              'value': '3307900008 - X'}]}
+        self.assertTrue(compliance_value_is_ours('22232', stored, provenance))
+
+    def test_seller_edited_value_is_not_ours(self):
+        from services.ozon_compliance_admin import compliance_value_is_ours
+
+        provenance = {'compliance.22232': {'external_value_id': '971397758'}}
+        stored = {'attribute_id': '22232',
+                  'values': [{'dictionary_value_id': '999999999',
+                              'value': 'Другой код'}]}
+        self.assertFalse(compliance_value_is_ours('22232', stored, provenance))
+
+    def test_value_without_provenance_is_not_ours(self):
+        from services.ozon_compliance_admin import compliance_value_is_ours
+
+        stored = {'attribute_id': '22232',
+                  'values': [{'dictionary_value_id': '971397758'}]}
+        self.assertFalse(compliance_value_is_ours('22232', stored, {}))
+```
+
+- [ ] **Step 7: Убедиться, что падает**
+
+Run: `SKIP_SCHEDULER=1 ./venv/bin/python -m pytest -q tests/test_ozon_compliance_admin.py::RefreshExistingDraftsTestCase`
+Expected: FAIL — `cannot import name 'compliance_value_is_ours'`
+
+- [ ] **Step 8: Реализовать проверку принадлежности и режим обновления**
+
+```python
+def compliance_value_is_ours(attribute_id, stored_item, provenance) -> bool:
+    """Ставил ли это значение сам слой, и не менял ли его с тех пор продавец."""
+    entry = (provenance or {}).get(f"compliance.{attribute_id}")
+    if not isinstance(entry, dict):
+        return False
+    values = (stored_item or {}).get("values")
+    if not isinstance(values, list) or len(values) != 1:
+        return False
+    value = values[0]
+    if not isinstance(value, dict):
+        return False
+    if attribute_id == "23536":
+        return value.get("value") == entry.get("value")
+    return (
+        value.get("dictionary_value_id") == entry.get("external_value_id")
+    )
+```
+
+`apply_to_existing_drafts` получает параметр `refresh=False`. При `refresh=True` для заполненного атрибута проверяется `compliance_value_is_ours`; если да и текущее разрешённое значение отличается — значение заменяется и провенанс обновляется, счётчик `refreshed`. Если нет — счётчик `skipped_seller_owned`, значение не трогается. Если совпадает — `already_current`.
+
+- [ ] **Step 9: Прогнать тесты и полный набор**
+
+Run: `SKIP_SCHEDULER=1 ./venv/bin/python -m pytest -q tests/test_ozon_compliance_defaults.py tests/test_ozon_compliance_admin.py`
+Expected: PASS
+
+Затем полный набор синхронно: `SKIP_SCHEDULER=1 ./venv/bin/python -m pytest -q`
+
+- [ ] **Step 10: Проверки и коммит**
+
+```bash
+./venv/bin/python -m py_compile services/ozon_compliance_defaults.py services/ozon_compliance_admin.py services/marketplace_drafts.py
+git diff --check
+git add services/ozon_compliance_defaults.py services/ozon_compliance_admin.py services/marketplace_drafts.py tests/test_ozon_compliance_defaults.py tests/test_ozon_compliance_admin.py
+git commit -m "feat(ozon): провенанс compliance-значений и обновление существующих черновиков"
+```
+
+---
+
 ### Task 9: Подключение миграции и обновление AGENTS.md
 
 **Files:**
@@ -1793,6 +2031,20 @@ type; единственный допустимый источник призн�
 ```
 
 Также добавить `migrate_add_ozon_compliance_defaults.py` в список миграций раздела «База данных и миграции».
+
+- [ ] **Step 2b: Закрыть отложенный минор Task 1**
+
+В `models.py` у класса `OzonMarkingRule` в существующий `__table_args__` добавить недостающий перф-индекс, объявленный в миграции как `ix_ozon_marking_rules_prefix`, чтобы `db.create_all()` и миграция давали одинаковый набор индексов:
+
+```python
+        db.Index('ix_ozon_marking_rules_prefix', 'code_prefix'),
+```
+
+Существующий `db.UniqueConstraint('registry_version_id', 'code_prefix', name='uq_ozon_marking_rule_scope')` не трогать.
+
+- [ ] **Step 2c: Убрать недостижимый обработчик**
+
+В `services/ozon_compliance_admin.py` в `activate_registry_version` убрать `StaleDataError` из кортежа `except`, оставив только `IntegrityError`. У модели `OzonMarkingRegistryVersion` нет `version_id_col`, поэтому `StaleDataError` там недостижим; непроверяемая ветка создаёт ложное впечатление, что конкурентная активация защищена оптимистической блокировкой, тогда как её сдерживает только partial-unique индекс. В `save_decision` кортеж НЕ трогать — там `version_id_col` есть и обработчик реально срабатывает.
 
 - [ ] **Step 3b: Поправить ошибку в спеке**
 

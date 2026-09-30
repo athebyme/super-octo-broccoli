@@ -19,8 +19,8 @@ import unicodedata
 from urllib.parse import urlsplit
 
 from flask import current_app
-from sqlalchemy import or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, or_, text
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -42,6 +42,12 @@ from models import (
 from services.marketplace_fact_pack import (
     MarketplaceFactPackBuilder,
     MarketplaceFactPackError,
+)
+from services.marketplace_category_review import (
+    PAGE_SIZE as CATEGORY_IMPACT_PAGE_SIZE,
+    build_impact as build_category_impact,
+    issue_token as issue_category_review_token,
+    valid_token as valid_category_review_token,
 )
 from services.marketplace_operation_locks import (
     release_marketplace_category_mapping_lock,
@@ -76,6 +82,10 @@ class MarketplaceDraftConflict(MarketplaceDraftError):
     code = "marketplace_draft_conflict"
 
 
+class MarketplaceCategoryImpactTooLarge(MarketplaceDraftConflict):
+    code = "category_impact_too_large"
+
+
 class MarketplaceDraftService:
     MAX_JSON_BYTES = 256 * 1024
     MAX_ATTRIBUTES = 5_000
@@ -86,14 +96,17 @@ class MarketplaceDraftService:
     MAX_BARCODES = 100
     MAX_IMPORT_BARCODES = 1
     MAX_OZON_OFFER_ID_CHARS = 50
+    MAX_OZON_API_PHYSICAL_INTEGER = 2_147_483_647
     OZON_DESCRIPTION_ATTRIBUTE_ID = "4191"
     OZON_TYPE_ATTRIBUTE_ID = "8229"
+    OZON_RUSSIAN_SIZE_ATTRIBUTE_ID = "4295"
     OZON_MODEL_NAME_ATTRIBUTE_ID = "9048"
     OZON_GROUP_ATTRIBUTE_ID = "8292"
     OZON_ADULT_ATTRIBUTE_ID = "9070"
     OZON_HASHTAG_ATTRIBUTE_ID = "23171"
     OZON_ACCESSORY_GENDER_ATTRIBUTE_ID = "4539"
     OZON_CLOTHING_GENDER_ATTRIBUTE_ID = "9163"
+    OZON_BRAND_ATTRIBUTE_IDS = frozenset({"31", "85"})
     MAX_VALIDATION_ITEMS = 250
     DIMENSION_UNITS = {"MILLIMETERS", "CENTIMETERS", "INCHES"}
     WEIGHT_UNITS = {"GRAMS", "KILOGRAMS", "POUNDS"}
@@ -108,7 +121,29 @@ class MarketplaceDraftService:
         "polling",
         "uncertain",
     }
-    OBSERVED_MAPPING_ALGORITHM = "ozon-exact-linked-category-consensus-v2"
+    OBSERVED_MAPPING_ALGORITHM = "ozon-exact-linked-category-consensus-v3"
+    EXPLICIT_SOURCE_MAPPING_ALGORITHM = "ozon-explicit-source-taxonomy-v2"
+    EXPLICIT_SOURCE_MAPPING_ALGORITHMS = frozenset({
+        "ozon-explicit-source-taxonomy-v1",
+        EXPLICIT_SOURCE_MAPPING_ALGORITHM,
+    })
+    EXPLICIT_EROTIC_CLOTHING_PATH = (
+        "Одежда / Одежда и аксессуары эротические"
+    )
+    EXPLICIT_PERSONAL_HYGIENE_PATH = "Аптека / Личная гигиена"
+    EXPLICIT_ADULT_BDSM_PATH = "Товары для взрослых / БДСМ"
+    EXPLICIT_ADULT_COSMETICS_PATH = (
+        "Товары для взрослых / Интимная косметика"
+    )
+    EXPLICIT_ADULT_SEX_TOYS_PATH = (
+        "Товары для взрослых / Секс игрушки"
+    )
+    EXPLICIT_ADULT_SOUVENIRS_PATH = (
+        "Товары для взрослых / Сувениры и игры эротические"
+    )
+    EXPLICIT_ADULT_CARE_PATH = (
+        "Товары для взрослых / Уход и хранение секс игрушек"
+    )
     OBSERVED_MAPPING_MIN_LISTINGS = 2
     OBSERVED_MAPPING_MAX_LISTINGS = 20_000
     OBSERVED_MAPPING_MAX_PRODUCTS = 50_000
@@ -117,6 +152,20 @@ class MarketplaceDraftService:
         "exact_source_identity",
     })
     OBSERVED_MODEL_RECIPE = "source_vendor_code_exact_v1"
+    EXPLICIT_SOURCE_MODEL_RECIPE = "isolated_source_product_model_v1"
+    # Reviewed identity aliases only.  The result is still accepted solely
+    # through one fresh exact type-scoped Ozon dictionary row; this table does
+    # not authorize fuzzy matching or a free-form brand replacement.
+    OBSERVED_BRAND_CANONICAL_ALIASES = {
+        "bioritm": "Bioritmlab",
+        'лаборатория "биоритм"': "Bioritmlab",
+        "system jo": "System JO, США",
+        "soft line": "SoftLine",
+        "le shali": "LeShaLi",
+        "mens max": "Men's Max",
+        "nsnovelties": "NS Novelties",
+        "svakom design usa limited": "Svakom Design",
+    }
 
     @staticmethod
     def _positive_integer(value: Any, field_name: str) -> int:
@@ -203,6 +252,15 @@ class MarketplaceDraftService:
     @staticmethod
     def _normalized_text(value: str) -> str:
         return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+    @classmethod
+    def _reviewed_brand_candidate(cls, value: Any) -> Any:
+        if not isinstance(value, str) or not value.strip():
+            return value
+        return cls.OBSERVED_BRAND_CANONICAL_ALIASES.get(
+            cls._normalized_text(value),
+            value,
+        )
 
     @classmethod
     def _external_id(cls, value: Any, field_name: str) -> str:
@@ -494,6 +552,600 @@ class MarketplaceDraftService:
         return identities
 
     @classmethod
+    def _explicit_source_taxonomy_rule(
+        cls,
+        source_category: Any,
+    ) -> Optional[dict]:
+        """Resolve only literal, reviewed source leaves to official types.
+
+        This is intentionally an allowlist rather than a lexical classifier.
+        Broad ancestors and mixed leaves may contain several Ozon types, so
+        only exact observed categories reviewed below may select a type.
+        """
+        if not isinstance(source_category, str):
+            return None
+        source = cls._normalized_text(source_category).replace("ё", "е")
+        parts = [part.strip() for part in source.split(">")]
+        if not all(parts):
+            return None
+
+        def target(
+            rule_id: str,
+            product_type_name: str,
+            product_type_path: str,
+        ) -> dict:
+            return {
+                "rule_id": rule_id,
+                "product_type_name": product_type_name,
+                "product_type_path": product_type_path,
+            }
+
+        if parts == ["гели, смазки и лубриканты"]:
+            return target(
+                "explicit_lubricant_standalone_leaf_v1",
+                "Лубрикант",
+                cls.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            )
+        if len(parts) != 2:
+            return None
+        root, leaf = parts
+
+        if root == "бдсм товары и фетиш" and leaf in {
+            "одежда и белье для женщин",
+            "одежда и белье для мужчин",
+        }:
+            return target(
+                "explicit_bdsm_clothing_leaf_v1",
+                "БДСМ одежда",
+                cls.EXPLICIT_EROTIC_CLOTHING_PATH,
+            )
+        if root == "аксессуары, украшения для тела":
+            if leaf in {"стикини, пестис", "стикини, пэстис"}:
+                return target(
+                    "explicit_pasties_leaf_v1",
+                    "Пэстисы",
+                    cls.EXPLICIT_EROTIC_CLOTHING_PATH,
+                )
+            if leaf in {"портупеи, стрепы", "портупеи, стрэпы"}:
+                return target(
+                    "explicit_erotic_harness_leaf_v1",
+                    "Портупея эротическая",
+                    cls.EXPLICIT_EROTIC_CLOTHING_PATH,
+                )
+
+        if root == "эротическое белье для женщин":
+            if leaf in {"игровые костюмы", "ролевые костюмы"}:
+                return target(
+                    "explicit_roleplay_costume_leaf_v1",
+                    "Костюм для ролевых игр",
+                    cls.EXPLICIT_EROTIC_CLOTHING_PATH,
+                )
+            if leaf == "платья, мини-платья":
+                return target(
+                    "explicit_gogo_dress_leaf_v1",
+                    "Платье гоу-гоу",
+                    cls.EXPLICIT_EROTIC_CLOTHING_PATH,
+                )
+            if leaf in {
+                "белье большого размера",
+                "боди, ками, корсаж",
+                "длинные халатики, сорочки",
+                "колготки",
+                "комбинезоны",
+                "комплекты",
+                "корсеты",
+                "лифы, топы, бюстье, стрепы",
+                "пеньюары, сорочки, пижамы",
+                "пояса для чулок",
+                "свадебный образ",
+                "трусики, стринги, шортики",
+                "халатики",
+                "чулки, гольфины, леггинсы",
+                "юбки, брюки, шорты",
+            }:
+                return target(
+                    "explicit_womens_erotic_lingerie_leaf_v1",
+                    "Эротическое белье",
+                    cls.EXPLICIT_EROTIC_CLOTHING_PATH,
+                )
+        if root == "эротическое белье для мужчин" and leaf in {
+            "боди, комбинезоны",
+            "комплекты",
+            "трусы, стринги, шорты",
+        }:
+            return target(
+                "explicit_mens_erotic_lingerie_leaf_v1",
+                "Эротическое белье",
+                cls.EXPLICIT_EROTIC_CLOTHING_PATH,
+            )
+
+        exact_rules = {
+            ("смазки, косметика", "вагинальные смазки"): (
+                "explicit_vaginal_lubricant_leaf_v1",
+                "Лубрикант",
+                cls.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            ),
+            ("смазки, косметика", "анальные смазки"): (
+                "explicit_anal_lubricant_leaf_v1",
+                "Лубрикант",
+                cls.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            ),
+            ("смазки, косметика", "оральные смазки"): (
+                "explicit_oral_lubricant_leaf_v1",
+                "Лубрикант",
+                cls.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            ),
+            ("смазки, косметика", "возбуждающие смазки"): (
+                "explicit_arousal_lubricant_leaf_v1",
+                "Лубрикант",
+                cls.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            ),
+            ("смазки, косметика", "пролонгирующие смазки"): (
+                "explicit_prolonging_lubricant_leaf_v1",
+                "Лубрикант",
+                cls.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            ),
+            ("анальные стимуляторы и пробки", "анальные пробки, втулки"): (
+                "explicit_anal_plug_leaf_v1",
+                "Анальная пробка",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("анальные стимуляторы и пробки", "анальные стимуляторы"): (
+                "explicit_anal_stimulator_leaf_v1",
+                "Анальный стимулятор",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("анальные стимуляторы и пробки", "стимуляторы простаты"): (
+                "explicit_prostate_stimulator_leaf_v1",
+                "Массажер простаты",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("вибраторы и фаллоимитаторы", "хай-тек вибраторы"): (
+                "explicit_high_tech_vibrator_leaf_v1",
+                "Вибратор",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("вибраторы и фаллоимитаторы", "с вибрацией"): (
+                "explicit_vibrating_vibrator_leaf_v1",
+                "Вибратор",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("вибраторы и фаллоимитаторы", "для g точки"): (
+                "explicit_g_spot_vibrator_leaf_v1",
+                "Вибратор",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("вибраторы и фаллоимитаторы", "без вибрации"): (
+                "explicit_non_vibrating_dildo_leaf_v1",
+                "Фаллоимитатор",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("женские стимуляторы", "вибро-яйца"): (
+                "explicit_vibro_egg_leaf_v1",
+                "Виброяйцо",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("насадки и кольца", "эрекционные"): (
+                "explicit_erection_ring_leaf_v1",
+                "Эрекционное кольцо",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("насадки и кольца", "удлиняющие и расширяющие насадки"): (
+                "explicit_erotic_extension_leaf_v1",
+                "Насадки, удлинители эротические",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("вакуумные помпы", "мужские помпы для тренировки эрекции"): (
+                "explicit_male_pump_leaf_v1",
+                "Помпа эротическая",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("вакуумные помпы", "помпы женские"): (
+                "explicit_female_pump_leaf_v1",
+                "Помпа эротическая",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("вакуумные помпы", "насадки на помпу"): (
+                "explicit_pump_accessory_leaf_v1",
+                "Аксессуары для помпы",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+            ("красивая грудь", "зажимы для сосков, стимуляторы"): (
+                "explicit_nipple_clamp_leaf_v1",
+                "Зажим, стимулятор для сосков",
+                cls.EXPLICIT_ADULT_BDSM_PATH,
+            ),
+            ("бдсм товары и фетиш", "уретральные стимуляторы"): (
+                "explicit_urethral_stimulator_leaf_v1",
+                "Расширитель уретральный",
+                cls.EXPLICIT_ADULT_BDSM_PATH,
+            ),
+            ("бдсм товары и фетиш", "шоковая терапия (электростимуляция)"): (
+                "explicit_electrostimulation_leaf_v1",
+                "Электростимуляторы",
+                cls.EXPLICIT_ADULT_BDSM_PATH,
+            ),
+            ("бдсм товары и фетиш", "наборы"): (
+                "explicit_bdsm_set_leaf_v1",
+                "БДСМ набор",
+                cls.EXPLICIT_ADULT_BDSM_PATH,
+            ),
+            ("аксессуары для игр", "эротические игры"): (
+                "explicit_erotic_game_leaf_v1",
+                "Игра эротическая",
+                cls.EXPLICIT_ADULT_SOUVENIRS_PATH,
+            ),
+            ("эротические сувениры", "сувениры"): (
+                "explicit_erotic_souvenir_leaf_v1",
+                "Эротический сувенир",
+                cls.EXPLICIT_ADULT_SOUVENIRS_PATH,
+            ),
+            ("сумочки для хранения", "мешочки"): (
+                "explicit_toy_storage_leaf_v1",
+                "Хранение секс игрушек",
+                cls.EXPLICIT_ADULT_CARE_PATH,
+            ),
+            ("препараты и возбудители", "возбуждающие средства для женщин"): (
+                "explicit_female_arousal_product_leaf_v1",
+                "Возбуждающее средство",
+                cls.EXPLICIT_ADULT_COSMETICS_PATH,
+            ),
+            ("препараты и возбудители", "возбуждающие средства для мужчин"): (
+                "explicit_male_arousal_product_leaf_v1",
+                "Возбуждающее средство",
+                cls.EXPLICIT_ADULT_COSMETICS_PATH,
+            ),
+            ("препараты и возбудители", "пролонгаторы для мужчин"): (
+                "explicit_prolonger_leaf_v1",
+                "Пролонгатор",
+                cls.EXPLICIT_ADULT_COSMETICS_PATH,
+            ),
+            ("секс-наборы", "секс-наборы"): (
+                "explicit_erotic_set_leaf_v1",
+                "Эротический набор",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            ),
+        }
+        for leaf_name in {
+            "мастурбаторы и оростимуляторы",
+            "вагины без вибрации",
+            "вагины с вибрацией",
+            "мастурбаторы fleshlight, в колбах",
+            "автоматические мастурбаторы",
+            "мастурбаторы tenga",
+            "полуторсы, торсы",
+        }:
+            exact_rules[("мастурбаторы и вагины", leaf_name)] = (
+                "explicit_masturbator_leaf_v1",
+                "Мастурбатор",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            )
+        exact_rules[("страпоны и фаллопротезы", "страпоны")] = (
+            "explicit_strapon_leaf_v1",
+            "Страпон",
+            cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+        )
+        for leaf_name in {
+            "вагинальные со смещенным центром тяжести",
+            "вагинальные не со смещенным центром тяжести",
+            "вагинальные с вибрацией",
+        }:
+            exact_rules[("шарики", leaf_name)] = (
+                "explicit_vaginal_balls_leaf_v1",
+                "Вагинальные шарики",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            )
+        for leaf_name in {
+            "обычные",
+            "с шариками и усиками",
+            "ароматизированные",
+            "полиуретановые",
+        }:
+            exact_rules[("презервативы", leaf_name)] = (
+                "explicit_condoms_leaf_v1",
+                "Презервативы",
+                cls.EXPLICIT_PERSONAL_HYGIENE_PATH,
+            )
+        for leaf_name in {
+            "простого класса",
+            "среднего класса",
+            "премиум класса",
+        }:
+            exact_rules[("секс куклы", leaf_name)] = (
+                "explicit_sex_doll_leaf_v1",
+                "Кукла для секса",
+                cls.EXPLICIT_ADULT_SEX_TOYS_PATH,
+            )
+
+        resolved = exact_rules.get((root, leaf))
+        return target(*resolved) if resolved is not None else None
+
+    @classmethod
+    def _explicit_source_mapping_candidate(
+        cls,
+        product: ImportedProduct,
+    ) -> Optional[tuple]:
+        """Return exact source identity + rule from observed fact provenance."""
+        try:
+            fact_pack = MarketplaceFactPackBuilder.build(product)
+        except MarketplaceFactPackError:
+            return None
+        facts = fact_pack.get("facts")
+        provenance = fact_pack.get("provenance")
+        identity_facts = facts.get("identity") if isinstance(facts, dict) else None
+        source_category = (
+            identity_facts.get("source_category")
+            if isinstance(identity_facts, dict)
+            else None
+        )
+        source_provenance = (
+            provenance.get("identity.source_category")
+            if isinstance(provenance, dict)
+            else None
+        )
+        if (
+            not isinstance(source_provenance, dict)
+            or source_provenance.get("trust") != "observed"
+        ):
+            return None
+        rule = cls._explicit_source_taxonomy_rule(source_category)
+        if rule is None:
+            return None
+        normalized = cls._normalized_text(source_category)
+        source_identity = next((
+            identity
+            for identity in cls._mapping_identities(product)
+            if (
+                identity.get("scope_key") != "wb_subject"
+                and identity.get("source_category_normalized") == normalized
+            )
+        ), None)
+        if source_identity is None:
+            # A seller-current category that disagrees with the observed
+            # source snapshot must not inherit this source-only recipe.
+            return None
+        return source_identity, rule
+
+    @classmethod
+    def _is_explicit_source_mapping(
+        cls,
+        mapping: Optional[MarketplaceCategoryMapping],
+    ) -> bool:
+        if mapping is None or mapping.mapping_source != "deterministic":
+            return False
+        evidence = cls._stored_json(mapping.evidence_json, dict)
+        return evidence.get("algorithm") in cls.EXPLICIT_SOURCE_MAPPING_ALGORITHMS
+
+    @classmethod
+    def _explicit_source_product_type(
+        cls,
+        *,
+        marketplace_id: int,
+        product_type_name: str,
+        product_type_path: str,
+    ) -> Optional[MarketplaceProductType]:
+        rows = MarketplaceProductType.query.options(
+            joinedload(MarketplaceProductType.category),
+        ).join(
+            MarketplaceTaxonomyCategory,
+            MarketplaceProductType.category_id
+            == MarketplaceTaxonomyCategory.id,
+        ).filter(
+            MarketplaceProductType.marketplace_id == marketplace_id,
+            MarketplaceProductType.name == product_type_name,
+            MarketplaceProductType.is_available.is_(True),
+            MarketplaceProductType.is_seller_selectable.is_(True),
+            MarketplaceTaxonomyCategory.full_path
+            == product_type_path,
+            MarketplaceTaxonomyCategory.is_available.is_(True),
+        ).limit(2).all()
+        if len(rows) != 1:
+            return None
+        product_type = rows[0]
+        if not OzonReferenceService.reference_is_fresh(product_type):
+            return None
+        return product_type
+
+    @classmethod
+    def _ensure_explicit_source_taxonomy_mapping(
+        cls,
+        *,
+        seller_id: int,
+        marketplace_id: int,
+        product: ImportedProduct,
+    ) -> Optional[MarketplaceCategoryMapping]:
+        """Persist one seller-scoped exact source-taxonomy mapping.
+
+        Manual/AI/rejected/corrected decisions and the stronger confirmed WB
+        subject identity remain authoritative.  Only an unreviewed
+        deterministic source-category row may be created or replaced.
+        """
+        candidate = cls._explicit_source_mapping_candidate(product)
+        if candidate is None:
+            return None
+        identity, rule = candidate
+
+        active = cls._active_mapping(
+            seller_id=seller_id,
+            marketplace_id=marketplace_id,
+            product=product,
+        )
+        if active is not None and active.scope_key == "wb_subject":
+            return active
+
+        def mapping_for_identity() -> Optional[MarketplaceCategoryMapping]:
+            return MarketplaceCategoryMapping.query.options(
+                joinedload(MarketplaceCategoryMapping.product_type).joinedload(
+                    MarketplaceProductType.category
+                )
+            ).filter_by(
+                seller_id=seller_id,
+                marketplace_id=marketplace_id,
+                scope_key=identity["scope_key"],
+                source_category_normalized=(
+                    identity["source_category_normalized"]
+                ),
+            ).first()
+
+        existing = mapping_for_identity()
+        if existing is not None and (
+            existing.mapping_source != "deterministic"
+            or existing.corrected_by_user_id is not None
+            or existing.mapping_status == "rejected"
+        ):
+            return existing if existing.mapping_status == "active" else None
+        if (
+            existing is not None
+            and existing.mapping_status == "active"
+            and cls._is_explicit_source_mapping(existing)
+            and existing.product_type is not None
+            and existing.product_type.name == rule["product_type_name"]
+            and existing.product_type.category is not None
+            and existing.product_type.category.full_path
+            == rule["product_type_path"]
+        ):
+            return existing
+
+        claim = try_marketplace_category_mapping_lock(seller_id)
+        if claim is None:
+            raise MarketplaceDraftConflict(
+                "Сопоставление категорий Ozon обновляется; повторите подготовку"
+            )
+        try:
+            db.session.expire_all()
+            fresh_product = cls._owned_imported_product(
+                seller_id=seller_id,
+                imported_product_id=product.id,
+            )
+            fresh_candidate = cls._explicit_source_mapping_candidate(
+                fresh_product
+            )
+            if fresh_candidate is None:
+                return None
+            identity, rule = fresh_candidate
+            existing = mapping_for_identity()
+            if existing is not None and (
+                existing.mapping_source != "deterministic"
+                or existing.corrected_by_user_id is not None
+                or existing.mapping_status == "rejected"
+            ):
+                return existing if existing.mapping_status == "active" else None
+
+            product_type = cls._explicit_source_product_type(
+                marketplace_id=marketplace_id,
+                product_type_name=rule["product_type_name"],
+                product_type_path=rule["product_type_path"],
+            )
+            if product_type is None:
+                if existing is not None:
+                    # The literal rule already disproves the old automatic
+                    # target, but a missing/stale official target cannot be
+                    # selected yet.  Keep the category untyped until the
+                    # reference scheduler restores a fresh exact schema.
+                    existing.mapping_status = "stale"
+                    existing.evidence_json = json.dumps(
+                        {
+                            "algorithm": (
+                                cls.EXPLICIT_SOURCE_MAPPING_ALGORITHM
+                            ),
+                            "reason": "official_target_unavailable_or_stale",
+                            "rule_id": rule["rule_id"],
+                            "target_type_name": rule["product_type_name"],
+                            "target_type_path": rule["product_type_path"],
+                            "source_category_fingerprint": hashlib.sha256(
+                                identity[
+                                    "source_category_normalized"
+                                ].encode("utf-8")
+                            ).hexdigest(),
+                            "state": "stale",
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    existing.updated_at = datetime.utcnow()
+                    db.session.commit()
+                return None
+            evidence_json = json.dumps(
+                {
+                    "algorithm": cls.EXPLICIT_SOURCE_MAPPING_ALGORITHM,
+                    "attribute_recipes": [{
+                        "attribute_id": cls.OZON_MODEL_NAME_ATTRIBUTE_ID,
+                        "isolation": "per_imported_product",
+                        "recipe": cls.EXPLICIT_SOURCE_MODEL_RECIPE,
+                    }],
+                    "rule_id": rule["rule_id"],
+                    "source_category_fingerprint": hashlib.sha256(
+                        identity["source_category_normalized"].encode("utf-8")
+                    ).hexdigest(),
+                    "state": "active",
+                    "target_type_path": rule["product_type_path"],
+                    "target_category_id": (
+                        product_type.category.external_category_id
+                    ),
+                    "target_type_id": product_type.external_type_id,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if existing is None:
+                existing = MarketplaceCategoryMapping(
+                    seller_id=seller_id,
+                    marketplace_id=marketplace_id,
+                    supplier_id=identity["supplier_id"],
+                    product_type_id=product_type.id,
+                    scope_key=identity["scope_key"],
+                    source_type=identity["source_type"],
+                    source_category=identity["source_category"],
+                    source_category_normalized=(
+                        identity["source_category_normalized"]
+                    ),
+                    external_category_id=(
+                        product_type.category.external_category_id
+                    ),
+                    external_type_id=product_type.external_type_id,
+                    mapping_source="deterministic",
+                    mapping_status="active",
+                    confidence=0.995,
+                    evidence_json=evidence_json,
+                    corrected_by_user_id=None,
+                )
+                db.session.add(existing)
+            else:
+                existing.supplier_id = identity["supplier_id"]
+                existing.product_type_id = product_type.id
+                existing.source_type = identity["source_type"]
+                existing.source_category = identity["source_category"]
+                existing.external_category_id = (
+                    product_type.category.external_category_id
+                )
+                existing.external_type_id = product_type.external_type_id
+                existing.mapping_source = "deterministic"
+                existing.mapping_status = "active"
+                existing.confidence = 0.995
+                existing.evidence_json = evidence_json
+                existing.corrected_by_user_id = None
+                existing.updated_at = datetime.utcnow()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                winner = mapping_for_identity()
+                if (
+                    winner is not None
+                    and winner.mapping_status == "active"
+                    and cls._is_explicit_source_mapping(winner)
+                ):
+                    return winner
+                raise MarketplaceDraftConflict(
+                    "Category mapping изменился параллельно; повторите подготовку"
+                ) from None
+            return mapping_for_identity()
+        finally:
+            release_marketplace_category_mapping_lock(claim)
+
+    @classmethod
     def _active_mapping(
         cls,
         *,
@@ -671,6 +1323,160 @@ class MarketplaceDraftService:
             )
         ]
         return len(matches) == 1
+
+    @classmethod
+    def _mapping_has_explicit_source_model_recipe(
+        cls,
+        mapping: Optional[MarketplaceCategoryMapping],
+        *,
+        product_type: MarketplaceProductType,
+    ) -> bool:
+        """Allow an isolated model key only when v2 evidence owns the type."""
+        if (
+            mapping is None
+            or mapping.mapping_source != "deterministic"
+            or mapping.mapping_status != "active"
+            or mapping.corrected_by_user_id is not None
+            or mapping.product_type_id != product_type.id
+        ):
+            return False
+        evidence = cls._stored_json(mapping.evidence_json, dict)
+        if (
+            evidence.get("algorithm") != cls.EXPLICIT_SOURCE_MAPPING_ALGORITHM
+            or evidence.get("state") != "active"
+        ):
+            return False
+        recipes = evidence.get("attribute_recipes")
+        if not isinstance(recipes, list) or len(recipes) > 10:
+            return False
+        matches = [
+            item
+            for item in recipes
+            if (
+                isinstance(item, dict)
+                and item.get("attribute_id")
+                == cls.OZON_MODEL_NAME_ATTRIBUTE_ID
+                and item.get("recipe")
+                == cls.EXPLICIT_SOURCE_MODEL_RECIPE
+                and item.get("isolation") == "per_imported_product"
+            )
+        ]
+        return len(matches) == 1
+
+    @classmethod
+    def _isolated_source_model_name(cls, facts_document: dict) -> str:
+        """Build a readable model value that cannot merge two local cards."""
+        source = facts_document.get("source")
+        facts = facts_document.get("facts")
+        identifiers = facts.get("identifiers") if isinstance(facts, dict) else None
+        if not isinstance(source, dict) or not isinstance(identifiers, dict):
+            return ""
+        imported_product_id = source.get("imported_product_id")
+        supplier_id = source.get("supplier_id")
+        if (
+            not isinstance(imported_product_id, int)
+            or isinstance(imported_product_id, bool)
+            or imported_product_id <= 0
+            or not isinstance(supplier_id, int)
+            or isinstance(supplier_id, bool)
+            or supplier_id <= 0
+        ):
+            return ""
+        external_id = cls._optional_text(
+            identifiers.get("external_id"),
+            "source_external_id",
+            maximum=200,
+        )
+        if not external_id:
+            return ""
+        readable = cls._optional_text(
+            identifiers.get("vendor_code"),
+            "source_vendor_code",
+            maximum=200,
+        ) or external_id
+        suffix = f" · SH-{supplier_id}-{imported_product_id}"
+        prefix = readable[: max(1, 200 - len(suffix))].rstrip()
+        return f"{prefix}{suffix}"[:200]
+
+    @classmethod
+    def _automatic_mapping_conflict_reason(
+        cls,
+        *,
+        identity: dict,
+        product_type: MarketplaceProductType,
+    ) -> Optional[str]:
+        """Reject direct taxonomy contradictions without selecting a type.
+
+        Exact linked listings prove what was historically published, not that
+        the provider category was semantically correct.  This negative-only
+        guard recognizes narrow, literal contradictions in the observed
+        source category.  It never proposes an alternative and is used only
+        for deterministic mappings; seller-reviewed mappings stay untouched.
+        """
+        source_category = (
+            identity.get("source_category")
+            if isinstance(identity, dict)
+            else None
+        )
+        source = cls._normalized_text(
+            source_category if isinstance(source_category, str) else ""
+        )
+        category = product_type.category
+        target_category = cls._normalized_text(
+            category.full_path if category is not None else ""
+        )
+        target_type = cls._normalized_text(product_type.name or "")
+        if not source or not target_type or not target_category:
+            return "explicit_source_category_conflict"
+
+        # Wearable-size evidence is deliberately broader than category
+        # identity: strap-on briefs, for example, can still be a Strap-on.
+        # Only explicit apparel taxonomy is strong enough for this boundary.
+        explicit_clothing_markers = (
+            "одежда >",
+            "одежда /",
+            "одежда и белье",
+            "одежда и бельё",
+            "эротическое белье",
+            "эротическое бельё",
+            "игровые костюмы",
+            "ролевые костюмы",
+            "платья, мини-платья",
+            "пеньюары, сорочки",
+            "чулки, гольфины",
+            "колготки",
+            "комбинезоны",
+            "боди, ками",
+            "лифы, топы",
+            "пояса для чулок",
+            "пэстис",
+            "пестис",
+            "стикини",
+        )
+        if any(marker in source for marker in explicit_clothing_markers):
+            if not (
+                target_category == "одежда"
+                or target_category.startswith("одежда /")
+            ):
+                return "explicit_source_category_conflict"
+
+        required_target_tokens = (
+            (("менструальн", "чаш"), ("менструальн", "чаш")),
+            (("анальн", "крюк"), ("анальн", "крюк")),
+            (("насадк", "помп"), ("помп",)),
+            (("вакуум", "стимулятор"), ("вакуум", "стимулятор")),
+        )
+        for source_tokens, target_tokens in required_target_tokens:
+            if all(token in source for token in source_tokens) and not all(
+                token in target_type for token in target_tokens
+            ):
+                return "explicit_source_category_conflict"
+
+        if "анальн" in source and "вагинальн" in target_type:
+            return "explicit_source_category_conflict"
+        if "вагинальн" in source and "анальн" in target_type:
+            return "explicit_source_category_conflict"
+        return None
 
     @classmethod
     def reconcile_observed_category_mappings(
@@ -986,6 +1792,12 @@ class MarketplaceDraftService:
             for key in sorted(evidence):
                 item = evidence[key]
                 mapping = existing.get(key)
+                if cls._is_explicit_source_mapping(mapping):
+                    # This row is owned by the reviewed literal taxonomy
+                    # recipe, not by historical-listing consensus.  A later
+                    # listing scan must neither rewrite nor stale it.
+                    protected += 1
+                    continue
                 reason = None
                 if len(item["structured_subtypes"]) > 1:
                     reason = "heterogeneous_source_category"
@@ -1003,6 +1815,14 @@ class MarketplaceDraftService:
                     < cls.OBSERVED_MAPPING_MIN_LISTINGS
                 ):
                     reason = "not_enough_exact_listings"
+                else:
+                    observed_product_type_id = next(iter(item["types"]))
+                    reason = cls._automatic_mapping_conflict_reason(
+                        identity=item["identity"],
+                        product_type=item["product_types"][
+                            observed_product_type_id
+                        ],
+                    )
 
                 if reason is not None:
                     unsafe_groups += 1
@@ -1095,6 +1915,7 @@ class MarketplaceDraftService:
                     or mapping.mapping_source != "deterministic"
                     or mapping.mapping_status != "active"
                     or mapping.corrected_by_user_id is not None
+                    or cls._is_explicit_source_mapping(mapping)
                 ):
                     continue
                 mapping.mapping_status = "stale"
@@ -1240,10 +2061,18 @@ class MarketplaceDraftService:
             MarketplaceTaxonomyCategory.is_available.is_(True),
         )
         if search:
-            pattern = f"%{search}%"
+            if db.engine.dialect.name == 'sqlite':
+                connection = db.session.connection().connection.driver_connection
+                connection.create_function(
+                    'sh_ozon_type_casefold', 1,
+                    lambda value: str(value or '').casefold(), deterministic=True,
+                )
+                lower = func.sh_ozon_type_casefold
+            else:
+                lower = func.lower
             rows = rows.filter(or_(
-                MarketplaceProductType.name.ilike(pattern),
-                MarketplaceTaxonomyCategory.full_path.ilike(pattern),
+                lower(MarketplaceProductType.name).contains(search.casefold(), autoescape=True),
+                lower(MarketplaceTaxonomyCategory.full_path).contains(search.casefold(), autoescape=True),
             ))
         product_types = rows.order_by(
             MarketplaceTaxonomyCategory.full_path.asc(),
@@ -1507,6 +2336,7 @@ class MarketplaceDraftService:
             },
             "category": {
                 "status": category_status,
+                "explicit_source_taxonomy": cls._is_explicit_source_mapping(draft.category_mapping),
                 "mapping_id": draft.category_mapping_id,
                 "mapping_origin": (
                     draft.category_mapping.mapping_source
@@ -1851,6 +2681,13 @@ class MarketplaceDraftService:
         query = MarketplaceProductDraft.query.options(
             joinedload(MarketplaceProductDraft.marketplace),
             joinedload(MarketplaceProductDraft.account),
+            joinedload(MarketplaceProductDraft.imported_product).load_only(
+                ImportedProduct.id, ImportedProduct.seller_id, ImportedProduct.title,
+            ),
+            joinedload(MarketplaceProductDraft.published_listing).load_only(
+                MarketplaceListing.id, MarketplaceListing.seller_id,
+                MarketplaceListing.account_id, MarketplaceListing.media_json,
+            ),
             joinedload(MarketplaceProductDraft.product_type).joinedload(
                 MarketplaceProductType.category
             ),
@@ -1926,8 +2763,8 @@ class MarketplaceDraftService:
         # several supplier feeds and therefore must never be promoted to
         # package dimensions.  Accept only explicit package/packing names.
         result = {}
+        dimension_units: Dict[str, Optional[str]] = {}
 
-        russian_dimension_seen = False
         for raw_key, raw_value in raw.items():
             if not isinstance(raw_key, str):
                 continue
@@ -1959,7 +2796,7 @@ class MarketplaceDraftService:
                     target,
                     positive=True,
                 )
-                russian_dimension_seen = True
+                dimension_units[target] = "MILLIMETERS"
                 continue
             if "вес" in key_name:
                 if "кг" in key_name:
@@ -1974,9 +2811,6 @@ class MarketplaceDraftService:
                     positive=True,
                 )
                 result["weight_unit"] = "GRAMS"
-        if russian_dimension_seen:
-            result["dimension_unit"] = "MILLIMETERS"
-
         normalized = {
             cls._normalized_text(str(key)).replace(" ", "_"): value
             for key, value in raw.items()
@@ -2055,13 +2889,40 @@ class MarketplaceDraftService:
         )
         if width:
             result["width"] = width
+            dimension_units["width"] = width_unit
         if height:
             result["height"] = height
+            dimension_units["height"] = height_unit
         if depth:
             result["depth"] = depth
-        units = {item for item in (width_unit, height_unit, depth_unit) if item}
-        if len(units) == 1:
-            result["dimension_unit"] = units.pop()
+            dimension_units["depth"] = depth_unit
+        # A later package alias may replace one Russian mm fact. Convert each
+        # observed field from its own explicit unit, without Decimal rounding.
+        # Decimal.as_integer_ratio() preserves even a long fractional source
+        # exactly; 25.4 mm/inch is represented as the exact ratio 127/5.
+        units = [dimension_units.get(field) for field in ("width", "height", "depth")]
+        if all(units) and all(field in result for field in ("width", "height", "depth")):
+            millimeters_per_unit = {
+                "MILLIMETERS": (1, 1),
+                "CENTIMETERS": (10, 1),
+                "INCHES": (127, 5),
+            }
+            for target_unit in ("MILLIMETERS", "CENTIMETERS", "INCHES"):
+                target_num, target_den = millimeters_per_unit[target_unit]
+                converted = {}
+                for field in ("width", "height", "depth"):
+                    value_num, value_den = Decimal(result[field]).as_integer_ratio()
+                    source_num, source_den = millimeters_per_unit[dimension_units[field]]
+                    numerator = value_num * source_num * target_den
+                    denominator = value_den * source_den * target_num
+                    exact, remainder = divmod(numerator, denominator)
+                    if remainder or not (0 < exact <= cls.MAX_OZON_API_PHYSICAL_INTEGER):
+                        break
+                    converted[field] = str(exact)
+                if len(converted) == 3:
+                    result.update(converted)
+                    result["dimension_unit"] = target_unit
+                    break
 
         for alias in (
             "package_weight_g", "package_weight_kg",
@@ -2148,13 +3009,139 @@ class MarketplaceDraftService:
         return result
 
     @classmethod
+    def _description_fact_text(cls, value: Any) -> str:
+        if isinstance(value, bool):
+            return "Да" if value else "Нет"
+        if isinstance(value, (int, float, Decimal)):
+            try:
+                return cls._decimal(value, "description fact")[:500]
+            except MarketplaceDraftValidationError:
+                return ""
+        if isinstance(value, str):
+            return " ".join(value.split())[:500]
+        if isinstance(value, dict):
+            return cls._description_fact_text(value.get("raw"))
+        if not isinstance(value, list):
+            return ""
+        rendered = []
+        seen = set()
+        for item in value[:20]:
+            text = cls._description_fact_text(item)
+            normalized = cls._normalized_text(text) if text else ""
+            if not text or normalized in seen:
+                continue
+            seen.add(normalized)
+            rendered.append(text)
+        return ", ".join(rendered)[:500]
+
+    @classmethod
+    def _fact_grounded_description(cls, facts_document: dict) -> str:
+        """Compose bounded plain text solely from verified current/source facts."""
+        facts = facts_document.get("facts", {})
+        if not isinstance(facts, dict):
+            return ""
+        identity = facts.get("identity", {})
+        attributes = facts.get("attributes", {})
+        if not isinstance(identity, dict):
+            identity = {}
+        if not isinstance(attributes, dict):
+            attributes = {}
+
+        title = cls._description_fact_text(
+            identity.get("source_title") or identity.get("title")
+        )
+        if not title:
+            return ""
+        lines = [title if title[-1:] in ".!?" else f"{title}."]
+        detail_lines = []
+        detail_identities = set()
+
+        def add_detail(label: str, value: Any) -> None:
+            rendered = cls._description_fact_text(value)
+            if not rendered or "http://" in rendered or "https://" in rendered:
+                return
+            line = f"{label}: {rendered}"
+            identity_key = cls._normalized_text(line)
+            if identity_key in detail_identities:
+                return
+            detail_identities.add(identity_key)
+            detail_lines.append(f"{line}.")
+
+        add_detail("Бренд", identity.get("brand"))
+        add_detail("Категория", identity.get("source_category"))
+        add_detail("Цвет", attributes.get("colors"))
+        add_detail("Материал", attributes.get("materials"))
+        add_detail("Размер", attributes.get("sizes"))
+        add_detail("Пол", attributes.get("gender"))
+        add_detail("Страна производства", attributes.get("country"))
+
+        blocked_characteristic_tokens = (
+            "артикул",
+            "закуп",
+            "остат",
+            "поставщик",
+            "ррц",
+            "склад",
+            "штрихкод",
+            "barcode",
+            "цена",
+        )
+        represented_names = {
+            "brand",
+            "gender",
+            "material",
+            "size",
+            "бренд",
+            "материал",
+            "пол",
+            "размер",
+            "страна производства",
+            "цвет",
+            "цвет товара",
+        }
+        characteristics = attributes.get("characteristics")
+        if isinstance(characteristics, list):
+            for item in characteristics[: cls.MAX_ATTRIBUTES]:
+                if len(detail_lines) >= 12:
+                    break
+                if not isinstance(item, dict):
+                    continue
+                name = cls._description_fact_text(item.get("name"))[:120]
+                normalized_name = cls._normalized_text(name) if name else ""
+                if (
+                    not name
+                    or normalized_name in represented_names
+                    or any(
+                        token in normalized_name
+                        for token in blocked_characteristic_tokens
+                    )
+                ):
+                    continue
+                add_detail(name, item.get("value"))
+
+        lines.extend(detail_lines)
+        return "\n".join(lines)[:5_000]
+
+    @classmethod
     def _content_from_facts(cls, facts_document: dict) -> dict:
-        identity = facts_document.get("facts", {}).get("identity", {})
+        facts = facts_document.get("facts", {})
+        identity = facts.get("identity", {}) if isinstance(facts, dict) else {}
+        if not isinstance(identity, dict):
+            identity = {}
         result = {}
-        name = identity.get("title")
+        name = identity.get("title") or identity.get("source_title")
         description = identity.get("description")
         if isinstance(name, str) and name.strip():
             result["name"] = name.strip()[:500]
+        if not isinstance(description, str) or not description.strip():
+            description = identity.get("source_description")
+        if (
+            (not isinstance(description, str) or not description.strip())
+            and isinstance(facts_document.get("version"), int)
+            and not isinstance(facts_document.get("version"), bool)
+            and facts_document["version"] >= 3
+        ):
+            description = cls._fact_grounded_description(facts_document)
         if isinstance(description, str) and description.strip():
             result["description"] = description.strip()[:100_000]
         return result
@@ -2304,7 +3291,24 @@ class MarketplaceDraftService:
                 r"(?:размер\w*|трусик\w*|бель\w*)[^0-9]{0,24}$",
                 prefix,
             ))
-            if not bare_range and not explicit_size_context:
+            leading_size_range = not normalized[:match.start()].strip()
+            alpha_parenthetical_range = bool(re.fullmatch(
+                r"\s*(?:xxxxl|xxxl|xxl|xl|xs|xxs|xxxxs|xxxs|"
+                r"[smlx]|[2-9]xl|os)\s*\(\s*",
+                prefix,
+            ))
+            trailing_parenthetical_range = bool(
+                match.start() > 0
+                and normalized[match.start() - 1] == "("
+                and re.fullmatch(r"\)\s*", normalized[match.end():])
+            )
+            if not (
+                bare_range
+                or explicit_size_context
+                or leading_size_range
+                or alpha_parenthetical_range
+                or trailing_parenthetical_range
+            ):
                 continue
             start = int(start_text)
             end = int(end_text)
@@ -2317,8 +3321,23 @@ class MarketplaceDraftService:
                     add(str(size))
 
         if not russian_sizes:
+            leading_single = re.match(
+                r"^\s*(3[2-9]|[4-7]\d|80)"
+                r"(?=\s*(?:\(|[,;]|(?:российск\w+\s+)?размер\b|$))",
+                normalized,
+            )
+            if leading_single:
+                suffix = normalized[leading_single.end():
+                                    leading_single.end() + 16]
+                if not re.match(
+                    r"\s*(?:мм|см|мл|л|г|кг|дюйм\w*|inch(?:es)?)\b",
+                    suffix,
+                ):
+                    add(leading_single.group(1))
+
+        if not russian_sizes:
             hosiery_ranges = re.findall(
-                r"(?<!\d)([1-9])\s*/\s*([1-9])(?!\d)",
+                r"(?<!\d)([1-9])\s*[/\\]+\s*([1-9])(?!\d)",
                 normalized,
             )
             for start_text, end_text in hosiery_ranges:
@@ -2327,6 +3346,44 @@ class MarketplaceDraftService:
                 if start <= end and end - start <= 3:
                     for size in range(start, end + 1):
                         add(str(size))
+        if not russian_sizes:
+            leading_hosiery_range = re.match(
+                r"^\s*([1-9])\s*[-–—]\s*([1-9])"
+                r"(?=\s*(?:[,;(]|размер\b|$))",
+                normalized,
+            )
+            if leading_hosiery_range:
+                start = int(leading_hosiery_range.group(1))
+                end = int(leading_hosiery_range.group(2))
+                if start <= end and end - start <= 3:
+                    for size in range(start, end + 1):
+                        add(str(size))
+        if not russian_sizes:
+            leading_hosiery = re.match(
+                r"^\s*([1-9])\s*(?:"
+                r"\(\s*(?:xxxxl|xxxl|xxl|xl|xs|xxs|[smlx])\s*\)"
+                r"|\([^\r\n)]{1,80}\)"
+                r"(?=\s*(?:[,;]|на\s+рост\b|$))"
+                r"|(?:xxxxl|xxxl|xxl|xl|xs|xxs|[smlx])(?=\s*[,;])"
+                r"|размер\b)",
+                normalized,
+            )
+            if leading_hosiery:
+                add(leading_hosiery.group(1))
+        if not russian_sizes:
+            explicit_hosiery = re.search(
+                r"\bразмер\s*([1-9])(?!\d)",
+                normalized,
+            )
+            if explicit_hosiery:
+                suffix = normalized[
+                    explicit_hosiery.end():explicit_hosiery.end() + 16
+                ]
+                if not re.match(
+                    r"\s*(?:мм|см|мл|л|г|кг|дюйм\w*|inch(?:es)?)\b",
+                    suffix,
+                ):
+                    add(explicit_hosiery.group(1))
         if not russian_sizes:
             standalone = re.fullmatch(
                 r"\s*(3[2-9]|[4-7]\d|80)\s*",
@@ -2338,6 +3395,16 @@ class MarketplaceDraftService:
             hosiery = re.fullmatch(r"\s*([1-9])\s*", normalized)
             if hosiery:
                 add(hosiery.group(1))
+        if not russian_sizes:
+            bra_literal = re.fullmatch(
+                r"\s*((?:6[5-9]|[7-9]\d|1[0-2]\d))\s*([a-h])\s*",
+                normalized,
+            )
+            if bra_literal:
+                add(
+                    f"{bra_literal.group(1)}"
+                    f"{bra_literal.group(2).upper()}"
+                )
         universal_size = bool(re.search(
             r"\b(?:универсальн\w*|one[\s_-]*size)\b",
             normalized,
@@ -2651,6 +3718,35 @@ class MarketplaceDraftService:
             value = source_values.get(source_key)
             if value in (None, "", [], {}):
                 continue
+            if source_key == "brand":
+                brand_keys = [cls._normalized_text(name) for name in names]
+                existing = [
+                    candidates[key]
+                    for key in brand_keys
+                    if candidates.get(key) not in (None, "", [], {})
+                ]
+                brand_normalized = (
+                    cls._normalized_text(value)
+                    if isinstance(value, str)
+                    else ""
+                )
+                if any(
+                    not isinstance(candidate, str)
+                    or cls._normalized_text(candidate) != brand_normalized
+                    for candidate in existing
+                ):
+                    # Two observed source fields disagree on identity.  Never
+                    # pick one silently; leave every Ozon brand alias absent
+                    # so validation/repair exposes the conflict to the seller.
+                    for key in brand_keys:
+                        candidates.pop(key, None)
+                    continue
+                # ``identity.brand`` is the explicitly mapped supplier field.
+                # It may restore source display case over a redundant equal
+                # characteristic, which can disambiguate provider IDs without
+                # changing the normalized brand identity.
+                assign(names, value, overwrite=True)
+                continue
             assign(names, value)
 
         # Ozon exposes the display title and free-form color name as ordinary
@@ -2758,6 +3854,16 @@ class MarketplaceDraftService:
                 )
             ):
                 canonical = "Термопластичный эластомер (TPE)"
+            elif any(token.startswith("силикон") for token in tokens):
+                # This input is already the observed supplier ``materials``
+                # field.  Strip descriptive surface/quality wording without
+                # promoting it into a material: the exact official dictionary
+                # still decides whether the canonical material is admissible.
+                canonical = (
+                    "Медицинский силикон"
+                    if any(token.startswith("медицинск") for token in tokens)
+                    else "Силикон"
+                )
             else:
                 canonical = observed_material
             if canonical not in normalized_materials:
@@ -2791,6 +3897,14 @@ class MarketplaceDraftService:
         )
         if length_cm is not None:
             assign(("длина, см",), length_cm)
+
+        working_length_cm = cls._positive_fact_decimal(
+            product_dimensions.get("working_length_cm")
+        )
+        if working_length_cm is not None:
+            working_length_mm = working_length_cm * Decimal("10")
+            if working_length_mm == working_length_mm.to_integral_value():
+                assign(("длина рабочей части, мм",), working_length_mm)
 
         diameter_cm = next((
             parsed
@@ -2935,7 +4049,26 @@ class MarketplaceDraftService:
             )
         )
         if no_taste:
-            assign(("вкус", "вкус 18+"), "Без вкуса")
+            assign(
+                (
+                    "вкус",
+                    "вкус 18+",
+                    "вкус презервативов, средств для взрослых",
+                ),
+                "Без вкуса",
+            )
+        elif re.search(r"\b(?:эспрессо|espresso)\b", title_signal):
+            # Espresso is a literal coffee taste, not a fuzzy flavour guess.
+            # A missing exact ``Кофе`` row in the current type dictionary
+            # still leaves the attribute empty.
+            assign(
+                (
+                    "вкус",
+                    "вкус 18+",
+                    "вкус презервативов, средств для взрослых",
+                ),
+                "Кофе",
+            )
 
         composition_values = [
             value
@@ -2952,6 +4085,9 @@ class MarketplaceDraftService:
             for value in material_values
             if isinstance(value, str) and value.strip()
         )
+        composition_signal = (
+            f"{title_signal} {' '.join(composition_values)}"
+        )
         silicone_observed = (
             bool(re.search(r"\b(?:силикон\w*|silicone)\b", title_signal))
             or any(
@@ -2963,19 +4099,20 @@ class MarketplaceDraftService:
             if re.search(
                 r"\b(?:водн\w*[\s-]*силикон\w*|"
                 r"силикон\w*[\s-]*водн\w*)\b",
-                f"{title_signal} {' '.join(composition_values)}",
+                composition_signal,
             ):
                 assign(("основа состава",), "Водно-силиконовая")
             elif silicone_observed:
                 assign(("основа состава",), "Силиконовая")
             elif re.search(
                 r"\b(?:на\s+водн\w*\s+основ\w*|water[\s-]*based)\b",
-                title_signal,
+                composition_signal,
             ):
                 assign(("основа состава",), "Водная")
+                assign(("текстура",), "На водной основе")
             elif re.search(
                 r"\b(?:на\s+маслян\w*\s+основ\w*|oil[\s-]*based)\b",
-                title_signal,
+                composition_signal,
             ):
                 assign(("основа состава",), "Масляная")
             elif "глицерин" in title_signal:
@@ -3004,12 +4141,19 @@ class MarketplaceDraftService:
                 ("эффект интимного средства",),
                 list(dict.fromkeys(effects)),
             )
-            if "вагинальн" in category_signal:
-                assign(("область использования",), "Вагинальная")
-            elif "анальн" in category_signal:
-                assign(("область использования",), "Анальная")
-            elif "оральн" in category_signal:
-                assign(("область использования",), "Пероральная")
+            use_areas = []
+            for pattern, value in (
+                (r"\bвагинальн\w*", "Вагинальная"),
+                (r"\bанальн\w*", "Анальная"),
+                (r"\bоральн\w*", "Пероральная"),
+            ):
+                if any(re.search(pattern, signal) for signal in category_signals):
+                    use_areas.append(value)
+            if use_areas:
+                assign(
+                    ("область использования",),
+                    use_areas[0] if len(use_areas) == 1 else use_areas,
+                )
 
             volume_signal = f"{source_title} {size_literal}"
             volume_match = re.search(
@@ -3178,17 +4322,17 @@ class MarketplaceDraftService:
         purposes = []
         if is_extension:
             purposes.append("Для увеличения члена")
-        if "клитор" in title_signal:
+        if re.search(r"\bклитор\w*", title_signal):
             purposes.append("Для клиторальной стимуляции")
-        if "анальн" in combined_signal:
+        if re.search(r"\bанальн\w*", combined_signal):
             purposes.append("Для анального секса")
-        if "вагинальн" in combined_signal:
+        if re.search(r"\bвагинальн\w*", combined_signal):
             purposes.append("Для вагинального секса")
-        if "оральн" in combined_signal:
+        if re.search(r"\bоральн\w*", combined_signal):
             purposes.append("Для орального секса")
-        if "простат" in combined_signal:
+        if re.search(r"\bпростат\w*", combined_signal):
             purposes.append("Для стимуляции простаты")
-        if "уретральн" in combined_signal:
+        if re.search(r"\bуретральн\w*", combined_signal):
             purposes.append("Для стимуляции уретры")
         if "ролев" in category_signal:
             purposes.append("Для ролевых игр")
@@ -3233,7 +4377,18 @@ class MarketplaceDraftService:
             features.append("Два мотора")
         if re.search(r"\b(?:три|тремя|3)\s+мотор", title_signal):
             features.append("Три мотора")
-        if any("с ротацией" in value for value in category_signals):
+        exact_rotation_category = any(
+            re.search(
+                r"(?:^|>)\s*с\s+ротаци\w*"
+                r"(?:\s*\(\s*вращени\w*\s*\))?\s*$",
+                value,
+            )
+            for value in category_signals
+        )
+        if (
+            exact_rotation_category
+            or re.search(r"\b(?:ротатор\w*|ротаци\w*|вращени\w*)", title_signal)
+        ):
             features.append("С вращением")
         for pattern, value in (
             (r"\bводонепроницаем\w*", "Водонепроницаемость"),
@@ -3254,6 +4409,31 @@ class MarketplaceDraftService:
         ):
             if re.search(pattern, combined_signal):
                 features.append(value)
+        if any(
+            re.search(r"\bбархатист\w*", value)
+            for value in composition_values
+        ):
+            features.append("Бархатистая поверхность")
+
+        is_explicit_set = bool(
+            re.search(r"\b(?:набор|комплект)\w*", title_signal)
+            and any(
+                re.search(r"\b(?:набор|комплект)\w*", value)
+                for value in category_signals
+            )
+        )
+        if is_explicit_set:
+            kit_parts = []
+            for pattern, value in (
+                (r"\bвакуумн\w*\s+стимулятор\w*", "Вакуумный стимулятор"),
+                (r"\bвибро[\s-]*яйц\w*", "Виброяйцо"),
+                (r"\bпульт\w*\s+управлен\w*", "Пульт управления"),
+            ):
+                if re.search(pattern, title_signal):
+                    kit_parts.append(value)
+            if len(kit_parts) >= 2:
+                assign(("состав комплекта",), "; ".join(kit_parts))
+                features.append("Набор")
         if features:
             assign(
                 ("особенности 18+",),
@@ -3347,6 +4527,12 @@ class MarketplaceDraftService:
             category_mapping,
             product_type=product_type,
         )
+        explicit_source_model_enabled = (
+            cls._mapping_has_explicit_source_model_recipe(
+                category_mapping,
+                product_type=product_type,
+            )
+        )
         official_scope = cls._normalized_text(
             " ".join((
                 product_type.name or "",
@@ -3405,10 +4591,40 @@ class MarketplaceDraftService:
                 raw_value = product_type.name
             elif (
                 attribute.external_attribute_id
-                == cls.OZON_MODEL_NAME_ATTRIBUTE_ID
-                and model_recipe_enabled
+                == cls.OZON_RUSSIAN_SIZE_ATTRIBUTE_ID
+                and product_type.name == "Пэстисы"
             ):
-                raw_value = vendor_code
+                # Pasties have physical diameter but no wearable Russian size.
+                # The official type nevertheless requires this dictionary;
+                # keep an explicit observed size when one exists, otherwise
+                # use the type-owned non-numeric value if the fresh dictionary
+                # contains it exactly.
+                raw_value = (
+                    candidates.get(cls._normalized_text(attribute.name))
+                    or "Универсальный"
+                )
+            elif (
+                attribute.external_attribute_id
+                == cls.OZON_MODEL_NAME_ATTRIBUTE_ID
+            ):
+                if model_recipe_enabled:
+                    raw_value = vendor_code
+                elif explicit_source_model_enabled:
+                    raw_value = cls._isolated_source_model_name(
+                        facts_document
+                    )
+                else:
+                    raw_value = candidates.get(
+                        cls._normalized_text(attribute.name)
+                    )
+            elif (
+                attribute.external_attribute_id
+                in cls.OZON_BRAND_ATTRIBUTE_IDS
+                and attribute.dictionary_id
+            ):
+                raw_value = cls._reviewed_brand_candidate(
+                    candidates.get(cls._normalized_text(attribute.name))
+                )
             else:
                 raw_value = candidates.get(
                     cls._normalized_text(attribute.name)
@@ -3459,6 +4675,14 @@ class MarketplaceDraftService:
                         ).append(row)
 
         result = []
+
+        def literal_dictionary_text(value: Any) -> str:
+            if not isinstance(value, str):
+                return ""
+            return " ".join(
+                unicodedata.normalize("NFKC", value).split()
+            )
+
         for attribute, values in matched:
             canonical_values = []
             if attribute.dictionary_id:
@@ -3471,11 +4695,31 @@ class MarketplaceDraftService:
                         OzonReferenceService.normalize_value(value),
                     )
                     matches = value_rows.get(key, [])
-                    if len(matches) != 1:
-                        continue
-                    row = matches[0]
-                    if restriction and row.external_value_id not in restriction:
-                        continue
+                    if restriction:
+                        matches = [
+                            candidate
+                            for candidate in matches
+                            if candidate.external_value_id in restriction
+                        ]
+                    if len(matches) == 1:
+                        row = matches[0]
+                    else:
+                        # Ozon sometimes exposes several IDs whose values
+                        # differ only by case (or even repeat the same display
+                        # value).  The exact type restriction is applied
+                        # first; an observed literal may then select exactly
+                        # one remaining provider-owned display value without
+                        # fuzzy/case inference.
+                        literal = literal_dictionary_text(value)
+                        literal_matches = [
+                            candidate
+                            for candidate in matches
+                            if literal_dictionary_text(candidate.value)
+                            == literal
+                        ]
+                        if len(literal_matches) != 1:
+                            continue
+                        row = literal_matches[0]
                     canonical_values.append({
                         "dictionary_value_id": row.external_value_id,
                         "value": row.value,
@@ -3993,6 +5237,7 @@ class MarketplaceDraftService:
         draft: MarketplaceProductDraft,
         *,
         now: Optional[datetime] = None,
+        include_baseline_editor_data: bool = False,
     ) -> Tuple[dict, Optional[dict]]:
         """Return effective normalized blocks and an exact update baseline.
 
@@ -4118,6 +5363,21 @@ class MarketplaceDraftService:
                 "ozon_attribute_removal_snapshot_changed",
                 str(exc),
             ) from exc
+        baseline_identities = []
+        if include_baseline_editor_data:
+            baseline_rows = baseline_documents['attributes'] + [
+                attribute for group in baseline_documents['complex_attributes']
+                for attribute in group.get('attributes', [])
+            ]
+            exact_identities = set()
+            for row in baseline_rows:
+                identity = cls._attribute_identity(row)
+                if identity is not None:
+                    exact_identities.add(identity)
+            baseline_identities = [
+                {'attribute_id': item[0], 'complex_id': item[1]}
+                for item in sorted(exact_identities)
+            ]
         return (
             effective_documents,
             {
@@ -4126,6 +5386,10 @@ class MarketplaceDraftService:
                 "fingerprint": state["fingerprint"],
                 "synced_at": min(freshness).isoformat(),
                 "contract_version": OzonProductStateContract.CONTRACT_VERSION,
+                **({'attribute_identities': baseline_identities,
+                    'preserved_media': baseline_documents['media'],
+                    'preserved_barcodes': baseline_documents['barcodes'][:1]}
+                   if include_baseline_editor_data else {}),
             },
         )
 
@@ -4257,21 +5521,53 @@ class MarketplaceDraftService:
             account=account,
             product=product,
         )
+        if linked_listing is not None and product_type_id is not None:
+            observed_type = linked_listing.product_type
+            if (
+                observed_type is None
+                or product_type_id != observed_type.id
+                or observed_type.marketplace_id != account.marketplace_id
+                or observed_type.category is None
+                or linked_listing.external_category_id != observed_type.category.external_category_id
+                or linked_listing.external_type_id != observed_type.external_type_id
+            ):
+                raise MarketplaceDraftConflict(
+                    "Для существующей карточки нельзя выбрать другой тип: "
+                    "измените категорию в Ozon и синхронизируйте каталог"
+                )
+        mapping_identities = cls._mapping_identities(product)
         if (
-            observed_mapping_preflight
-            and linked_listing is None
+            linked_listing is None
             and product_type_id is None
-            and cls._mapping_identities(product)
-            and cls._active_mapping(
+            and mapping_identities
+        ):
+            current_mapping = cls._active_mapping(
                 seller_id=seller_id,
                 marketplace_id=account.marketplace_id,
                 product=product,
-            ) is None
-        ):
-            cls.reconcile_observed_category_mappings(
-                seller_id=seller_id,
-                marketplace_id=account.marketplace_id,
             )
+            if current_mapping is None or (
+                current_mapping.scope_key != "wb_subject"
+                and current_mapping.mapping_source == "deterministic"
+                and current_mapping.corrected_by_user_id is None
+            ):
+                cls._ensure_explicit_source_taxonomy_mapping(
+                    seller_id=seller_id,
+                    marketplace_id=account.marketplace_id,
+                    product=product,
+                )
+            if (
+                observed_mapping_preflight
+                and cls._active_mapping(
+                    seller_id=seller_id,
+                    marketplace_id=account.marketplace_id,
+                    product=product,
+                ) is None
+            ):
+                cls.reconcile_observed_category_mappings(
+                    seller_id=seller_id,
+                    marketplace_id=account.marketplace_id,
+                )
         if (
             offer_id is not None
             and linked_listing is not None
@@ -4704,6 +6000,203 @@ class MarketplaceDraftService:
         return result
 
     @classmethod
+    def _category_change_plan(
+        cls,
+        *,
+        draft: MarketplaceProductDraft,
+        target_product_type_id: Optional[int],
+        save_mapping: bool,
+    ) -> dict:
+        cls._assert_linked_category_change(
+            draft=draft, target_product_type_id=target_product_type_id,
+            save_mapping=save_mapping,
+        )
+        if target_product_type_id is not None:
+            selected_type = cls._product_type(
+                marketplace_id=draft.marketplace_id,
+                product_type_id=target_product_type_id,
+            )
+        else:
+            selected_type = None
+        if save_mapping and selected_type is None:
+            raise MarketplaceDraftValidationError(
+                "save_mapping требует выбранный product_type_id"
+            )
+        changing = target_product_type_id != draft.product_type_id or (
+            draft.published_listing_id is not None
+            and cls.linked_category_state(draft)["mode"] == "repair"
+        )
+        if changing and selected_type is not None:
+            facts = cls._stored_json(draft.source_facts_json, dict)
+            auto_attributes, compliance_report = cls._auto_map_attributes(
+                product_type=selected_type,
+                facts_document=facts,
+            )
+        elif changing:
+            auto_attributes, compliance_report = [], None
+        else:
+            auto_attributes = cls._stored_json(draft.attributes_json, list)
+            compliance_report = None
+        type_ids = {value for value in (
+            draft.product_type_id,
+            target_product_type_id,
+        ) if value is not None}
+        names = {
+            (row.external_attribute_id, row.attribute_complex_id or "0"): row.name
+            for row in MarketplaceAttributeDefinition.query.filter(
+                MarketplaceAttributeDefinition.marketplace_id == draft.marketplace_id,
+                MarketplaceAttributeDefinition.product_type_id.in_(type_ids),
+            ).order_by(MarketplaceAttributeDefinition.product_type_id.desc()).limit(
+                cls.MAX_ATTRIBUTES * 2 + 1
+            ).all()
+        } if type_ids else {}
+        try:
+            impact = build_category_impact(
+                draft, target_type=selected_type, auto_attributes=auto_attributes,
+                names=names, save_mapping=save_mapping, changing=changing,
+            )
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise MarketplaceCategoryImpactTooLarge(str(exc)) from None
+        return {
+            "selected_type": selected_type,
+            "auto_attributes": auto_attributes,
+            "compliance_report": compliance_report,
+            "impact": impact,
+            "changing": changing,
+        }
+
+    @classmethod
+    def linked_category_state(cls, draft: MarketplaceProductDraft) -> dict:
+        """Exact local category identity for an existing Ozon listing."""
+        if draft.published_listing_id is None:
+            return {"mode": "new"}
+        listing = MarketplaceListing.query.filter_by(
+            id=draft.published_listing_id,
+            seller_id=draft.seller_id,
+            marketplace_id=draft.marketplace_id,
+            account_id=draft.account_id,
+            imported_product_id=draft.imported_product_id,
+            offer_id=draft.offer_id,
+        ).first()
+        if (listing is None or not listing.external_product_id or not listing.is_available
+                or listing.is_archived or listing.link_status != "linked"):
+            return {"mode": "unavailable"}
+        aligned = (
+            draft.product_type_id is not None
+            and draft.product_type_id == listing.product_type_id
+            and draft.external_category_id == listing.external_category_id
+            and draft.external_type_id == listing.external_type_id
+        )
+        if aligned:
+            return {"mode": "fixed"}
+        product_type = listing.product_type
+        if (
+            product_type is None
+            or product_type.marketplace_id != draft.marketplace_id
+            or not product_type.is_available
+            or not product_type.is_seller_selectable
+            or product_type.category is None
+            or product_type.category.marketplace_id != draft.marketplace_id
+            or not product_type.category.is_available
+            or listing.external_category_id != product_type.category.external_category_id
+            or listing.external_type_id != product_type.external_type_id
+            or listing.last_seen_at is None
+            or listing.info_synced_at is None
+            or min(listing.last_seen_at, listing.info_synced_at) < datetime.utcnow() - cls.LISTING_HARD_TTL
+        ):
+            return {"mode": "unavailable"}
+        return {
+            "mode": "repair",
+            "observed_type": {
+                "id": product_type.id,
+                "name": product_type.name,
+                "category_path": product_type.category.full_path,
+            },
+        }
+
+    @classmethod
+    def _assert_linked_category_change(
+        cls, *, draft: MarketplaceProductDraft,
+        target_product_type_id: Optional[int], save_mapping: bool,
+    ) -> None:
+        state = cls.linked_category_state(draft)
+        if state["mode"] == "new":
+            return
+        if (state["mode"] == "fixed" and not save_mapping
+                and target_product_type_id == draft.product_type_id):
+            return
+        if (state["mode"] == "repair" and not save_mapping
+                and target_product_type_id == state["observed_type"]["id"]):
+            return
+        raise MarketplaceDraftConflict(
+            "Категория существующей карточки меняется в Ozon. "
+            "После изменения синхронизируйте каталог; здесь можно только "
+            "восстановить тип из свежего точного листинга."
+        )
+
+    @classmethod
+    def category_impact(
+        cls,
+        *,
+        seller_id: int,
+        draft_id: int,
+        expected_version: int,
+        target_product_type_id: Optional[int],
+        save_mapping: bool,
+        actor_user_id: Optional[int],
+        page: int = 1,
+    ) -> dict:
+        expected_version = cls._positive_integer(expected_version, "expected_version")
+        page = cls._positive_integer(page, "page")
+        if page > 100:
+            raise MarketplaceDraftValidationError("Страница preview вне предела")
+        save_mapping = cls._strict_boolean(save_mapping, "save_mapping")
+        if target_product_type_id is not None:
+            target_product_type_id = cls._positive_integer(
+                target_product_type_id, "target_product_type_id"
+            )
+        draft = cls.get_draft(seller_id=seller_id, draft_id=draft_id)
+        if draft.version != expected_version:
+            raise MarketplaceDraftConflict(
+                "Черновик изменился; проверьте сохранённую версию перед сменой категории"
+            )
+        if draft.status == "archived":
+            raise MarketplaceDraftConflict("Архивный черновик нельзя редактировать")
+        cls._assert_no_active_publication(draft)
+        plan = cls._category_change_plan(
+            draft=draft,
+            target_product_type_id=target_product_type_id,
+            save_mapping=save_mapping,
+        )
+        impact = plan["impact"]
+        start = (page - 1) * CATEGORY_IMPACT_PAGE_SIZE
+        if start >= impact["total"] and page != 1:
+            raise MarketplaceDraftValidationError("Страница preview вне списка")
+        return {
+            "draft_id": draft.id,
+            "account_id": draft.account_id,
+            "version": draft.version,
+            "current_type": {
+                "id": draft.product_type_id,
+                "name": draft.product_type.name,
+                "category_path": draft.product_type.category.full_path,
+            } if draft.product_type and draft.product_type.category else None,
+            "target_type": impact["target_type"],
+            "save_mapping": save_mapping,
+            "counts": impact["counts"],
+            "total": impact["total"],
+            "digest": impact["digest"],
+            "page": page,
+            "has_more": start + CATEGORY_IMPACT_PAGE_SIZE < impact["total"],
+            "rows": impact["rows"][start:start + CATEGORY_IMPACT_PAGE_SIZE],
+            "review_token": issue_category_review_token(
+                draft, actor_user_id=actor_user_id,
+                target_type=plan["selected_type"],
+                save_mapping=save_mapping, impact=impact,
+            ),
+        }
+
+    @classmethod
     def update_draft(
         cls,
         *,
@@ -4712,7 +6205,73 @@ class MarketplaceDraftService:
         expected_version: int,
         patch: Dict[str, Any],
         corrected_by_user_id: Optional[int] = None,
+        category_review_token: Optional[str] = None,
+        category_review_required: bool = True,
     ) -> MarketplaceProductDraft:
+        reviewed_change = (
+            category_review_required
+            and isinstance(patch, dict)
+            and "product_type_id" in patch
+        )
+        if reviewed_change:
+            session = db.session()
+            if session.new or session.dirty or session.deleted:
+                raise MarketplaceDraftConflict(
+                    "Сначала завершите текущее изменение черновика"
+                )
+            if db.engine.dialect.name == "sqlite":
+                raw = session.connection().connection.driver_connection
+                if raw.in_transaction:
+                    raise MarketplaceDraftConflict(
+                        "Сначала завершите текущую транзакцию черновика"
+                    )
+                previous_timeout = raw.execute("PRAGMA busy_timeout").fetchone()[0]
+                try:
+                    raw.execute("PRAGMA busy_timeout=200")
+                    session.execute(text("BEGIN IMMEDIATE"))
+                except OperationalError:
+                    raw.execute(f"PRAGMA busy_timeout={int(previous_timeout)}")
+                    session.rollback()
+                    raise MarketplaceDraftConflict(
+                        "Черновик сейчас меняется; повторите проверку позже"
+                    ) from None
+                else:
+                    raw.execute(f"PRAGMA busy_timeout={int(previous_timeout)}")
+                    # A prior preview may have cached the draft/type/source in
+                    # this Session. The lock protects the database, so refresh
+                    # every identity before recomputing the signed impact.
+                    session.expire_all()
+        try:
+            return cls._update_draft_core(
+                seller_id=seller_id, draft_id=draft_id,
+                expected_version=expected_version, patch=patch,
+                corrected_by_user_id=corrected_by_user_id,
+                category_review_token=category_review_token,
+                category_review_required=category_review_required,
+            )
+        except Exception:
+            if reviewed_change:
+                db.session.rollback()
+            raise
+
+    @classmethod
+    def _update_draft_core(
+        cls,
+        *,
+        seller_id: int,
+        draft_id: int,
+        expected_version: int,
+        patch: Dict[str, Any],
+        corrected_by_user_id: Optional[int] = None,
+        category_review_token: Optional[str] = None,
+        category_review_required: bool = True,
+        commit: bool = True,
+    ) -> MarketplaceProductDraft:
+        """Mutate a draft; internal review workflows may flush with their audit.
+
+        ``commit=False`` requires a caller-owned short writer transaction and
+        rollback on any error. It never weakens version/publication checks.
+        """
         expected_version = cls._positive_integer(expected_version, "expected_version")
         if not isinstance(patch, dict) or not patch:
             raise MarketplaceDraftValidationError("patch должен быть непустым объектом")
@@ -4737,6 +6296,40 @@ class MarketplaceDraftService:
             )
         cls._assert_no_active_publication(draft)
 
+        save_mapping = patch.get("save_mapping", False)
+        if "save_mapping" in patch:
+            save_mapping = cls._strict_boolean(save_mapping, "save_mapping")
+        if "product_type_id" in patch or save_mapping:
+            target_type_id = patch.get("product_type_id", draft.product_type_id)
+            if target_type_id is not None:
+                target_type_id = cls._positive_integer(target_type_id, "product_type_id")
+            cls._assert_linked_category_change(
+                draft=draft, target_product_type_id=target_type_id,
+                save_mapping=save_mapping,
+            )
+        category_plan = None
+        if "product_type_id" in patch and category_review_required:
+            if set(patch) & {"attributes", "complex_attributes", "attribute_removals"}:
+                raise MarketplaceDraftValidationError(
+                    "Смену категории и изменение характеристик сохраните отдельно"
+                )
+            target_type_id = patch["product_type_id"]
+            if target_type_id is not None:
+                target_type_id = cls._positive_integer(target_type_id, "product_type_id")
+            category_plan = cls._category_change_plan(
+                draft=draft, target_product_type_id=target_type_id,
+                save_mapping=save_mapping,
+            )
+            if not valid_category_review_token(
+                category_review_token, draft,
+                actor_user_id=corrected_by_user_id,
+                target_type=category_plan["selected_type"],
+                save_mapping=save_mapping, impact=category_plan["impact"],
+            ):
+                raise MarketplaceDraftConflict(
+                    "Проверка последствий смены категории устарела; откройте её снова"
+                )
+
         product_type_changed = False
         if "offer_id" in patch:
             offer_id = cls._text(patch["offer_id"], "offer_id", maximum=200)
@@ -4756,7 +6349,36 @@ class MarketplaceDraftService:
             draft.offer_id = offer_id
 
         selected_type = draft.product_type
-        if "product_type_id" in patch:
+        if category_plan is not None:
+            if category_plan["selected_type"] is None and category_plan["changing"]:
+                selected_type = None
+                draft.product_type_id = None
+                draft.category_mapping_id = None
+                draft.external_category_id = None
+                draft.external_type_id = None
+                draft.attributes_json = '[]'
+                draft.complex_attributes_json = '[]'
+                draft.attribute_removals_json = '[]'
+                draft.status = "needs_category"
+                product_type_changed = True
+            elif category_plan["selected_type"] is not None:
+                selected_type = category_plan["selected_type"]
+                if category_plan["changing"]:
+                    cls._bind_type(draft, selected_type)
+                    draft.attributes_json = cls._canonical_json(
+                        category_plan["auto_attributes"], list,
+                    )
+                    cls._merge_compliance_provenance(
+                        draft, category_plan["compliance_report"]
+                    )
+                    draft.complex_attributes_json = '[]'
+                    draft.attribute_removals_json = '[]'
+                    draft.category_mapping_id = None
+                    product_type_changed = True
+        elif "product_type_id" in patch:
+            # Internal bulk repair already has its own reviewed, scoped form
+            # contract. The interactive JSON/classic route always opts into
+            # the signed single-draft review above.
             if patch["product_type_id"] is None:
                 selected_type = None
                 draft.product_type_id = None
@@ -4773,25 +6395,23 @@ class MarketplaceDraftService:
                     marketplace_id=draft.marketplace_id,
                     product_type_id=patch["product_type_id"],
                 )
-                if selected_type.id != draft.product_type_id:
+                if selected_type.id != draft.product_type_id or (
+                    draft.published_listing_id is not None
+                    and cls.linked_category_state(draft)["mode"] == "repair"
+                ):
                     cls._bind_type(draft, selected_type)
                     facts_document = cls._stored_json(draft.source_facts_json, dict)
                     auto_attributes, compliance_report = cls._auto_map_attributes(
                         product_type=selected_type,
                         facts_document=facts_document,
                     )
-                    draft.attributes_json = cls._canonical_json(
-                        auto_attributes, list,
-                    )
+                    draft.attributes_json = cls._canonical_json(auto_attributes, list)
                     cls._merge_compliance_provenance(draft, compliance_report)
                     draft.complex_attributes_json = '[]'
                     draft.attribute_removals_json = '[]'
                     draft.category_mapping_id = None
                     product_type_changed = True
 
-        save_mapping = patch.get("save_mapping", False)
-        if "save_mapping" in patch:
-            save_mapping = cls._strict_boolean(save_mapping, "save_mapping")
         if save_mapping:
             if selected_type is None:
                 raise MarketplaceDraftValidationError(
@@ -4853,6 +6473,9 @@ class MarketplaceDraftService:
         }, dict)
         draft.validated_at = None
         draft.updated_at = datetime.utcnow()
+        if not commit:
+            db.session.flush()
+            return draft
         try:
             db.session.commit()
         except StaleDataError:
@@ -5851,6 +7474,12 @@ class MarketplaceDraftService:
                         "physical_fact_not_integer",
                         f"dimensions.{field_name}",
                         f"{field_name} должен быть целым числом в выбранной единице Ozon",
+                    ))
+                elif parsed > cls.MAX_OZON_API_PHYSICAL_INTEGER:
+                    errors.append(cls._validation_item(
+                        "physical_fact_out_of_range",
+                        f"dimensions.{field_name}",
+                        f"{field_name} превышает максимум целого числа Ozon API",
                     ))
             except MarketplaceDraftValidationError:
                 errors.append(cls._validation_item(

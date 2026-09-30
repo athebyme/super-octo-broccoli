@@ -4,6 +4,7 @@ import requests
 import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
+from sqlalchemy.orm import Load
 
 from models import db, Product, ProductStock
 
@@ -41,10 +42,14 @@ def register_warehouse_routes(app):
 
         try:
             seller_id = current_user.seller.id
+            from services.wb_stock_sync import latest_stock_sync
+            sync = latest_stock_sync(seller_id)
 
             # Query all stocks joined with products for this seller
             stocks = db.session.query(
                 ProductStock, Product
+            ).options(
+                Load(Product).load_only(Product.id, Product.nm_id, Product.title, Product.vendor_code, Product.brand, Product.price, Product.discount_price),
             ).join(
                 Product, ProductStock.product_id == Product.id
             ).filter(
@@ -53,6 +58,9 @@ def register_warehouse_routes(app):
 
             if not stocks:
                 return jsonify({
+                    'sync': sync,
+                    'observedAt': sync['updated_at'] if sync and sync['status'] == 'completed' else None,
+                    'observationAvailable': bool(sync and sync['status'] == 'completed'),
                     'totalQuantity': 0,
                     'warehouseCount': 0,
                     'stockValue': 0,
@@ -149,6 +157,9 @@ def register_warehouse_routes(app):
             dead_stock = [{**p, 'value': round(p['value'], 2)} for p in all_products[:10]]
 
             return jsonify({
+                'sync': sync,
+                'observedAt': min(stock.updated_at for stock, _ in stocks if stock.updated_at).isoformat() if any(stock.updated_at for stock, _ in stocks) else None,
+                'observationAvailable': True,
                 'totalQuantity': total_quantity,
                 'warehouseCount': len(warehouses),
                 'stockValue': round(total_value, 2),
@@ -166,123 +177,19 @@ def register_warehouse_routes(app):
     @app.route('/api/warehouse/refresh', methods=['POST'])
     @login_required
     def api_warehouse_refresh():
-        """Fetch fresh stock data from WB Statistics API and update ProductStock table."""
-        if not current_user.seller or not current_user.seller.has_valid_api_key():
-            return jsonify({'error': 'API ключ WB не настроен'}), 403
-
+        """Enqueue the same bounded Analytics reader used by catalog sync."""
+        if not current_user.seller:
+            return jsonify({'error': 'Продавец не настроен'}), 403
+        from services.wb_stock_sync import WBStockSyncError, enqueue_stock_sync
         try:
-            seller_id = current_user.seller.id
-            api_key = current_user.seller.wb_api_key
-
-            # Fetch stocks from WB API
-            date_from = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-            session = requests.Session()
-            session.headers.update({
-                'Authorization': api_key,
-                'Content-Type': 'application/json'
-            })
-
-            resp = session.get(
-                f"{STATISTICS_API_URL}/api/v1/supplier/stocks",
-                params={'dateFrom': date_from},
-                timeout=60
-            )
-            resp.raise_for_status()
-            wb_stocks = resp.json()
-
-            if not isinstance(wb_stocks, list):
-                return jsonify({'error': 'Неожиданный ответ API'}), 500
-
-            # Build a map of nmId -> product_id for this seller
-            products = Product.query.filter_by(seller_id=seller_id).all()
-            nm_to_product = {p.nm_id: p for p in products}
-
-            updated = 0
-            created = 0
-
-            for item in wb_stocks:
-                nm_id = item.get('nmId')
-                if not nm_id:
-                    continue
-
-                product = nm_to_product.get(nm_id)
-                if not product:
-                    continue
-
-                warehouse_id = item.get('warehouseId') or 0
-                warehouse_name = item.get('warehouseName', '')
-
-                # Try to find existing stock record
-                stock = ProductStock.query.filter_by(
-                    product_id=product.id,
-                    warehouse_id=warehouse_id
-                ).first()
-
-                if stock:
-                    stock.warehouse_name = warehouse_name
-                    stock.quantity = item.get('quantity', 0)
-                    stock.quantity_full = item.get('quantityFull', 0)
-                    stock.in_way_to_client = item.get('inWayToClient', 0)
-                    stock.in_way_from_client = item.get('inWayFromClient', 0)
-                    stock.updated_at = datetime.utcnow()
-                    updated += 1
-                else:
-                    stock = ProductStock(
-                        product_id=product.id,
-                        warehouse_id=warehouse_id,
-                        warehouse_name=warehouse_name,
-                        quantity=item.get('quantity', 0),
-                        quantity_full=item.get('quantityFull', 0),
-                        in_way_to_client=item.get('inWayToClient', 0),
-                        in_way_from_client=item.get('inWayFromClient', 0),
-                    )
-                    db.session.add(stock)
-                    created += 1
-
-            db.session.commit()
-
-            # Обновляем Product.quantity из суммы складских остатков
-            # чтобы контент-фабрика и другие модули видели актуальные остатки
-            product_ids_updated = set()
-            for item in wb_stocks:
-                nm_id = item.get('nmId')
-                if nm_id and nm_id in nm_to_product:
-                    product_ids_updated.add(nm_to_product[nm_id].id)
-
-            if product_ids_updated:
-                stock_totals = (
-                    db.session.query(
-                        ProductStock.product_id,
-                        db.func.coalesce(db.func.sum(ProductStock.quantity), 0).label('total_qty')
-                    )
-                    .filter(ProductStock.product_id.in_(product_ids_updated))
-                    .group_by(ProductStock.product_id)
-                    .all()
-                )
-                qty_map = {pid: int(total) for pid, total in stock_totals}
-                for pid in product_ids_updated:
-                    product = Product.query.get(pid)
-                    if product:
-                        product.quantity = qty_map.get(pid, 0)
-                db.session.commit()
-
-            logger.info(f"Warehouse refresh for seller {seller_id}: {len(wb_stocks)} items from API, {created} created, {updated} updated")
-
+            job = enqueue_stock_sync(current_user.seller.id)
             return jsonify({
-                'success': True,
-                'message': f'Обновлено: {updated}, создано: {created} записей из {len(wb_stocks)} позиций API',
-                'apiItems': len(wb_stocks),
-                'created': created,
-                'updated': updated,
-            })
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"WB API error in warehouse refresh: {e}")
-            return jsonify({'error': f'Ошибка WB API: {str(e)}'}), 502
-        except Exception as e:
+                'success': True, 'queued': True, 'sync': job,
+                'message': 'Обновление остатков в очереди. Последние данные остаются доступны; прогресс виден в фоновых задачах.',
+            }), 202
+        except WBStockSyncError as exc:
             db.session.rollback()
-            logger.error(f"Error in warehouse refresh: {e}")
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'error': str(exc), 'code': exc.code}), exc.status_code
 
     @app.route('/api/analytics/sync', methods=['POST'])
     @login_required

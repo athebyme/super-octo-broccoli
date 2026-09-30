@@ -1,225 +1,301 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% from "macros/components.html" import stepper %}
 
-{% block title %}Кабинеты маркетплейсов — Seller Hub{% endblock %}
+{% block title %}Подключение Ozon — Seller Hub{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='ozon-account-setup.css') }}">
+{% endblock %}
+
+{% macro vat_options(value=none) %}
+<option value="" {% if not value %}selected{% endif %}>Не задан</option>
+{% for rate, label in [('0', 'Без НДС'), ('0.05', '5%'), ('0.07', '7%'), ('0.1', '10%'), ('0.2', '20%'), ('0.22', '22%')] %}
+<option value="{{ rate }}" {% if value == rate or (rate == '0.1' and value == '0.10') or (rate == '0.2' and value == '0.20') %}selected{% endif %}>{{ label }}</option>
+{% endfor %}
+{% endmacro %}
+
+{% macro connection_form() %}
+<form method="post" action="{{ url_for('marketplace_accounts.connect_ozon') }}" @submit.prevent="submit($event)"
+      class="space-y-4" id="ozon-connect-form" :aria-busy="!!busy.new">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <label class="block min-w-0">
+            <span class="block text-sm font-medium mb-1">Client-Id <span style="color:var(--danger)" aria-hidden="true">*</span></span>
+            <input class="sh-input w-full" id="ozon-client-id" name="client_id" required maxlength="200"
+                   inputmode="numeric" autocomplete="off" placeholder="Например, 123456" aria-describedby="ozon-key-help">
+        </label>
+        <label class="block min-w-0">
+            <span class="block text-sm font-medium mb-1">Название магазина <span class="text-xs font-normal" style="color:var(--text-muted)">необязательно</span></span>
+            <input class="sh-input w-full" name="label" maxlength="120" autocomplete="organization"
+                   placeholder="Например, Основной магазин">
+        </label>
+    </div>
+    <label class="block">
+        <span class="block text-sm font-medium mb-1">API key <span style="color:var(--danger)" aria-hidden="true">*</span></span>
+        <input class="sh-input w-full" id="ozon-api-key" type="password" name="api_key" required maxlength="2000"
+               autocomplete="new-password" spellcheck="false" placeholder="Вставьте ключ Seller API" aria-describedby="ozon-key-help">
+    </label>
+    <p id="ozon-key-help" class="text-xs" style="color:var(--text-muted)">Ключ хранится зашифрованным. После сохранения его нельзя посмотреть. Подключение только читает данные — товары на Ozon не изменятся.</p>
+    <details class="border-t pt-3" style="border-color:var(--border)">
+        <summary class="cursor-pointer text-sm" style="color:var(--text-secondary)">Настройки для будущей публикации — можно позже</summary>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
+            <label class="block">
+                <span class="block text-xs mb-1" style="color:var(--text-secondary)">НДС новых карточек</span>
+                <select class="sh-input w-full" name="default_vat">{{ vat_options() }}</select>
+                <span class="block text-xs mt-1" style="color:var(--text-muted)">Понадобится перед первой отправкой. Не меняет ставку существующих карточек.</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
+                <input type="checkbox" name="is_default" value="1"> Использовать как основной кабинет Ozon
+            </label>
+        </div>
+    </details>
+    <p v-cloak v-show="errors.new" v-text="errors.new" role="alert" class="sh-alert sh-alert--danger text-sm"></p>
+    <a v-cloak v-show="uncertain.new" class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_accounts.index') }}">Проверить сохранённые кабинеты</a>
+    <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+        <button type="submit" class="sh-btn sh-btn--primary sh-btn--md" :disabled="busy.new" :class="{'is-loading': busy.new}">
+            <span v-text="busy.new ? 'Сохраняем подключение…' : 'Подключить и загрузить каталог'"></span>
+        </button>
+        <span class="text-xs" style="color:var(--text-muted)">После сохранения всё продолжится в фоне.</span>
+    </div>
+</form>
+{% endmacro %}
 
 {% block content %}
-{% set vat_labels = {
-    '0': 'Без НДС', '0.05': '5%', '0.07': '7%',
-    '0.1': '10%', '0.10': '10%', '0.2': '20%',
-    '0.20': '20%', '0.22': '22%'
-} %}
-<div class="sh-page-header">
+<div class="sh-page-header ozon-setup-header">
     <div class="sh-page-header-content">
         <div>
-            <h1 class="sh-page-title">Кабинеты маркетплейсов</h1>
-            <p class="sh-page-subtitle">Подключения принадлежат только вашему продавцу. Секретные ключи нельзя посмотреть после сохранения.</p>
+            <h1 class="sh-page-title">Подключение Ozon</h1>
+            <p class="sh-page-subtitle">Подключите магазин, загрузите каталог и переходите к работе с товарами.</p>
         </div>
         <div class="sh-page-actions">
-            {% if ozon_enabled %}<a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index') }}">Каталог</a>{% endif %}
-            {% if publication_enabled %}
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index') }}">Загрузки карточек</a>
-            <span class="sh-badge sh-badge--sm sh-badge--green">Ozon · загрузка включена</span>
-            {% else %}
-            <span class="sh-badge sh-badge--sm sh-badge--gray">Ozon · запись выключена</span>
-            {% endif %}
+            <a class="sh-btn sh-btn--secondary sh-btn--md" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">{{ icon('package', 16) }} Каталог Ozon</a>
+            <a class="sh-btn sh-btn--secondary sh-btn--md" href="{{ url_for('api_settings') }}">{{ icon('settings', 16) }} Настройки API</a>
         </div>
     </div>
 </div>
 
-<div class="max-w-5xl mx-auto px-4 sm:px-6 py-6">
-
+<div id="ozon-setup-bootstrap-fallback" class="max-w-5xl mx-auto px-4 py-6" role="status">
+    <p class="text-sm mb-3" style="color:var(--text-secondary)">Открываем настройки магазина…</p>
+    <a class="sh-btn sh-btn--secondary" href="{{ url_for('api_settings') }}">Открыть настройки API</a>
+</div>
+<noscript><style>#ozon-setup-bootstrap-fallback { display: none; }</style><p class="sh-alert sh-alert--warning">Для подключения Ozon нужен JavaScript. Сохранённые товары доступны в <a href="{{ url_for('marketplace_listings.classic', marketplace='ozon') }}">упрощённом каталоге</a>.</p></noscript>
+<div id="ozon-account-setup" class="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-5" v-cloak x-ignore
+     data-ozon-setup="{{ setup_config | tojson | forceescape }}">
     {% if not ozon_enabled %}
-    <div class="rounded-md border px-4 py-4 text-sm"
-         style="border-color:var(--border);background:var(--bg-card);color:var(--text-secondary)">
-        Ozon выключен настройкой <code>MARKETPLACE_OZON_ENABLED</code>. Существующие подключения можно безопасно отключить.
-    </div>
-    {% else %}
-    <section class="sh-card p-4 sm:p-5 mb-6" aria-labelledby="ozon-connect-title">
-        <div class="flex items-center justify-between gap-4 mb-4">
-            <div>
-                <h2 id="ozon-connect-title" class="text-base font-semibold" style="color:var(--text)">Добавить кабинет Ozon</h2>
-                <p class="text-xs mt-1" style="color:var(--text-muted)">Client-Id не является секретом; API key хранится только в зашифрованном виде.</p>
-            </div>
-            <span class="inline-flex items-center gap-1.5 text-xs" style="color:var(--text-muted)"><span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>Ozon</span>
-        </div>
-        <form method="post" action="{{ url_for('marketplace_accounts.create_ozon') }}"
-              class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label class="block">
-                <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Название подключения</span>
-                <input name="label" required maxlength="120" autocomplete="organization"
-                       placeholder="Основной кабинет"
-                       class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                       style="border-color:var(--border);color:var(--text)">
-            </label>
-            <label class="block">
-                <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">Client-Id</span>
-                <input name="client_id" required maxlength="200" autocomplete="off"
-                       placeholder="123456"
-                       class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                       style="border-color:var(--border);color:var(--text)">
-            </label>
-            <label class="block md:col-span-2">
-                <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">API key</span>
-                <input type="password" name="api_key" required maxlength="2000" autocomplete="new-password"
-                       class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                       style="border-color:var(--border);color:var(--text)">
-            </label>
-            <label class="block md:col-span-2">
-                <span class="block text-xs font-medium mb-1" style="color:var(--text-secondary)">НДС для новых карточек</span>
-                <select name="default_vat" required
-                        class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                        style="border-color:var(--border);color:var(--text)">
-                    <option value="">Выберите один раз для кабинета</option>
-                    <option value="0">Без НДС</option>
-                    <option value="0.05">5%</option>
-                    <option value="0.07">7%</option>
-                    <option value="0.1">10%</option>
-                    <option value="0.2">20%</option>
-                    <option value="0.22">22%</option>
-                </select>
-                <span class="block mt-1 text-xs" style="color:var(--text-muted)">Подставим автоматически, но не перезапишем НДС, заданный в отдельной карточке.</span>
-            </label>
-            <div class="md:col-span-2 flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <label class="inline-flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
-                    <input type="checkbox" name="is_default" value="1" class="rounded">
-                    Сделать основным кабинетом Ozon
-                </label>
-                <button type="submit" class="sh-btn sh-btn--primary">Сохранить подключение</button>
-            </div>
-        </form>
-    </section>
+    <div class="sh-alert sh-alert--warning" role="status">Подключение Ozon временно выключено оператором. Сохранённые товары и кабинеты не удалены.</div>
     {% endif %}
+    {% if request.args.get('setup_pending') == '1' %}
+    <div class="sh-alert sh-alert--warning" role="status">Реквизиты сохранены, но фоновую проверку запустить не удалось. Нажмите «Проверить и загрузить каталог» у своего кабинета.</div>
+    {% endif %}
+    <div v-cloak v-show="pollError" class="sh-alert sh-alert--warning flex flex-wrap items-center gap-3" role="status">
+        <span v-text="pollError"></span>
+        <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="refresh()">Обновить статус</button>
+    </div>
 
-    <section aria-labelledby="marketplace-account-list-title">
-        <h2 id="marketplace-account-list-title" class="text-base font-semibold mb-3" style="color:var(--text)">
-            Сохранённые кабинеты
-        </h2>
-        {% if accounts %}
-        <div class="space-y-3">
-            {% for account in accounts %}
-            {% set status = account.connection_status or 'unchecked' %}
-            <article class="sh-card p-4 sm:p-5">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div class="min-w-0">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <h3 class="font-semibold truncate" style="color:var(--text)">{{ account.label }}</h3>
-                            <span class="inline-flex items-center gap-1.5 text-xs" style="color:var(--text-muted)"><span class="sh-mp-dot sh-mp-dot--{{ account.marketplace.code }}" aria-hidden="true"></span>{{ account.marketplace.code | upper }}</span>
-                            {% if account.is_default %}
-                            <span class="sh-badge sh-badge--sm sh-badge--blue">Основной</span>
-                            {% endif %}
-                        </div>
-                        <p class="text-sm mt-1" style="color:var(--text-secondary)">Client-Id: {{ account.external_account_id }}</p>
-                        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs" style="color:var(--text-muted)">
-                            <span>
-                                Статус:
-                                {% if status == 'connected' %}<span class="sh-badge sh-badge--sm sh-badge--green">подключён</span>
-                                {% elif status == 'invalid' %}<strong style="color:var(--danger)">ключ отклонён</strong>
-                                {% elif status == 'disconnected' %}<strong>отключён</strong>
-                                {% elif status == 'error' %}<strong style="color:var(--warn)">ошибка проверки</strong>
-                                {% else %}<strong>не проверен</strong>{% endif %}
-                            </span>
-                            {% if account.connection_checked_at %}
-                            <span>Проверен: {{ account.connection_checked_at.strftime('%d.%m.%Y %H:%M') }}</span>
-                            {% endif %}
-                            <span>{{ 'Ключ сохранён' if account.has_credentials else 'Ключ удалён' }}</span>
-                            {% if account.credential_expires_at %}
-                            <span style="color:{% if account.credential_expires_at <= now %}var(--danger){% else %}inherit{% endif %}">
-                                Ключ действует до {{ account.credential_expires_at.strftime('%d.%m.%Y') }}{% if account.credential_expires_at <= now %} — истёк{% endif %}
-                            </span>
-                            {% endif %}
-                            <span>
-                                НДС новых карточек:
-                                <strong>{{ vat_labels.get(account.public_settings.default_vat, 'не выбран') }}</strong>
-                            </span>
-                        </div>
-                        {% if account.last_error_message %}
-                        <p class="mt-2 text-xs" style="color:var(--danger)">{{ account.last_error_message }}</p>
-                        {% endif %}
+    {% if accounts %}
+    <section aria-labelledby="connected-ozon-title" class="space-y-4">
+        <h2 id="connected-ozon-title" class="text-base font-semibold">Ваши кабинеты</h2>
+        {% for account in accounts if account.marketplace.code == 'ozon' %}
+        {% set aid = account.id %}
+        {% set sync = latest_syncs.get(aid) %}
+        {% set job = onboarding_jobs.get(aid) %}
+        {% set is_connected = account.is_active and account.has_credentials and account.connection_status == 'connected' %}
+        <article class="sh-card p-4 sm:p-5 scroll-mt-20" id="ozon-account-{{ aid }}">
+            <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span>
+                        <h3 class="font-semibold break-words" v-text="(accounts[{{ aid }}] || {}).label || {{ account.label | tojson | forceescape }}"></h3>
+                        {% if account.is_default %}<span class="sh-badge sh-badge--gray sh-badge--sm">Основной</span>{% endif %}
+                        <span class="sh-badge sh-badge--sm"
+                              :class="tone({{ aid }})" v-text="connectionLabel({{ aid }})"></span>
                     </div>
-                    <div class="flex flex-wrap gap-2 sm:justify-end">
-                        {% if ozon_enabled and account.marketplace.code == 'ozon' and account.has_credentials and account.connection_status == 'connected' %}
-                        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', account_id=account.id) }}">Каталог</a>
-                        {% if publication_enabled and account.id in upload_ready_account_ids %}
-                        <a class="sh-btn sh-btn--primary" href="{{ url_for('seller_my_products') }}">Загрузить товары</a>
-                        {% endif %}
-                        {% endif %}
-                        {% if ozon_enabled and account.marketplace.code == 'ozon' and account.has_credentials %}
-                        <form method="post" action="{{ url_for('marketplace_accounts.check', account_id=account.id) }}">
+                    <p class="text-xs mt-1" style="color:var(--text-muted)">Client-Id: <span v-text="{{ account.external_account_id | tojson | forceescape }}"></span></p>
+                </div>
+                <div class="flex flex-wrap gap-2" v-show="connected({{ aid }})">
+                    <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=aid) }}">Открыть каталог</a>
+                    <a class="sh-btn sh-btn--primary" href="{{ url_for('marketplace_drafts.index', account_id=aid) }}">Подготовить товар</a>
+                </div>
+            </div>
+            <section v-if="(accounts[{{ aid }}] || {}).has_credentials" class="ozon-key-expiry" :data-state="expiry({{ aid }}).state" aria-label="Срок ключа" aria-live="polite">
+                <div class="ozon-key-expiry-copy">
+                    <strong v-text="expiry({{ aid }}).label"></strong>
+                    <time v-if="expiry({{ aid }}).expires_at" :datetime="expiry({{ aid }}).expires_at" v-text="expiryDate({{ aid }})"></time>
+                    <p v-text="expiry({{ aid }}).hint"></p>
+                </div>
+                {% if ozon_enabled %}<button v-if="expiry({{ aid }}).needs_attention" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" aria-controls="ozon-key-settings-{{ aid }}" :aria-expanded="!!keyOpen[{{ aid }}]" @click="openKey({{ aid }})">{{ icon('key', size=16) }} Заменить ключ</button>{% endif %}
+            </section>
+            <p class="mt-3 text-sm"><a class="sh-btn sh-btn--secondary" href="{{ url_for('ozon_account_health.page', account_id=aid) }}">Состояние магазина</a></p>
+            <div class="sh-stepper my-4" role="list" aria-label="Этапы подключения">
+                {% for label in ['Подключение', 'Каталог', 'Работа с товарами'] %}
+                <div class="sh-step" role="listitem"
+                     :class="{'sh-step--done': step({{ aid }}) > {{ loop.index0 }}, 'sh-step--current': step({{ aid }}) === {{ loop.index0 }}, 'sh-step--upcoming': step({{ aid }}) < {{ loop.index0 }}}"
+                     :aria-current="step({{ aid }}) === {{ loop.index0 }} ? 'step' : null">
+                    <span class="sh-step-dot">{{ loop.index }}</span><span class="sh-step-label">{{ label }}</span>
+                </div>
+                {% if not loop.last %}<span class="sh-step-line" :class="{'sh-step-line--done': step({{ aid }}) > {{ loop.index0 }}}"></span>{% endif %}
+                {% endfor %}
+            </div>
+            <div class="text-sm rounded-md px-3 py-3" style="background:var(--bg-hover)" aria-live="polite">
+                <div class="flex items-start gap-2">
+                    <span class="sh-spinner mt-0.5 shrink-0" v-show="active({{ aid }})" v-cloak aria-hidden="true"></span>
+                    <p v-text="message({{ aid }})" :style="(jobs[{{ aid }}] || {}).status === 'failed' ? 'color:var(--danger)' : ''"></p>
+                </div>
+                <p class="text-xs mt-2" style="color:var(--text-muted)" v-show="count({{ aid }}) > 0">
+                    Получено товаров: <span v-text="count({{ aid }})"></span>
+                </p>
+                <p v-cloak v-show="retryTime({{ aid }})" v-text="retryTime({{ aid }})" class="text-xs mt-1" style="color:var(--text-muted)"></p>
+                <p v-show="active({{ aid }})" v-cloak class="text-xs mt-1" style="color:var(--text-muted)">Страницу можно закрыть. Прогресс также доступен в фоновых задачах.</p>
+            </div>
+            <p v-cloak v-show="errors[{{ aid }}]" v-text="errors[{{ aid }}]" role="alert" class="sh-alert sh-alert--danger text-sm mt-3"></p>
+            <p v-if="reviewed[{{ aid }}]" class="sh-alert sh-alert--info text-sm mt-2" role="status">Статус перечитан. Проверьте магазин и срок ключа; затем подтвердите замену ещё раз.</p>
+            <div v-if="conflicts[{{ aid }}]" class="text-sm mt-2" role="status">
+                <p>Перечитывание сохранит введённый ключ в этом поле. Перед повторной отправкой проверьте обновлённое состояние магазина.</p>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm mt-2" :disabled="busy[{{ aid }}]" @click="reviewCurrent({{ aid }})">Перечитать настройки</button>
+            </div>
+            {% if ozon_enabled and account.has_credentials %}
+            <div class="flex flex-wrap gap-2 mt-3">
+                <form method="post" action="{{ url_for('marketplace_accounts.connect_existing', account_id=aid) }}"
+                      data-account-id="{{ aid }}" @submit.prevent="submit($event)" v-show="!connected({{ aid }})">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="sh-btn sh-btn--primary" :disabled="busy[{{ aid }}] || active({{ aid }})" type="submit">Проверить и загрузить каталог</button>
+                </form>
+                <form method="post" action="{{ url_for('marketplace_listings.sync_account', account_id=aid) }}"
+                      data-account-id="{{ aid }}" @submit.prevent="submit($event)" v-show="connected({{ aid }})">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="force_restart" value="1">
+                    <button class="sh-btn sh-btn--secondary" :disabled="busy[{{ aid }}] || active({{ aid }})" type="submit"
+                            v-text="active({{ aid }}) ? 'Загрузка идёт…' : ((jobs[{{ aid }}] || {}).status === 'failed' ? 'Загрузить заново' : 'Обновить каталог')"></button>
+                </form>
+                <a class="sh-btn sh-btn--secondary" href="{{ url_for('ozon_bulk_uploads.index', account_id=aid) }}">Результаты загрузок</a>
+            </div>
+            {% endif %}
+            <details id="ozon-key-settings-{{ aid }}" data-key-settings @toggle="keyOpen[{{ aid }}] = $event.currentTarget.open" class="border-t mt-4 pt-3" style="border-color:var(--border)">
+                <summary class="cursor-pointer text-sm" style="color:var(--text-secondary)">Доступы, настройки и замена ключа</summary>
+                <div class="space-y-4 mt-3 text-sm">
+                    <p style="color:var(--text-secondary)" v-show="connected({{ aid }})">
+                        <span v-show="canWrite({{ aid }})">В правах ключа найдено разрешение на отправку карточек. Каждая отправка всё равно требует отдельного подтверждения и проверки.</span>
+                        <span v-show="!canWrite({{ aid }})">Право ключа на отправку карточек не подтверждено. Просмотр каталога и подготовка черновиков доступны; перед отправкой проверьте права ключа в Ozon.</span>
+                    </p>
+                    {% if not publication_enabled %}<p style="color:var(--text-muted)">Отправка карточек сейчас выключена настройкой сервиса. Локальная подготовка доступна.</p>{% endif %}
+                    {% if account.connection_checked_at %}<p class="text-xs" style="color:var(--text-muted)">Последняя проверка: {{ account.connection_checked_at.strftime('%d.%m.%Y %H:%M') }} UTC.</p>{% endif %}
+                    {% if ozon_enabled %}
+                    <form method="post" action="{{ url_for('marketplace_accounts.update', account_id=aid) }}" data-account-id="{{ aid }}"
+                          data-account-settings data-account-action="settings" @submit.prevent="submit($event)" class="grid grid-cols-1 sm:grid-cols-2 gap-3" :aria-busy="!!busy[{{ aid }}]">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="expected_version" value="{{ account.version }}">
+                        <input type="hidden" name="client_id" value="{{ account.external_account_id }}">
+                        <label class="block min-w-0"><span class="block text-xs mb-1">Название магазина</span><input class="sh-input w-full" name="label" required maxlength="120" value="{{ account.label }}" :disabled="busy[{{ aid }}]"></label>
+                        <label class="block min-w-0"><span class="block text-xs mb-1">НДС новых карточек</span><select class="sh-input w-full" name="default_vat" :disabled="busy[{{ aid }}]" aria-describedby="ozon-vat-help-{{ aid }}">{{ vat_options(account.public_settings.default_vat) }}</select></label>
+                        <p class="sm:col-span-2 text-xs" id="ozon-vat-help-{{ aid }}" style="color:var(--text-secondary)">Ставка применяется только к новым черновикам. Подготовленные карточки сохранят прежние значения.</p>
+                        <div class="sm:col-span-2 ozon-settings-feedback">
+                            <p v-if="settingsErrors[{{ aid }}]" v-text="settingsErrors[{{ aid }}]" role="alert" class="sh-alert sh-alert--danger"></p>
+                            <p v-if="saved[{{ aid }}]" v-text="saved[{{ aid }}]" role="status" class="sh-alert sh-alert--success"></p>
+                            <p v-if="settingsReviewed[{{ aid }}]" role="status" class="sh-alert sh-alert--info">Ваши изменения остались в форме. Проверьте их и нажмите «Сохранить настройки».</p>
+                            <div v-if="settingsConflicts[{{ aid }}] || settingsUncertain[{{ aid }}]" class="ozon-settings-conflict">
+                                <p>Введённые значения сохранены в форме. Сначала сравните их с текущими настройками магазина.</p>
+                                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="busy[{{ aid }}] || sessionExpired" @click="readSettings({{ aid }})">Показать текущие настройки</button>
+                            </div>
+                            <section v-if="settingsReview[{{ aid }}]" id="ozon-settings-review-{{ aid }}" tabindex="-1" class="ozon-settings-review" aria-labelledby="ozon-settings-review-title-{{ aid }}">
+                                <h4 id="ozon-settings-review-title-{{ aid }}" class="font-semibold">Сейчас сохранено в магазине</h4>
+                                <dl><div><dt>Название</dt><dd v-text="settingsReview[{{ aid }}].label"></dd></div><div><dt>НДС новых карточек</dt><dd v-text="vatLabel(settingsReview[{{ aid }}].default_vat)"></dd></div></dl>
+                                <div class="ozon-settings-review-actions">
+                                    <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="acceptSettingsReview({{ aid }})">Продолжить с моими изменениями</button>
+                                    <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" @click="acceptSettingsReview({{ aid }}, true)">Загрузить сохранённые значения</button>
+                                </div>
+                            </section>
+                        </div>
+                        <div class="sm:col-span-2"><button type="submit" class="sh-btn sh-btn--secondary" :disabled="busy[{{ aid }}] || settingsConflicts[{{ aid }}] || settingsUncertain[{{ aid }}] || sessionExpired" v-text="busy[{{ aid }}] ? 'Сохраняем…' : 'Сохранить настройки'"></button></div>
+                    </form>
+                    {% endif %}
+                    {% if ozon_enabled %}
+                    <form method="post" action="{{ url_for('marketplace_accounts.reconnect', account_id=aid) }}" data-account-id="{{ aid }}" data-key-replacement
+                          data-reload="true" @submit.prevent="submit($event)" class="border-t pt-3" style="border-color:var(--border)">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="expected_version" value="{{ account.version }}">
+                        <input type="hidden" name="client_id" value="{{ account.external_account_id }}">
+                        <input type="hidden" name="label" value="{{ account.label }}">
+                        <label class="block"><span class="block text-xs mb-1">Новый API key для этого же Client-Id</span>
+                            <input class="sh-input w-full" type="password" name="api_key" required maxlength="2000" autocomplete="new-password" spellcheck="false" :disabled="busy[{{ aid }}]">
+                        </label>
+                        <p class="text-xs mt-1" style="color:var(--text-muted)">Для другого Client-Id создайте отдельное подключение. Ключ можно заменить и при неподтверждённом результате прежней отправки: её история сохранится, повторной отправки не будет. Если запрос к Ozon выполняется прямо сейчас, дождитесь его завершения.</p>
+                        <button type="submit" class="sh-btn sh-btn--secondary mt-3" :disabled="busy[{{ aid }}]">{{ 'Заменить ключ и проверить' if account.has_credentials else 'Подключить заново и загрузить каталог' }}</button>
+                    </form>
+                    {% endif %}
+                    <div class="flex flex-wrap gap-2">
+                        {% if ozon_enabled and account.is_active and not account.is_default %}
+                        <form method="post" action="{{ url_for('marketplace_accounts.make_default', account_id=aid) }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="sh-btn sh-btn--secondary">Проверить</button>
-                        </form>
-                        {% endif %}
-                        {% if ozon_enabled and account.marketplace.code == 'ozon' and account.is_active and not account.is_default %}
-                        <form method="post" action="{{ url_for('marketplace_accounts.make_default', account_id=account.id) }}">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="sh-btn sh-btn--secondary">Сделать основным</button>
+                            <input type="hidden" name="expected_version" value="{{ account.version }}">
+                            {% set current_default = accounts|selectattr('marketplace_id', 'equalto', account.marketplace_id)|selectattr('is_default')|first %}
+                            <input type="hidden" name="expected_default_id" value="{{ current_default.id if current_default else '' }}">
+                            <input type="hidden" name="expected_default_version" value="{{ current_default.version if current_default else '' }}">
+                            <button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">Использовать по умолчанию</button>
                         </form>
                         {% endif %}
                         {% if account.has_credentials %}
-                        <form method="post" action="{{ url_for('marketplace_accounts.disconnect', account_id=account.id) }}"
-                              onsubmit="return confirm('Удалить сохранённый API key и отключить кабинет?')">
+                        <form method="post" action="{{ url_for('marketplace_accounts.disconnect', account_id=aid) }}"
+                              onsubmit="return confirm('Отключить кабинет и удалить сохранённый ключ? Каталог и история останутся. Начатые отправки сначала нужно сверить с Ozon.')">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="sh-btn sh-btn--secondary">Отключить</button>
+                            <input type="hidden" name="expected_version" value="{{ account.version }}">
+                            <button class="sh-btn sh-btn--secondary sh-btn--sm" type="submit">Отключить кабинет</button>
                         </form>
                         {% endif %}
                     </div>
                 </div>
+            </details>
+            <details class="ozon-account-history" data-account-history @toggle="$event.currentTarget.open &amp;&amp; loadHistory({{ aid }})">
+                <summary>{{ icon('clock', size=16) }} История изменений магазина</summary>
+                <div class="ozon-account-history-body" :aria-busy="historyFor({{ aid }}).busy">
+                    <p class="ozon-history-note">Здесь появятся изменения, сделанные после добавления истории. Время указано в вашем часовом поясе.</p>
+                    <p v-if="historyFor({{ aid }}).busy" role="status">Загружаем историю…</p>
+                    <p v-if="historyFor({{ aid }}).loaded && !historyFor({{ aid }}).items.length" class="ozon-history-empty">История начнётся со следующего изменения.</p>
+                    <ol v-if="historyFor({{ aid }}).items.length" class="ozon-history-list">
+                        <li v-for="item in historyFor({{ aid }}).items" :key="item.id">
+                            <div class="ozon-history-heading"><strong v-text="item.title"></strong><time :datetime="item.created_at" v-text="historyDate(item.created_at)"></time></div>
+                            <p class="ozon-history-actor" v-text="item.actor"></p>
+                            <dl v-if="item.changes.length"><div v-for="change in item.changes" :key="change.field"><dt v-text="change.label"></dt><dd><span class="ozon-history-before"><span class="sr-only">Было: </span><span v-text="change.before"></span></span><span aria-hidden="true"> → </span><span class="sr-only">Стало: </span><span v-text="change.after"></span></dd></div></dl>
+                            <p v-if="item.hint" class="ozon-history-note" v-text="item.hint"></p>
+                        </li>
+                    </ol>
+                    <div v-if="historyFor({{ aid }}).error" class="ozon-history-error"><p role="alert" v-text="historyFor({{ aid }}).error"></p><button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="historyFor({{ aid }}).busy || sessionExpired" @click="loadHistory({{ aid }}, false, true)">Повторить загрузку истории</button></div>
+                    <button v-if="historyFor({{ aid }}).next" type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="historyFor({{ aid }}).busy || sessionExpired" @click="loadHistory({{ aid }}, true)">Показать более ранние изменения</button>
+                </div>
+            </details>
+        </article>
+        {% endfor %}
+    </section>
+    {% endif %}
 
-                {% if ozon_enabled and account.marketplace.code == 'ozon' and account.has_credentials %}
-                <details class="mt-4 border-t pt-4" style="border-color:var(--border)">
-                    <summary class="cursor-pointer text-sm" style="color:var(--text-secondary)">Изменить реквизиты</summary>
-                    <form method="post" action="{{ url_for('marketplace_accounts.update', account_id=account.id) }}"
-                          class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <label class="block">
-                            <span class="sr-only">Название подключения</span>
-                            <input name="label" required maxlength="120" value="{{ account.label }}"
-                                   class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                                   style="border-color:var(--border);color:var(--text)">
-                        </label>
-                        <label class="block">
-                            <span class="sr-only">Client-Id</span>
-                            <input name="client_id" required maxlength="200" value="{{ account.external_account_id }}"
-                                   class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                                   style="border-color:var(--border);color:var(--text)">
-                        </label>
-                        <label class="block md:col-span-2">
-                            <span class="block text-xs mb-1" style="color:var(--text-muted)">Новый API key — оставьте пустым, чтобы сохранить текущий</span>
-                            <input type="password" name="api_key" maxlength="2000" autocomplete="new-password"
-                                   class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                                   style="border-color:var(--border);color:var(--text)">
-                        </label>
-                        <label class="block md:col-span-2">
-                            <span class="block text-xs mb-1" style="color:var(--text-muted)">НДС для новых карточек</span>
-                            {% set current_vat = account.public_settings.default_vat %}
-                            <select name="default_vat" required
-                                    class="w-full rounded-md border px-3 py-2 text-sm bg-transparent"
-                                    style="border-color:var(--border);color:var(--text)">
-                                <option value="" {% if current_vat is none %}selected{% endif %}>Выберите ставку</option>
-                                <option value="0" {% if current_vat == '0' %}selected{% endif %}>Без НДС</option>
-                                <option value="0.05" {% if current_vat == '0.05' %}selected{% endif %}>5%</option>
-                                <option value="0.07" {% if current_vat == '0.07' %}selected{% endif %}>7%</option>
-                                <option value="0.1" {% if current_vat in ['0.1', '0.10'] %}selected{% endif %}>10%</option>
-                                <option value="0.2" {% if current_vat in ['0.2', '0.20'] %}selected{% endif %}>20%</option>
-                                <option value="0.22" {% if current_vat == '0.22' %}selected{% endif %}>22%</option>
-                            </select>
-                        </label>
-                        <div class="md:col-span-2 flex justify-end">
-                            <button type="submit" class="sh-btn sh-btn--primary">Сохранить изменения</button>
-                        </div>
-                    </form>
-                </details>
-                {% endif %}
-            </article>
-            {% endfor %}
-        </div>
+    {% if ozon_enabled and accounts|length < 10 %}
+    <section class="sh-card p-4 sm:p-5" aria-labelledby="ozon-new-title">
+        {% if accounts %}<details><summary id="ozon-new-title" class="cursor-pointer font-medium">Подключить ещё один кабинет Ozon</summary><div class="mt-4">
         {% else %}
-        <div class="rounded-md border px-4 py-8 text-center text-sm"
-             style="border-color:var(--border);background:var(--bg-card);color:var(--text-muted)">
-            Кабинеты маркетплейсов ещё не подключены.
+        <div class="ozon-connect-intro">
+            <div>
+                <h2 id="ozon-new-title">Подключить свой магазин</h2>
+                <p>Добавьте ключ из Ozon Seller. Мы проверим доступ и загрузим ваши товары, цены и остатки.</p>
+                {{ stepper([{'label': 'Подключение'}, {'label': 'Каталог'}, {'label': 'Работа с товарами'}]) }}
+            </div>
+            <img src="{{ url_for('static', filename='images/ozon-shop-start.webp') }}" alt="" width="160" height="160" decoding="async">
         </div>
         {% endif %}
+        <details class="mb-4 rounded-md p-3 text-sm" style="background:var(--bg-hover)">
+            <summary class="cursor-pointer font-medium">Где взять Client-Id и API key?</summary>
+            <ol class="list-decimal pl-5 space-y-2 mt-3" style="color:var(--text-secondary)">
+                <li>Откройте свой магазин в <a href="https://seller.ozon.ru/" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">Ozon Seller</a> и раздел API-ключей.</li>
+                <li>Создайте ключ для Seller API и скопируйте Client-Id этого же магазина. Ключ рекламного Performance API сюда не подходит.</li>
+                <li>Для загрузки каталога нужны права чтения товаров, цен и остатков. Для будущей отправки карточек отдельно понадобится право управления товарами.</li>
+                <li>Вставьте значения ниже. Seller Hub проверит подключение и начнёт загрузку автоматически.</li>
+            </ol>
+            <p class="text-xs mt-3" style="color:var(--text-muted)">Доступ к отзывам и вопросам может зависеть от подписки Ozon; его отсутствие не мешает работе с каталогом.</p>
+        </details>
+        {{ connection_form() }}
+        {% if accounts %}</div></details>{% endif %}
     </section>
+    {% endif %}
 </div>
+<script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
+<script src="{{ url_for('static', filename='ozon-account-setup.js') }}"></script>
+<script src="{{ url_for('static', filename='ozon-account-setup-vue.js') }}"></script>
 {% endblock %}

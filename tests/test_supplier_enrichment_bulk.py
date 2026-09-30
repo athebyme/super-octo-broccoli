@@ -16,6 +16,7 @@ from models import (
     ImportedProduct,
     Product,
     Seller,
+    SellerSupplier,
     Supplier,
     SupplierProduct,
     db,
@@ -91,6 +92,64 @@ class SupplierEnrichmentBulkTestCase(unittest.TestCase):
         db.session.remove()
         db.drop_all()
         self.ctx.pop()
+
+    def test_unlinked_page_without_sources_has_constant_query_budget(self):
+        from sqlalchemy import event
+        products = [Product(id=i, seller_id=1, nm_id=6000+i,
+                            vendor_code=f'id-{90000+i}-seller') for i in range(21,71)]
+        db.session.add_all(products)
+        # Exact-looking matches of another seller must not admit fallback.
+        db.session.add(ImportedProduct(seller_id=2, external_id='90021'))
+        db.session.commit()
+        statements=[]
+        def record(*args):
+            statements.append(1)
+        event.listen(db.engine, 'before_cursor_execute', record)
+        service=EnrichmentService()
+        try:
+            with patch.object(service,'find_supplier_data',side_effect=AssertionError('N+1 resolver called')):
+                result=service.check_enrichment_availability(list(range(21,71)),1)
+        finally:
+            event.remove(db.engine, 'before_cursor_execute', record)
+        self.assertEqual(len(result),50)
+        self.assertFalse(any(row['available'] for row in result.values()))
+        self.assertLessEqual(len(statements),4)
+
+    def test_positive_batch_preflight_keeps_exact_resolver(self):
+        product=db.session.get(Product,11)
+        source=db.session.get(ImportedProduct,1011)
+        source.product_id=None
+        source.external_id='12345'
+        product.vendor_code='id-12345-seller'
+        db.session.commit()
+        service=EnrichmentService()
+        with patch.object(service,'find_supplier_data',wraps=service.find_supplier_data) as resolver:
+            result=service.check_enrichment_availability([11],1)
+        self.assertTrue(result[11]['available'])
+        self.assertEqual(result[11]['imp_id'],1011)
+        resolver.assert_called_once()
+
+    def test_preflight_covers_direct_vendor_and_connected_supplier_indirection(self):
+        product=db.session.get(Product,11)
+        source=db.session.get(ImportedProduct,1011)
+        source.product_id=None
+        product.supplier_vendor_code='exact-vendor'
+        source.external_vendor_code='exact-vendor'
+        db.session.commit()
+        self.assertTrue(EnrichmentService._has_potential_supplier_data([product],1))
+        source.external_vendor_code=None
+        supplier=Supplier(name='Source',code='batch-preflight')
+        db.session.add(supplier)
+        db.session.flush()
+        sp=SupplierProduct(supplier_id=supplier.id, external_id='unrelated-source', vendor_code='exact-vendor', title='Source')
+        db.session.add(sp)
+        db.session.flush()
+        source.supplier_product_id=sp.id
+        db.session.commit()
+        self.assertFalse(EnrichmentService._has_potential_supplier_data([product],1))
+        db.session.add(SellerSupplier(seller_id=1,supplier_id=supplier.id))
+        db.session.commit()
+        self.assertTrue(EnrichmentService._has_potential_supplier_data([product],1))
 
     def test_one_card_failure_does_not_stop_remaining_cards(self):
         service = EnrichmentService()

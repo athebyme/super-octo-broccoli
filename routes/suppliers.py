@@ -5,6 +5,7 @@
 import json
 import re
 import logging
+import secrets
 from datetime import datetime
 from functools import wraps
 
@@ -52,7 +53,9 @@ def _bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
     return normalized
 
 
-MY_PRODUCTS_PAGE_SIZE = 200
+# Обычный каталог ограничен 50 строками: legacy 200-row HTML весил >1 МБ и
+# запускал сотни image requests. Bulk-вкладка обновлений сохраняет cap 200.
+MY_PRODUCTS_PAGE_SIZE = 50
 MY_PRODUCTS_UPDATES_PAGE_SIZE = 200
 MY_PRODUCTS_STATUSES = frozenset({
     'pending', 'validated', 'imported', 'failed',
@@ -116,6 +119,9 @@ def _my_products_return_args(args):
     local ``url_for`` redirect into an arbitrary or unbounded URL.
     """
     result = {}
+    account_id = _coerce_positive_int(args.get('account_id'))
+    if account_id is not None:
+        result['account_id'] = account_id
     updates_filter = (
         isinstance(args.get('updates'), str)
         and args.get('updates').strip() == '1'
@@ -946,52 +952,29 @@ def register_supplier_routes(app):
     @login_required
     @admin_required
     def admin_supplier_ai_parse(supplier_id):
-        """AI парсинг одного или нескольких товаров — запуск в фоне"""
-        product_id = request.form.get('product_id', type=int)
+        """Retired legacy start: move an exact selection to the Flash review page."""
+        if not SupplierService.get_supplier(supplier_id):
+            return jsonify({'code': 'supplier_not_found', 'error': 'Поставщик не найден'}), 404
+        product_id = request.form.get('product_id', '')
         product_ids_raw = request.form.getlist('product_ids')
-        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
-
-        # Одиночный товар
-        if product_id and not product_ids:
-            product_ids = [product_id]
-
-        if not product_ids:
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return jsonify({'error': 'Не указаны товары'}), 400
-            flash('Не указаны товары', 'warning')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
-
-        max_workers = request.form.get('max_workers', 8, type=int)
-        max_workers = max(1, min(max_workers, 16))
-        model_override = request.form.get('model_override', '').strip() or None
-
-        result = SupplierService.start_ai_parse_job(
-            supplier_id, product_ids,
-            admin_user_id=current_user.id,
-            max_workers=max_workers,
-            model_override=model_override,
+        values = product_ids_raw or ([product_id] if product_id else [])
+        if (not values or len(values) > 5000 or
+                any(len(value) > 20 or not value.isdigit() or int(value) <= 0
+                    for value in values) or
+                len({int(value) for value in values}) != len(values)):
+            return jsonify({
+                'code': 'invalid_product_ids',
+                'error': 'Выберите от 1 до 5000 уникальных товаров.',
+            }), 400
+        next_url = url_for(
+            'admin_supplier_catalog_enrichment', supplier_id=supplier_id,
+            handoff='ids', product_ids=','.join(str(int(value)) for value in values),
         )
-
-        if result.get('error'):
-            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return jsonify({'error': result['error']}), 400
-            flash(result['error'], 'danger')
-            return redirect(url_for('admin_supplier_products', supplier_id=supplier_id))
-
-        log_admin_action(
-            admin_user_id=current_user.id,
-            action='start_ai_parse_job',
-            target_type='supplier',
-            target_id=supplier_id,
-            details={'job_id': result['job_id'], 'count': result['total']},
-            request=request
-        )
-
-        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-            return jsonify(result)
-
-        flash(f'AI парсинг запущен в фоне ({result["total"]} товаров)', 'success')
-        return redirect(url_for('admin_supplier_ai_parser', supplier_id=supplier_id))
+        return jsonify({
+            'code': 'legacy_parser_retired',
+            'error': 'Запуск старого полного AI-парсера закрыт. Проверьте выбор и режим Flash.',
+            'next_url': next_url,
+        }), 409
 
     @app.route('/admin/suppliers/<int:supplier_id>/ai/parse-job/<job_id>/status')
     @login_required
@@ -1033,128 +1016,30 @@ def register_supplier_routes(app):
     @login_required
     @admin_required
     def admin_supplier_ai_parse_by_filter(supplier_id):
-        """Массовый AI парсинг: собрать все товары по фильтрам и запустить job."""
-        supplier = SupplierService.get_supplier(supplier_id)
-        if not supplier:
-            return jsonify({'error': 'Поставщик не найден'}), 404
-
-        # Фильтры из формы
-        search = request.form.get('search', '').strip()
-        stock_status = request.form.get('stock_status', '').strip()
-        parse_status = request.form.get('parse_status', '').strip()
-        fill_max = request.form.get('fill_max', '').strip()
-        limit = request.form.get('limit', 0, type=int)  # 0 = без лимита
-        max_workers = request.form.get('max_workers', 8, type=int)
-        max_workers = max(1, min(max_workers, 16))
-        model_override = request.form.get('model_override', '').strip() or None
-        category_filter = request.form.get('category', '').strip()
-        brand_filter = request.form.get('brand', '').strip()
-        model_filter_param = request.form.get('ai_model', '').strip()
-        has_description = request.form.get('has_description', '').strip()
-        price_min = request.form.get('price_min', '').strip()
-        price_max = request.form.get('price_max', '').strip()
-
-        # Строим запрос с фильтрами (аналогично admin_supplier_ai_parser)
-        query = SupplierProduct.query.filter_by(supplier_id=supplier_id)
-
-        if search:
-            search_term = f'%{search}%'
-            query = query.filter(
-                db.or_(
-                    SupplierProduct.title.ilike(search_term),
-                    SupplierProduct.external_id.ilike(search_term),
-                    SupplierProduct.brand.ilike(search_term),
-                )
-            )
-        if stock_status == 'in_stock':
-            query = query.filter(SupplierProduct.supplier_status == 'in_stock')
-        elif stock_status == 'out_of_stock':
-            query = query.filter(SupplierProduct.supplier_status == 'out_of_stock')
-
-        if parse_status == 'not_parsed':
-            query = query.filter(SupplierProduct.ai_parsed_data_json.is_(None))
-        elif parse_status == 'parsed':
-            query = query.filter(SupplierProduct.ai_parsed_data_json.isnot(None))
-        elif parse_status == 'fill_below' and fill_max:
-            try:
-                fill_threshold = float(fill_max)
-                query = query.filter(
-                    db.or_(
-                        SupplierProduct.ai_fill_pct.is_(None),
-                        SupplierProduct.ai_fill_pct < fill_threshold
-                    )
-                )
-            except (ValueError, TypeError):
-                pass
-
-        if category_filter:
-            cat_term = f'%{category_filter}%'
-            query = query.filter(
-                db.or_(
-                    SupplierProduct.wb_category_name.ilike(cat_term),
-                    SupplierProduct.category.ilike(cat_term),
-                )
-            )
-        if brand_filter:
-            query = query.filter(SupplierProduct.brand.ilike(f'%{brand_filter}%'))
-        if model_filter_param:
-            query = query.filter(SupplierProduct.ai_model_used.ilike(f'%{model_filter_param}%'))
-        if has_description == 'yes':
-            query = query.filter(SupplierProduct.description.isnot(None), SupplierProduct.description != '')
-        elif has_description == 'no':
-            query = query.filter(db.or_(SupplierProduct.description.is_(None), SupplierProduct.description == ''))
-        if price_min:
-            try:
-                query = query.filter(SupplierProduct.supplier_price >= float(price_min))
-            except (ValueError, TypeError):
-                pass
-        if price_max:
-            try:
-                query = query.filter(SupplierProduct.supplier_price <= float(price_max))
-            except (ValueError, TypeError):
-                pass
-
-        # Собираем ID (с опциональным лимитом)
-        q = query.with_entities(SupplierProduct.id).order_by(SupplierProduct.title)
-        if limit > 0:
-            q = q.limit(limit)
-        product_ids = [row[0] for row in q.all()]
-
-        if not product_ids:
-            return jsonify({'error': 'По фильтрам не найдено товаров'}), 400
-
-        # Ограничение — не больше 10000 за раз
-        if len(product_ids) > 10000:
-            product_ids = product_ids[:10000]
-
-        result = SupplierService.start_ai_parse_job(
-            supplier_id, product_ids,
-            admin_user_id=current_user.id,
-            max_workers=max_workers,
-            model_override=model_override,
+        """Retired legacy filter start; preserve filters for strict Flash review."""
+        if not SupplierService.get_supplier(supplier_id):
+            return jsonify({'code': 'supplier_not_found', 'error': 'Поставщик не найден'}), 404
+        names = (
+            'search', 'stock_status', 'parse_status', 'fill_max',
+            'category', 'brand', 'ai_model', 'has_description',
+            'price_min', 'price_max', 'limit',
         )
-
-        if result.get('error'):
-            return jsonify({'error': result['error']}), 400
-
-        log_admin_action(
-            admin_user_id=current_user.id,
-            action='start_ai_parse_by_filter',
-            target_type='supplier',
-            target_id=supplier_id,
-            details={
-                'job_id': result['job_id'],
-                'count': result['total'],
-                'filters': {
-                    'search': search, 'stock_status': stock_status,
-                    'parse_status': parse_status, 'fill_max': fill_max,
-                    'limit': limit,
-                },
-            },
-            request=request
+        if any(len((request.form.get(name) or '').strip()) > 300 for name in names):
+            return jsonify({
+                'code': 'filter_too_long',
+                'error': 'Фильтр слишком длинный; сократите значение до 300 символов.',
+            }), 400
+        next_url = url_for(
+            'admin_supplier_catalog_enrichment', supplier_id=supplier_id,
+            handoff='filter',
+            **{f'legacy_{name}': (request.form.get(name) or '').strip()
+               for name in names if request.form.get(name)},
         )
-
-        return jsonify(result)
+        return jsonify({
+            'code': 'legacy_parser_retired',
+            'error': 'Запуск старого полного AI-парсера закрыт. Проверьте фильтр и режим Flash.',
+            'next_url': next_url,
+        }), 409
 
     @app.route('/admin/suppliers/<int:supplier_id>/products/<int:product_id>/refresh-data')
     @login_required
@@ -1323,30 +1208,6 @@ def register_supplier_routes(app):
             flash('Поставщик не найден', 'danger')
             return redirect(url_for('admin_suppliers'))
 
-        # Ленивый backfill ai_fill_pct для товаров спарсенных до добавления колонки
-        try:
-            stale = SupplierProduct.query.filter(
-                SupplierProduct.supplier_id == supplier_id,
-                SupplierProduct.ai_parsed_data_json.isnot(None),
-                SupplierProduct.ai_fill_pct.is_(None)
-            ).limit(500).all()
-            if stale:
-                import json as _json
-                for p in stale:
-                    try:
-                        data = _json.loads(p.ai_parsed_data_json)
-                        p.ai_fill_pct = data.get('parsing_meta', {}).get('fill_percentage', 0)
-                    except Exception:
-                        p.ai_fill_pct = 0
-                db.session.commit()
-                app.logger.info(f"Backfilled ai_fill_pct for {len(stale)} products (supplier {supplier_id})")
-        except Exception as e:
-            app.logger.debug(f"ai_fill_pct backfill skipped: {e}")
-            try:
-                db.session.rollback()
-            except Exception:
-                pass
-
         page = request.args.get('page', 1, type=int)
         search = request.args.get('search', '').strip()
         stock_status = request.args.get('stock_status', '').strip()
@@ -1461,10 +1322,6 @@ def register_supplier_routes(app):
             active_jobs = []
             recent_jobs = []
 
-        # Модели для выбора в парсере
-        from services.ai_service import get_available_models
-        available_models = get_available_models(supplier.ai_provider or 'cloudru')
-
         # Уникальные категории и бренды для выпадающих списков
         try:
             categories_list = [r[0] for r in db.session.query(
@@ -1513,7 +1370,6 @@ def register_supplier_routes(app):
                                parsed_count=parsed_count,
                                active_jobs=active_jobs,
                                recent_jobs=recent_jobs,
-                               available_models=available_models,
                                category_filter=category_filter,
                                brand_filter=brand_filter,
                                model_filter=model_filter,
@@ -2150,6 +2006,18 @@ def register_supplier_routes(app):
     def seller_my_products():
         """Список импортированных товаров продавца с WB-статусами."""
         seller = current_user.seller
+        selected_ozon_account = None
+        if request.args.get('account_id'):
+            from services.marketplace_accounts import MarketplaceAccountService, MarketplaceAccountError
+            account_id = _coerce_positive_int(request.args.get('account_id'))
+            if account_id is None or len(request.args.getlist('account_id')) != 1:
+                return 'Некорректный кабинет Ozon', 400
+            try:
+                selected_ozon_account = MarketplaceAccountService.get_owned_account(
+                    seller_id=seller.id, account_id=account_id, marketplace_code='ozon',
+                )
+            except MarketplaceAccountError as exc:
+                return str(exc), exc.status_code
         page = request.args.get('page', 1, type=int)
         status = request.args.get('status', '').strip()
         if status not in MY_PRODUCTS_STATUSES:
@@ -2169,7 +2037,7 @@ def register_supplier_routes(app):
         query = ImportedProduct.query.filter_by(seller_id=seller.id)
         if status:
             query = query.filter_by(import_status=status)
-        elif not updates_filter:
+        elif not updates_filter and selected_ozon_account is None:
             # По умолчанию скрываем товары уже загруженные на WB;
             # фильтр «обновления поставщика» показывает и опубликованные —
             # именно их продавец дообогащает на маркетплейсе
@@ -2399,6 +2267,8 @@ def register_supplier_routes(app):
             if updates_filter else
             ({'status': status} if status else {})
         )
+        if selected_ozon_account is not None:
+            reset_args['account_id'] = selected_ozon_account.id
         active_filters = sum(1 for k in (
             'supplier', 'brand', 'wb_category', 'has_photos',
             'stock', 'price_min', 'price_max',
@@ -2492,6 +2362,12 @@ def register_supplier_routes(app):
                 ozon_upload_accounts[0]
                 if len(ozon_upload_accounts) == 1 else None,
             )
+            if selected_ozon_account is not None:
+                default_marketplace_account = selected_ozon_account
+                default_ozon_upload_account = next(
+                    (account for account in ozon_upload_accounts if account.id == selected_ozon_account.id),
+                    None,
+                )
             # channel bar (mp_nav) переиспользует уже загруженные кабинеты
             from services.marketplace_nav import prime_ozon_accounts_cache
             prime_ozon_accounts_cache(marketplace_accounts)
@@ -2577,7 +2453,11 @@ def register_supplier_routes(app):
             recent_imports=recent_imports,
             brand_category_map=brand_category_map,
             marketplace_accounts=marketplace_accounts,
+            ozon_prepare_request_key=(secrets.token_urlsafe(24)
+                                      if current_app.config.get('MARKETPLACE_OZON_ENABLED', False)
+                                      else None),
             default_marketplace_account=default_marketplace_account,
+            selected_ozon_account=selected_ozon_account,
             ozon_upload_accounts=ozon_upload_accounts,
             default_ozon_upload_account=default_ozon_upload_account,
             ozon_drafts_map=ozon_drafts_map,

@@ -6,6 +6,38 @@
 
     if (typeof window.shVue === 'undefined') return;
     var boot = window.shVue.bootstrapData('mp-bootstrap');
+    var ozonPendingKey = 'ozon-source-prepare-v1';
+    function readOzonPending() {
+        try { return JSON.parse(sessionStorage.getItem(ozonPendingKey) || 'null'); }
+        catch (_) { return null; }
+    }
+    function hasOzonPending() {
+        try { return sessionStorage.getItem(ozonPendingKey) !== null; }
+        catch (_) { return false; }
+    }
+    function validOzonPending(value, accounts) {
+        return !!value && Number.isSafeInteger(value.account_id) &&
+            accounts.some(function (row) { return row.id === value.account_id; }) &&
+            typeof value.request_key === 'string' &&
+            /^[A-Za-z0-9_-]{24,128}$/.test(value.request_key) &&
+            Array.isArray(value.imported_product_ids) &&
+            value.imported_product_ids.length > 0 && value.imported_product_ids.length <= 200 &&
+            value.imported_product_ids.every(function (id) { return Number.isSafeInteger(id) && id > 0; }) &&
+            new Set(value.imported_product_ids).size === value.imported_product_ids.length;
+    }
+    function saveOzonPending(value) {
+        try { sessionStorage.setItem(ozonPendingKey, JSON.stringify(value)); return true; }
+        catch (_) { return false; }
+    }
+    function clearOzonPending() {
+        try { sessionStorage.removeItem(ozonPendingKey); } catch (_) {}
+    }
+    function ozonRequestKey() {
+        if (window.crypto.randomUUID) return window.crypto.randomUUID().replace(/-/g, '');
+        return Array.from(window.crypto.getRandomValues(new Uint8Array(16)), function (byte) {
+            return byte.toString(16).padStart(2, '0');
+        }).join('');
+    }
 
     var TABS = [
         { key: '', label: 'Все', countKey: 'all' },
@@ -19,6 +51,7 @@
 
     window.shVue.mount('#my-products-app', {
         data: function () {
+            var savedOzon = readOzonPending();
             return {
                 wbConnected: !!boot.wbConnected,
                 ozonEnabled: !!boot.ozonEnabled,
@@ -39,6 +72,15 @@
                     search: '', supplier: '', has_photos: '', stock: '', sort: '',
                 },
                 selected: [],
+                ozonIds: [],
+                ozonAccountId: '',
+                ozonConfirmed: false,
+                ozonBusy: '',
+                ozonError: '',
+                ozonPending: validOzonPending(savedOzon, boot.ozonAccounts || []) ? savedOzon : null,
+                ozonStorageProblem: hasOzonPending() && !validOzonPending(savedOzon, boot.ozonAccounts || []),
+                ozonRetrySameKey: false,
+                ozonSessionEnded: false,
                 imgFailed: {},
                 tabs: TABS,
 
@@ -87,9 +129,9 @@
                         },
                         this.ozonEnabled ? {
                             key: 'ozon',
-                            label: 'Загрузить на Ozon',
-                            hint: 'откроет экран подтверждения',
-                            disabled: !this.ozonAccounts.length,
+                            label: 'Подготовить для Ozon',
+                            hint: 'создаст локальные черновики; отправка подтверждается отдельно',
+                            disabled: !this.ozonAccounts.length || !!this.ozonPending || this.ozonStorageProblem || !!this.ozonBusy,
                         } : null,
                     ].filter(Boolean),
                 });
@@ -316,8 +358,19 @@
                     return;
                 }
                 if (action.key === 'ozon') {
-                    window.location.href = this.urls.ozonUploads + '?ids='
-                        + this.selected.join(',');
+                    if (this.ozonPending || this.ozonStorageProblem || this.ozonBusy || this.ozonSessionEnded) return;
+                    if (!chosen.length || chosen.length > 200) {
+                        this.ozonError = 'Выберите от 1 до 200 товаров для одной подготовки.';
+                        return;
+                    }
+                    this.ozonIds = chosen.map(function (item) { return item.id; });
+                    this.ozonAccountId = this.ozonAccounts.length === 1 ? String(this.ozonAccounts[0].id) : '';
+                    this.ozonConfirmed = false;
+                    this.ozonError = '';
+                    this.$nextTick(function () {
+                        this.$refs.ozonDialog.showModal();
+                        this.$refs.ozonAccount.focus();
+                    });
                     return;
                 }
                 var plan = plans[action.key];
@@ -380,6 +433,114 @@
                 }).finally(function () {
                     self.confirm.busy = false;
                 });
+            },
+            closeOzonDialog: function () {
+                if (this.ozonBusy) return;
+                this.$refs.ozonDialog.close();
+                this.ozonConfirmed = false;
+            },
+            clearOzonStorageProblem: function () {
+                if (!this.ozonStorageProblem || this.ozonBusy) return;
+                clearOzonPending(); this.ozonStorageProblem = false;
+                this.ozonError = 'Повреждённая запись снята после проверки истории. Выберите товары заново перед подготовкой.';
+            },
+            prepareOzon: async function () {
+                var accountId = Number(this.ozonAccountId);
+                if (this.ozonBusy || this.ozonPending || this.ozonStorageProblem || this.ozonSessionEnded ||
+                    !this.ozonConfirmed || !Number.isSafeInteger(accountId) ||
+                    !this.ozonAccounts.some(function (row) { return row.id === accountId; }) ||
+                    !this.ozonIds.length || this.ozonIds.length > 200) return;
+                var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+                if (!csrf) { this.ozonError = 'Защита формы недоступна. Обновите страницу перед подготовкой.'; return; }
+                var pending = {account_id:accountId, imported_product_ids:this.ozonIds.slice(),
+                    request_key:ozonRequestKey()};
+                if (!saveOzonPending(pending)) {
+                    this.ozonError = 'Браузер не сохранил ключ подготовки. Запуск остановлен, чтобы не потерять результат.';
+                    return;
+                }
+                this.ozonPending = pending;
+                await this.submitOzonPending(pending);
+            },
+            retryOzonPending: async function () {
+                if (!this.ozonPending || !this.ozonRetrySameKey || this.ozonBusy ||
+                    this.ozonSessionEnded || this.ozonStorageProblem) return;
+                this.ozonRetrySameKey = false;
+                await this.submitOzonPending(this.ozonPending);
+            },
+            submitOzonPending: async function (pending) {
+                if (!validOzonPending(pending, this.ozonAccounts) || this.ozonBusy || this.ozonSessionEnded) return;
+                var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+                if (!csrf) { this.ozonError = 'Защита формы недоступна. Обновите страницу перед подготовкой.'; return; }
+                this.ozonBusy = 'post'; this.ozonError = '';
+                var controller = new AbortController();
+                var timer = setTimeout(function () { controller.abort(); }, 45000);
+                try {
+                    var response = await fetch(this.urls.ozonUploads, {
+                        method:'POST', credentials:'same-origin', redirect:'manual', signal:controller.signal,
+                        headers:{Accept:'application/json','Content-Type':'application/json','X-CSRFToken':csrf},
+                        body:JSON.stringify({...pending, confirm_prepare:true}),
+                    });
+                    if (response.status === 401 || response.type === 'opaqueredirect' || response.redirected)
+                        throw Object.assign(Error('Сессия завершилась. Войдите снова и проверьте результат подготовки.'), {status:401});
+                    if (response.status === 403)
+                        throw Object.assign(Error('Доступ к выбранному магазину больше недоступен.'), {status:403});
+                    if (!(response.headers.get('content-type') || '').includes('application/json'))
+                        throw Error('Ответ подготовки не подтверждён. Проверьте результат по сохранённому ключу.');
+                    var data = await response.json();
+                    if (!response.ok || data.success !== true) {
+                        if (response.status < 500) { clearOzonPending(); this.ozonPending = null; }
+                        throw Object.assign(Error(data.error || 'Подготовка не принята.'), {status:response.status});
+                    }
+                    if (data.run?.mode !== 'source_prepare' || data.run.account_id !== pending.account_id ||
+                        !/^ozon-upload-[0-9a-f]{32}$/.test(data.run.job_uid))
+                        throw Error('Ответ не совпал с подготовкой. Проверьте результат по ключу.');
+                    clearOzonPending(); this.ozonPending = null;
+                    window.location.assign(this.urls.ozonUploads + data.run.job_uid);
+                } catch (error) {
+                    if (error.status === 401 || error.status === 403) this.ozonSessionEnded = true;
+                    this.ozonError = error.name === 'AbortError'
+                        ? 'Ответ не пришёл вовремя. Повторная подготовка заблокирована; проверьте результат.'
+                        : error instanceof TypeError
+                            ? 'Связь прервалась. Повторная подготовка заблокирована; проверьте результат.'
+                            : error.message;
+                } finally {
+                    clearTimeout(timer); this.ozonBusy = '';
+                    this.$refs.ozonDialog.close();
+                }
+            },
+            readOzonPending: async function () {
+                if (!this.ozonPending || this.ozonBusy || this.ozonSessionEnded) return;
+                this.ozonBusy = 'read'; this.ozonError = ''; this.ozonRetrySameKey = false;
+                var controller = new AbortController();
+                var timer = setTimeout(function () { controller.abort(); }, 10000);
+                try {
+                    var response = await fetch(this.urls.ozonByRequest + '?account_id=' + this.ozonPending.account_id, {
+                        credentials:'same-origin', cache:'no-store', redirect:'manual', signal:controller.signal,
+                        headers:{Accept:'application/json','X-Upload-Request-Key':this.ozonPending.request_key},
+                    });
+                    if (response.status === 401 || response.type === 'opaqueredirect' || response.redirected)
+                        throw Object.assign(Error('Сессия завершилась. Войдите снова для проверки.'), {status:401});
+                    if (response.status === 403)
+                        throw Object.assign(Error('Доступ к магазину больше недоступен.'), {status:403});
+                    if (!(response.headers.get('content-type') || '').includes('application/json'))
+                        throw Error('Ответ проверки не подтверждён.');
+                    var data = await response.json();
+                    if (typeof data.csrf_token === 'string' && data.csrf_token)
+                        document.querySelector('meta[name="csrf-token"]')?.setAttribute('content', data.csrf_token);
+                    if (response.status === 404)
+                        throw Object.assign(Error('Запуск по сохранённому ключу не найден. Это не доказывает, что первый запрос не был принят; можно вручную повторить только тот же запрос.'), {status:404});
+                    if (!response.ok || data.success !== true) throw Object.assign(Error(data.error || 'Не удалось проверить запуск.'), {status:response.status});
+                    if (data.run?.mode !== 'source_prepare' || data.run.account_id !== this.ozonPending.account_id ||
+                        !/^ozon-upload-[0-9a-f]{32}$/.test(data.run.job_uid))
+                        throw Error('Найденный запуск не совпал с выбранным магазином.');
+                    clearOzonPending(); this.ozonPending = null;
+                    window.location.assign(this.urls.ozonUploads + data.run.job_uid);
+                } catch (error) {
+                    if (error.status === 401 || error.status === 403) this.ozonSessionEnded = true;
+                    if (error.status === 404) this.ozonRetrySameKey = true;
+                    this.ozonError = error.name === 'AbortError' ? 'Проверка заняла слишком много времени. Повторите только чтение.' :
+                        error instanceof TypeError ? 'Нет связи. Повторите только чтение.' : error.message;
+                } finally { clearTimeout(timer); this.ozonBusy = ''; }
             },
             trackJob: function (jobUid) {
                 var self = this;
@@ -445,6 +606,11 @@
                 return 'Что мешает: ' + reasons.map(function (code) {
                     return labels[code] || code;
                 }).join(', ');
+            },
+        },
+        watch: {
+            ozonError: function (value) {
+                if (value) this.$nextTick(function () { this.$refs.ozonError?.focus(); });
             },
         },
     });

@@ -288,6 +288,23 @@ class OzonReferenceAdminRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         sync.assert_not_called()
 
+    def test_review_is_local_admin_only_and_feature_gated(self):
+        route = f"/admin/marketplaces/ozon/attributes/{self.attribute_id}/review"
+        user_patch, login_patch = self._auth(admin=False)
+        with user_patch, login_patch, patch("services.ozon_reference_reviews.OzonReferenceReviewService.approve") as approve:
+            self.assertEqual(self.client.post(route, json={}).status_code, 302)
+            self.assertEqual(self.client.get(route).status_code, 302)
+            approve.assert_not_called()
+        user_patch, login_patch = self._auth()
+        with user_patch, login_patch, patch("routes.marketplaces.OzonReferenceService._adapter_credentials", side_effect=AssertionError("HTTP must be local")):
+            self.assertEqual(self.client.get(route).get_json(), {"success": True, "review": None})
+            self.assertEqual(self.client.get(route + "?mode=bad").status_code, 400)
+            self.assertEqual(self.client.get(route + "?page=2001").status_code, 400)
+            self.assertEqual(self.client.post(route, json={}).status_code, 409)
+            self.app.config["MARKETPLACE_OZON_ENABLED"] = False
+            self.assertEqual(self.client.get(route).status_code, 404)
+            self.assertEqual(self.client.post(route, json={}).status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

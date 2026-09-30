@@ -27,6 +27,7 @@ from services.marketplace_publications import (
     MarketplacePublicationService,
     MarketplacePublicationValidationError,
 )
+from services import ozon_write_quarantine as quarantine
 
 
 marketplace_operations_bp = Blueprint(
@@ -34,6 +35,11 @@ marketplace_operations_bp = Blueprint(
     __name__,
     url_prefix="/marketplaces/operations",
 )
+
+
+class QuarantineForbidden(quarantine.QuarantineError):
+    code = "write_quarantine_forbidden"
+    status_code = 403
 
 
 def _seller_id() -> Optional[int]:
@@ -149,7 +155,7 @@ def _error_response(
     *,
     force_json: bool = False,
 ):
-    if isinstance(error, (MarketplacePublicationError, MarketplaceCommercialError)):
+    if isinstance(error, (MarketplacePublicationError, MarketplaceCommercialError, quarantine.QuarantineError)):
         status_code = status_code or error.status_code
         code = error.code
         validation = getattr(error, "validation", None)
@@ -288,6 +294,104 @@ def detail(operation_id: int):
 @login_required
 def detail_api(operation_id: int):
     return _get_operation_response(operation_id, force_json=True)
+
+
+def _quarantine_seller():
+    seller_id = _seller_id()
+    if seller_id is None:
+        raise QuarantineForbidden("Нужен аккаунт продавца.")
+    return seller_id
+
+
+def _quarantine_error(exc):
+    if isinstance(exc, quarantine.QuarantineError):
+        return jsonify({"success": False, "code": exc.code, "error": str(exc)}), exc.status_code
+    db.session.rollback()
+    current_app.logger.exception("Ozon quarantine request failed")
+    return jsonify({"success": False, "code": "write_quarantine_failed",
+                    "error": "Не удалось сохранить решение. Проверьте его текущее состояние."}), 500
+
+
+def _quarantine_document(operation_id, before_id=None):
+    return quarantine.preview(seller_id=_quarantine_seller(), origin_id=operation_id,
+                              viewer_user_id=current_user.id, before_id=before_id)
+
+
+def _quarantine_payload(allowed):
+    if not request.is_json:
+        raise quarantine.QuarantineError("Отправьте JSON с просмотренной версией решения.")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or set(data) != allowed:
+        raise quarantine.QuarantineError("Состав запроса не соответствует действию.")
+    return data
+
+
+def _quarantine_version(data, name):
+    value = data[name]
+    if type(value) is not int or not 0 < value <= 2**63 - 1:
+        raise quarantine.QuarantineError("Версия просмотра должна быть положительным целым числом.")
+    return value
+
+
+@marketplace_operations_bp.route("/<int:operation_id>/review", methods=["GET"])
+@login_required
+def quarantine_review(operation_id: int):
+    try:
+        document = _quarantine_document(operation_id)
+    except quarantine.QuarantineError as exc:
+        return _error_response(exc, exc.status_code)
+    return render_template("ozon_operation_review.html", operation_id=operation_id,
+                           account_id=document["account"]["id"])
+
+
+@marketplace_operations_bp.route("/api/<int:operation_id>/review", methods=["GET"])
+@login_required
+def quarantine_review_api(operation_id: int):
+    try:
+        values = request.args.getlist("before_id")
+        before = values[0] if values else None
+        if set(request.args) - {"before_id"} or len(values) > 1 or (before is not None and
+            (not 0 < len(before) <= 19 or not before.isascii() or not before.isdigit() or
+             not 0 < int(before) <= 2**63 - 1)):
+            raise quarantine.QuarantineError("Неверная страница журнала.")
+        document = _quarantine_document(operation_id, int(before) if before else None)
+    except quarantine.QuarantineError as exc:
+        return _quarantine_error(exc)
+    return jsonify({"success": True, "review": document})
+
+
+@marketplace_operations_bp.route("/api/<int:operation_id>/quarantine", methods=["POST"])
+@login_required
+def quarantine_place(operation_id: int):
+    try:
+        data = _quarantine_payload({"expected_version", "scope_token", "reason", "confirm_scope"})
+        if type(data["confirm_scope"]) is not bool:
+            raise quarantine.QuarantineError("Подтвердите область остановки.")
+        quarantine.place(seller_id=_quarantine_seller(), origin_id=operation_id,
+            expected_version=_quarantine_version(data, "expected_version"),
+            scope_token=data["scope_token"], reason=data["reason"],
+            confirm_scope=data["confirm_scope"], actor_user_id=current_user.id)
+        return jsonify({"success": True, "review": _quarantine_document(operation_id)})
+    except Exception as exc:
+        return _quarantine_error(exc)
+
+
+@marketplace_operations_bp.route("/api/<int:operation_id>/quarantine/decision", methods=["POST"])
+@login_required
+def quarantine_decision(operation_id: int):
+    try:
+        data = _quarantine_payload({"expected_version", "expected_operation_version",
+                                    "action", "reason", "confirm_release"})
+        if type(data["confirm_release"]) is not bool:
+            raise quarantine.QuarantineError("Подтвердите выбранное действие.")
+        quarantine.update_decision(seller_id=_quarantine_seller(), origin_id=operation_id,
+            expected_version=_quarantine_version(data, "expected_version"),
+            expected_operation_version=_quarantine_version(data, "expected_operation_version"),
+            action=data["action"], reason=data["reason"],
+            confirm_release=data["confirm_release"], actor_user_id=current_user.id)
+        return jsonify({"success": True, "review": _quarantine_document(operation_id)})
+    except Exception as exc:
+        return _quarantine_error(exc)
 
 
 @marketplace_operations_bp.route(

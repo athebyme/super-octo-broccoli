@@ -229,6 +229,30 @@ class ContentFactoryMarketplaceScopeTests(unittest.TestCase):
         self.assertEqual(product["product_url"], "")
         self.assertNotIn("ozon.test", json.dumps(product, ensure_ascii=False))
 
+    def test_zero_promotion_never_advertises_a_free_product(self):
+        self.listing.price_summary_json = json.dumps({'currency': 'RUB', 'values': {
+            'price': '1059', 'old_price': '1462', 'marketing_seller_price': 0,
+            'marketing_price': 600, 'retail_price': 700,
+        }})
+        self.assertEqual(self.service._listing_price_values(self.listing), (1059.0, 1462.0, 'RUB'))
+        self.listing.price_summary_json = json.dumps({'currency': 'RUB', 'values': {
+            'price': '1059', 'marketing_seller_price': '900',
+        }})
+        self.assertEqual(self.service._listing_price_values(self.listing), (900.0, 0.0, 'RUB'))
+
+    def test_content_rejects_unconfirmed_price_or_currency_instead_of_zero_or_retail_fallback(self):
+        for summary in [
+            {'currency': 'RUB', 'values': {'marketing_seller_price': 0, 'retail_price': 700}},
+            {'currency': 'RUB', 'available': False, 'values': {'price': 1059}},
+            {'currency': 'RUB', 'values': {'price': -1, 'marketing_seller_price': True}},
+            {'currency': None, 'values': {'price': 1059}},
+            {'currency': 'USD', 'values': {'price': 1059}},
+        ]:
+            with self.subTest(summary=summary):
+                self.listing.price_summary_json = json.dumps(summary)
+                with self.assertRaises(ContentFactoryScopeError):
+                    self.service._listing_price_values(self.listing)
+
     def test_typed_refs_fail_closed_for_foreign_duplicate_and_zero_stock(self):
         invalid_sets = (
             [self._ref(self.foreign_listing, self.account2)],

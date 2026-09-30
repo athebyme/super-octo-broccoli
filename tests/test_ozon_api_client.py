@@ -3,6 +3,8 @@
 
 import json
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 import requests
 
@@ -15,6 +17,7 @@ from services.ozon_api_client import (
     OzonAPIError,
     OzonAuthError,
     OzonProtocolError,
+    OzonRateLimitError,
     OzonSellerAPIClient,
 )
 
@@ -61,6 +64,7 @@ class OzonSellerAPIClientTest(unittest.TestCase):
             self.credentials,
             session=session,
             sleep_fn=sleeps.append,
+            rate_budget=None,
             **kwargs,
         )
         return client, session, sleeps
@@ -126,14 +130,56 @@ class OzonSellerAPIClientTest(unittest.TestCase):
         self.assertEqual(session.calls[0][2]["json"], payload)
         self.assertEqual(OZON_ENDPOINTS["analytics_data"].retry_class, "read")
 
-    def test_read_post_honors_bounded_retry_after(self):
-        client, session, sleeps = self._client([
-            FakeResponse(429, {}, {"Retry-After": "99"}),
-            FakeResponse(200, {"ok": True}),
-        ])
-        self.assertTrue(client.get_product_operation_limits()["ok"])
-        self.assertEqual(len(session.calls), 2)
-        self.assertEqual(sleeps, [30])
+    def test_rate_limit_returns_full_due_without_sleep_or_physical_retry(self):
+        for endpoint in ("product_operation_limits", "analytics_data", "product_import"):
+            for delay in ("1", "120", "5000", None):
+                with self.subTest(endpoint=endpoint, delay=delay):
+                    headers = {"Retry-After": delay} if delay is not None else {}
+                    client, session, sleeps = self._client([
+                        FakeResponse(429, {}, headers),
+                        FakeResponse(200, {"ok": True}),
+                    ], read_retries=5)
+                    with self.assertRaises(OzonRateLimitError) as caught:
+                        client.request(endpoint, {})
+                    self.assertEqual(len(session.calls), 1)
+                    self.assertEqual(sleeps, [])
+                    self.assertEqual(
+                        caught.exception.retry_after,
+                        float(delay) if delay is not None else None,
+                    )
+                    self.assertEqual(caught.exception.status_code, 429)
+                    self.assertEqual(
+                        caught.exception.retriable,
+                        OZON_ENDPOINTS[endpoint].retry_class == "read",
+                    )
+
+    def test_retry_after_http_date_uses_provider_clock_or_utc_fallback(self):
+        now = datetime(2026, 9, 24, 10, 0, tzinfo=timezone.utc)
+        for date_header in ("Thu, 24 Sep 2026 10:00:00 GMT", None, "invalid"):
+            with self.subTest(date_header=date_header):
+                headers = {"Retry-After": "Thu, 24 Sep 2026 10:02:00 GMT"}
+                if date_header is not None:
+                    headers["Date"] = date_header
+                client, session, sleeps = self._client([FakeResponse(429, {}, headers)])
+                with patch("services.ozon_api_client.datetime") as clock:
+                    clock.now.return_value = now
+                    with self.assertRaises(OzonRateLimitError) as caught:
+                        client.get_product_operation_limits()
+                self.assertEqual(caught.exception.retry_after, 120)
+                self.assertEqual(len(session.calls), 1)
+                self.assertEqual(sleeps, [])
+
+    def test_malformed_retry_after_does_not_become_nonfinite_due_or_retry(self):
+        for value in ("NaN", "inf", "1e999", "invalid date"):
+            with self.subTest(value=value):
+                client, session, sleeps = self._client([
+                    FakeResponse(429, {}, {"Retry-After": value}),
+                ])
+                with self.assertRaises(OzonRateLimitError) as caught:
+                    client.get_product_operation_limits()
+                self.assertIsNone(caught.exception.retry_after)
+                self.assertEqual(len(session.calls), 1)
+                self.assertEqual(sleeps, [])
 
     def test_write_transport_failure_is_ambiguous_and_never_retried(self):
         client, session, sleeps = self._client([
@@ -325,6 +371,19 @@ class OzonAdapterTest(unittest.TestCase):
         self.assertIs(registry.get("OZON"), adapter)
         with self.assertRaises(Exception):
             registry.register(adapter)
+
+    def test_connection_capabilities_require_exact_complete_method_sets(self):
+        caps = OzonAdapter._role_capabilities({'roles': [{'name': 'Administrator', 'methods': [
+            '/v3/product/list', '/v3/product/info/list', '/v4/product/info/attributes',
+            '/v5/product/info/prices', '/v4/product/info/stocks',
+            '/v3/product/import-extra', ' /v3/product/import', '*',
+        ]}]})
+        self.assertTrue({'catalog_read', 'prices_read', 'stocks_read'} <= set(caps))
+        self.assertNotIn('catalog_write', caps)
+        self.assertNotIn('stocks_write', caps)
+        self.assertEqual(OzonAdapter._role_capabilities({'roles': [{'name': 'Administrator'}]}), ())
+        self.assertEqual(OzonAdapter._role_capabilities({'roles': [{'methods': ['/v3/product/list']}]}), ())
+        self.assertEqual(OzonAdapter._role_capabilities({'roles': [{'methods': ['/v3/product/import']}]}), ('catalog_write',))
 
     def test_analytics_capability_delegates_to_typed_read_method(self):
         calls = []
