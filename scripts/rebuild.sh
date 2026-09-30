@@ -1,30 +1,13 @@
 #!/bin/bash
-# Скрипт для полной пересборки без кэша
+# Rebuild seller-platform and start the default Compose services. The shared
+# deployment helper drains durable native Flash reservations before stopping it.
 
-set -e
+set -euo pipefail
 
-echo "🔄 Остановка контейнеров..."
-docker-compose down
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+PYTHON_BIN="$PROJECT_DIR/venv/bin/python"
+[ -x "$PYTHON_BIN" ] || PYTHON_BIN=python3
 
-echo "🧹 Очистка старых образов..."
-docker-compose rm -f 2>/dev/null || true
-
-echo "🏗️  Пересборка БЕЗ кэша (это может занять 1-2 минуты)..."
-docker-compose build --no-cache seller-platform
-
-echo "🚀 Запуск контейнеров..."
-docker-compose up -d
-
-echo ""
-echo "⏳ Ожидание инициализации (10 секунд)..."
-sleep 10
-
-echo ""
-echo "📋 Проверка пути к базе данных..."
-docker-compose logs seller-platform | grep "Используется база данных"
-
-echo ""
-echo "✅ Пересборка завершена!"
-echo ""
-echo "Теперь запустите:"
-echo "  ./init_database.sh  # для проверки базы"
+exec "$PYTHON_BIN" "$SCRIPT_DIR/deploy_safety.py" \
+    --project-dir "$PROJECT_DIR" --no-cache --up-all

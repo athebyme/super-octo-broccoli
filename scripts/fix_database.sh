@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR"
+PYTHON_BIN="$PROJECT_DIR/venv/bin/python"
+[ -x "$PYTHON_BIN" ] || PYTHON_BIN=python3
+
 echo "========================================="
 echo "🔧 Скрипт исправления проблемы с базой данных"
 echo "========================================="
@@ -40,21 +46,10 @@ ls -lh ./data/
 echo ""
 echo "Шаг 2: Остановка контейнеров"
 echo "-----------------------------------"
-docker-compose down
-echo -e "${GREEN}✓ Контейнеры остановлены${NC}"
-
-echo ""
-echo "Шаг 3: Полная пересборка БЕЗ кеша"
-echo "-----------------------------------"
-echo -e "${YELLOW}Это может занять несколько минут...${NC}"
-docker-compose build --no-cache seller-platform
-echo -e "${GREEN}✓ Образ пересобран${NC}"
-
-echo ""
-echo "Шаг 4: Запуск контейнера"
-echo "-----------------------------------"
-docker-compose up -d seller-platform
-echo -e "${GREEN}✓ Контейнер запущен${NC}"
+echo -e "${YELLOW}Пересборка выполняется с ожиданием завершения активных native Flash вызовов; volume базы данных сохраняется.${NC}"
+"$PYTHON_BIN" "$SCRIPT_DIR/deploy_safety.py" \
+    --project-dir "$PROJECT_DIR" --no-cache --compose-down
+echo -e "${GREEN}✓ Контейнеры безопасно пересозданы${NC}"
 
 echo ""
 echo "Шаг 5: Ожидание инициализации (10 секунд)"
@@ -68,7 +63,7 @@ echo ""
 echo ""
 echo "Шаг 6: Проверка логов инициализации"
 echo "-----------------------------------"
-docker-compose logs seller-platform | grep -E "Используется база данных|администратор|Базовая структура БД"
+    docker compose logs seller-platform | grep -E "Используется база данных|администратор|Базовая структура БД"
 
 echo ""
 echo "Шаг 7: Проверка создания базы данных"

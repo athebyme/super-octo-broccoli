@@ -259,13 +259,22 @@ if args and args[0]=='inspect': print('healthy')
     docker.chmod(0o700)
     sleep=bindir/'sleep';sleep.write_text('#!/bin/sh\nexit 0\n');sleep.chmod(0o700)
     fake_python=tmp_path/'venv'/'bin'/'python';fake_python.parent.mkdir(parents=True)
-    fake_python.write_text('#!/bin/sh\nexit 0\n');fake_python.chmod(0o700)
+    python_calls=tmp_path/'python-calls.jsonl'
+    fake_python.write_text(f'''#!/usr/bin/python3
+import json,sys
+from pathlib import Path
+with Path({str(python_calls)!r}).open('a') as f:
+    f.write(json.dumps(sys.argv[1:])+'\\n')
+''')
+    fake_python.chmod(0o700)
     script=Path(__file__).parents[1]/'scripts/autodeploy.sh'
     result=subprocess.run(['bash',str(script),'--once','--project-dir',str(tmp_path)],
         env={**os.environ,'PATH':str(bindir)+os.pathsep+os.environ['PATH']},
         capture_output=True,text=True,timeout=5)
     read_calls=lambda path:[json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
-    return result,read_calls(git_calls),read_calls(docker_calls),json.loads(state_file.read_text())
+    state=json.loads(state_file.read_text())
+    state['python_calls']=read_calls(python_calls)
+    return result,read_calls(git_calls),read_calls(docker_calls),state
 
 
 def test_autodeploy_does_not_build_when_local_branch_is_ahead(tmp_path):
@@ -286,8 +295,10 @@ def test_autodeploy_builds_once_after_remote_fast_forward(tmp_path):
     assert state['head']==new_hash
     assert ['merge','--ff-only',new_hash] in git_calls
     assert not any(args[0]=='pull' for args in git_calls)
-    builds=[args for args in docker_calls if args[:3]==['compose','build','seller-platform']]
-    assert len(builds)==1
+    guarded=[args for args in state['python_calls'] if args and args[0].endswith('/deploy_safety.py')]
+    assert len(guarded)==1
+    assert guarded[0][1:]==['--project-dir',str(tmp_path)]
+    assert not any(args[:3]==['compose','build','seller-platform'] for args in docker_calls)
     assert f"New commits detected on 'main': {old_hash[:7]} -> {new_hash[:7]}" in result.stdout
 
 

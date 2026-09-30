@@ -92,13 +92,16 @@ $commits_formatted
 MSG
 )"
 
-    # Пересборка
-    log "Rebuilding containers..."
+    # The helper builds first, then holds SQLite's shared AI-ledger writer lock
+    # while it stops the app. This closes the reservation-vs-restart race.
+    log "Building and safely restarting seller-platform..."
     local deploy_start
     deploy_start=$(date +%s)
-    if docker compose build seller-platform 2>&1 | tail -5; then
-        log "Build successful, restarting..."
-        docker compose up -d seller-platform 2>&1 | tail -3
+    local python_bin="$PROJECT_DIR/venv/bin/python"
+    [ -x "$python_bin" ] || python_bin=python3
+    if "$python_bin" "$PROJECT_DIR/scripts/deploy_safety.py" \
+        --project-dir "$PROJECT_DIR" 2>&1 | tail -20; then
+        log "Guarded build and restart completed"
 
         # Ждём healthcheck
         log "Waiting for healthcheck (max 60s)..."
