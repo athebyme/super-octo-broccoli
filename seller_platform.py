@@ -6522,7 +6522,9 @@ register_agents_routes(app)
 
 # ============= КОНТЕНТ-ФАБРИКА =============
 from routes.content_factory import register_content_factory_routes
+from routes.common_product_content import register_common_product_content_routes
 register_content_factory_routes(app)
+register_common_product_content_routes(app)
 
 # ============= МОНИТОРИНГ КОНКУРЕНТОВ =============
 from routes.competitors import register_competitor_routes
