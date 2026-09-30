@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-09-30T19:10:32.724146+00:00",
+  "generated_at": "2026-09-30T19:35:45.224445+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -27,7 +27,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "ad97833de2958157df78326c701c7616898768aad893c278354d4502044105cd"
+      "sha256": "329aa5906722a02aaaa9a1c4142fedd4d3ad51f942f41dc291bde5dcee7f9aff"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -55,7 +55,7 @@
     },
     {
       "path": "OZON_INTEGRATION_STATUS.md",
-      "sha256": "df7e07309953d0c29660d3c25ab40d747f12a31040c102a3dacc01a74debf6ec"
+      "sha256": "39e212ff1ca55ae4688b900c1cdab0a0446d741ee23a338f20de90712d2405a8"
     },
     {
       "path": "PARSING_QUALITY_IMPROVEMENT_PLAN.md",
@@ -439,7 +439,7 @@
     },
     {
       "path": "docs/design/ozon-prices.md",
-      "sha256": "abf163f6c8a29b21e217c6829b4647088bc8c921b833656c3b898f3889babd7a"
+      "sha256": "8fb9003d0833e14f91dd481112a3962c845e3abdcd5d3af6f81cd34ad69e9cdb"
     },
     {
       "path": "docs/design/ozon-quality-workspace.md",
@@ -1604,10 +1604,6 @@
     {
       "path": "scripts/notify_task_status.py",
       "sha256": "8e37f7459bbf72cd11cf9761d2bc358ed3db41e9506bcad37e25c51fd237249a"
-    },
-    {
-      "path": "scripts/prepare_ozon_ai_release.py",
-      "sha256": "39abcf6863287a070ab6743ff0382768f2bb95cfb030e78ba2a472ddefbbcd58"
     },
     {
       "path": "scripts/probe_ozon_read_contracts.py",
@@ -3463,11 +3459,11 @@
     },
     {
       "path": "tests/ozon_release/assets/INSTRUMENT-SERIF-OFL.txt",
-      "sha256": "129ed7618959716959f2941fdd5b49e0ad6e6c1d78726761786a00253d865521"
+      "sha256": "b6b2292aa580937fb63796878d65a027a27f8c3db2d97601d0c34d9031f4ca17"
     },
     {
       "path": "tests/ozon_release/assets/INTER-OFL.txt",
-      "sha256": "5b9321a4298cfeb6b34354164a1c3afc3db114569984c502b9b35d988fd58c57"
+      "sha256": "5dd548d31a85f756e01d63e00d7faf1e324103ed3e9102fcbbabf2cc2db6dd39"
     },
     {
       "path": "tests/ozon_release/assets/NOTICE.md",
@@ -4858,5 +4854,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "41f25edeb2712b41eedf4bd0bd8e824e3f667e1645015f81018418f162201d31"
+  "aggregate_sha256": "2c657df0c6ee59875287b9e84e3b1cec0018edbab742d71a5011eb88fc1284bc"
 }
