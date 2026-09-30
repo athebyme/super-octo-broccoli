@@ -24,7 +24,17 @@ Root принимает архитектурные решения, провер�
 | WB edit | `seller-hub-wb-edit-20261001` | WB-EDIT-01..04 и WB-возврат UX-01.2; сначала контракт и предложения ownership |
 | Catalog/UX | `seller-hub-catalog-ux-20261001` | CAT-EDIT-01/02, читаемые ошибки и операции, остаточная UX-матрица; сначала карта и ownership |
 
-Общие `models.py`, `seller_platform.py`, `templates/base.html`, runner inputs и миграции не меняются workers без нового согласования. Frozen inputs удостоверяются новым manifest и затронутой проверкой. API/LLM/production данные не используются synthetic проверками. Secrets, raw responses и личные данные не попадают в отчёты, Git и Telegram.
+Общие `models.py`, `seller_platform.py`, `templates/base.html`, runner inputs и миграции не меняются workers без нового согласования. После исследования CAT root разрешил Catalog/UX worker добавить только две колонки ImportedProduct, отдельную additive migration и append-step, dedicated common-content service/routes/UI и override guards в выявленных source/agent/reverse-proposal writers. WB worker остаётся единственным владельцем `seller_platform.py`, включая последующую регистрацию common routes. Ozon worker добавляет сквозную synthetic browser-приёмку с реальными core services и заменой только внешнего транспорта. Frozen inputs удостоверяются новым manifest и затронутой проверкой. API/LLM/production данные не используются synthetic проверками. Secrets, raw responses и личные данные не попадают в отчёты, Git и Telegram.
+
+## Принятый контракт общего редактора
+
+Редактируется seller-owned `ImportedProduct`: title, description, выбор/порядок уже известных фото и общие именованные характеристики. Категории, provider IDs, цены, остатки, `imtID`, связи и публикационные статусы исключены. `content_overrides_json` хранит typed ручные значения с server-derived автором; `content_edit_version` и fingerprint текущего содержимого защищают сохранение от конкурирующих изменений. Существующий `AgentChangeSnapshot` хранит отдельный audit, а `original_data` сохраняет наблюдённые факты источника.
+
+Сначала local-only preview показывает effective/inherited/manual значения и точные контексты связанных каналов. До 50 exact товаров, bounded JSON и строгие типы; signed preview привязан к продавцу/пользователю, версиям, source fingerprints, изменениям и просмотренным channel refs, TTL 600 секунд. Apply атомарно проверяет весь набор и сохраняет только общий товар; любой drift требует нового preview. Existing drafts/live остаются самостоятельными снимками, их просмотренные «получатели» не являются скрытой командой записи. Изменения в канал идут через существующие отдельные формы/review и publication gates.
+
+Refresh поставщика/CSV обновляет исходные факты и наследуемые поля, сохраняя ручные overrides. Agent write конфликтует с изменяемым вручную полем; reverse Ozon→common proposal сохраняет прежний exact-account контракт и требует сначала явного reset-inheritance при конфликте. Ручные характеристики/фото не становятся source evidence. Фото выбираются только из exact существующего source/common pool, без arbitrary URL, нового proxy или неподтверждённого upload.
+
+Изменение model schema ожидаемо меняет fingerprints шести прежних startup steps (bootstrap и пять зависимых migrations), плюс добавляется новый последний шаг; остальные receipts не пересертифицируются. Приёмка должна проверить именно этот scoped rerun и повторный no-op запуск на отдельной восстановленной копии, а также expected fail-closed для несовместимого legacy bridge.
 
 ## Сверка переданного списка
 
