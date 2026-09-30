@@ -132,6 +132,16 @@ class OzonDraftAICompletionTest(OzonPublicationFixture, unittest.TestCase):
         self.assertNotEqual(first[1], second[1])
         self.assertEqual(json.loads(second[1]['content'])['items'][0]['draft_id'], altered['draft_id'])
 
+    def test_prompt_uses_rooted_json_pointers_and_exact_source_quotes(self):
+        prompt = ' '.join(worker._SYSTEM.split())
+        self.assertIn('RFC 6901 JSON Pointer', prompt)
+        self.assertIn('source_facts itself is the root', prompt)
+        for path in ('/description', '/title', '/colors/0', '/characteristics/0/value'):
+            self.assertIn(path, prompt)
+        self.assertIn('point to a scalar value; never invent a path', prompt)
+        self.assertIn('quote must be exact literal text copied from the value at that path', prompt)
+        self.assertIn('do not paraphrase, normalize, translate, or combine facts', prompt)
+
     def test_missing_source_is_explicit_without_model_call(self):
         self.source.original_data = None
         db.session.commit()

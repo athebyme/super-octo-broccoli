@@ -34,8 +34,15 @@ group_ordinal (integer, 0 for simple), values (native canonical list), evidence
 Use only allowed missing slots, types and dictionary values from the provided schema.
 The shared field definitions precede the items. Each item supplies its own allowed
 missing slots and dictionary values; never borrow another item's allowed values.
-Every value needs direct evidence from that item's source_facts; evidence pointers
-are relative to source_facts. Never use another item's facts or fill an existing slot.
+Every value needs direct evidence from that item's source_facts. Each evidence
+path must be an RFC 6901 JSON Pointer rooted at that item's source_facts object
+(source_facts itself is the root), so every path starts with `/`. Examples:
+`/description`, `/title`, `/colors/0`, `/characteristics/0/value`. Escape `/` in
+a key as `~1` and `~` as `~0`; use zero-based array indices without leading zeros.
+Use only paths that exist in this item's facts and point to a scalar value; never
+invent a path. The quote must be exact literal text copied from the value at
+that path; do not paraphrase, normalize, translate, or combine facts. Never use
+another item's facts or fill an existing slot.
 Do not invent measurements, compliance, country, certifications, composition or facts.
 If the source does not prove a value, omit it; an empty suggestions list is valid.
 Output no confidence, rationale, instructions, prices, stock, barcode or media fields.'''
