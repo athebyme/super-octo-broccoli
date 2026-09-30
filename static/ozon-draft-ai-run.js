@@ -14,6 +14,24 @@
         computed: {
             active() { return ['pending','running','cancelling'].includes(this.run.status); },
             done() { return this.run.items.filter(item => !['pending','reserved'].includes(item.status)).length; },
+            rejectedCount() {
+                const reasons = this.run.summary?.rejection_reasons;
+                if (!reasons || typeof reasons !== 'object' || Array.isArray(reasons)) return 0;
+                const count = Object.values(reasons).reduce((total, value) =>
+                    total + (Number.isSafeInteger(value) && value > 0 ? value : 0), 0);
+                return Math.min(this.run.total, count);
+            },
+            outcomeSummary() {
+                const countText = count => count === 1 ? '1 карточки' : `${count} карточек`;
+                const noEvidence = this.run.items.filter(item =>
+                    item.status === 'no_evidence' && item.code !== 'ai_fields_rejected').length;
+                const unknown = this.run.items.filter(item => item.status === 'unknown_response').length;
+                const messages = [];
+                if (this.rejectedCount) messages.push(`${this.rejectionSummary()} Откройте карточки, проверьте источник и заполните поля вручную или запустите новый поиск явно.`);
+                if (noEvidence) messages.push(`Модель не вернула подтверждённых предложений для ${countText(noEvidence)}. Проверьте исходные сведения, затем заполните поля вручную или запустите новый поиск явно.`);
+                if (unknown) messages.push(`Ответ модели не подтверждён для ${countText(unknown)}. Проверьте карточки и историю запуска; автоматического повтора нет. Новый поиск можно начать только вручную.`);
+                return messages.join(' ');
+            },
         },
         methods: {
             statusLabel(status) { return ({pending:'В очереди',running:'Обрабатывается',cancelling:'Отменяем',
@@ -25,9 +43,27 @@
             itemCode(code) { return ({source_snapshot_missing:'Нет исходного снимка товара',
                 schema_stale:'Требования Ozon требуют обновления',
                 no_eligible_missing_attributes:'Для этой версии нет подходящих пустых характеристик',
-                unknown_response:'Ответ модели не подтверждён',
                 ai_capacity_full:'Дождитесь завершения текущих AI-запусков'})[code] ||
-                (code ? 'Проверьте карточку вручную' : ''); },
+                (code && !['ai_fields_rejected','unknown_response'].includes(code) ? 'Проверьте карточку вручную' : ''); },
+            itemGuidance(item) {
+                if (item.status === 'unknown_response')
+                    return 'Ответ модели не подтверждён. Проверьте состояние карточки и историю запуска; автоматического повтора нет. При необходимости откройте карточку и запустите новый поиск вручную либо заполните поля сами.';
+                if (item.code === 'ai_fields_rejected') {
+                    if (item.status === 'no_evidence')
+                        return 'Модель вернула предложения, но проверка источника их отклонила; ничего не сохранено. Проверьте источник, затем заполните поля вручную или запустите новый поиск явно.';
+                    return 'Часть предложений не прошла проверку источника и не сохранена. Проверьте доступные предложения; остальные поля заполните вручную или запустите новый поиск после проверки источника.';
+                }
+                if (item.status === 'no_evidence')
+                    return 'Модель не вернула подтверждённых предложений. Проверьте исходные сведения, затем заполните поля вручную или запустите новый поиск явно.';
+                return '';
+            },
+            rejectionSummary() {
+                const count = this.rejectedCount;
+                if (!count) return '';
+                return count === 1
+                    ? 'Проверка источника отклонила AI-предложения в 1 карточке.'
+                    : `Проверка источника отклонила AI-предложения в ${count} карточках.`;
+            },
             editorUrl(item) { return config.urls.editorBase + item.draft_id + '?ai_item_id=' + item.id; },
             async request(url, post=false) {
                 const abort = new AbortController(), timer = setTimeout(() => abort.abort(), post ? 25000 : 10000);

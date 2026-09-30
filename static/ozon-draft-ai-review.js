@@ -60,8 +60,23 @@
                 schema_stale:'Требования Ozon требуют обновления.',
                 no_eligible_missing_attributes:'Для этой версии нет подходящих пустых характеристик.',
                 unknown_response:'Ответ модели не подтверждён; проверьте карточку вручную.',
+                ai_fields_rejected:'Проверка исходных сведений отклонила AI-предложения. Ничего не применено.',
                 ai_suggestions_stale:'Источник, схема или заполненные поля изменились. Нужен новый запуск.'})[code] ||
                 'Предложения требуют новой проверки карточки и исходных сведений.'; },
+            itemOutcomeMessage() {
+                const item = this.doc?.item;
+                if (!item) return '';
+                if (item.status === 'unknown_response')
+                    return 'Ответ модели не подтверждён. Проверьте состояние карточки и историю запуска; автоматического повтора нет. При необходимости запустите новый поиск явно или заполните поля вручную.';
+                if (item.code === 'ai_fields_rejected') {
+                    return this.doc.suggestions?.length
+                        ? 'Часть AI-предложений не прошла проверку исходных сведений и не сохранена. Проверьте доступные предложения; остальные поля заполните вручную или начните новый поиск после проверки источника.'
+                        : 'Модель вернула предложения, но проверка источника их отклонила; ничего не сохранено. Проверьте источник, затем заполните поля вручную или запустите новый поиск явно.';
+                }
+                if (item.status === 'no_evidence')
+                    return 'Модель не вернула подтверждённых предложений. Проверьте исходные сведения, затем заполните поля вручную или запустите новый поиск явно.';
+                return '';
+            },
             evidenceLabel(row) { return typeof row.path === 'string' ? row.path : ''; },
             selectedIds() { return this.available.filter(row => this.selected.includes(row.id)).map(row => row.id); },
             groupIds(row) {
@@ -259,7 +274,8 @@
             <p v-if="loading" class="ode-help" role="status">Читаем предложения…</p><button v-if="!loading" type="button" class="ode-text-button" :disabled="!!busy || sessionEnded" @click="loadSuggestions">Обновить предложения</button>
             <p v-if="doc?.item" class="ode-help">Состояние AI-запуска: {{ statusLabel(doc.item.status) }} · версия черновика {{ doc.version }}. <a v-if="/^ozon-ai-[0-9a-f]{32}$/.test(doc.item.run_uid)" :href="urls.runBase+doc.item.run_uid" class="ode-link">Открыть запуск</a></p>
             <p v-if="doc?.code" class="ode-help">{{ issueLabel(doc.code) }}</p>
-            <p v-if="doc && !doc.suggestions.length" class="ode-help">Для этой карточки пока нет подтверждённых предложений. Ручное заполнение доступно независимо.</p>
+            <p v-if="itemOutcomeMessage()" class="ode-help ode-ai-outcome" role="status">{{ itemOutcomeMessage() }}</p>
+            <p v-if="doc && !doc.suggestions.length && !itemOutcomeMessage()" class="ode-help">Для этой карточки пока нет подтверждённых предложений. Ручное заполнение доступно независимо.</p>
             <div v-if="doc?.suggestions?.length" class="ode-ai-list"><article v-for="row in doc.suggestions" :key="row.id" class="ode-ai-item" :class="{'is-accepted':row.status === 'accepted','is-proposed':row.status === 'proposed'}"><label v-if="row.applicable" class="ode-ai-check"><input type="checkbox" :checked="checked(row)" :disabled="reviewLocked" :aria-label="'Выбрать предложение ' + row.name" @change="toggle(row,$event.target.checked)"></label><span v-else class="ode-ai-check-spacer"></span><div><div class="ode-ai-item-head"><strong>{{ row.name }}</strong><span>{{ row.status === 'accepted' ? 'Принято вами' : row.status === 'rejected' ? 'Отклонено' : row.applicable ? 'Предложено AI' : 'Нужна новая проверка' }}</span></div><p>{{ row.status === 'accepted' ? 'Принятое значение' : 'Предложенное значение' }}: <strong>{{ row.label || 'значение не указано' }}</strong></p><small v-if="String(row.complex_id) !== '0'">Связанная группа {{ row.group_ordinal }}: выбор применяется ко всей группе.</small><details v-if="row.evidence?.length"><summary>Подтверждение из исходных сведений</summary><ul><li v-for="(fact,index) in row.evidence" :key="index"><span>{{ evidenceLabel(fact) }}</span><q>{{ fact.quote }}</q></li></ul></details><p v-else class="ode-help">Нет буквального подтверждения; значение не должно применяться.</p></div></article></div>
             <div v-if="selectedIds().length" class="ode-ai-actions"><span>Выбрано значений: {{ selectedIds().length }}</span><button type="button" class="sh-btn sh-btn--secondary" :disabled="reviewLocked" @click="openReview('reject')">Отклонить выбранные</button><button type="button" class="sh-btn sh-btn--primary" :disabled="reviewLocked" @click="openReview('apply')">Принять выбранные</button></div>
             <dialog ref="generateDialog" class="ode-dialog ode-ai-dialog" aria-labelledby="ode-ai-generate-title" @cancel.prevent="closeGenerate"><h2 id="ode-ai-generate-title">Запустить AI-дополнение?</h2><p>Черновик № {{ draftId }} · сохранённая версия {{ version }}. Модель получит только разрешённые исходные факты и предложит значения для пустых характеристик. Отправки в Ozon и автоматического изменения карточки не будет.</p><label class="ode-checkbox"><input ref="generateCheck" type="checkbox" v-model="confirmGenerate">Я хочу получить предложения для этой версии</label><div class="ode-actions"><button type="button" class="sh-btn sh-btn--secondary" :disabled="busy === 'generate'" @click="closeGenerate">Вернуться</button><button type="button" class="sh-btn sh-btn--primary" :disabled="!confirmGenerate || !canGenerate" @click="startGenerate">Запустить предложения</button></div></dialog>

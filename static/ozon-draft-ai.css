@@ -21,6 +21,7 @@
 .oai-list strong,.oai-list small { display:block; overflow-wrap:anywhere; }
 .oai-list strong { font-size:13px; }
 .oai-list small { margin-top:3px; font-size:11px; color:var(--text-secondary); }
+.oai-list .oai-outcome { color:var(--text); line-height:1.45; }
 .oai-list .sh-btn { flex-shrink:0; }
 .oai-number { display:grid; place-items:center; min-width:40px; height:40px; padding:0 5px; border-radius:6px; background:var(--bg-hover); font-size:11px; color:var(--text-secondary); }
 .oai-dialog { width:min(94vw,520px); max-height:90vh; padding:24px; border:1px solid var(--border); border-radius:10px; background:var(--bg-card); color:var(--text); overscroll-behavior:contain; }
@@ -53,6 +54,7 @@
 .ode-ai-item-head strong { font-size:13px; }
 .ode-ai-item-head span,.ode-ai-field-badge { color:var(--accent); font-size:11px; font-weight:650; }
 .ode-ai-item p { margin:8px 0; font-size:12px; line-height:1.5; }
+.ode-ai-outcome { padding:10px 12px; border-left:3px solid var(--warn); background:var(--bg-hover); color:var(--text); line-height:1.5; }
 .ode-ai-item small { color:var(--text-secondary); font-size:11px; }
 .ode-ai-item details { margin-top:10px; font-size:12px; }
 .ode-ai-item summary { cursor:pointer; color:var(--accent); }
