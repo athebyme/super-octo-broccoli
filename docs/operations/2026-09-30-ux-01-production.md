@@ -1,6 +1,6 @@
 # Передеплой UX-01 — 30.09.2026
 
-Статус: UX-01 опубликован и healthy; отдельное исправление startup готовится. Основание: прямое указание владельца «передеплой».
+Статус: UX-01 и исправление startup опубликованы и healthy. Основание: прямое указание владельца «передеплой».
 
 ## Источник
 
@@ -10,13 +10,13 @@
 
 ## Проверки
 
-Резервная копия, новая offline приёмка, runtime build, репетиция полной миграции, production startup и read-only smoke пока ожидаются. Реальные публикации, изменение цен/остатков, AI pilot и API E2E не входят в проверку UX и не запускаются. Покупательская цена/скидка Ozon остаются неизвестными; незавершённые интеграционные сценарии не объявляются завершёнными.
+Итоговые результаты перечислены ниже; новая резервная копия и restore rehearsal отменены владельцем. Offline приёмка, runtime build, production startup и ограниченный read-only smoke выполнены. Реальные публикации, изменение цен/остатков, AI pilot и API E2E не входят в проверку UX и не запускаются. Покупательская цена/скидка Ozon остаются неизвестными; незавершённые интеграционные сценарии не объявляются завершёнными.
 
 ## Уточнение владельца перед переключением
 
 Владелец повторно поручил немедленный передеплой и явно отменил новую резервную копию из-за диска. Автоматически начавшийся daily backup остановлен; только его непринятый private temp удалён. Прежние accepted archives и production DB/WAL/ledger сохранены. Новая репетиция на восстановленной 13 GiB копии не выполняется; применяется штатный fail-fast startup guard. Это оставшийся operational риск, а не выполненная проверка.
 
-Runtime candidate: `sha256:41d6384c0e59c3dcc053ed9360553cb6f2a347b0e3799e5261e89ac3e6cc7cb2`, source manifest `52c23165f72335628b20be3db3287d5a5be0a7f6a2b62a37c129b55c8f4c5a94` (1207 files); image сам проверен по manifest, `.env`/production DB отсутствуют. Runtime/test/CI source совпадает с полностью принятой UX/Ozon версией v6; относительно прежнего manifest обновились только 3 документа. Новый UX gate 6/6 passed, 109 tests +38 subtests/493 layouts. Полный Ozon gate v6 12/12, 1918 tests +482 subtests/93 browser scenarios/444 layouts принят до подготовки; дополнительный повтор Ozon текущего doc-only manifest ещё идёт и не объявляется завершённым.
+Runtime candidate: `sha256:41d6384c0e59c3dcc053ed9360553cb6f2a347b0e3799e5261e89ac3e6cc7cb2`, source manifest `52c23165f72335628b20be3db3287d5a5be0a7f6a2b62a37c129b55c8f4c5a94` (1207 files); image сам проверен по manifest, `.env`/production DB отсутствуют. Runtime/test/CI source совпадает с полностью принятой UX/Ozon версией v6; относительно прежнего manifest обновились только 3 документа. Новый UX gate 6/6 passed, 109 tests +38 subtests/493 layouts. Полный Ozon gate v6 12/12, 1918 tests +482 subtests/93 browser scenarios/444 layouts принят до подготовки; результат дополнительного повтора Ozon doc-only manifest описан в следующем разделе.
 
 ## Дополнительный повтор Ozon
 
@@ -32,4 +32,4 @@ Doc-only release повтор: backend 1917 passed +482 subtests, одна conte
 
 Live smoke допустил один login POST и239GET, без прочих методов и provider-capable/external requests. Admin credentials успешно вошли, но у admin нет seller profile:20 seller-specific probes недоступны (catalog403; другие redirects). Это ограничение доступа проверки, не доказательство поломки UI; seller browser matrices остаются подтверждёнными synthetic gates, production seller E2E этим входом не проверен. Привилегии/профили не менялись. Скриншотов real seller данных не создано. JSON evidence private, не в repo.
 
-По дополнительной коррекции владельца «применённые миграции не надо заново» готовится отдельный startup fix worktree `codex/startup-migration-steps-20260930`. Этот исправляющий код ещё не опубликован и не включён в текущийUXimage.
+По коррекции владельца «применённые миграции не надо заново» startup fix принят и опубликован из отдельного worktree `codex/startup-migration-steps-20260930`, own commit `959178bbcfabfd3e64c86b27f10b24e062b839b2`. Текущий runtime image `sha256:4773978b6330ed0e32d40f6b59d2ad222884855e5e90d23ce7f9fbd0cd685dea` сохраняет принятую UX/Ozon основу и новый per-step journal. Production transition1.262s, healthy7.167s; старые миграции не выполнялись. Полный результат: `docs/operations/2026-09-30-startup-step-journal.md`; перенос: `docs/operations/2026-09-30-ux-01-main-handoff.md`.
