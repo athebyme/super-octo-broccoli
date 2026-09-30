@@ -57,7 +57,8 @@
         <div class="mdet-grid">
             <div class="mdet-gallery">
                 <div class="mdet-hero">
-                    <img v-image-deadline v-if="heroSrc" :src="heroSrc" alt="" @error="imageFailed(heroSrc)">
+                    <img v-image-deadline v-if="heroSrc" :src="heroSrc" :alt="heroAlt"
+                         width="320" height="427" decoding="async" @error="imageFailed(heroSrc)">
                     <div v-else class="mcat-fallback" :class="'mcat-fallback--' + (listing.marketplace_code || 'wb')">
                         <span>{{ letterOf(listing) }}</span>
                     </div>
@@ -66,8 +67,10 @@
                 <div class="mcat-gallery" v-if="gallery.length > 1">
                     <button v-for="(url, gi) in gallery" :key="gi" type="button"
                             class="mcat-gal-thumb" :class="{'is-active': heroSrc === url}"
-                            @click="heroOverride = url" :aria-label="'Фото ' + (gi + 1)">
-                        <img v-image-deadline :src="url" loading="lazy" alt="" @error="imageFailed(url)">
+                            @click="heroOverride = url" :aria-label="'Фото ' + (gi + 1) + ' из ' + gallery.length"
+                            :aria-pressed="heroSrc === url">
+                        <img v-image-deadline :src="url" width="44" height="58"
+                             loading="lazy" decoding="async" alt="" @error="imageFailed(url)">
                     </button>
                 </div>
                 <div v-if="Object.keys(imgFailed).length" class="mdet-photo-retry" role="status">
@@ -120,8 +123,19 @@
         <section class="mdet-sect mdet-sect--danger" v-if="moderationErrors.length">
             <h3>Ошибки модерации площадки</h3>
             <ul class="mcat-errlist">
-                <li v-for="(err, idx) in moderationErrors" :key="idx">{{ err }}</li>
+                <li v-for="(err, idx) in moderationErrors" :key="idx">
+                    <strong>{{ err.summary }}</strong>
+                    <p>{{ err.nextStep }}</p>
+                    <details>
+                        <summary>Технические сведения площадки<template v-if="err.code"> · {{ err.code }}</template></summary>
+                        <pre class="listing-workspace-diagnostic-json">{{ err.technical }}</pre>
+                    </details>
+                </li>
             </ul>
+            <a v-if="listing.marketplace_code === 'ozon'" class="sh-btn sh-btn--secondary"
+               :href="urls.drafts + '?account_id=' + encodeURIComponent(listing.account_id)">
+                Открыть черновики Ozon
+            </a>
         </section>
 
         <div class="mdet-cols" :class="{'mdet-cols--single': !hasContentColumn}">

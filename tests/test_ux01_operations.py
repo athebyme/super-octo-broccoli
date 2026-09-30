@@ -43,6 +43,8 @@ def _app(*, ozon_enabled=True):
         "marketplace_operations.index": "/marketplaces/operations/",
         "marketplace_operations.detail": "/marketplaces/operations/9",
         "marketplace_commercial.index": "/marketplaces/commercial/",
+        "product_detail": "/products/<int:product_id>",
+        "product_edit_history": "/products/<int:product_id>/history",
     }
     for endpoint, path in endpoints.items():
         app.add_url_rule(path, endpoint=endpoint, view_func=lambda: "")
@@ -189,10 +191,18 @@ def test_history_navigation_hides_ozon_when_feature_is_disabled():
     assert "marketplaces/operations" not in html
 
 
-def _render_bulk_history_detail(errors_details, *, error_count=2):
+def _render_bulk_history_detail(
+    errors_details,
+    *,
+    error_count=2,
+    operation_id=44,
+    product_changes=None,
+    owned_product_ids=None,
+):
     app = _app()
     operation = SimpleNamespace(
-        id=44,
+        id=operation_id,
+        seller_id=92,
         description="Synthetic bulk operation",
         status="completed",
         total_products=2,
@@ -207,11 +217,12 @@ def _render_bulk_history_detail(errors_details, *, error_count=2):
         errors_details=errors_details,
         can_revert=lambda: False,
     )
-    with app.test_request_context("/bulk-history/44"):
+    with app.test_request_context(f"/bulk-history/{operation_id}"):
         return render_template(
             "bulk_edit_history_detail.html",
             bulk_operation=operation,
-            product_changes=[],
+            product_changes=product_changes or [],
+            owned_product_ids=owned_product_ids or [],
         )
 
 
@@ -241,7 +252,8 @@ def test_bulk_detail_shows_row_identity_and_typed_error_outside_collapsed_raw_da
     assert "supplier_photo_source_drift" not in visible_summary
     assert "Сверьте текущую галерею поставщика и карточку WB до нового выбора." in visible_summary
     assert "Перед новым изменением проверьте актуальное состояние карточки в WB." in visible_summary
-    assert 'href="/products/990000101' not in html
+    assert 'data-operations-error-fix-link' not in visible_summary
+    assert 'href="/products/990000101"' not in visible_summary
     assert 'data-operations-error-id="990000101"' in visible_summary
     assert '"product_id": 990000101' in raw_details
     assert '"reason": "supplier_photo_source_drift"' in raw_details
@@ -347,3 +359,100 @@ def test_bulk_detail_handles_legacy_string_unknown_shape_and_escapes_text():
     assert '"reason": "future_reason_v2"' in raw_details
     assert "unexpected" in raw_details
     assert "nested" in raw_details
+
+
+def test_batch31_detail_shows_readable_field_values_and_seller_scoped_fix_links():
+    from types import SimpleNamespace
+
+    product = SimpleNamespace(
+        id=814,
+        seller_id=92,
+        title="Synthetic updated shirt",
+        vendor_code="SYNTH-WB-814",
+        nm_id=7000814,
+    )
+    change = SimpleNamespace(
+        product_id=814,
+        product=product,
+        reverted=False,
+        wb_synced=False,
+        wb_sync_status="failed",
+        wb_error_message="Synthetic provider detail",
+        changed_fields=["title", "description", "characteristics", "is_active", "extra_metadata"],
+        snapshot_before={
+            "title": "Старое название",
+            "description": "Старое описание " + ("а" * 400),
+            "characteristics": [
+                {"id": 11, "name": "Материал", "value": "Хлопок"},
+                {"id": 12, "name": "Состав", "value": ["Хлопок", "Эластан"]},
+                {"id": 13, "name": "Размер", "value": {"value": 42, "unit": "RU"}},
+            ],
+            "is_active": True,
+            "extra_metadata": {"legacy": {"provider_value": [1, 2, 3]}},
+        },
+        snapshot_after={
+            "title": "Новое название",
+            "description": "Новое описание",
+            "characteristics": [
+                {"id": 11, "name": "Материал", "value": "Лён"},
+                {"id": 12, "name": "Состав", "value": ["Лён", "Вискоза"]},
+            ],
+            "is_active": False,
+            "extra_metadata": {"legacy": {"provider_value": [4, 5]}},
+        },
+    )
+    foreign_product = SimpleNamespace(
+        id=815,
+        seller_id=999,
+        title="Foreign seller private title",
+        vendor_code="FOREIGN-815",
+        nm_id=7000815,
+    )
+    foreign_change = SimpleNamespace(
+        product_id=815,
+        product=foreign_product,
+        reverted=False,
+        wb_synced=False,
+        wb_sync_status="failed",
+        wb_error_message="Foreign details must stay hidden",
+        changed_fields=["title"],
+        snapshot_before={"title": "foreign before"},
+        snapshot_after={"title": "foreign after"},
+    )
+    html = _render_bulk_history_detail([{
+        "product_id": 814,
+        "vendor_code": "SYNTH-WB-814",
+        "status": "failed",
+        "reason": "future_failure_code",
+        "error": "Synthetic item failure",
+    }, {
+        "product_id": 815,
+        "status": "failed",
+        "reason": "foreign_id_payload",
+        "error": "Foreign row must not receive a link",
+    }], error_count=1, operation_id=31, product_changes=[change], owned_product_ids=[814])
+
+    assert "Завершено с ошибками" in html
+    assert "0 из 2" in html
+    assert 'data-operations-error-fix-link' in html
+    assert 'href="/products/814"' in html
+    assert 'data-operations-change-fix-link' in html
+    assert 'href="/products/814"' in html
+    assert 'href="/products/814/history"' in html
+    assert 'data-operations-changed-field="title"' in html
+    assert 'data-operations-changed-field="description"' in html
+    assert 'data-operations-changed-field="characteristics"' in html
+    assert 'data-operations-changed-field="is_active"' in html
+    assert 'data-operations-changed-field="extra_metadata"' in html
+    assert "Название" in html
+    assert "Описание" in html
+    assert "Характеристики" in html
+    assert "Старое название" in html and "Новое название" in html
+    assert "Старое описание" in html and "Новое описание" in html
+    assert "а" * 400 in html
+    assert "Материал" in html and "Хлопок" in html and "Лён" in html
+    assert "Да" in html and "Нет" in html
+    assert "Полное структурированное значение" in html
+    assert "Foreign seller private title" not in html
+    assert 'href="/products/815"' not in html
+    assert "WB вернул ошибку" in html

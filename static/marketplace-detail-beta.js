@@ -18,6 +18,122 @@
         if (typeof data.csrf === 'string' && data.csrf.length >= 20 && data.csrf.length <= 512) CSRF = data.csrf;
     }
 
+    function isJsonContainer(text) {
+        var value = typeof text === 'string' ? text.trim() : '';
+        return value.length > 1 && value.length <= 5000
+            && (value.charAt(0) === '{' || value.charAt(0) === '['
+                || value.charAt(0) === '"');
+    }
+
+    function looksLikeProviderCode(text) {
+        return typeof text === 'string'
+            && /^[A-Z][A-Z0-9_.-]{2,}$/.test(text.trim());
+    }
+
+    function isLongWordsDescription(text) {
+        if (typeof text !== 'string') return false;
+        return /длинн[а-яё]*[\s\S]{0,80}слов|слов[\s\S]{0,80}длинн[а-яё]*/iu.test(text)
+            || /long\s+words?|words?\s+(?:are\s+)?too\s+long/i.test(text);
+    }
+
+    function moderationErrorPresentation(entry, marketplaceCode) {
+        var codes = {code: [], error_code: [], type: []};
+        var messages = [];
+        var visited = 0;
+
+        function inspect(value, key, depth) {
+            if (depth > 5 || visited >= 160) return;
+            visited += 1;
+            if (typeof value === 'string') {
+                var text = value.trim();
+                if (isJsonContainer(text)) {
+                    try {
+                        var decoded = JSON.parse(text);
+                        if (decoded !== value) {
+                            inspect(decoded, key, depth + 1);
+                            return;
+                        }
+                    } catch (_) {
+                        // A malformed JSON-looking provider message stays diagnostic.
+                        return;
+                    }
+                }
+                if (key === 'code' || key === 'error_code' || key === 'type') {
+                    if (text && looksLikeProviderCode(text)) codes[key].push(text.toUpperCase());
+                    return;
+                }
+                if (!key && text.toUpperCase() === 'DESCRIPTION_DECLINE') {
+                    codes.code.push('DESCRIPTION_DECLINE');
+                    return;
+                }
+                if (/^(description|message|reason|error|error_description|details?|warning)$/.test(key)) {
+                    if (text && !looksLikeProviderCode(text)) messages.push({key: key, text: text});
+                    return;
+                }
+                if (!key && text && !looksLikeProviderCode(text)) messages.push({key: '', text: text});
+                return;
+            }
+            if (Array.isArray(value)) {
+                value.slice(0, 20).forEach(function (item) {
+                    inspect(item, '', depth + 1);
+                });
+                return;
+            }
+            if (!value || typeof value !== 'object') return;
+            Object.keys(value).slice(0, 40).forEach(function (name) {
+                var normalized = name.toLowerCase();
+                inspect(value[name], normalized, depth + 1);
+            });
+        }
+
+        inspect(entry, '', 0);
+        if (typeof entry === 'string' && entry.trim().toUpperCase() === 'DESCRIPTION_DECLINE') {
+            codes.code.push('DESCRIPTION_DECLINE');
+        }
+        var code = codes.code[0] || codes.error_code[0] || codes.type[0] || '';
+        var messagePriority = {
+            description: 100,
+            error_description: 95,
+            reason: 90,
+            message: 75,
+            details: 65,
+            detail: 65,
+            warning: 60,
+            error: 40,
+            '': 20
+        };
+        var messageCandidate = messages.filter(function (item) {
+            return item.text.length <= 1000;
+        }).sort(function (left, right) {
+            return (messagePriority[right.key] || 0) - (messagePriority[left.key] || 0);
+        })[0];
+        var message = messageCandidate ? messageCandidate.text : '';
+        var knownLongWords = code === 'DESCRIPTION_DECLINE' && isLongWordsDescription(message);
+        var summary = knownLongWords
+            ? 'Слишком длинные слова в описании.'
+            : (message
+                ? (marketplaceCode === 'ozon' ? 'Ozon сообщает: ' : 'Площадка сообщает: ') + message
+                : marketplaceCode === 'ozon'
+                    ? 'Площадка отклонила карточку. Проверьте описание и другие замечания в черновике Ozon; технический код показан ниже.'
+                    : 'Площадка отклонила карточку. Проверьте её замечания и сохранённую историю; технический код показан ниже.');
+        var nextStep = marketplaceCode === 'ozon'
+            ? (knownLongWords
+                ? 'Разделите склеенные слова и сократите слишком длинные слова. Откройте черновики Ozon, проверьте описание и сохраните исправление; отправка карточки остаётся отдельным действием.'
+                : 'Сверьте замечание с содержимым карточки в черновике Ozon. Сохраните исправление и проверьте новую версию; отправка карточки остаётся отдельным действием.')
+            : (knownLongWords
+                ? 'Разделите склеенные слова и сократите слишком длинные слова. Сверьте актуальное описание WB и сохранённую историю перед отдельной записью.'
+                : 'Сверьте замечание с текущей карточкой и историей WB. Перед новым изменением используйте существующий просмотр карточки.');
+        var technical;
+        try {
+            technical = typeof entry === 'string' ? entry : JSON.stringify(entry, null, 2);
+        } catch (_) {
+            technical = String(entry);
+        }
+        if (typeof technical !== 'string') technical = String(entry);
+        if (technical.length > 5000) technical = technical.slice(0, 5000) + '\n…';
+        return {summary: summary, nextStep: nextStep, code: code, technical: technical};
+    }
+
     var S = window.mcatShared;
     var linkController = null;
     var linkTimer = null;
@@ -173,14 +289,15 @@
             stockRows: function () { return S.stockRows(this.listing); },
             moderationErrors: function () {
                 var raw = (this.listing && this.listing.moderation_errors) || [];
-                return raw.slice(0, 20).map(function (entry) {
-                    if (typeof entry === 'string') return entry;
-                    if (entry && typeof entry === 'object') {
-                        return entry.description || entry.message || entry.error ||
-                            entry.code || JSON.stringify(entry).slice(0, 200);
-                    }
-                    return String(entry);
-                });
+                var marketplaceCode = this.listing && this.listing.marketplace_code;
+                return Array.isArray(raw) ? raw.slice(0, 20).map(function (entry) {
+                    return moderationErrorPresentation(entry, marketplaceCode);
+                }) : [];
+            },
+            heroAlt: function () {
+                var title = this.listing && typeof this.listing.title === 'string'
+                    ? this.listing.title.trim().slice(0, 120) : '';
+                return title ? 'Фото товара: ' + title : 'Главное фото товара на площадке';
             },
             barcodes: function () {
                 var raw = (this.listing && this.listing.barcodes) || [];

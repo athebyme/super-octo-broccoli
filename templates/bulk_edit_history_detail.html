@@ -7,6 +7,61 @@
 {% block content %}
 {% set operations_history_current = 'wb-bulk' %}
 {% set operation = bulk_operation %}
+{% macro operations_value(value, depth=0) %}
+    {% if value is none %}
+        <span>Не сохранено</span>
+    {% elif value is string %}
+        {% if value|length > 320 %}
+        <span>{{ value[:320] }}…</span>
+        <details class="operations-technical-details">
+            <summary>Показать сохранённое значение</summary>
+            <pre>{{ value[:5000] }}{% if value|length > 5000 %}… Длинное значение ограничено в истории.{% endif %}</pre>
+        </details>
+        {% else %}{{ value|trim or 'Пустое значение' }}{% endif %}
+    {% elif value is mapping and depth < 2 %}
+        {% if value %}
+        <ul class="list-disc pl-5">
+            {% for key, item in value.items() %}
+                {% if loop.index <= 12 %}<li><strong>{{ key|replace('_', ' ')|title }}:</strong> {{ operations_value(item, depth + 1) }}</li>{% endif %}
+            {% endfor %}
+            {% if value|length > 12 %}<li>Ещё {{ value|length - 12 }} полей</li>{% endif %}
+        </ul>
+        {% set serialized_value = value|tojson(indent=2) %}
+        <details class="operations-technical-details"><summary>Полное структурированное значение</summary><pre>{{ serialized_value[:10000] }}{% if serialized_value|length > 10000 %}… Длинное значение ограничено в истории.{% endif %}</pre></details>
+        {% else %}Нет значений{% endif %}
+    {% elif value is sequence and value is not string and depth < 2 %}
+        {% if value %}
+        <ul class="list-disc pl-5">
+            {% for item in value[:16] %}
+                {% if item is mapping %}
+                    <li>
+                        <strong>{{ item.get('name') or item.get('charcName') or item.get('id') or ('Характеристика ' ~ loop.index) }}:</strong>
+                        {% set item_value = item.get('value') if item.get('value') is not none else item.get('valueId') %}
+                        {% if item_value is none %}—{% else %}{{ operations_value(item_value, depth + 1) }}{% endif %}
+                    </li>
+                {% else %}<li>{{ item }}</li>{% endif %}
+            {% endfor %}
+            {% if value|length > 16 %}<li>Ещё {{ value|length - 16 }}</li>{% endif %}
+        </ul>
+        {% if value|length > 16 %}
+        {% set serialized_value = value|tojson(indent=2) %}
+        <details class="operations-technical-details"><summary>Полный список значений</summary><pre>{{ serialized_value[:10000] }}{% if serialized_value|length > 10000 %}… Длинное значение ограничено в истории.{% endif %}</pre></details>
+        {% endif %}
+        {% else %}Нет значений{% endif %}
+    {% elif value is mapping %}
+        <span>Составное значение сохранено.</span>
+        {% set serialized_value = value|tojson(indent=2) %}
+        <details class="operations-technical-details"><summary>Полное структурированное значение</summary><pre>{{ serialized_value[:10000] }}{% if serialized_value|length > 10000 %}… Длинное значение ограничено в истории.{% endif %}</pre></details>
+    {% elif value is sequence and value is not string %}
+        <span>Составной список сохранён.</span>
+        {% set serialized_value = value|tojson(indent=2) %}
+        <details class="operations-technical-details"><summary>Полный список значений</summary><pre>{{ serialized_value[:10000] }}{% if serialized_value|length > 10000 %}… Длинное значение ограничено в истории.{% endif %}</pre></details>
+    {% elif value is boolean %}
+        {{ 'Да' if value else 'Нет' }}
+    {% else %}
+        {{ value }}
+    {% endif %}
+{% endmacro %}
 <div class="operations-workspace container mx-auto px-4 py-8">
     <!-- Навигация -->
     <div class="mb-6">
@@ -173,6 +228,7 @@
 
         <!-- Сохранённые причины показываем обычным текстом; полный payload остаётся в свернутой диагностике. -->
         {% set raw_error_details = bulk_operation.errors_details %}
+        {% set trusted_product_ids = owned_product_ids|default([], true) %}
         {% if raw_error_details is sequence and raw_error_details is not string and raw_error_details is not mapping %}
             {% set error_rows = raw_error_details %}
         {% elif raw_error_details %}
@@ -279,6 +335,10 @@
                         {% if row_nm_id is integer or (row_nm_id is string and row_nm_id|trim) %}{% if row_vendor_code is string and row_vendor_code|trim %} · {% endif %}Артикул WB: {{ row_nm_id }}{% endif %}
                         {% if row_product_id is integer or (row_product_id is string and row_product_id|trim) %}{% if (row_vendor_code is string and row_vendor_code|trim) or row_nm_id is integer or (row_nm_id is string and row_nm_id|trim) %} · {% endif %}ID строки: #{{ row_product_id }}{% endif %}
                     </p>
+                    {% if row_product_id is integer and row_product_id > 0 and row_product_id in trusted_product_ids %}
+                    <a class="operations-error-row-fix-link" data-operations-error-fix-link
+                       href="{{ url_for('product_detail', product_id=row_product_id) }}">Открыть эту карточку WB</a>
+                    {% endif %}
                     {% endif %}
                     {% if reason_presentation %}
                     <p class="operations-error-row-description">{{ reason_presentation.summary }}</p>
@@ -339,12 +399,13 @@
         {% if product_changes %}
         <div class="space-y-3">
             {% for change in product_changes %}
-            <div class="border border-gray-200 rounded-lg p-4 {% if change.reverted %}opacity-60{% endif %}">
+            {% set change_product_owned = change.product and change.product.id == change.product_id and change.product.seller_id == bulk_operation.seller_id %}
+            <div class="border border-gray-200 rounded-lg p-4 {% if change.reverted %}opacity-60{% endif %}" data-operations-product-id="{{ change.product_id }}">
                 <div class="flex items-start justify-between">
                     <div class="flex-1">
                         <div class="flex items-center space-x-2 mb-1">
                             <h4 class="font-semibold text-gray-900">
-                                {{ change.product.title if change.product else 'Товар #' + change.product_id|string }}
+                                {{ change.product.title if change_product_owned else 'Товар #' + change.product_id|string }}
                             </h4>
                             {% if change.reverted %}
                             <span class="px-2 py-0.5 text-xs bg-gray-200 text-gray-600 rounded">
@@ -359,7 +420,7 @@
                         </div>
 
                         <p class="text-sm text-gray-600">
-                            {% if change.product %}
+                            {% if change_product_owned %}
                                 Артикул: {{ change.product.vendor_code }} | NM ID: {{ change.product.nm_id }}
                             {% endif %}
                         </p>
@@ -393,24 +454,31 @@
 
                         <!-- Измененные поля -->
                         {% if change.changed_fields %}
-                        <div class="mt-2 flex flex-wrap gap-2">
+                        {% set field_labels = {
+                            'nm_id': 'Артикул WB', 'vendor_code': 'Артикул продавца', 'title': 'Название',
+                            'description': 'Описание', 'brand': 'Бренд', 'object_name': 'Категория WB',
+                            'price': 'Цена продавца', 'discount_price': 'Цена со скидкой продавца',
+                            'quantity': 'Остаток', 'characteristics': 'Характеристики',
+                            'keywords': 'Ключевые слова', 'is_active': 'Активность карточки'
+                        } %}
+                        <div class="mt-3 space-y-3" aria-label="Изменённые значения">
                             {% for field in change.changed_fields %}
-                            <span class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">
-                                {% if field == 'vendor_code' %}Артикул
-                                {% elif field == 'title' %}Название
-                                {% elif field == 'description' %}Описание
-                                {% elif field == 'brand' %}Бренд
-                                {% elif field == 'characteristics' %}Характеристики
-                                {% else %}{{ field }}
-                                {% endif %}
-                            </span>
+                            <div class="operations-value-diff" data-operations-changed-field="{{ field }}">
+                                <strong>{{ field_labels.get(field, field.replace('_', ' ')|title) }}</strong>
+                                <div><span>До:</span> {{ operations_value((change.snapshot_before or {}).get(field)) }}</div>
+                                <div><span>После:</span> {{ operations_value((change.snapshot_after or {}).get(field)) }}</div>
+                            </div>
                             {% endfor %}
                         </div>
                         {% endif %}
                     </div>
 
                     <div class="flex items-center space-x-2">
-                        {% if change.product %}
+                        {% if change_product_owned %}
+                        <a href="{{ url_for('product_detail', product_id=change.product_id) }}"
+                           class="text-indigo-600 hover:text-indigo-700 text-sm" data-operations-change-fix-link>
+                            Карточка WB
+                        </a>
                         <a href="{{ url_for('product_edit_history', product_id=change.product_id) }}"
                            class="text-indigo-600 hover:text-indigo-700 text-sm">
                             История →

@@ -28,9 +28,9 @@
         </div>
         <p v-if="listing && listing.id === listingId && (!listing.is_available || (visibilityBadge && ['danger', 'warn'].includes(visibilityBadge.tone)) || providerBadge || statusMeta(listing).tone === 'danger')" class="listing-workspace-warning" role="alert">
             <span v-if="!listing.is_available">Данные карточки не подтверждены последней синхронизацией.</span>
-            <span v-if="statusMeta(listing).tone === 'danger'">Статус карточки требует проверки: <span v-text="statusMeta(listing).label"></span>.</span>
-            <span v-if="visibilityBadge && ['danger', 'warn'].includes(visibilityBadge.tone)" v-text="visibilityBadge.hint || ('Проверьте видимость карточки: ' + visibilityBadge.label + '.')"></span>
-            <span v-if="providerBadge" v-text="providerBadge.hint || listing.provider_status || providerBadge.label"></span>
+            <span v-if="statusMeta(listing).tone === 'danger'"><template v-if="!listing.is_available"> · </template>Статус карточки требует проверки: <span v-text="statusMeta(listing).label"></span>.</span>
+            <span v-if="visibilityBadge && ['danger', 'warn'].includes(visibilityBadge.tone)"><template v-if="!listing.is_available || statusMeta(listing).tone === 'danger'"> · </template><span v-text="visibilityBadge.hint || ('Проверьте видимость карточки: ' + visibilityBadge.label + '.')"></span></span>
+            <span v-if="providerBadge"><template v-if="!listing.is_available || statusMeta(listing).tone === 'danger' || (visibilityBadge && ['danger', 'warn'].includes(visibilityBadge.tone))"> · </template>Статус площадки: <span v-text="providerBadge.hint || providerBadge.label"></span>.</span>
         </p>
     </div>
     <div class="listing-workspace-controls">

@@ -89,6 +89,8 @@ from models import (
 )
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
 
+PHOTO2 = "https://ozon-fixture.test/product-2.svg"
+
 
 app.config.update(TESTING=True, WTF_CSRF_ENABLED=True, SESSION_COOKIE_SECURE=False)
 FIXTURE = seed(app)
@@ -195,6 +197,26 @@ with app.app_context():
         listing.stocks_synced_at = now
 
     target = db.session.get(MarketplaceListing, ozon_ids[1])
+    inner_moderation_error = json.dumps({
+        "code": "DESCRIPTION_DECLINE",
+        "message": "Request failed",
+        "error": json.dumps({
+            "description": "Описание содержит слишком длинные слова. Разделите склеенные слова."
+        }, ensure_ascii=True),
+    }, ensure_ascii=True)
+    target.moderation_errors_json = json.dumps([
+        inner_moderation_error,
+        json.dumps({
+            "code": "FUTURE_REASON",
+            "description": "<img src=x onerror=alert(1)>",
+        }, ensure_ascii=False),
+    ], ensure_ascii=False)
+    target.media_json = json.dumps({
+        "primary_image": PHOTO,
+        "images": [PHOTO, PHOTO2],
+    })
+    target.provider_status = "declined"
+    target.visibility = "inactive"
     wb_member = MarketplaceListing(
         seller_id=seller_id,
         marketplace_id=wb.id,
@@ -271,7 +293,7 @@ def bridge(route):
             REPORT["unexpected_http"].append({"path": parts.path, "status": result.status})
         route.fulfill(response=result)
         return
-    if request.url == PHOTO:
+    if request.url in {PHOTO, PHOTO2}:
         route.fulfill(body=SVG, content_type="image/svg+xml")
         return
     asset = manifest.get(request.url) or manifest.get(request.url.rstrip("/"))
@@ -705,6 +727,29 @@ def run_browser_scenario(page, context, browser):
     target_detail_path = f"/marketplaces/listings/beta/{FIXTURE['target_listing_id']}"
     go(page, target_detail_path + "?return_to=" + quote(CATALOG_CONTEXT, safe=""), ".listing-workspace-head")
     page.locator(".listing-workspace-title").filter(has_text="UX Listing Target").wait_for()
+    hero_image = page.locator(".mdet-hero img")
+    assert hero_image.get_attribute("alt") == "Фото товара: UX Listing Target"
+    assert hero_image.get_attribute("width") == "320"
+    assert hero_image.get_attribute("height") == "427"
+    gallery_buttons = page.locator(".mcat-gallery .mcat-gal-thumb")
+    assert gallery_buttons.count() == 2
+    assert [gallery_buttons.nth(i).get_attribute("aria-pressed") for i in range(2)] == ["true", "false"]
+    moderation_section = page.locator(".mdet-sect--danger")
+    moderation_text = moderation_section.inner_text()
+    assert "Слишком длинные слова в описании." in moderation_text
+    assert "Разделите склеенные слова" in moderation_text
+    assert "Откройте черновики Ozon" in moderation_text
+    assert moderation_section.locator("details").count() == 2
+    assert all(not moderation_section.locator("details").nth(i).evaluate("el => el.open") for i in range(2))
+    assert page.locator('.mdet-sect--danger img[src="x"]').count() == 0
+    draft_link = moderation_section.get_by_role("link", name="Открыть черновики Ozon")
+    draft_parts = urlsplit(draft_link.get_attribute("href"))
+    assert draft_parts.path == "/marketplaces/drafts/"
+    assert parse_qs(draft_parts.query)["account_id"] == [str(FIXTURE["account_id"])]
+    warning_text = page.locator(".listing-workspace-warning").inner_text()
+    assert "Ошибка" in warning_text and "Отклонён площадкой" in warning_text
+    assert "declined" not in warning_text
+    passed("moderation_reason_next_step_and_gallery_controls_have_accessible_semantics")
     link_label = page.locator("#marketplace-detail-app .mcat-linkline > .mcat-link")
     assert link_label.count() == 1, "template DOM must match the scoped link-label selector"
     link_label_style = link_label.evaluate("""el => {
