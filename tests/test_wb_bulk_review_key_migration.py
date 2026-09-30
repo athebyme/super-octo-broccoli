@@ -88,6 +88,25 @@ def test_review_key_migration_rejects_wrong_index_with_expected_name():
         connection.close()
 
 
+def test_review_key_migration_rolls_back_ddl_if_index_verification_fails():
+    connection = _legacy_connection()
+    try:
+        connection.executescript("""
+            CREATE TABLE other_table (id INTEGER PRIMARY KEY);
+            CREATE INDEX uq_bulk_edit_history_review_key ON other_table(id);
+        """)
+        assert not connection.in_transaction
+        with pytest.raises(sqlite3.OperationalError, match="Incompatible object"):
+            apply_migration(connection, verbose=False)
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(bulk_edit_history)")
+        }
+        assert "review_key" not in columns
+        assert not connection.in_transaction
+    finally:
+        connection.close()
+
+
 def test_review_key_migration_requires_history_table():
     connection = sqlite3.connect(":memory:")
     try:

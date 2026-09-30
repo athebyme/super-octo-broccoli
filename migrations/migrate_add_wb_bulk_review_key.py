@@ -70,30 +70,46 @@ def _verify_index(connection: sqlite3.Connection) -> bool:
 
 
 def apply_migration(connection: sqlite3.Connection, *, verbose: bool = True) -> int:
-    if not _table_exists(connection):
-        raise sqlite3.OperationalError(f"Required table {TABLE} is missing")
+    owns_transaction = not connection.in_transaction
+    if owns_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    try:
+        if not _table_exists(connection):
+            raise sqlite3.OperationalError(f"Required table {TABLE} is missing")
 
-    before = set(connection.execute("SELECT type, name FROM sqlite_master"))
-    _verify_column(connection)
-    _verify_index(connection)
+        before = set(connection.execute("SELECT type, name FROM sqlite_master"))
+        _verify_column(connection)
+        _verify_index(connection)
 
-    # Verify the final contract, including nullable legacy rows and unique keys.
-    column = next(
-        (row for row in connection.execute(f"PRAGMA table_info({TABLE})") if row[1] == COLUMN),
-        None,
-    )
-    if column is None or "".join(str(column[2]).upper().split()) != "VARCHAR(64)" or column[3] != 0:
-        raise sqlite3.OperationalError(f"Final {TABLE}.{COLUMN} schema verification failed")
+        # Verify the final contract, including nullable legacy rows and unique keys.
+        column = next(
+            (row for row in connection.execute(f"PRAGMA table_info({TABLE})") if row[1] == COLUMN),
+            None,
+        )
+        if (
+            column is None
+            or "".join(str(column[2]).upper().split()) != "VARCHAR(64)"
+            or column[3] != 0
+        ):
+            raise sqlite3.OperationalError(
+                f"Final {TABLE}.{COLUMN} schema verification failed"
+            )
 
-    added = len(set(connection.execute("SELECT type, name FROM sqlite_master")) - before)
-    if verbose:
-        print(f"WB bulk review key migration complete; schema_objects_added={added}")
-    return added
+        added = len(set(connection.execute("SELECT type, name FROM sqlite_master")) - before)
+        if verbose:
+            print(f"WB bulk review key migration complete; schema_objects_added={added}")
+        return added
+    except Exception:
+        if owns_transaction:
+            connection.rollback()
+        raise
 
 
 def migrate(database_path: str) -> int:
     connection = sqlite3.connect(database_path)
     try:
+        # sqlite3's legacy transaction mode does not automatically wrap DDL.
+        connection.execute("BEGIN IMMEDIATE")
         added = apply_migration(connection)
         connection.commit()
         return added
