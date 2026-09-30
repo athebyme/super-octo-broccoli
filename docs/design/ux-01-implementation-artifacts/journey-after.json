@@ -1,0 +1,7450 @@
+{
+  "source": "worktree",
+  "status": "passed",
+  "scope": "synthetic_flask_jinja_vue_preparation_journey",
+  "pages": [
+    {
+      "name": "supplier_catalog",
+      "path": "/supplier-catalog",
+      "status": 200
+    },
+    {
+      "name": "supplier_products",
+      "path": "/supplier-catalog/1/products",
+      "status": 200
+    },
+    {
+      "name": "supplier_source_detail",
+      "path": "/supplier-catalog/1/products/1",
+      "status": 200
+    },
+    {
+      "name": "internal_ozon",
+      "path": "/my-products",
+      "status": 200
+    },
+    {
+      "name": "drafts_vue",
+      "path": "/marketplaces/drafts/",
+      "status": 200
+    },
+    {
+      "name": "drafts_classic",
+      "path": "/marketplaces/drafts/classic",
+      "status": 200
+    },
+    {
+      "name": "draft_detail_vue",
+      "path": "/marketplaces/drafts/1",
+      "status": 200
+    },
+    {
+      "name": "draft_detail_classic",
+      "path": "/marketplaces/drafts/classic/1",
+      "status": 200
+    },
+    {
+      "name": "review",
+      "path": "/marketplaces/ozon/uploads/review",
+      "status": 200
+    },
+    {
+      "name": "upload_history",
+      "path": "/marketplaces/ozon/uploads/",
+      "status": 200
+    },
+    {
+      "name": "upload_result",
+      "path": "/marketplaces/ozon/uploads/ozon-upload-944aca9d6f63425583d417e39b65db46",
+      "status": 200
+    },
+    {
+      "name": "internal_beta",
+      "path": "/my-products/beta",
+      "status": 200
+    },
+    {
+      "name": "listing_vue",
+      "path": "/marketplaces/listings/view/1",
+      "status": 200
+    },
+    {
+      "name": "listing_classic",
+      "path": "/marketplaces/listings/1",
+      "status": 200
+    },
+    {
+      "name": "supplier_catalog",
+      "path": "/supplier-catalog",
+      "status": 200
+    },
+    {
+      "name": "supplier_products",
+      "path": "/supplier-catalog/1/products",
+      "status": 200
+    },
+    {
+      "name": "supplier_source_detail",
+      "path": "/supplier-catalog/1/products/1",
+      "status": 200
+    },
+    {
+      "name": "internal_ozon",
+      "path": "/my-products",
+      "status": 200
+    },
+    {
+      "name": "drafts_vue",
+      "path": "/marketplaces/drafts/",
+      "status": 200
+    },
+    {
+      "name": "drafts_classic",
+      "path": "/marketplaces/drafts/classic",
+      "status": 200
+    },
+    {
+      "name": "draft_detail_vue",
+      "path": "/marketplaces/drafts/1",
+      "status": 200
+    },
+    {
+      "name": "draft_detail_classic",
+      "path": "/marketplaces/drafts/classic/1",
+      "status": 200
+    },
+    {
+      "name": "review",
+      "path": "/marketplaces/ozon/uploads/review",
+      "status": 200
+    },
+    {
+      "name": "upload_history",
+      "path": "/marketplaces/ozon/uploads/",
+      "status": 200
+    },
+    {
+      "name": "upload_result",
+      "path": "/marketplaces/ozon/uploads/ozon-upload-944aca9d6f63425583d417e39b65db46",
+      "status": 200
+    }
+  ],
+  "layouts": [
+    {
+      "page": "listing_vue",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1129,
+          "scrollWidth": 1129,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_vue",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 14,
+          "right": 376,
+          "width": 362,
+          "clientWidth": 359,
+          "scrollWidth": 359,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_vue",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1129,
+          "scrollWidth": 1129,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_vue",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 14,
+          "right": 376,
+          "width": 362,
+          "clientWidth": 359,
+          "scrollWidth": 359,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_classic",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1129,
+          "scrollWidth": 1129,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_classic",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 355,
+          "scrollWidth": 355,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_classic",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1129,
+          "scrollWidth": 1129,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_classic",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 355,
+          "scrollWidth": 355,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 296,
+          "width": 272,
+          "clientWidth": 270,
+          "scrollWidth": 270,
+          "pathClientWidth": 248,
+          "pathScrollWidth": 248,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "clientWidth": 340,
+          "scrollWidth": 340,
+          "pathClientWidth": 318,
+          "pathScrollWidth": 318,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 296,
+          "width": 272,
+          "clientWidth": 270,
+          "scrollWidth": 270,
+          "pathClientWidth": 248,
+          "pathScrollWidth": 248,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "clientWidth": 340,
+          "scrollWidth": 340,
+          "pathClientWidth": 318,
+          "pathScrollWidth": 318,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 370,
+          "right": 1330,
+          "width": 960,
+          "clientWidth": 958,
+          "scrollWidth": 958,
+          "pathClientWidth": 930,
+          "pathScrollWidth": 930,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 370,
+          "right": 1330,
+          "width": 960,
+          "clientWidth": 958,
+          "scrollWidth": 958,
+          "pathClientWidth": 930,
+          "pathScrollWidth": 930,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1000,
+          "width": 716,
+          "clientWidth": 714,
+          "scrollWidth": 714,
+          "pathClientWidth": 686,
+          "pathScrollWidth": 686,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1130,
+          "scrollWidth": 1130,
+          "pathClientWidth": 1102,
+          "pathScrollWidth": 1102,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1000,
+          "width": 716,
+          "clientWidth": 714,
+          "scrollWidth": 714,
+          "pathClientWidth": 686,
+          "pathScrollWidth": 686,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1130,
+          "scrollWidth": 1130,
+          "pathClientWidth": 1102,
+          "pathScrollWidth": 1102,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1000,
+          "width": 716,
+          "clientWidth": 714,
+          "scrollWidth": 714,
+          "pathClientWidth": 686,
+          "pathScrollWidth": 686,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1130,
+          "scrollWidth": 1130,
+          "pathClientWidth": 1102,
+          "pathScrollWidth": 1102,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1000,
+          "width": 716,
+          "clientWidth": 714,
+          "scrollWidth": 714,
+          "pathClientWidth": 686,
+          "pathScrollWidth": 686,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1130,
+          "scrollWidth": 1130,
+          "pathClientWidth": 1102,
+          "pathScrollWidth": 1102,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    }
+  ],
+  "geometry": [
+    {
+      "page": "listing_vue",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1129,
+          "scrollWidth": 1129,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_vue",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 14,
+          "right": 376,
+          "width": 362,
+          "clientWidth": 359,
+          "scrollWidth": 359,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_vue",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1129,
+          "scrollWidth": 1129,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_vue",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 14,
+          "right": 376,
+          "width": 362,
+          "clientWidth": 359,
+          "scrollWidth": 359,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_classic",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1129,
+          "scrollWidth": 1129,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_classic",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 355,
+          "scrollWidth": 355,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_classic",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1129,
+          "scrollWidth": 1129,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "listing_classic",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "listing_end_state",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 355,
+          "scrollWidth": 355,
+          "pathClientWidth": null,
+          "pathScrollWidth": null,
+          "navClientWidth": 260,
+          "navScrollWidth": 260,
+          "touchTargets": [
+            44,
+            44
+          ],
+          "summaryHeight": null
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 296,
+          "width": 272,
+          "clientWidth": 270,
+          "scrollWidth": 270,
+          "pathClientWidth": 248,
+          "pathScrollWidth": 248,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "clientWidth": 340,
+          "scrollWidth": 340,
+          "pathClientWidth": 318,
+          "pathScrollWidth": 318,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 296,
+          "width": 272,
+          "clientWidth": 270,
+          "scrollWidth": 270,
+          "pathClientWidth": 248,
+          "pathScrollWidth": 248,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 366,
+          "width": 342,
+          "clientWidth": 340,
+          "scrollWidth": 340,
+          "pathClientWidth": 318,
+          "pathScrollWidth": 318,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_catalog",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_products",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 370,
+          "right": 1330,
+          "width": 960,
+          "clientWidth": 958,
+          "scrollWidth": 958,
+          "pathClientWidth": 930,
+          "pathScrollWidth": 930,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 370,
+          "right": 1330,
+          "width": 960,
+          "clientWidth": 958,
+          "scrollWidth": 958,
+          "pathClientWidth": 930,
+          "pathScrollWidth": 930,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 992,
+          "width": 700,
+          "clientWidth": 698,
+          "scrollWidth": 698,
+          "pathClientWidth": 670,
+          "pathScrollWidth": 670,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "internal_ozon",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 292,
+          "right": 1408,
+          "width": 1116,
+          "clientWidth": 1114,
+          "scrollWidth": 1114,
+          "pathClientWidth": 1086,
+          "pathScrollWidth": 1086,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_vue",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "drafts_classic",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "draft_detail_classic",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 320,
+          "width": 320,
+          "clientWidth": 318,
+          "scrollWidth": 318,
+          "pathClientWidth": 296,
+          "pathScrollWidth": 296,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 390,
+          "width": 390,
+          "clientWidth": 388,
+          "scrollWidth": 388,
+          "pathClientWidth": 366,
+          "pathScrollWidth": 366,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 0,
+          "right": 768,
+          "width": 768,
+          "clientWidth": 766,
+          "scrollWidth": 766,
+          "pathClientWidth": 738,
+          "pathScrollWidth": 738,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1024,
+          "width": 764,
+          "clientWidth": 762,
+          "scrollWidth": 762,
+          "pathClientWidth": 734,
+          "pathScrollWidth": 734,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "review",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 260,
+          "right": 1440,
+          "width": 1180,
+          "clientWidth": 1178,
+          "scrollWidth": 1178,
+          "pathClientWidth": 1150,
+          "pathScrollWidth": 1150,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1000,
+          "width": 716,
+          "clientWidth": 714,
+          "scrollWidth": 714,
+          "pathClientWidth": 686,
+          "pathScrollWidth": 686,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1130,
+          "scrollWidth": 1130,
+          "pathClientWidth": 1102,
+          "pathScrollWidth": 1102,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1000,
+          "width": 716,
+          "clientWidth": 714,
+          "scrollWidth": 714,
+          "pathClientWidth": 686,
+          "pathScrollWidth": 686,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_history",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1130,
+          "scrollWidth": 1130,
+          "pathClientWidth": 1102,
+          "pathScrollWidth": 1102,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 320,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 390,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 768,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 1024,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1000,
+          "width": 716,
+          "clientWidth": 714,
+          "scrollWidth": 714,
+          "pathClientWidth": 686,
+          "pathScrollWidth": 686,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 1440,
+      "theme": "light",
+      "actual_theme": "light",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1130,
+          "scrollWidth": 1130,
+          "pathClientWidth": 1102,
+          "pathScrollWidth": 1102,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 320,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 304,
+          "width": 288,
+          "clientWidth": 286,
+          "scrollWidth": 286,
+          "pathClientWidth": 264,
+          "pathScrollWidth": 264,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 390,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 16,
+          "right": 374,
+          "width": 358,
+          "clientWidth": 356,
+          "scrollWidth": 356,
+          "pathClientWidth": 334,
+          "pathScrollWidth": 334,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 768,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 24,
+          "right": 744,
+          "width": 720,
+          "clientWidth": 718,
+          "scrollWidth": 718,
+          "pathClientWidth": 690,
+          "pathScrollWidth": 690,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 1024,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1000,
+          "width": 716,
+          "clientWidth": 714,
+          "scrollWidth": 714,
+          "pathClientWidth": 686,
+          "pathScrollWidth": 686,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    },
+    {
+      "page": "upload_result",
+      "width": 1440,
+      "theme": "dark",
+      "actual_theme": "dark",
+      "components": [
+        {
+          "kind": "journey",
+          "left": 284,
+          "right": 1416,
+          "width": 1132,
+          "clientWidth": 1130,
+          "scrollWidth": 1130,
+          "pathClientWidth": 1102,
+          "pathScrollWidth": 1102,
+          "navClientWidth": null,
+          "navScrollWidth": null,
+          "touchTargets": [
+            44,
+            44,
+            44,
+            44
+          ],
+          "summaryHeight": 44
+        }
+      ]
+    }
+  ],
+  "checks": [
+    "synthetic_test_client_login_with_csrf",
+    "supplier_catalog_seven_steps_and_current_next",
+    "supplier_products_seven_steps_and_current_next",
+    "supplier_source_detail_seven_steps_and_current_next",
+    "internal_ozon_seven_steps_and_current_next",
+    "wb_channel_and_ozon_contextual_actions_coexist",
+    "drafts_vue_seven_steps_and_current_next",
+    "drafts_classic_seven_steps_and_current_next",
+    "draft_detail_vue_seven_steps_and_current_next",
+    "vue_draft_form_save_and_separate_publish_controls_preserved",
+    "draft_detail_classic_seven_steps_and_current_next",
+    "classic_draft_validation_and_refresh_actions_preserved",
+    "review_seven_steps_and_current_next",
+    "review_exact_set_selection_and_explicit_write_controls_preserved",
+    "upload_history_seven_steps_and_current_next",
+    "upload_result_seven_steps_and_current_next",
+    "beta_internal_page_keeps_existing_channel_actions",
+    "listing_vue_ozon_listing_terminal_context",
+    "listing_classic_ozon_listing_terminal_context",
+    "supplier_catalog_seven_steps_and_current_next",
+    "supplier_products_seven_steps_and_current_next",
+    "supplier_source_detail_seven_steps_and_current_next",
+    "internal_ozon_seven_steps_and_current_next",
+    "drafts_vue_seven_steps_and_current_next",
+    "drafts_classic_seven_steps_and_current_next",
+    "draft_detail_vue_seven_steps_and_current_next",
+    "draft_detail_classic_seven_steps_and_current_next",
+    "review_seven_steps_and_current_next",
+    "upload_history_seven_steps_and_current_next",
+    "upload_result_seven_steps_and_current_next",
+    "provider_external_and_unapproved_writes_zero"
+  ],
+  "interactions": [
+    {
+      "name": "supplier_catalog_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(107, 107, 107)",
+        "contrast": 5.32921162976606,
+        "background": [
+          255,
+          255,
+          255
+        ]
+      }
+    },
+    {
+      "name": "supplier_products_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(107, 107, 107)",
+        "contrast": 5.32921162976606,
+        "background": [
+          255,
+          255,
+          255
+        ]
+      }
+    },
+    {
+      "name": "supplier_source_detail_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(107, 107, 107)",
+        "contrast": 5.32921162976606,
+        "background": [
+          255,
+          255,
+          255
+        ]
+      }
+    },
+    {
+      "name": "internal_ozon_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "drafts_vue_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "drafts_classic_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "draft_detail_vue_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "draft_detail_classic_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "review_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "upload_history_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "upload_result_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "supplier_catalog_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "supplier_products_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "supplier_source_detail_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "internal_ozon_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "drafts_vue_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "drafts_classic_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "draft_detail_vue_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "draft_detail_classic_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "review_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "upload_history_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    },
+    {
+      "name": "upload_result_disclosure_and_keyboard_focus",
+      "focus": {
+        "active": true,
+        "visible": true,
+        "width": "3px",
+        "color": "rgb(163, 157, 150)",
+        "contrast": 6.456973740115215,
+        "background": [
+          28,
+          26,
+          25
+        ]
+      }
+    }
+  ],
+  "screenshots": [
+    {
+      "page": "supplier_source_detail",
+      "theme": "light",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-supplier_source_detail-light-1440.png"
+    },
+    {
+      "page": "supplier_source_detail",
+      "theme": "light",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-supplier_source_detail-light-390.png"
+    },
+    {
+      "page": "supplier_source_detail",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-supplier_source_detail-dark-1440.png"
+    },
+    {
+      "page": "supplier_source_detail",
+      "theme": "dark",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-supplier_source_detail-dark-390.png"
+    },
+    {
+      "page": "internal_ozon",
+      "theme": "light",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-internal_ozon-light-1440.png"
+    },
+    {
+      "page": "internal_ozon",
+      "theme": "light",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-internal_ozon-light-390.png"
+    },
+    {
+      "page": "internal_ozon",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-internal_ozon-dark-1440.png"
+    },
+    {
+      "page": "internal_ozon",
+      "theme": "dark",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-internal_ozon-dark-390.png"
+    },
+    {
+      "page": "draft_detail_vue",
+      "theme": "light",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-draft_detail_vue-light-1440.png"
+    },
+    {
+      "page": "draft_detail_vue",
+      "theme": "light",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-draft_detail_vue-light-390.png"
+    },
+    {
+      "page": "draft_detail_vue",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-draft_detail_vue-dark-1440.png"
+    },
+    {
+      "page": "draft_detail_vue",
+      "theme": "dark",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-draft_detail_vue-dark-390.png"
+    },
+    {
+      "page": "review",
+      "theme": "light",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-review-light-1440.png"
+    },
+    {
+      "page": "review",
+      "theme": "light",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-review-light-390.png"
+    },
+    {
+      "page": "review",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-review-dark-1440.png"
+    },
+    {
+      "page": "review",
+      "theme": "dark",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-review-dark-390.png"
+    },
+    {
+      "page": "upload_result",
+      "theme": "light",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-upload_result-light-1440.png"
+    },
+    {
+      "page": "upload_result",
+      "theme": "light",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-upload_result-light-390.png"
+    },
+    {
+      "page": "upload_result",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-upload_result-dark-1440.png"
+    },
+    {
+      "page": "upload_result",
+      "theme": "dark",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-upload_result-dark-390.png"
+    },
+    {
+      "page": "listing_vue",
+      "theme": "light",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-listing_vue-light-1440.png"
+    },
+    {
+      "page": "listing_vue",
+      "theme": "light",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-listing_vue-light-390.png"
+    },
+    {
+      "page": "listing_vue",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-listing_vue-dark-1440.png"
+    },
+    {
+      "page": "listing_vue",
+      "theme": "dark",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-listing_vue-dark-390.png"
+    },
+    {
+      "page": "listing_classic",
+      "theme": "light",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-listing_classic-light-1440.png"
+    },
+    {
+      "page": "listing_classic",
+      "theme": "light",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-listing_classic-light-390.png"
+    },
+    {
+      "page": "listing_classic",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-listing_classic-dark-1440.png"
+    },
+    {
+      "page": "listing_classic",
+      "theme": "dark",
+      "width": 390,
+      "path": "/artifacts/ux01/journey_browser/artifacts/journey-worktree-listing_classic-dark-390.png"
+    }
+  ],
+  "javascript_errors": [],
+  "unexpected_http": [],
+  "unexpected_external_requests": [],
+  "provider_attempts": 0,
+  "writes": [],
+  "text_200": [
+    {
+      "page": "supplier_source_detail",
+      "width": 390,
+      "theme": "light",
+      "scaled_text_nodes": 27,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 356,
+      "scrollWidth": 356,
+      "right": 374,
+      "links": 4,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1024,
+      "theme": "light",
+      "scaled_text_nodes": 27,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 698,
+      "scrollWidth": 698,
+      "right": 992,
+      "links": 4,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 390,
+      "theme": "dark",
+      "scaled_text_nodes": 27,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 356,
+      "scrollWidth": 356,
+      "right": 374,
+      "links": 4,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "supplier_source_detail",
+      "width": 1024,
+      "theme": "dark",
+      "scaled_text_nodes": 27,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 698,
+      "scrollWidth": 698,
+      "right": 992,
+      "links": 4,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 390,
+      "theme": "light",
+      "scaled_text_nodes": 26,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 388,
+      "scrollWidth": 388,
+      "right": 390,
+      "links": 5,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1024,
+      "theme": "light",
+      "scaled_text_nodes": 26,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 762,
+      "scrollWidth": 762,
+      "right": 1024,
+      "links": 5,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 390,
+      "theme": "dark",
+      "scaled_text_nodes": 26,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 388,
+      "scrollWidth": 388,
+      "right": 390,
+      "links": 5,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "draft_detail_vue",
+      "width": 1024,
+      "theme": "dark",
+      "scaled_text_nodes": 26,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 762,
+      "scrollWidth": 762,
+      "right": 1024,
+      "links": 5,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "review",
+      "width": 390,
+      "theme": "light",
+      "scaled_text_nodes": 26,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 388,
+      "scrollWidth": 388,
+      "right": 390,
+      "links": 5,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "review",
+      "width": 1024,
+      "theme": "light",
+      "scaled_text_nodes": 26,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 762,
+      "scrollWidth": 762,
+      "right": 1024,
+      "links": 5,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "review",
+      "width": 390,
+      "theme": "dark",
+      "scaled_text_nodes": 26,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 388,
+      "scrollWidth": 388,
+      "right": 390,
+      "links": 5,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    },
+    {
+      "page": "review",
+      "width": 1024,
+      "theme": "dark",
+      "scaled_text_nodes": 26,
+      "summary_included_in_scale": true,
+      "summary_child_nodes": [
+        {
+          "type": 3,
+          "name": "#text",
+          "text": "Показать все этапы"
+        }
+      ],
+      "summary_font_before": 12,
+      "summary_inline_before": "",
+      "summary_priority_before": "",
+      "summary_font_after": 24,
+      "summary_inline_after_write": "24px",
+      "summary_priority_after_write": "important",
+      "summary_scale_ratio": 2.0,
+      "summary_font_restored": 12,
+      "inline_styles_restored": true,
+      "clientWidth": 762,
+      "scrollWidth": 762,
+      "right": 1024,
+      "links": 5,
+      "summaries": 1,
+      "summaryFontAfter": 24,
+      "summaryInlineAfterWrite": "24px",
+      "summaryPriorityAfterWrite": "important"
+    }
+  ]
+}

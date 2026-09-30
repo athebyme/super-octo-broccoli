@@ -1,0 +1,211 @@
+{
+  "source": "ba63371",
+  "status": "passed",
+  "scope": "synthetic_flask_jinja_vue_preparation_journey",
+  "pages": [
+    {
+      "name": "supplier_catalog",
+      "path": "/supplier-catalog",
+      "status": 200
+    },
+    {
+      "name": "supplier_products",
+      "path": "/supplier-catalog/1/products",
+      "status": 200
+    },
+    {
+      "name": "supplier_source_detail",
+      "path": "/supplier-catalog/1/products/1",
+      "status": 200
+    },
+    {
+      "name": "internal_ozon",
+      "path": "/my-products",
+      "status": 200
+    },
+    {
+      "name": "drafts_vue",
+      "path": "/marketplaces/drafts/",
+      "status": 200
+    },
+    {
+      "name": "drafts_classic",
+      "path": "/marketplaces/drafts/classic",
+      "status": 200
+    },
+    {
+      "name": "draft_detail_vue",
+      "path": "/marketplaces/drafts/1",
+      "status": 200
+    },
+    {
+      "name": "draft_detail_classic",
+      "path": "/marketplaces/drafts/classic/1",
+      "status": 200
+    },
+    {
+      "name": "review",
+      "path": "/marketplaces/ozon/uploads/review",
+      "status": 200
+    },
+    {
+      "name": "upload_history",
+      "path": "/marketplaces/ozon/uploads/",
+      "status": 200
+    },
+    {
+      "name": "upload_result",
+      "path": "/marketplaces/ozon/uploads/ozon-upload-6f61b46a51c244989e7bc99dd02817e7",
+      "status": 200
+    },
+    {
+      "name": "internal_beta",
+      "path": "/my-products/beta",
+      "status": 200
+    },
+    {
+      "name": "listing_vue",
+      "path": "/marketplaces/listings/view/1",
+      "status": 200
+    },
+    {
+      "name": "listing_classic",
+      "path": "/marketplaces/listings/1",
+      "status": 200
+    }
+  ],
+  "layouts": [],
+  "geometry": [],
+  "checks": [
+    "synthetic_test_client_login_with_csrf",
+    "provider_external_and_unapproved_writes_zero"
+  ],
+  "interactions": [],
+  "screenshots": [
+    {
+      "page": "supplier_source_detail",
+      "theme": "light",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-supplier_source_detail-light-1440.png"
+    },
+    {
+      "page": "supplier_source_detail",
+      "theme": "light",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-supplier_source_detail-light-390.png"
+    },
+    {
+      "page": "supplier_source_detail",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-supplier_source_detail-dark-1440.png"
+    },
+    {
+      "page": "supplier_source_detail",
+      "theme": "dark",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-supplier_source_detail-dark-390.png"
+    },
+    {
+      "page": "internal_ozon",
+      "theme": "light",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-internal_ozon-light-1440.png"
+    },
+    {
+      "page": "internal_ozon",
+      "theme": "light",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-internal_ozon-light-390.png"
+    },
+    {
+      "page": "internal_ozon",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-internal_ozon-dark-1440.png"
+    },
+    {
+      "page": "internal_ozon",
+      "theme": "dark",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-internal_ozon-dark-390.png"
+    },
+    {
+      "page": "draft_detail_vue",
+      "theme": "light",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-draft_detail_vue-light-1440.png"
+    },
+    {
+      "page": "draft_detail_vue",
+      "theme": "light",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-draft_detail_vue-light-390.png"
+    },
+    {
+      "page": "draft_detail_vue",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-draft_detail_vue-dark-1440.png"
+    },
+    {
+      "page": "draft_detail_vue",
+      "theme": "dark",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-draft_detail_vue-dark-390.png"
+    },
+    {
+      "page": "review",
+      "theme": "light",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-review-light-1440.png"
+    },
+    {
+      "page": "review",
+      "theme": "light",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-review-light-390.png"
+    },
+    {
+      "page": "review",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-review-dark-1440.png"
+    },
+    {
+      "page": "review",
+      "theme": "dark",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-review-dark-390.png"
+    },
+    {
+      "page": "upload_result",
+      "theme": "light",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-upload_result-light-1440.png"
+    },
+    {
+      "page": "upload_result",
+      "theme": "light",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-upload_result-light-390.png"
+    },
+    {
+      "page": "upload_result",
+      "theme": "dark",
+      "width": 1440,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-upload_result-dark-1440.png"
+    },
+    {
+      "page": "upload_result",
+      "theme": "dark",
+      "width": 390,
+      "path": "/tmp/ux01-journey-20260930/ba63371/journey-ba63371-upload_result-dark-390.png"
+    }
+  ],
+  "javascript_errors": [],
+  "unexpected_http": [],
+  "unexpected_external_requests": [],
+  "provider_attempts": 0,
+  "writes": []
+}

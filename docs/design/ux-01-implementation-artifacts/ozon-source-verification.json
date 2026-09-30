@@ -1,0 +1,13 @@
+{
+  "manifest": "a69f940834b3f8eb558c5f2a22e618f066fdd69ec7f8d88ac05523328f1e0543",
+  "file_count": 1207,
+  "before": {
+    "verified": true,
+    "issues": []
+  },
+  "after": {
+    "verified": true,
+    "issues": []
+  },
+  "exit_code": 0
+}

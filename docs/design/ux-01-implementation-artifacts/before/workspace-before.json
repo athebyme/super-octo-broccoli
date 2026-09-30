@@ -1,0 +1,555 @@
+{
+  "status": "completed",
+  "source": "ba63371",
+  "scope": "synthetic_full_flask_jinja_alpine_vue_workspace",
+  "database": "disposable_sqlite",
+  "network_policy": "loopback_only_pinned_browser_assets_no_provider_calls",
+  "widths": [
+    320,
+    390,
+    768,
+    1024
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "layouts": [
+    {
+      "width": 320,
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "overflows": false,
+      "theme": "light",
+      "main": {
+        "left": 0,
+        "right": 320,
+        "width": 320,
+        "height": 2052
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": null,
+      "focusColor": "rgb(26, 26, 26)",
+      "layout_settle": {
+        "width": 320,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 320,
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "overflows": false,
+      "theme": "dark",
+      "main": {
+        "left": 0,
+        "right": 320,
+        "width": 320,
+        "height": 2052
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": null,
+      "focusColor": "rgb(26, 26, 26)",
+      "layout_settle": {
+        "width": 320,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 390,
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "overflows": false,
+      "theme": "light",
+      "main": {
+        "left": 0,
+        "right": 390,
+        "width": 390,
+        "height": 1874
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": null,
+      "focusColor": "rgb(235, 231, 226)",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 390,
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "overflows": false,
+      "theme": "dark",
+      "main": {
+        "left": 0,
+        "right": 390,
+        "width": 390,
+        "height": 1874
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": null,
+      "focusColor": "rgb(26, 26, 26)",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 768,
+      "clientWidth": 768,
+      "scrollWidth": 768,
+      "overflows": false,
+      "theme": "light",
+      "main": {
+        "left": 0,
+        "right": 768,
+        "width": 768,
+        "height": 1277
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": null,
+      "focusColor": "rgb(235, 231, 226)",
+      "layout_settle": {
+        "width": 768,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 768,
+      "clientWidth": 768,
+      "scrollWidth": 768,
+      "overflows": false,
+      "theme": "dark",
+      "main": {
+        "left": 0,
+        "right": 768,
+        "width": 768,
+        "height": 1277
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": null,
+      "focusColor": "rgb(235, 231, 226)",
+      "layout_settle": {
+        "width": 768,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 1024,
+      "clientWidth": 1024,
+      "scrollWidth": 1024,
+      "overflows": false,
+      "theme": "light",
+      "main": {
+        "left": 260,
+        "right": 1024,
+        "width": 764,
+        "height": 1277
+      },
+      "sidebar": {
+        "left": 0,
+        "right": 260,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": null,
+      "focusColor": "rgb(235, 231, 226)",
+      "layout_settle": {
+        "width": 1024,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 1024,
+      "clientWidth": 1024,
+      "scrollWidth": 1024,
+      "overflows": false,
+      "theme": "dark",
+      "main": {
+        "left": 260,
+        "right": 1024,
+        "width": 764,
+        "height": 1277
+      },
+      "sidebar": {
+        "left": 0,
+        "right": 260,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": null,
+      "focusColor": "rgb(26, 26, 26)",
+      "layout_settle": {
+        "width": 1024,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    }
+  ],
+  "pages": [
+    {
+      "path": "/dashboard",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/dashboard",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/card-quality",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/card-quality/beta",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/marketplaces/accounts/",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/api-settings",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/marketplaces/readiness/",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/auto-publish",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/settings/product-defaults",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/api-logs",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/image-lab",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/marketplaces/status",
+      "status": 200,
+      "source": "ba63371"
+    },
+    {
+      "path": "/admin",
+      "status": 200,
+      "source": "ba63371"
+    }
+  ],
+  "interactions": [
+    {
+      "check": "render_dashboard",
+      "status": "passed"
+    },
+    {
+      "check": "render_quality_classic",
+      "status": "passed"
+    },
+    {
+      "check": "render_quality_beta",
+      "status": "passed"
+    },
+    {
+      "check": "render_marketplace_accounts",
+      "status": "passed"
+    },
+    {
+      "check": "render_api_settings",
+      "status": "passed"
+    },
+    {
+      "check": "render_marketplace_readiness",
+      "status": "passed"
+    },
+    {
+      "check": "render_auto_publish_ozon",
+      "status": "passed"
+    },
+    {
+      "check": "render_product_defaults",
+      "status": "passed"
+    },
+    {
+      "check": "render_api_logs",
+      "status": "passed"
+    },
+    {
+      "check": "render_image_lab",
+      "status": "passed"
+    },
+    {
+      "check": "render_account_health",
+      "status": "passed"
+    }
+  ],
+  "browser_api_reads": [
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/finances/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/finances/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/sync-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    }
+  ],
+  "browser_mutations": [],
+  "unexpected_external_requests": [],
+  "provider_attempts": 0,
+  "javascript_errors": [],
+  "console_errors": [
+    "Failed to load resource: the server responded with a status of 400 (BAD REQUEST)"
+  ],
+  "source_hashes": {
+    "templates/base.html": "f4b83f4056f4e03aaa128e7338a29972b53ee285c4cfff494fca5343558d01b5",
+    "templates/api_settings.html": "262ea3f9aaf40416afd0ad9b554ce3e3fa8e2fb89062f40b7177285958d4f1b8",
+    "templates/marketplace_accounts.html": "8033148ba2b98ca76a14734032f41785c19e1932322398668ff11fb2863611f8",
+    "templates/marketplace_readiness.html": "0f605afa6ea36cd17e859741a0426d22023f00731c89ed8fb59fdf00a586f23f",
+    "templates/card_quality.html": "6631da243edd57e64738afb1b25de7f58d965f241436f409725d9218997fa4cc",
+    "templates/card_quality_beta.html": "ab40b317d828179e82a57c750d959ae3d7c719b370ec3a035ae0e3c53f6f03cc",
+    "templates/image_lab.html": "2a4864782dbed36dd07cc51ad726b16d291516e0f7ff57f22b0bba984f1d55e9",
+    "templates/product_defaults.html": "c4cc653096846808a0fb834604135df4f0e325017b2f10cf38f5021291246ce4",
+    "templates/auto_publish.html": "a17a1438668fe25da86f6ba9c319501d0ec6655a114559831fe4d6711ffb5744",
+    "templates/api_logs.html": "c9774f399edae59deaf8e1b53d09e0202117dcecef0547dea81dbfc135bc4295",
+    "static/seller-workspace.css": null
+  },
+  "pinned_asset_hashes": {
+    "https://cdn.tailwindcss.com": "176e894661aa9cdc9a5cba6c720044cbbf7b8bd80d1c9a142a7c24b1b6c50d15",
+    "https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js": "c7661d4e2cf0465e3cd693190debb5f592ac72dcc4cfe650581273767558b27b",
+    "https://cdn.jsdelivr.net/npm/@alpinejs/focus@3.x.x/dist/cdn.min.js": "ea7e215444f5110619549621cd0760cedfe273f708b144d4e658a87b702555f9",
+    "https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js": "232519394c6c8fdba6f362b1d9da16106db513cdbf899011f00daab4051df31c",
+    "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap": "5c5ca91e8131dd1bcddb7a5d13413bc84a2396b262b1e3edc6ceb7bbe04e74b9",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa2ZL7SUc.woff2": "6e9e020a25f9b56d418f2c085b1d3c09725a4da23fe693a5b463064606732190",
+    "https://fonts.gstatic.com/s/instrumentserif/v5/jizHRFtNs2ka5fXjeivQ4LroWlx-6zAjjH7M.woff2": "5a51946dfffa82972bc98745359c46761515641fda557c25116459a9f83da4a7",
+    "https://fonts.gstatic.com/s/instrumentserif/v5/jizBRFtNs2ka5fXjeivQ4LroWlx-6zUTjg.woff2": "5eb09b5ac0e28b67c2f041c8ba6d244604ca0c0980d65912ab2d47fed84ddc31",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa2pL7SUc.woff2": "5c66f9e07e90c6d4ac4922cc68d60de26c17b1858e677fb5e603fce3952b3ff2",
+    "https://fonts.gstatic.com/s/instrumentserif/v5/jizHRFtNs2ka5fXjeivQ4LroWlx-6zAjgn7MsNo.woff2": "d0014821252a8a770bf7551641572f239a8ede83d75652d84fef0c3627751baf",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2": "71d5ee93cc1e9f1d520a3a8b66456de18c7879d8df09d57fcd2eaff75fef0075",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa2JL7SUc.woff2": "ca157063339ac4ad418f214f3abfed119b0798ab4d377386ce5c9e5a7a435ebd",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1pL7SUc.woff2": "1be3448e292fbf05ffe176fe1e43f135013d50b1e7d324ad1a558f623d3bb6f6",
+    "https://fonts.gstatic.com/s/instrumentserif/v5/jizBRFtNs2ka5fXjeivQ4LroWlx-6zsTjmbI.woff2": "290e6267dd833bf5f899eba4c29ad0a9b09dbe53f6075b18af38057159e1ff20",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa25L7SUc.woff2": "34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956",
+    "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js": "0e2326c6868072bec1592760c6729043caeea2960a2b46cee6a2192aac6abff0",
+    "https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js": "b50eeefe35d41636bb96c92b40f1df0b4fb7914e07b3c625b1ec15e9748767b9"
+  },
+  "authenticated_synthetic_users": [
+    "ozon-ci-seller",
+    "ux01-synthetic-admin"
+  ],
+  "account_id": 1
+}

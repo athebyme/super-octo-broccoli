@@ -1,0 +1,536 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "generated_at": "2026-09-30T15:51:25.596733+00:00",
+  "worktree": "/home/athebyme/worktrees/seller-hub-ux-01",
+  "branch": "codex/ux-01-2026-09-30",
+  "manifest": {
+    "path": "../ux-01-source-manifest.json",
+    "aggregate_sha256": "a69f940834b3f8eb558c5f2a22e618f066fdd69ec7f8d88ac05523328f1e0543",
+    "file_count": 1207,
+    "baseline": "ba63371"
+  },
+  "image": {
+    "tag": "seller-hub-ux-check:20260930-v6",
+    "id": "sha256:df80f0b0101619ce5be3956cc10b719c93268d99222b7c7092ca0729079f2ea5",
+    "dockerfile": "tests/ozon_release/Dockerfile"
+  },
+  "container_policy": {
+    "user": "check (UID 1000)",
+    "network": "none",
+    "volumes": [],
+    "cpus": 2,
+    "memory": "4g",
+    "pids_limit": 512,
+    "shm_size": "512m",
+    "cap_drop": "ALL",
+    "security_opt": "no-new-privileges",
+    "synthetic_only": true
+  },
+  "ux": {
+    "stages": 6,
+    "junit": {
+      "tests": 147,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "pytest_passed": 109,
+    "subtests_passed": 38,
+    "layouts": 493,
+    "report": "ux01-report.json",
+    "source_verified_before_after_each_stage": true
+  },
+  "ozon": {
+    "stages": 12,
+    "junit": {
+      "tests": 2400,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "pytest_passed": 1918,
+    "subtests_passed": 482,
+    "browser_checks": 93,
+    "browser_layouts": 444,
+    "report": "ozon-summary.json",
+    "source_verification": {
+      "manifest": "a69f940834b3f8eb558c5f2a22e618f066fdd69ec7f8d88ac05523328f1e0543",
+      "file_count": 1207,
+      "before": {
+        "verified": true,
+        "issues": []
+      },
+      "after": {
+        "verified": true,
+        "issues": []
+      },
+      "exit_code": 0
+    }
+  },
+  "commands": {
+    "build": "docker build -f tests/ozon_release/Dockerfile -t seller-hub-ux-check:20260930-v6 .",
+    "ux": "docker create --name seller-hub-ux01-v6-final --network=none --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=512 --memory=4g --cpus=2 --shm-size=512m --entrypoint python seller-hub-ux-check:20260930-v6 scripts/check_ux01.py --manifest /app/docs/design/ux-01-source-manifest.json --output /artifacts/ux01 --chromium /usr/bin/chromium",
+    "ozon_wrapper_python": "from pathlib import Path\nimport json,subprocess,sys\nfrom scripts.check_ux01 import load_manifest,verify_snapshot\nm=load_manifest(Path('docs/design/ux-01-source-manifest.json'))\nrecord={'manifest':m['aggregate_sha256'],'file_count':len(m['files']),'before':verify_snapshot(m)}\nprint(json.dumps({'phase':'before_ozon',**record}),flush=True)\nif not record['before']['verified']:\n    raise SystemExit(1)\nresult=subprocess.run([sys.executable,'scripts/check_ozon_release.py'])\nrecord['after']=verify_snapshot(m)\nrecord['exit_code']=result.returncode\nPath('/artifacts/source-verification.json').write_text(json.dumps(record,indent=2)+'\\n')\nprint(json.dumps({'phase':'after_ozon',**record}),flush=True)\nraise SystemExit(result.returncode if result.returncode else (0 if record['after']['verified'] else 1))\n",
+    "ozon_container": "docker create --name seller-hub-ozon-ux01-v6-final --network=none --cap-drop=ALL --security-opt=no-new-privileges --pids-limit=512 --memory=4g --cpus=2 --shm-size=512m --entrypoint python seller-hub-ux-check:20260930-v6 -c 'from pathlib import Path\nimport json,subprocess,sys\nfrom scripts.check_ux01 import load_manifest,verify_snapshot\nm=load_manifest(Path('\"'\"'docs/design/ux-01-source-manifest.json'\"'\"'))\nrecord={'\"'\"'manifest'\"'\"':m['\"'\"'aggregate_sha256'\"'\"'],'\"'\"'file_count'\"'\"':len(m['\"'\"'files'\"'\"']),'\"'\"'before'\"'\"':verify_snapshot(m)}\nprint(json.dumps({'\"'\"'phase'\"'\"':'\"'\"'before_ozon'\"'\"',**record}),flush=True)\nif not record['\"'\"'before'\"'\"']['\"'\"'verified'\"'\"']:\n    raise SystemExit(1)\nresult=subprocess.run([sys.executable,'\"'\"'scripts/check_ozon_release.py'\"'\"'])\nrecord['\"'\"'after'\"'\"']=verify_snapshot(m)\nrecord['\"'\"'exit_code'\"'\"']=result.returncode\nPath('\"'\"'/artifacts/source-verification.json'\"'\"').write_text(json.dumps(record,indent=2)+'\"'\"'\\n'\"'\"')\nprint(json.dumps({'\"'\"'phase'\"'\"':'\"'\"'after_ozon'\"'\"',**record}),flush=True)\nraise SystemExit(result.returncode if result.returncode else (0 if record['\"'\"'after'\"'\"']['\"'\"'verified'\"'\"'] else 1))\n'",
+    "ozon_inner": "python scripts/check_ozon_release.py",
+    "ozon_wrapper": "Load docs/design/ux-01-source-manifest.json via scripts.check_ux01.load_manifest; verify_snapshot before; subprocess.run([sys.executable, scripts/check_ozon_release.py]); verify_snapshot after; persist both verdicts and return code. No app import in wrapper."
+  },
+  "limitations": [
+    "No production deployment or production browser E2E",
+    "No reads or migration rehearsal on current production DB",
+    "No live marketplace writes, publication, sync, rollback or LLM calls",
+    "Ozon buyer price/marketplace discount and exact economic old_price mapping remain unverified",
+    "Before workspace capture includes two synthetic Image Lab HTTP 400; final fixture removes invalid seed photo without changing runtime validator",
+    "New combined source manifest and UX/Ozon gates required after integration"
+  ],
+  "images": [
+    {
+      "path": "after/analytics-worktree-dark-1024.png",
+      "sha256": "a483ae4dc93d2e820d2421f564d0d2111ffffebbfcf14c04b75b895e1f29b487",
+      "width": 1024,
+      "height": 2111,
+      "source_fixture_path": "analytics_browser/artifacts/analytics-worktree-dark-1024.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/analytics-worktree-dark-390.png",
+      "sha256": "e68a26a674549d112cc8e914f332c682490b5eb58c66ead4e812d2d4b2207ed9",
+      "width": 390,
+      "height": 3198,
+      "source_fixture_path": "analytics_browser/artifacts/analytics-worktree-dark-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/analytics-worktree-light-1024.png",
+      "sha256": "2de00febacde6dcae7d55a9c1c7d4ae879b47351e0c032e7d6e18be1dbd00be7",
+      "width": 1024,
+      "height": 2111,
+      "source_fixture_path": "analytics_browser/artifacts/analytics-worktree-light-1024.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/analytics-worktree-light-390.png",
+      "sha256": "c4048f2ba182e491c19baab3516b51b9f548aa026da80515270a2a0aca27a8c6",
+      "width": 390,
+      "height": 3198,
+      "source_fixture_path": "analytics_browser/artifacts/analytics-worktree-light-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/journey-worktree-draft_detail_vue-dark-1440.png",
+      "sha256": "a9a04885d3ab60249121609e4255abc6fb1032c364290be81f1da08d245f48c4",
+      "width": 1440,
+      "height": 1819,
+      "source_fixture_path": "journey_browser/artifacts/journey-worktree-draft_detail_vue-dark-1440.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/journey-worktree-draft_detail_vue-dark-390.png",
+      "sha256": "30a2277629cb27bec93363a53a66b629c96a96141c795b42e4796cc0be894e2d",
+      "width": 390,
+      "height": 2321,
+      "source_fixture_path": "journey_browser/artifacts/journey-worktree-draft_detail_vue-dark-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/journey-worktree-draft_detail_vue-light-1440.png",
+      "sha256": "8c9da7f170858df6ee1ba2c6dce9021ecbd017ca3f5f451556dda33b927c40e2",
+      "width": 1440,
+      "height": 1819,
+      "source_fixture_path": "journey_browser/artifacts/journey-worktree-draft_detail_vue-light-1440.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/journey-worktree-draft_detail_vue-light-390.png",
+      "sha256": "5e59a92581e9005de73966d9ef678acb1e724d682b680f167dae3fd564bf5f00",
+      "width": 390,
+      "height": 2321,
+      "source_fixture_path": "journey_browser/artifacts/journey-worktree-draft_detail_vue-light-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/listing-after-catalog-initial-page-two.png",
+      "sha256": "960e8bc0d9a11e6bb35dcbfc1bc3028d5ec302ce8b4e605e991f506ea28cd6b4",
+      "width": 1440,
+      "height": 1254,
+      "source_fixture_path": "listing_browser/artifacts/listing-after-catalog-initial-page-two.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/listing-after-classic-management.png",
+      "sha256": "639beec8236835ce63e862925628f4a349e66596dd940db269747a5e661cedae",
+      "width": 1440,
+      "height": 2104,
+      "source_fixture_path": "listing_browser/artifacts/listing-after-classic-management.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/listing-after-matrix-1024-dark-management.png",
+      "sha256": "98b7ea44a95ffa0b2d6cd5887c4e1bd295ec33bc6875c208ef2ad5f88e828a64",
+      "width": 1024,
+      "height": 2302,
+      "source_fixture_path": "listing_browser/artifacts/listing-after-matrix-1024-dark-management.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/listing-after-matrix-1440-dark-overview.png",
+      "sha256": "68e2c83715fa810d6c8b35dc041a0388785c34abeb2c8883e061c870bc24f2d0",
+      "width": 1440,
+      "height": 1600,
+      "source_fixture_path": "listing_browser/artifacts/listing-after-matrix-1440-dark-overview.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/listing-after-matrix-390-light-management.png",
+      "sha256": "43c872fdb72d85310002126fd9b8b19d40f5f2c78d13d5112f1048506b48312b",
+      "width": 390,
+      "height": 3563,
+      "source_fixture_path": "listing_browser/artifacts/listing-after-matrix-390-light-management.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/listing-after-matrix-390-light-overview.png",
+      "sha256": "126629e49ba18fcc6cd759952d9c56857ba90c5e74cc987f5ab2cbdc7ff97284",
+      "width": 390,
+      "height": 2471,
+      "source_fixture_path": "listing_browser/artifacts/listing-after-matrix-390-light-overview.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/listing-after-overview-member-ozon.png",
+      "sha256": "ac8ed098abd635d7e2e95f510a91ef2e1480d0d762862c7268ff259d959fd3ef",
+      "width": 1440,
+      "height": 1600,
+      "source_fixture_path": "listing_browser/artifacts/listing-after-overview-member-ozon.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/listing-after-overview-member-wb.png",
+      "sha256": "fbe3e3fef83fc66e5cb6b181bb32d90fbbb53fa752713781ce86f685e8b24ff2",
+      "width": 1440,
+      "height": 1438,
+      "source_fixture_path": "listing_browser/artifacts/listing-after-overview-member-wb.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/wb_bulk_detail-dark-1440.png",
+      "sha256": "8215974ea63f455417f5ca9c397845ec7c857c20e1ab6beb3acfeff64575bb68",
+      "width": 1440,
+      "height": 1505,
+      "source_fixture_path": "operations_pricing_browser/artifacts/wb_bulk_detail-dark-1440.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/wb_bulk_detail-dark-390.png",
+      "sha256": "b7c0403bba4bffb52374295b0842ba7a2a07d12c86d88566423d00c694ad0b56",
+      "width": 390,
+      "height": 1902,
+      "source_fixture_path": "operations_pricing_browser/artifacts/wb_bulk_detail-dark-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/wb_bulk_detail-light-1440.png",
+      "sha256": "7da524a09c020b81b0c14fce89c265a6376e84d330f2d827049f1ee87d6de75c",
+      "width": 1440,
+      "height": 1505,
+      "source_fixture_path": "operations_pricing_browser/artifacts/wb_bulk_detail-light-1440.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/wb_bulk_detail-light-390.png",
+      "sha256": "caee1d759274d3a19aabda151c3d04e16b21955baa38c0d2147c59895d79fee0",
+      "width": 390,
+      "height": 1902,
+      "source_fixture_path": "operations_pricing_browser/artifacts/wb_bulk_detail-light-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/wb_prices_change-dark-1440.png",
+      "sha256": "4ff185489b542a78dcd93b1dc4afc5e8cdfc399fd1448a7d5c59f32456244541",
+      "width": 1440,
+      "height": 1356,
+      "source_fixture_path": "operations_pricing_browser/artifacts/wb_prices_change-dark-1440.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/wb_prices_change-dark-390.png",
+      "sha256": "506e4ba122166c9d52d91617174656eb29d24f6c30efd0db130153e2f7904033",
+      "width": 390,
+      "height": 2194,
+      "source_fixture_path": "operations_pricing_browser/artifacts/wb_prices_change-dark-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/wb_prices_change-light-1440.png",
+      "sha256": "a9016c26eff5c5796f1d64d71ad3bfcb16c92ee62b39c4b5e6b3b6adb99761f0",
+      "width": 1440,
+      "height": 1356,
+      "source_fixture_path": "operations_pricing_browser/artifacts/wb_prices_change-light-1440.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/wb_prices_change-light-390.png",
+      "sha256": "34cb812aa9f200d67c9005c7620ddc71b592aa993a8f77c3ff167f6c3fa9169e",
+      "width": 390,
+      "height": 2194,
+      "source_fixture_path": "operations_pricing_browser/artifacts/wb_prices_change-light-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/worktree-api_settings-dark-1440.png",
+      "sha256": "80116d8943252132c0265cc792204ba1f6842a96550a3f95081838b41a204d7f",
+      "width": 1440,
+      "height": 1000,
+      "source_fixture_path": "workspace_browser/artifacts/worktree-api_settings-dark-1440.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/worktree-api_settings-dark-390.png",
+      "sha256": "fc0e7331aee9a72e170b2d2435626eeceb4875f83b91534232202838a1687c50",
+      "width": 390,
+      "height": 1000,
+      "source_fixture_path": "workspace_browser/artifacts/worktree-api_settings-dark-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/worktree-api_settings-light-1440.png",
+      "sha256": "3421b0fb41ac037daeb016c1dcfd23a3854a951d071b41254451bacb3c92e66a",
+      "width": 1440,
+      "height": 1000,
+      "source_fixture_path": "workspace_browser/artifacts/worktree-api_settings-light-1440.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/worktree-api_settings-light-390.png",
+      "sha256": "e7415e4df2350e7837aab3d5fce069330390b1976e694ea17dd423ee4929657f",
+      "width": 390,
+      "height": 1000,
+      "source_fixture_path": "workspace_browser/artifacts/worktree-api_settings-light-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/worktree-dark-1024.png",
+      "sha256": "df8d3498cbc25b98d1f932576e386bc02993e2f1e007a000b87ce29bd3fb386a",
+      "width": 1024,
+      "height": 1000,
+      "source_fixture_path": "workspace_browser/artifacts/worktree-dark-1024.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/worktree-dark-390.png",
+      "sha256": "12164f8ec89bb1a7a034452f6ee24ebdef1f146d50de6394a850d0805cd536d9",
+      "width": 390,
+      "height": 1000,
+      "source_fixture_path": "workspace_browser/artifacts/worktree-dark-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/worktree-light-1024.png",
+      "sha256": "9141f792741cc0baa3f4b753ea6195213329d6d99a0e86b76ba1b8f28946647a",
+      "width": 1024,
+      "height": 1000,
+      "source_fixture_path": "workspace_browser/artifacts/worktree-light-1024.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "after/worktree-light-390.png",
+      "sha256": "8653392a546593e0ca780ae8924fe4dce893da3cb29422206d27ff2184d5f3e5",
+      "width": 390,
+      "height": 1000,
+      "source_fixture_path": "workspace_browser/artifacts/worktree-light-390.png",
+      "scope": "Final actual application fixture, frozen v6 source"
+    },
+    {
+      "path": "before/analytics-ba63371-dark-1024.png",
+      "sha256": "98aab261aafa37dad28b90db069c712c389433afe0cb18a338a202b5cb44e41d",
+      "width": 1851,
+      "height": 2057,
+      "source_fixture_path": "analytics-ba63371-dark-1024.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/analytics-ba63371-dark-390.png",
+      "sha256": "dcc59b2774360ca9b0be803ece71bfca1a9333c8a68286a82c4716b5bbb53b1e",
+      "width": 836,
+      "height": 2935,
+      "source_fixture_path": "analytics-ba63371-dark-390.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/analytics-ba63371-light-1024.png",
+      "sha256": "5ca12d906e52807d53333e19845b6b8f74cffa1e98e65900dcef1a22b13e6976",
+      "width": 1851,
+      "height": 2057,
+      "source_fixture_path": "analytics-ba63371-light-1024.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/analytics-ba63371-light-390.png",
+      "sha256": "c448846f2e15e75f011cbef6230a8b075ebb2fdef6150a661cf00d61fa8fd7da",
+      "width": 836,
+      "height": 2935,
+      "source_fixture_path": "analytics-ba63371-light-390.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/ba63371-dark-1024.png",
+      "sha256": "8c8a9dbe71cf184d633d06de3fa88356bcedf9d45a81a0c7e6b9220dd3b17f21",
+      "width": 1024,
+      "height": 1000,
+      "source_fixture_path": "ba63371-dark-1024.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/ba63371-dark-390.png",
+      "sha256": "29929393dabaf3214737350f14c25495c7bb45198bb15dfcc407cfad0233f321",
+      "width": 390,
+      "height": 1000,
+      "source_fixture_path": "ba63371-dark-390.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/ba63371-light-1024.png",
+      "sha256": "eb980978789cec6324dbe9045007573503a9fed5a6441cc7ec5e3df97d6430a1",
+      "width": 1024,
+      "height": 1000,
+      "source_fixture_path": "ba63371-light-1024.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/ba63371-light-390.png",
+      "sha256": "1cf7868da0dcec83f1934cfe61c1a32340d50180ed34f303c374e6a49f928510",
+      "width": 390,
+      "height": 1000,
+      "source_fixture_path": "ba63371-light-390.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/journey-ba63371-draft_detail_vue-dark-1440.png",
+      "sha256": "c709a090910db8120ea81f4b797d64ed2bb2144ad8466d619cc5e3c44f380342",
+      "width": 1440,
+      "height": 1635,
+      "source_fixture_path": "journey-ba63371-draft_detail_vue-dark-1440.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/journey-ba63371-draft_detail_vue-dark-390.png",
+      "sha256": "7683bbb71d62356ca189efd15bdb605127dd3a35ee72ad12f6df57706cd16524",
+      "width": 390,
+      "height": 2038,
+      "source_fixture_path": "journey-ba63371-draft_detail_vue-dark-390.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/journey-ba63371-draft_detail_vue-light-1440.png",
+      "sha256": "8ba269beb4621ad837b11ec21c35bd4dea9bfffbbecba37e0aeb982943540e65",
+      "width": 1440,
+      "height": 1635,
+      "source_fixture_path": "journey-ba63371-draft_detail_vue-light-1440.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/journey-ba63371-draft_detail_vue-light-390.png",
+      "sha256": "493107430e3e6ce236943234635f04a7a975f36f3a7091b6c90e14b574ff8cd0",
+      "width": 390,
+      "height": 2038,
+      "source_fixture_path": "journey-ba63371-draft_detail_vue-light-390.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/listing-baseline-catalog-before.png",
+      "sha256": "c79cb95f6a928c9535e5528d746bb8dd61bcfafa150ab48023a709de11a4b19f",
+      "width": 1440,
+      "height": 1236,
+      "source_fixture_path": "listing-baseline-catalog-before.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/listing-baseline-management-before.png",
+      "sha256": "42b98f4d0a59cc73dc65873689bb7e01d0a6ca309d5fd80491de0596191a5ed0",
+      "width": 1440,
+      "height": 1891,
+      "source_fixture_path": "listing-baseline-management-before.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/listing-baseline-overview-before.png",
+      "sha256": "e401d42ca91488bb656428900599dca7de9e8e5a85cbfa2b19e5528901ce2eba",
+      "width": 1440,
+      "height": 1276,
+      "source_fixture_path": "listing-baseline-overview-before.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/wb_bulk_detail-dark-1440.png",
+      "sha256": "71d8d97fe9920f38d1835897ac7a0022e7969e0ca813fd870b3cdf573fd546e8",
+      "width": 1440,
+      "height": 1026,
+      "source_fixture_path": "wb_bulk_detail-dark-1440.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/wb_bulk_detail-dark-390.png",
+      "sha256": "b2b66975c247f53ffe48c89b9ccb25efb03decb210c6209b9f95099fb7bf9df9",
+      "width": 390,
+      "height": 1160,
+      "source_fixture_path": "wb_bulk_detail-dark-390.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/wb_bulk_detail-light-1440.png",
+      "sha256": "f6cd35f0d8280e3deaa2de3993bc88c6421879b02c4f971ed1aaa943fe21ee8b",
+      "width": 1440,
+      "height": 1026,
+      "source_fixture_path": "wb_bulk_detail-light-1440.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    },
+    {
+      "path": "before/wb_bulk_detail-light-390.png",
+      "sha256": "7ba9132892fc1d9331f1a1cab47c699e02c34b8c87ede6bbe7002f949c1c28d0",
+      "width": 390,
+      "height": 1160,
+      "source_fixture_path": "wb_bulk_detail-light-390.png",
+      "scope": "Recorded original ba63371 fixture; baseline scope, not final gate"
+    }
+  ],
+  "implementation_commit": "1bb28b7405a73afe878be6e94929d02c5696f98b",
+  "own_preparation_commits": [
+    "f681d74",
+    "c4dd103",
+    "a27ee3c"
+  ],
+  "do_not_integrate_snapshot_commits": [
+    "ae6994b",
+    "6488975",
+    "ba63371"
+  ],
+  "previous_runs": [
+    {
+      "scope": "v4 full Ozon gate",
+      "status": "failed",
+      "cause": "Reactive photo loading label was observed before GET bridge counter; line 245 immediate count",
+      "host_artifacts": "/tmp/ux01-ozon-v4-failed-20260930"
+    },
+    {
+      "scope": "v4 focused reproduction",
+      "status": "failed",
+      "cause": "Same premature photo counter assertion",
+      "host_artifacts": "/tmp/ux01-ozon-v4-photo-repro-20260930"
+    },
+    {
+      "scope": "v5 focused check",
+      "status": "failed",
+      "cause": "Target fixture search was outside response expectation; corrected before final source",
+      "host_artifacts": "/tmp/ux01-v5-photo-failed-20260930"
+    },
+    {
+      "scope": "v6 focused check",
+      "status": "passed",
+      "checks": 11,
+      "layouts": 32,
+      "provider_attempts": 0,
+      "host_artifacts": "/tmp/ux01-v6-photo-focused-20260930"
+    }
+  ]
+}
