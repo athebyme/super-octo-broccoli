@@ -212,7 +212,6 @@ def index():
                 account.is_active
                 and account.connection_status == "connected"
                 and account.has_credentials
-                and account.public_settings.get("default_vat") is not None
                 and (
                     account.credential_expires_at is None
                     or account.credential_expires_at > now

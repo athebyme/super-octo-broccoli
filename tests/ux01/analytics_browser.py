@@ -158,6 +158,8 @@ def build_app(source: str, report: dict) -> Flask:
             report["blocked_writes"].append(call)
             return jsonify({"error": "Synthetic browser fixture blocks writes"}), 405
         if path == "analytics/summary":
+            if report.get("scenario") == "summary_error":
+                return jsonify({"error": "Synthetic analytics read unavailable"}), 503
             return jsonify(synthetic_summary())
         if path == "analytics/products":
             return jsonify({"data": {"items": []}})
@@ -350,6 +352,7 @@ def run(source: str, report_path: Path, artifacts_dir: Path, chromium: str | Non
         "unexpected_external_requests": [],
         "javascript_errors": [],
         "layouts": [],
+        "state_cases": [],
         "after_failures": [],
     }
     manifest, pinned_hashes = load_pinned_assets()
@@ -550,6 +553,77 @@ def run(source: str, report_path: Path, artifacts_dir: Path, chromium: str | Non
                                 page.screenshot(path=str(screenshot), full_page=True)
                                 row["screenshot"] = str(screenshot)
 
+            for scenario in ("empty_products", "summary_error"):
+                report["scenario"] = scenario
+                for width in (390, 1024, 1280, 1440):
+                    for theme in ("light", "dark"):
+                        current_case.update({
+                            "stage": "empty_error_state",
+                            "scenario": scenario,
+                            "width": width,
+                            "theme": theme,
+                        })
+                        page.set_viewport_size({"width": width, "height": 1100})
+                        response = page.goto(
+                            base + f"/analytics?__ux_theme={theme}&__ux_sidebar=open",
+                            wait_until="networkidle",
+                        )
+                        if not response or response.status != 200:
+                            raise AssertionError(("synthetic analytics state route failed",
+                                                  response.status if response else None))
+                        page.add_style_tag(content=".main-content { transition: none !important; }")
+                        if scenario == "empty_products":
+                            page.locator(".sh-stat-grid--4").wait_for()
+                            page.get_by_text("Нет данных за выбранный период", exact=True).wait_for()
+                            page.locator(".analytics-table-scroll td").filter(
+                                has_text="Нет данных",
+                            ).wait_for()
+                            state = page.evaluate("""() => {
+                                const table = document.querySelector('.analytics-table-scroll');
+                                const root = document.documentElement;
+                                return {
+                                    kpiCount: document.querySelectorAll('.sh-stat-grid--4 .sh-stat-value').length,
+                                    topProductsEmpty: Array.from(document.querySelectorAll('p')).some(
+                                        node => node.textContent.trim() === 'Нет данных за выбранный период'),
+                                    tableEmpty: table?.querySelector('tbody')?.innerText.trim() === 'Нет данных',
+                                    tableRegion: table?.getAttribute('role') === 'region'
+                                        && !!table?.getAttribute('aria-label')
+                                        && table?.getAttribute('tabindex') === '0'
+                                        && ['auto','scroll'].includes(getComputedStyle(table).overflowX),
+                                    pageOverflow: root.scrollWidth > innerWidth + 1,
+                                    theme: root.dataset.theme,
+                                    width: innerWidth,
+                                };
+                            }""")
+                            assert state["kpiCount"] == 4 and state["topProductsEmpty"]
+                            assert state["tableEmpty"] and state["tableRegion"]
+                        else:
+                            alert = page.locator(".analytics-error[role=alert]")
+                            alert.wait_for()
+                            assert "Synthetic analytics read unavailable" in alert.inner_text()
+                            state = page.evaluate("""() => {
+                                const root = document.documentElement;
+                                return {
+                                    errorVisible: !!document.querySelector('.analytics-error[role=alert]'),
+                                    kpiCount: document.querySelectorAll('.sh-stat-grid--4 .sh-stat-value').length,
+                                    staleDataVisible: !!document.querySelector('.analytics-data'),
+                                    pageOverflow: root.scrollWidth > innerWidth + 1,
+                                    theme: root.dataset.theme,
+                                    width: innerWidth,
+                                };
+                            }""")
+                            assert state["errorVisible"] and state["kpiCount"] == 0
+                            assert state["staleDataVisible"] is False
+                        assert state["pageOverflow"] is False, state
+                        assert state["theme"] == theme and state["width"] == width, state
+                        state["scenario"] = scenario
+                        report["state_cases"].append(state)
+                        if width in (390, 1440):
+                            page.screenshot(
+                                path=str(artifacts_dir / f"analytics-{scenario}-{theme}-{width}.png"),
+                                full_page=True,
+                            )
+
     except Exception as exc:
         report["harness_error"] = {
             "type": type(exc).__name__,
@@ -571,6 +645,8 @@ def run(source: str, report_path: Path, artifacts_dir: Path, chromium: str | Non
     if report["unexpected_api_calls"] or report["blocked_writes"] or report["unexpected_external_requests"]:
         report["status"] = "failed"
     if source == "worktree" and report["after_failures"]:
+        report["status"] = "failed"
+    if len(report["state_cases"]) != 16:
         report["status"] = "failed"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

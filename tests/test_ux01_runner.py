@@ -287,8 +287,9 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertEqual([stage.name for stage in stages], [
                 "ux01_pytest", "analytics_browser", "listing_browser",
                 "workspace_browser", "journey_browser", "operations_pricing_browser",
+                "wb_edit_browser", "common_content_browser",
             ])
-            self.assertEqual([stage.timeout_seconds for stage in stages], [600] * 6)
+            self.assertEqual([stage.timeout_seconds for stage in stages], [600] * 8)
             pytest_command = stages[0].command
             self.assertIn("tests/test_ux01_runner.py", pytest_command)
             for path in REQUIRED_TESTS_FOR_TEST:
@@ -306,12 +307,30 @@ class Ux01RunnerContractTest(unittest.TestCase):
                 dict(listing.environment)["UX01_LISTING_ARTIFACTS"],
                 str(expected_listing_report.parent),
             )
+            for index, name, prefix in (
+                (6, "wb_edit_browser", "UX01_WB_EDIT"),
+                (7, "common_content_browser", "UX01_COMMON_CONTENT"),
+            ):
+                stage = stages[index]
+                stage_dir = root.parent / "out" / name
+                self.assertEqual(stage.expected_source, "worktree")
+                self.assertEqual(stage.report_path, stage_dir / "browser-report.json")
+                self.assertEqual(dict(stage.environment)[prefix + "_SOURCE"], "worktree")
+                self.assertEqual(dict(stage.environment)[prefix + "_ARTIFACTS"],
+                                 str(stage_dir / "artifacts"))
+                self.assertEqual(dict(stage.environment)[prefix + "_REPORT"],
+                                 str(stage.report_path))
 
 
 REQUIRED_TESTS_FOR_TEST = (
     "tests/test_competitor_routes.py",
     "tests/test_marketplace_readiness.py",
     "tests/test_marketplace_listing_routes.py",
+    "tests/test_product_selection.py",
+    "tests/test_wb_edit_review_replay.py",
+    "tests/test_wb_bulk_review_key_migration.py",
+    "tests/test_common_product_content_service.py",
+    "tests/test_common_product_content_routes.py",
 )
 REQUIRED_BROWSER_FILES_FOR_TEST = (
     "tests/ux01/analytics_browser.py",
@@ -319,6 +338,8 @@ REQUIRED_BROWSER_FILES_FOR_TEST = (
     "tests/ux01/workspace_browser.py",
     "tests/ux01/journey_browser.py",
     "tests/ux01/operations_pricing_browser.py",
+    "tests/ux01/wb_edit_browser.py",
+    "tests/ux01/common_content_browser.py",
 )
 
 

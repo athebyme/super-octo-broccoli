@@ -39,6 +39,11 @@ REQUIRED_TESTS = (
     "tests/test_competitor_routes.py",
     "tests/test_marketplace_readiness.py",
     "tests/test_marketplace_listing_routes.py",
+    "tests/test_product_selection.py",
+    "tests/test_wb_edit_review_replay.py",
+    "tests/test_wb_bulk_review_key_migration.py",
+    "tests/test_common_product_content_service.py",
+    "tests/test_common_product_content_routes.py",
 )
 REQUIRED_BROWSERS = (
     "tests/ux01/analytics_browser.py",
@@ -46,6 +51,8 @@ REQUIRED_BROWSERS = (
     "tests/ux01/workspace_browser.py",
     "tests/ux01/journey_browser.py",
     "tests/ux01/operations_pricing_browser.py",
+    "tests/ux01/wb_edit_browser.py",
+    "tests/ux01/common_content_browser.py",
 )
 BROWSER_INTERACTION_FIELDS = {
     # Analytics has no separate click log; the real page's bounded API reads
@@ -55,6 +62,8 @@ BROWSER_INTERACTION_FIELDS = {
     "workspace_browser": ("interactions",),
     "journey_browser": ("interactions", "checks"),
     "operations_pricing_browser": ("interactions", "checks"),
+    "wb_edit_browser": ("checks",),
+    "common_content_browser": ("checks",),
 }
 
 
@@ -342,6 +351,16 @@ def _browser_env(name: str, stage_dir: Path, chromium: str) -> tuple[tuple[str, 
             "UX01_OPERATIONS_PRICING_ARTIFACTS": str(artifacts),
             "UX01_OPERATIONS_PRICING_REPORT": str(report),
         },
+        "wb_edit": {
+            "UX01_WB_EDIT_SOURCE": "worktree",
+            "UX01_WB_EDIT_ARTIFACTS": str(artifacts),
+            "UX01_WB_EDIT_REPORT": str(report),
+        },
+        "common_content": {
+            "UX01_COMMON_CONTENT_SOURCE": "worktree",
+            "UX01_COMMON_CONTENT_ARTIFACTS": str(artifacts),
+            "UX01_COMMON_CONTENT_REPORT": str(report),
+        },
     }[name]
     return tuple(sorted({**shared, **specific}.items()))
 
@@ -374,12 +393,16 @@ def build_stages(root: Path, output: Path, chromium: str) -> list[Stage]:
         ("workspace_browser", "workspace", "tests/ux01/workspace_browser.py", "worktree", "workspace"),
         ("journey_browser", "journey", "tests/ux01/journey_browser.py", "worktree", "journey"),
         ("operations_pricing_browser", "operations_pricing", "tests/ux01/operations_pricing_browser.py", "worktree", "operations_pricing"),
+        ("wb_edit_browser", "wb_edit", "tests/ux01/wb_edit_browser.py", "worktree", "wb_edit"),
+        ("common_content_browser", "common_content", "tests/ux01/common_content_browser.py", "worktree", "common_content"),
     )
     for name, browser_key, script, expected_source, output_key in browser_specs:
         path = root / script
         stage_dir = output / name
         stage_dir.mkdir(parents=True, exist_ok=True)
-        report_path = stage_dir / ("browser-report.json" if browser_key in {"workspace", "journey", "operations_pricing"}
+        report_path = stage_dir / ("browser-report.json" if browser_key in {
+            "workspace", "journey", "operations_pricing", "wb_edit", "common_content",
+        }
                                    else f"{output_key}-report.json")
         if browser_key == "analytics":
             artifacts = stage_dir / "artifacts"

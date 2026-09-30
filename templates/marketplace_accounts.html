@@ -40,9 +40,9 @@
         <summary class="cursor-pointer text-sm" style="color:var(--text-secondary)">Настройки для будущей публикации — можно позже</summary>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
             <label class="block">
-                <span class="block text-xs mb-1" style="color:var(--text-secondary)">НДС новых карточек</span>
+                <span class="block text-xs mb-1" style="color:var(--text-secondary)">НДС по умолчанию для новых карточек</span>
                 <select class="sh-input w-full" name="default_vat">{{ vat_options() }}</select>
-                <span class="block text-xs mt-1" style="color:var(--text-muted)">Понадобится перед первой отправкой. Не меняет ставку существующих карточек.</span>
+                <span class="block text-xs mt-1" style="color:var(--text-muted)">Подставляется в новые черновики. Если оставить поле пустым, укажите НДС в карточке перед проверкой и отправкой. Существующие карточки не меняются.</span>
             </label>
             <label class="flex items-center gap-2 text-sm" style="color:var(--text-secondary)">
                 <input type="checkbox" name="is_default" value="1"> Использовать как основной кабинет Ozon
@@ -196,8 +196,8 @@
                         <input type="hidden" name="expected_version" value="{{ account.version }}">
                         <input type="hidden" name="client_id" value="{{ account.external_account_id }}">
                         <label class="block min-w-0"><span class="block text-xs mb-1">Название магазина</span><input class="sh-input w-full" name="label" required maxlength="120" value="{{ account.label }}" :disabled="busy[{{ aid }}]"></label>
-                        <label class="block min-w-0"><span class="block text-xs mb-1">НДС новых карточек</span><select class="sh-input w-full" name="default_vat" :disabled="busy[{{ aid }}]" aria-describedby="ozon-vat-help-{{ aid }}">{{ vat_options(account.public_settings.default_vat) }}</select></label>
-                        <p class="sm:col-span-2 text-xs" id="ozon-vat-help-{{ aid }}" style="color:var(--text-secondary)">Ставка применяется только к новым черновикам. Подготовленные карточки сохранят прежние значения.</p>
+                        <label class="block min-w-0"><span class="block text-xs mb-1">НДС по умолчанию для новых карточек</span><select class="sh-input w-full" name="default_vat" :disabled="busy[{{ aid }}]" aria-describedby="ozon-vat-help-{{ aid }}">{{ vat_options(account.public_settings.default_vat) }}</select></label>
+                        <p class="sm:col-span-2 text-xs" id="ozon-vat-help-{{ aid }}" style="color:var(--text-secondary)">Ставка подставляется в новые черновики. Если значение не задано, укажите НДС в карточке перед проверкой и отправкой. Подготовленные карточки сохранят прежние значения.</p>
                         <div class="sm:col-span-2 ozon-settings-feedback">
                             <p v-if="settingsErrors[{{ aid }}]" v-text="settingsErrors[{{ aid }}]" role="alert" class="sh-alert sh-alert--danger"></p>
                             <p v-if="saved[{{ aid }}]" v-text="saved[{{ aid }}]" role="status" class="sh-alert sh-alert--success"></p>

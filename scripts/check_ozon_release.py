@@ -21,6 +21,9 @@ EXTRA_TESTS = (
     'test_content_factory_marketplace_scope.py', 'test_content_factory_marketplace_routes.py',
     'test_my_products_filters.py', 'test_inbox_read_queue_migration.py',
     'test_deploy_telegram.py',
+    'test_deploy_safety.py',
+    'test_product_selection.py',
+    'test_wb_bulk_review_key_migration.py',
     'test_unauthorized_response_shape.py',
     'test_login_next.py',
     'test_ai_parsing_budget.py', 'test_supplier_flash_profile.py',
@@ -80,6 +83,12 @@ def main():
         if not args.browser_only:
             selected = set((ROOT / 'tests').glob('test_ozon_*.py')) | set((ROOT / 'tests').glob('test_marketplace_*.py'))
             selected.update(ROOT / 'tests' / name for name in EXTRA_TESTS)
+            for pattern in (
+                'test_wb_edit_*.py',
+                'test_products_selection_*.py',
+                'test_common_product_content*.py',
+            ):
+                selected.update((ROOT / 'tests').glob(pattern))
             assert len(selected) >= 80 and all(path.is_file() for path in selected)
             files = [str(path.relative_to(ROOT)) for path in sorted(selected)]
             report['test_files'] = files
@@ -137,6 +146,40 @@ def main():
             assert checked['provider_attempts'] == 0
             assert not checked['js_errors'] and not checked['unexpected_http'] and not checked['external']
             report[stage_name.replace('-', '_')] = checked
+        stage('ozon-complete-journey-browser',
+              [sys.executable, '-m', 'tests.ozon_release.ozon_complete_journey_browser'], 900)
+        journey = json.loads((out / 'ozon-complete-journey-browser.json').read_text())
+        assert journey['status'] == 'passed' and len(journey['checks']) >= 8
+        assert len(journey['layouts']) >= 4
+        assert journey['provider_attempts'] == 0
+        assert not journey.get('error') and not journey.get('errors', [])
+        assert not journey['js_errors'] and not journey['unexpected_http'] and not journey['external']
+        assert journey['synthetic']['browser_happy_path']['provider_writes'] == 1
+        assert journey['synthetic']['browser_happy_path']['photo_present_in_submit'] is True
+        ready_list = journey['synthetic']['clean_draft_list_state']
+        assert ready_list['account_default_vat_configured'] is False
+        assert ready_list['accounts'] and ready_list['accounts'][0]['can_publish'] is True
+        assert any(row['status'] == 'ready' and row['publishable'] is True
+                   for row in ready_list['rows'])
+        reviewed_queue = journey['synthetic']['reviewed_queue_outcome']
+        assert reviewed_queue == {
+            'phase': 'operation_linked', 'error_code': None,
+            'operation_linked': True, 'enqueued_count': 1,
+        }
+        assert journey['synthetic']['invalid_ai'] == {'ai_calls': 1, 'provider_writes': 0}
+        assert journey['synthetic']['human_repair'] == {
+            'ai_calls': 1, 'human_repairs': 1, 'repreparations': 1,
+        }
+        assert journey['synthetic']['clean_new_source'] == {
+            'new_sources': 1, 'prepared_drafts': 1, 'category_selections': 1,
+            'human_packaging_vat': 1, 'fresh_validations': 1,
+            'provider_writes': 1, 'full_readbacks': 4,
+        }
+        assert journey['synthetic']['unknown_write_quarantine_recovery'] == {
+            'provider_writes': 1, 'automatic_retries': 0, 'quarantines': 1,
+            'safe_reconciliations': 1,
+        }
+        report['ozon_complete_journey_browser'] = journey
         report['status'] = 'passed'
         return 0
     except Exception as error:
