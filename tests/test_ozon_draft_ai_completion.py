@@ -142,6 +142,14 @@ class OzonDraftAICompletionTest(OzonPublicationFixture, unittest.TestCase):
         self.assertIn('quote must be exact literal text copied from the value at that path', prompt)
         self.assertIn('do not paraphrase, normalize, translate, or combine facts', prompt)
 
+    def test_prompt_specifies_exact_value_object_shapes_and_dictionary_pairing(self):
+        prompt = ' '.join(worker._SYSTEM.split())
+        self.assertIn('values (a list of value objects)', prompt)
+        self.assertIn('For a non-dictionary attribute, each values entry is exactly {"value":"<literal text>"}', prompt)
+        self.assertIn('For a dictionary attribute, each entry is exactly {"value":"<exact allowed display>","dictionary_value_id":"<matching string ID>"}', prompt)
+        self.assertIn("Copy that exact display/ID pair from this item's allowed_dictionary_values for the same attribute_id and complex_id", prompt)
+        self.assertIn('Never return a bare string, omit a dictionary ID, mix a display with another ID, or add keys to a value object', prompt)
+
     def test_missing_source_is_explicit_without_model_call(self):
         self.source.original_data = None
         db.session.commit()
