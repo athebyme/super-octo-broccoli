@@ -260,7 +260,7 @@ if args and args[0]=='inspect': print('healthy')
     sleep=bindir/'sleep';sleep.write_text('#!/bin/sh\nexit 0\n');sleep.chmod(0o700)
     fake_python=tmp_path/'venv'/'bin'/'python';fake_python.parent.mkdir(parents=True)
     python_calls=tmp_path/'python-calls.jsonl'
-    fake_python.write_text(f'''#!/usr/bin/python3
+    fake_python.write_text(f'''#!/usr/bin/env python3
 import json,sys
 from pathlib import Path
 with Path({str(python_calls)!r}).open('a') as f:

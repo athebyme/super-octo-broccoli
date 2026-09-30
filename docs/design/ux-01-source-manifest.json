@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-09-30T21:37:47.057337+00:00",
+  "generated_at": "2026-09-30T21:47:14.546281+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -3847,7 +3847,7 @@
     },
     {
       "path": "tests/test_deploy_telegram.py",
-      "sha256": "50c940962a39c411d7b6bf41ee1f604ff55a26a22074aa4034e6a4d44b2e746d"
+      "sha256": "b5839d16270dde965cc42032eb2958a5240d5204e72d08b289e420084b9bf38d"
     },
     {
       "path": "tests/test_enrichment_inference.py",
@@ -4866,5 +4866,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "2418bfac1de0c72f8d353f36bcd4365b2bba26d80ee096403d8f1aa8b5452a2e"
+  "aggregate_sha256": "6374fff5370aea4de158a9d078208286d3c2bb9009b06096317ab60ed7efe19a"
 }
