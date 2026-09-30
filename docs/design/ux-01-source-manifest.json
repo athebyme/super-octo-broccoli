@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-09-30T20:31:06.841547+00:00",
+  "generated_at": "2026-09-30T21:00:50.959553+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -27,7 +27,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "04c9dd299ea2241a536c90273834cd49fd599642c432c0f38aba929bef4038d2"
+      "sha256": "40c328eadb9327209610d7cc1ea607d83fdc9ae18fda7065b8d72690452e6daa"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -55,7 +55,7 @@
     },
     {
       "path": "OZON_INTEGRATION_STATUS.md",
-      "sha256": "0b31d746605323ec9c6553b2a33e68381c3de21f646e6138d29d94f4d8aa8db8"
+      "sha256": "273e3d6cf030a7efe234276d0028044ba757d0564999142be7ec15426ad70b5c"
     },
     {
       "path": "PARSING_QUALITY_IMPROVEMENT_PLAN.md",
@@ -2127,7 +2127,7 @@
     },
     {
       "path": "services/ozon_draft_ai_completion.py",
-      "sha256": "27cd4c46190b0b723ed91ba2193e7e057a85a9fe063e406eda4e964393421217"
+      "sha256": "16be3c6a2793d2bbde90ebad7d9cf49fa9932bd8a1ac14eb597626b689f1033a"
     },
     {
       "path": "services/ozon_draft_ai_transport.py",
@@ -2139,7 +2139,7 @@
     },
     {
       "path": "services/ozon_draft_ai_worker.py",
-      "sha256": "36cca911f0261ae3f983f314aa73192c0d84d824da19dc15576e722a9be97557"
+      "sha256": "7875748edd2451ab817257767a87e47128e4e213298beb3a47c60375dfeaa96e"
     },
     {
       "path": "services/ozon_feedback_contracts.py",
@@ -4319,7 +4319,7 @@
     },
     {
       "path": "tests/test_ozon_draft_ai_completion.py",
-      "sha256": "ba13bc7537eb695d44ed69fb881d7bd537e15e71ce4379fcbff2cdf41991f5f8"
+      "sha256": "e8eb1f528953a2abc01ba69741e73f7aa2cf1a6d5516213a5ff64079827fed02"
     },
     {
       "path": "tests/test_ozon_draft_ai_migration.py",
@@ -4854,5 +4854,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "391edf5aa518b861189e3ee3d2b9b53cb864e9179172d4e0e2af8beae0197543"
+  "aggregate_sha256": "3fae8036eef05b74e13c7db9d908472b00d23ce2230449a97a41f4a90829f386"
 }
