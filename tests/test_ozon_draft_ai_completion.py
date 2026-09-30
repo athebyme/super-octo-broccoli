@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from models import (db, MarketplaceAttributeDefinition, MarketplaceOperation,
     AIParsingAttempt, OzonDraftCompletionSuggestion as Suggestion,
-    OzonDraftCompletionReview as Review, OzonDraftCompletionItem as Item)
+    OzonDraftCompletionReview as Review, OzonDraftCompletionItem as Item,
+    ImportedProduct, MarketplaceProductDraft)
 from services.ozon_draft_ai_completion import OzonDraftAICompletionService as Service, DraftAIError
 from services.ozon_draft_ai_transport import FlashOutcome, FlashUsage
 from services import ozon_draft_ai_worker as worker
@@ -84,6 +85,23 @@ class OzonDraftAICompletionTest(OzonPublicationFixture, unittest.TestCase):
     def review_doc(self):
         return Service.suggestions_document(seller_id=self.seller.id,
             draft_id=self.draft.id, actor_user_id=self.user.id)
+
+    def second_draft(self):
+        source = ImportedProduct(seller_id=self.seller.id, external_id='source-2',
+            external_vendor_code='safe-offer-2', source_type='synthetic',
+            title='Второй товар красный гладкий', category='Категория',
+            description='красный гладкий', original_data=self.source.original_data)
+        db.session.add(source)
+        db.session.flush()
+        values = {column.name: getattr(self.draft, column.name)
+                  for column in MarketplaceProductDraft.__table__.columns
+                  if column.name not in {'id', 'imported_product_id', 'offer_id',
+                                         'created_at', 'updated_at'}}
+        values.update(imported_product_id=source.id, offer_id='safe-offer-2')
+        draft = MarketplaceProductDraft(**values)
+        db.session.add(draft)
+        db.session.commit()
+        return draft
 
     def test_admission_is_local_replay_and_prevents_concurrent_duplicate(self):
         run, replayed = self.accept()
@@ -163,9 +181,95 @@ class OzonDraftAICompletionTest(OzonPublicationFixture, unittest.TestCase):
         self.assertEqual(Review.query.count(), 0)
 
     def test_ungrounded_result_does_not_become_suggestion(self):
-        self.generate(self.model_response([('909001', 'зелёный')]))
+        run = self.generate(self.model_response([('909001', 'зелёный')]))
         self.assertEqual(Suggestion.query.count(), 0)
         self.assertEqual(Item.query.one().status, 'no_evidence')
+        self.assertEqual(Item.query.one().safe_code,
+                         'ai_rejection:quote_not_in_source')
+        summary = run.job.get_result()
+        self.assertEqual(summary['rejection_reasons'], {'quote_not_in_source': 1})
+        run_document = Service.document(run)
+        self.assertEqual(run_document['items'][0]['code'], 'ai_fields_rejected')
+        review_document = Service.suggestions_document(seller_id=self.seller.id,
+            draft_id=self.draft.id, actor_user_id=self.user.id)
+        self.assertEqual(review_document['item']['code'], 'ai_fields_rejected')
+
+    def test_rejection_codes_are_allowlisted_primary_and_do_not_leak_values(self):
+        secret_value = 'MODEL_ONLY_VALUE_7b93'
+        self.assertTrue(all(len(worker.AI_REJECTION_SAFE_PREFIX + code) <= 80
+                            for code in worker.VALIDATOR_REJECTION_CODES))
+        self.assertEqual(worker._primary_rejection_code(['value_not_grounded']),
+                         'ai_rejection:value_not_grounded')
+        self.assertEqual(worker._primary_rejection_code([
+            'value_not_grounded', 'value_not_grounded', 'quote_not_in_source',
+        ]), 'ai_rejection:value_not_grounded')
+        self.assertEqual(worker._primary_rejection_code([
+            'value_not_grounded', 'quote_not_in_source',
+        ]), 'ai_rejection:quote_not_in_source')
+        self.assertEqual(worker._primary_rejection_code([secret_value]),
+                         'ai_rejection:unclassified')
+        self.assertNotIn(secret_value, worker._primary_rejection_code([secret_value]))
+
+        second = self.second_draft()
+        run, _ = Service.accept(seller_id=self.seller.id, account_id=self.account.id,
+            draft_ids=[self.draft.id, second.id],
+            expected_versions={str(self.draft.id): self.draft.version,
+                               str(second.id): second.version},
+            request_key='multi-rejection-run-key-1234567890', actor_user_id=self.user.id)
+
+        def row(attribute_id, value, quote):
+            return {'attribute_id': attribute_id, 'complex_id': '0', 'group_ordinal': 0,
+                    'values': [{'value': value}], 'evidence': [
+                        {'path': '/description', 'quote': quote}],
+                    'provenance_code': 'literal_source'}
+
+        outcome = FlashOutcome('success', content={'items': [
+            {'draft_id': self.draft.id, 'suggestions': [
+                row('909001', secret_value, 'QUOTE_NOT_IN_SOURCE'),
+                row('909002', 'UNSUPPORTED_VALUE', 'красный'),
+            ]},
+            {'draft_id': second.id, 'suggestions': [
+                row('909002', 'гладкий', 'гладкий'),
+                row('909001', secret_value, 'красный'),
+            ]},
+        ]}, http_status=200, usage=FlashUsage(prompt_tokens=100, completion_tokens=20))
+        with patch.object(worker, 'flash_completion', return_value=outcome) as call:
+            worker.tick(executor=ImmediateExecutor())
+            worker.tick(executor=ImmediateExecutor())
+            self.assertEqual(call.call_count, 1)
+
+        items = Item.query.filter_by(run_id=run.id).order_by(Item.ordinal).all()
+        self.assertEqual([item.status for item in items], ['no_evidence', 'proposed'])
+        self.assertEqual([item.safe_code for item in items], [
+            'ai_rejection:quote_not_in_source',
+            'ai_rejection:value_not_grounded',
+        ])
+        self.assertEqual(Suggestion.query.count(), 1)
+        document = Service.document(run)
+        expected = {'quote_not_in_source': 1, 'value_not_grounded': 1}
+        self.assertEqual(document['summary']['rejection_reasons'], expected)
+        self.assertEqual(document['summary']['counts'], {'no_evidence': 1, 'proposed': 1})
+        self.assertEqual([item['code'] for item in document['items']],
+                         ['ai_fields_rejected', 'ai_fields_rejected'])
+        diagnostics = json.dumps({'codes': [item.safe_code for item in items],
+                                  'summary': document['summary']}, ensure_ascii=False)
+        self.assertNotIn(secret_value, diagnostics)
+        self.assertNotIn('UNSUPPORTED_VALUE', diagnostics)
+        self.assertNotIn('/description', diagnostics)
+
+        Service._refresh(run, flush=True)
+        self.assertEqual(Service.document(run)['summary']['rejection_reasons'], expected)
+
+    def test_legacy_rejection_code_is_read_as_unclassified_for_old_runs(self):
+        run = self.generate()
+        item = Item.query.one()
+        item.safe_code = 'ai_fields_rejected'
+        db.session.commit()
+        self.assertEqual(Service.document(run)['summary']['rejection_reasons'],
+                         {'unclassified': 1})
+        Service._refresh(run, flush=True)
+        self.assertEqual(Service.document(run)['summary']['rejection_reasons'],
+                         {'unclassified': 1})
 
     def test_unknown_response_is_terminal_and_never_retried(self):
         self.generate(FlashOutcome('unknown_response', safe_code='ai_response_unknown'))

@@ -31,6 +31,47 @@ ACTIVE = ('pending', 'running', 'cancelling')
 KEY = re.compile(r'[A-Za-z0-9_-]{24,128}\Z')
 MAX_ITEMS = 200
 MAX_SUGGESTIONS = 200_000
+AI_REJECTION_SAFE_PREFIX = 'ai_rejection:'
+AI_REJECTION_UNCLASSIFIED = 'unclassified'
+# Exact fixed codes Validator.validate_result may append to rejection results.
+VALIDATOR_REJECTION_CODES = frozenset({
+    'invalid_suggestion_shape', 'invalid_suggestion_identity',
+    'complex_group_requires_manual_review', 'attribute_outside_sealed_schema',
+    'invalid_complex_group', 'attribute_values_limit', 'attribute_not_collection',
+    'missing_or_excessive_evidence', 'invalid_evidence_fields',
+    'invalid_evidence_quote', 'invalid_evidence_path', 'evidence_path_not_found',
+    'invalid_evidence_index', 'evidence_must_point_to_scalar', 'nonfinite_evidence',
+    'quote_not_in_source', 'source_field_mismatch', 'invalid_attribute_value',
+    'dictionary_value_not_exact', 'unexpected_dictionary_value_id',
+    'value_not_grounded',
+})
+
+
+def _rejection_reason_counts(run_id, item_count):
+    """Bounded derived item counts; unknown/legacy codes never become keys."""
+    rows = db.session.query(Item.safe_code).filter_by(
+        run_id=run_id,
+    ).limit(MAX_ITEMS + 1).all()
+    if item_count > MAX_ITEMS or len(rows) != item_count:
+        return None
+    counts = {}
+    for (safe_code,) in rows:
+        if safe_code == 'ai_fields_rejected':
+            reason = AI_REJECTION_UNCLASSIFIED
+        elif isinstance(safe_code, str) and safe_code.startswith(AI_REJECTION_SAFE_PREFIX):
+            candidate = safe_code[len(AI_REJECTION_SAFE_PREFIX):]
+            reason = candidate if candidate in VALIDATOR_REJECTION_CODES else AI_REJECTION_UNCLASSIFIED
+        else:
+            continue
+        counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _seller_safe_code(safe_code):
+    """Keep detailed validator diagnostics in storage/summary, not item UI codes."""
+    if isinstance(safe_code, str) and safe_code.startswith(AI_REJECTION_SAFE_PREFIX):
+        return 'ai_fields_rejected'
+    return safe_code
 
 
 class DraftAIError(MarketplaceDraftError):
@@ -237,6 +278,7 @@ class OzonDraftAICompletionService:
         if flush:
             db.session.flush()
         counts = dict(db.session.query(Item.status, func.count(Item.id)).filter_by(run_id=run.id).group_by(Item.status))
+        rejection_reasons = _rejection_reason_counts(run.id, run.item_count)
         active = counts.get('pending', 0) + counts.get('reserved', 0)
         now = datetime.utcnow()
         if not active:
@@ -249,7 +291,8 @@ class OzonDraftAICompletionService:
         job.failed_count = sum(counts.get(x, 0) for x in ('failed', 'needs_input', 'stale', 'unknown_response'))
         job.status = 'running' if active else 'completed'
         job.set_result({'mode': 'draft_suggestions', 'status': run.status,
-                        'counts': counts, 'active': active, 'total': run.item_count})
+                        'counts': counts, 'active': active, 'total': run.item_count,
+                        'rejection_reasons': rejection_reasons})
         job.updated_at = now
         run.updated_at = now
 
@@ -272,13 +315,17 @@ class OzonDraftAICompletionService:
                 title = None
             items.append({'id': item.id, 'draft_id': item.draft_id,
                 'expected_version': item.expected_draft_version, 'title': title,
-                'status': item.status, 'code': item.safe_code,
+                'status': item.status, 'code': _seller_safe_code(item.safe_code),
                 'next_due_at': item.next_due_at.isoformat() + 'Z' if item.next_due_at else None})
+        summary = job.get_result()
+        if isinstance(summary, dict):
+            summary = {**summary,
+                       'rejection_reasons': _rejection_reason_counts(run.id, run.item_count)}
         return {'job_uid': job.job_uid, 'account_id': run.account_id, 'mode': 'draft_suggestions',
             'status': run.status, 'model': run.model, 'total': run.item_count,
             'physical_calls': AIParsingAttempt.query.filter_by(lane='seller_draft_completion', run_uid=job.job_uid).count(),
             'max_calls': run.max_calls,
-            'items': items, 'summary': job.get_result(),
+            'items': items, 'summary': summary,
             'created_at': run.created_at.isoformat() + 'Z'}
 
     @classmethod
@@ -344,7 +391,7 @@ class OzonDraftAICompletionService:
             except OzonDraftAIValidationError as exc:
                 code = exc.code
         elif item:
-            code = item.safe_code
+            code = _seller_safe_code(item.safe_code)
         canonical = [cls._suggestion(r) for r in rows]
         claims = {'seller_id': seller_id, 'account_id': draft.account_id, 'draft_id': draft.id,
                   'actor_user_id': actor_user_id, 'item_id': item.id if item else None,

@@ -3,6 +3,7 @@
 HTTP futures carry only primitive source/schema documents and a native profile.
 The scheduler owns all ORM reads/writes; no SQL lock spans a model request.
 """
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import json
@@ -21,6 +22,7 @@ from services.ozon_draft_ai_completion import (
     OzonDraftAICompletionService as Service, DraftAIError, MarketplaceDraftError, Run, Item, Suggestion,
     Validator, OzonDraftAIValidationError, resolve_config, _writer, _dump, _hash,
     ACTIVE, PROFILE_VERSION, MAX_SUGGESTIONS, _account,
+    AI_REJECTION_SAFE_PREFIX, AI_REJECTION_UNCLASSIFIED, VALIDATOR_REJECTION_CODES,
 )
 
 _SYSTEM = '''You map explicitly observed product facts into missing Ozon attributes.
@@ -40,6 +42,17 @@ Output no confidence, rationale, instructions, prices, stock, barcode or media f
 
 _executor = None
 _inflight = {}  # at most 3 primitive chunks, bounded by the shared ledger too
+
+
+def _primary_rejection_code(rejections):
+    """Return one deterministic, constant-only reason for durable diagnostics."""
+    if not isinstance(rejections, list) or not rejections:
+        return None
+    counts = Counter(code for code in rejections[:40]
+                     if isinstance(code, str) and code in VALIDATOR_REJECTION_CODES)
+    primary = (min(counts, key=lambda code: (-counts[code], code))
+               if counts else AI_REJECTION_UNCLASSIFIED)
+    return AI_REJECTION_SAFE_PREFIX + primary
 
 
 def _pool():
@@ -271,7 +284,7 @@ def _apply_outcome(chunk, outcome, committed, now):
                             created_at=now, updated_at=now))
                     suggestion_count += len(suggestions)
                     _terminal(item, 'proposed' if suggestions else 'no_evidence',
-                              'ai_fields_rejected' if validated.get('rejections') else None, now)
+                              _primary_rejection_code(validated.get('rejections')), now)
                 except OzonDraftAIValidationError as exc:
                     _terminal(item, 'stale', exc.code, now)
         # Token usage belongs to the physical chunk, not duplicated per item.
