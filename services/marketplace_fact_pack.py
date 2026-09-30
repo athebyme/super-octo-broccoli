@@ -377,6 +377,20 @@ class MarketplaceFactPackBuilder:
                 "Marketplace fact pack requires an ImportedProduct"
             )
 
+        try:
+            from services.common_product_content import (
+                CommonProductContentError,
+                common_content_override_projection,
+            )
+
+            seller_common_content = common_content_override_projection(
+                imported_product
+            )
+        except CommonProductContentError as exc:
+            raise MarketplaceFactPackError(
+                "Seller common content is unavailable for explicit draft preparation"
+            ) from exc
+
         supplier_product: Optional[SupplierProduct] = imported_product.supplier_product
         imported_original = cls._load_object(imported_product.original_data)
         supplier_original = cls._load_object(
@@ -390,6 +404,7 @@ class MarketplaceFactPackBuilder:
 
         facts: Dict[str, Any] = {}
         provenance: Dict[str, Any] = {}
+        common_fields = seller_common_content["fields"]
 
         def original_text(key: str, maximum: int = cls.MAX_TEXT) -> Optional[str]:
             return cls._text(original.get(key), maximum=maximum)
@@ -401,8 +416,14 @@ class MarketplaceFactPackBuilder:
                 provenance,
                 "identity.title",
                 title,
-                source="imported_product.title",
-                trust="seller_current",
+                source=(
+                    "seller_common_content.title"
+                    if "title" in common_fields else "imported_product.title"
+                ),
+                trust=(
+                    "seller_override"
+                    if "title" in common_fields else "seller_current"
+                ),
             )
         source_title = original_text("title", 500)
         if source_title:
@@ -424,8 +445,15 @@ class MarketplaceFactPackBuilder:
                 provenance,
                 "identity.description",
                 description,
-                source="imported_product.description",
-                trust="seller_current",
+                source=(
+                    "seller_common_content.description"
+                    if "description" in common_fields
+                    else "imported_product.description"
+                ),
+                trust=(
+                    "seller_override"
+                    if "description" in common_fields else "seller_current"
+                ),
             )
         source_description = original_text(
             "description",
@@ -611,7 +639,7 @@ class MarketplaceFactPackBuilder:
             maximum=cls.MAX_IMAGES,
         )
         image_source = f"{original_source}.photo_urls"
-        if not images:
+        if not images and "photos" not in common_fields:
             images = cls._photo_urls(
                 imported_product.photo_urls,
                 maximum=cls.MAX_IMAGES,
@@ -725,6 +753,10 @@ class MarketplaceFactPackBuilder:
             "provenance": provenance,
             "unverified_suggestions": suggestions,
         }
+        # Preserve the exact legacy fact hash when there are no active common
+        # overrides. Only reviewed seller content adds this separate projection.
+        if seller_common_content["fields"]:
+            hash_payload["seller_common_content"] = seller_common_content
         canonical = cls._stable_json(hash_payload)
         if len(canonical.encode("utf-8")) > cls.MAX_SERIALIZED_BYTES:
             raise MarketplaceFactPackError(

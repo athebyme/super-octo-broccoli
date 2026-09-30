@@ -22,7 +22,8 @@ from services.ozon_reference_service import OzonReferenceService
 class DraftAIValidationTest(unittest.TestCase):
     def setUp(self):
         self.app = Flask(__name__)
-        self.app.config.update(TESTING=True, SQLALCHEMY_DATABASE_URI='sqlite://',
+        self.app.config.update(TESTING=True, SECRET_KEY='draft-ai-common-content-test',
+                               SQLALCHEMY_DATABASE_URI='sqlite://',
                                SQLALCHEMY_TRACK_MODIFICATIONS=False)
         db.init_app(self.app)
         self.context = self.app.app_context()
@@ -158,6 +159,45 @@ class DraftAIValidationTest(unittest.TestCase):
         open_ids = {row['attribute_id'] for row in context['schema']['attributes']}
         self.assertEqual(open_ids, {'33', '34'})
         self.assertNotIn('4191', open_ids)  # content.description is manual/implicit.
+
+    def test_capture_keeps_native_flash_evidence_on_original_source_after_common_edit(self):
+        from services.common_product_content import CommonProductContentService
+
+        original_snapshot = self.imported.original_data
+        preview = CommonProductContentService.preview(
+            seller_id=self.seller.id,
+            user_id=self.seller.user_id,
+            raw_items=[{
+                'product_id': self.imported.id,
+                'expected_content_edit_version': self.imported.content_edit_version,
+                'changes': {
+                    'title': {'mode': 'override', 'value': 'Продавец изменил название'},
+                    'description': {'mode': 'override', 'value': 'Продавец изменил описание'},
+                    'characteristics': {'mode': 'override', 'value': [
+                        {'name': 'Материал изделия', 'value': 'Ручное значение'},
+                    ]},
+                },
+                'recipients': [],
+            }],
+        )
+        CommonProductContentService.apply(
+            seller_id=self.seller.id,
+            user_id=self.seller.user_id,
+            token=preview['preview_token'],
+        )
+        db.session.commit()
+        db.session.refresh(self.imported)
+
+        context = OzonDraftAIValidation.capture(self.draft)
+        evidence = json.dumps(context['source_facts'], ensure_ascii=False)
+        self.assertEqual(self.imported.title, 'Продавец изменил название')
+        self.assertEqual(self.imported.description, 'Продавец изменил описание')
+        self.assertEqual(self.imported.original_data, original_snapshot)
+        self.assertIn('Красный аксессуар', evidence)
+        self.assertIn('Красный', evidence)
+        self.assertNotIn('Продавец изменил название', evidence)
+        self.assertNotIn('Продавец изменил описание', evidence)
+        self.assertNotIn('Ручное значение', evidence)
 
     def test_dictionary_literal_proposal_and_partial_apply_keep_seal(self):
         context = OzonDraftAIValidation.capture(self.draft)

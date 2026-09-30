@@ -39,6 +39,7 @@ MAX_TITLE = 500
 MAX_DESCRIPTION = 100_000
 MAX_PHOTOS = 30
 MAX_CHARACTERISTICS = 100
+MAX_MANUAL_NUMBER_ABS = 10**15
 _PROVIDER_ID_KEYS = {
     "id", "attributeid", "charcid", "valueid", "wbsubjectid",
     "subjectid", "nmid", "imtid", "marketplaceid",
@@ -76,8 +77,43 @@ def _stable_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+def _fingerprint_value(value: Any) -> Any:
+    """Make legacy in-memory non-finite values hashable without normalizing raw DB text."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return {"__nonfinite_float__": repr(value)}
+    if isinstance(value, list):
+        return [_fingerprint_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_fingerprint_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _fingerprint_value(item) for key, item in value.items()}
+    return value
+
+
 def _fingerprint(value: Any) -> str:
-    return sha256(_stable_json(value).encode("utf-8")).hexdigest()
+    return sha256(_stable_json(_fingerprint_value(value)).encode("utf-8")).hexdigest()
+
+
+def _manual_number_is_supported(value: Any) -> bool:
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return abs(value) <= MAX_MANUAL_NUMBER_ABS
+    return (
+        isinstance(value, float)
+        and math.isfinite(value)
+        and abs(value) <= MAX_MANUAL_NUMBER_ABS
+    )
+
+
+def _inherited_number_text(value: int | float) -> str:
+    try:
+        rendered = str(value)
+    except (ValueError, OverflowError):
+        rendered = "число не представлено"
+    if isinstance(value, float) and not math.isfinite(value):
+        return f"{rendered} · некорректное число источника"
+    return f"{rendered} · значение источника слишком велико"
 
 
 def _load_json(raw: Any, fallback: Any) -> Any:
@@ -101,8 +137,10 @@ def _default(field: str) -> Any:
 def _safe_json_value(value: Any, *, depth: int = 0) -> bool:
     if depth > 8:
         return False
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or isinstance(value, (str, bool)):
         return True
+    if isinstance(value, int):
+        return abs(value) <= MAX_MANUAL_NUMBER_ABS
     if isinstance(value, float):
         return math.isfinite(value)
     if isinstance(value, list):
@@ -257,8 +295,12 @@ def _characteristic_rows(value: Any, *, validate: bool = False) -> list[dict]:
         elif isinstance(item_value, bool):
             pass
         elif isinstance(item_value, (int, float)) and not isinstance(item_value, bool):
-            if isinstance(item_value, float) and not math.isfinite(item_value):
-                raise CommonProductContentError("Числовое значение характеристики некорректно")
+            if validate and not _manual_number_is_supported(item_value):
+                raise CommonProductContentError(
+                    f"Число характеристики должно быть конечным и не больше {MAX_MANUAL_NUMBER_ABS} по модулю"
+                )
+            if not validate and not _manual_number_is_supported(item_value):
+                item_value = _inherited_number_text(item_value)
         elif isinstance(item_value, list):
             if validate and len(item_value) > 20:
                 raise CommonProductContentError("В одном свойстве допускается не больше 20 значений")
@@ -269,8 +311,17 @@ def _characteristic_rows(value: Any, *, validate: bool = False) -> list[dict]:
                         _strict_text(subvalue, "характеристики.value", maximum=2_000, multiline=False, allow_empty=True)
                         if validate else subvalue[:2_000]
                     )
-                elif isinstance(subvalue, bool) or (isinstance(subvalue, (int, float)) and math.isfinite(float(subvalue))):
+                elif isinstance(subvalue, bool):
                     normalized.append(subvalue)
+                elif isinstance(subvalue, (int, float)):
+                    if validate and not _manual_number_is_supported(subvalue):
+                        raise CommonProductContentError(
+                            f"Число характеристики должно быть конечным и не больше {MAX_MANUAL_NUMBER_ABS} по модулю"
+                        )
+                    normalized.append(
+                        subvalue if _manual_number_is_supported(subvalue)
+                        else _inherited_number_text(subvalue)
+                    )
                 elif not validate and _safe_json_value(subvalue):
                     normalized.append(subvalue)
                 else:
@@ -383,6 +434,35 @@ def _parse_overrides(product: ImportedProduct) -> dict:
 
 def active_override_fields(product: ImportedProduct) -> set[str]:
     return set(_parse_overrides(product)["fields"])
+
+
+def common_content_override_projection(product: ImportedProduct) -> dict:
+    """Return only verified seller overrides for explicit channel draft preparation.
+
+    This projection is separate from observed facts and is not suitable as AI
+    source evidence. Existing channel drafts do not consume it on read/save.
+    """
+    overrides = _parse_overrides(product)
+    projected = {}
+    for field in ("title", "description", "photos"):
+        entry = overrides["fields"].get(field)
+        if entry is None:
+            continue
+        expected = normalize_value(field, entry["value"])
+        effective = _read_column(product, field)
+        if effective != expected:
+            raise CommonProductContentConflict(
+                f"Общее поле «{field}» товара #{product.id} расходится с ручным переопределением"
+            )
+        projected[field] = {
+            "value": effective,
+            "origin": "seller_override",
+        }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "content_edit_version": int(product.content_edit_version or 1),
+        "fields": projected,
+    }
 
 
 def _source_documents(product: ImportedProduct) -> tuple[dict, SupplierProduct | None]:
@@ -538,20 +618,47 @@ def _source_state(product: ImportedProduct, overrides: dict) -> dict:
             "supplier_id": supplier.supplier_id,
             "supplier_product_id": supplier.id,
             "revision": source["revision"],
+            "observed_at": source["observed_at"],
+            "copied_revision": source["copied_revision"],
+            "description_source": supplier.description_source,
             "title": supplier.title,
             "description": supplier.description,
             "ai_description": supplier.ai_description,
             "characteristics": supplier.characteristics_json,
+            "ai_marketplace": supplier.ai_marketplace_json,
             "photo_urls": supplier.photo_urls_json,
             "original_data": supplier.original_data_json,
+            "identity": {
+                "imported_product_id": product.id,
+                "seller_id": product.seller_id,
+                "source_type": product.source_type,
+                "supplier_id": product.supplier_id,
+                "supplier_product_id": product.supplier_product_id,
+                "external_id": product.external_id,
+            },
+            "field_origins": origins,
+            "inherited_raw_values": raw_values,
+            "inherited_values": {
+                field: _inherited_normalize(field, raw_values.get(field))
+                for field in FIELD_COLUMNS
+            },
         }
     else:
         source["revision"] = source["copied_revision"] or None
         source["observed_at"] = None
         source_payload = {
-            "source_type": source["type"],
-            "external_id": product.external_id,
-            "original_data": product.original_data,
+            "identity": {
+                "imported_product_id": product.id,
+                "seller_id": product.seller_id,
+                "source_type": product.source_type,
+                "supplier_id": product.supplier_id,
+                "supplier_product_id": product.supplier_product_id,
+                "supplier_content_revision": product.supplier_content_revision,
+                "external_id": product.external_id,
+            },
+            "original_data_raw": product.original_data,
+            "field_origins": origins,
+            "inherited_raw_values": raw_values,
             "values": {
                 field: _inherited_normalize(field, raw_values.get(field))
                 for field in FIELD_COLUMNS
@@ -575,7 +682,22 @@ def _source_state(product: ImportedProduct, overrides: dict) -> dict:
 def _current_fingerprint(product: ImportedProduct, overrides: dict) -> str:
     return _fingerprint({
         "version": int(product.content_edit_version or 1),
-        "values": {field: _read_column(product, field) for field in FIELD_COLUMNS},
+        "identity": {
+            "id": product.id,
+            "seller_id": product.seller_id,
+            "source_type": product.source_type,
+            "external_id": product.external_id,
+            "supplier_id": product.supplier_id,
+            "supplier_product_id": product.supplier_product_id,
+            "supplier_content_revision": product.supplier_content_revision,
+        },
+        # Fingerprint the exact persisted representation as well as typed fields.
+        # Legacy JSON whitespace/key-order edits still change the reviewed baseline.
+        "raw_values": {
+            field: _raw_column_value(product, field)
+            for field in FIELD_COLUMNS
+        },
+        "raw_overrides": product.content_overrides_json,
         "overrides": overrides,
     })
 
@@ -673,8 +795,21 @@ def _recipient_records(seller_id: int, product: ImportedProduct) -> list[dict]:
             "object": draft,
         }
         state["fingerprint"] = _fingerprint({
-            key: value for key, value in state.items()
-            if key not in {"object", "href"}
+            "state": {
+                key: value for key, value in state.items()
+                if key not in {"object", "href"}
+            },
+            "raw_context": {
+                "source_facts_json": draft.source_facts_json,
+                "provenance_json": draft.provenance_json,
+                "content_json": draft.content_json,
+                "attributes_json": draft.attributes_json,
+                "complex_attributes_json": draft.complex_attributes_json,
+                "media_json": draft.media_json,
+                "dimensions_json": draft.dimensions_json,
+                "barcodes_json": draft.barcodes_json,
+                "validation_result_json": draft.validation_result_json,
+            },
         })
         records.append(state)
 
@@ -709,8 +844,19 @@ def _recipient_records(seller_id: int, product: ImportedProduct) -> list[dict]:
             "object": listing,
         }
         state["fingerprint"] = _fingerprint({
-            key: value for key, value in state.items()
-            if key not in {"object", "href"}
+            "state": {
+                key: value for key, value in state.items()
+                if key not in {"object", "href"}
+            },
+            "raw_context": {
+                "title": listing.title,
+                "description": listing.description,
+                "attributes_json": listing.attributes_json,
+                "complex_attributes_json": listing.complex_attributes_json,
+                "media_json": listing.media_json,
+                "dimensions_json": listing.dimensions_json,
+                "barcodes_json": listing.barcodes_json,
+            },
         })
         records.append(state)
 
@@ -730,32 +876,54 @@ def _recipient_records(seller_id: int, product: ImportedProduct) -> list[dict]:
             "object": linked,
         }
         state["fingerprint"] = _fingerprint({
-            key: value for key, value in state.items()
-            if key not in {"object", "href"}
+            "state": {
+                key: value for key, value in state.items()
+                if key not in {"object", "href"}
+            },
+            "raw_context": {
+                "seller_id": linked.seller_id,
+                "nm_id": linked.nm_id,
+                "title": linked.title,
+                "description": linked.description,
+                "photos_json": linked.photos_json,
+                "characteristics_json": linked.characteristics_json,
+            },
         })
         records.append(state)
     return records[:MAX_RECIPIENTS_PER_ITEM]
 
 
+def _recipient_json_object(raw: Any) -> dict:
+    value = _load_json(raw, None)
+    return value if isinstance(value, dict) else {}
+
+
+def _recipient_media_urls(media: Any) -> list[str]:
+    if not isinstance(media, dict):
+        return []
+    images = media.get("images")
+    if not isinstance(images, list):
+        images = []
+    primary = media.get("primary_image")
+    return _photo_urls(([primary] if isinstance(primary, str) else []) + images)
+
+
 def _recipient_diff(record: dict, effective: dict, changed_fields: set[str]) -> list[dict]:
     target = record["object"]
     if record["ref"]["kind"] == "marketplace_draft":
-        content = _load_json(target.content_json, {})
-        media = _load_json(target.media_json, {})
+        content = _recipient_json_object(target.content_json)
+        media = _recipient_json_object(target.media_json)
         current_values = {
             "title": content.get("name"),
             "description": content.get("description"),
-            "photos": [
-                url for url in [media.get("primary_image"), *(media.get("images") or [])]
-                if isinstance(url, str)
-            ],
+            "photos": _recipient_media_urls(media),
         }
     elif record["ref"]["kind"] == "marketplace_listing":
-        media = _load_json(target.media_json, {})
+        media = _recipient_json_object(target.media_json)
         current_values = {
             "title": target.title,
             "description": target.description,
-            "photos": _photo_urls([media.get("primary_image"), *(media.get("images") or [])]),
+            "photos": _recipient_media_urls(media),
         }
     else:
         current_values = {

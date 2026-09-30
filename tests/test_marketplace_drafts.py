@@ -32,6 +32,7 @@ from services.marketplace_drafts import (
     MarketplaceDraftService,
 )
 from services.marketplace_fact_pack import MarketplaceFactPackBuilder
+from services.common_product_content import CommonProductContentService
 from services.ozon_reference_service import OzonReferenceService
 
 
@@ -40,6 +41,7 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.app = Flask(__name__)
         self.app.config.update(
             TESTING=True,
+            SECRET_KEY="marketplace-drafts-test-secret",
             SQLALCHEMY_DATABASE_URI="sqlite://",
             SQLALCHEMY_TRACK_MODIFICATIONS=False,
         )
@@ -471,6 +473,156 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
             content["description"],
             "Точное описание из фида поставщика",
         )
+
+    def test_unedited_legacy_draft_keeps_its_original_fact_hash_and_readiness(self):
+        product, draft = self._ready_draft(external_id="legacy-fact-hash")
+        draft = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        before_hash = draft.source_fact_hash
+        pack = MarketplaceFactPackBuilder.build(product)
+        facts_document, _provenance, current_hash = MarketplaceDraftService._fact_snapshot(product)
+
+        self.assertNotIn("seller_common_content", pack)
+        self.assertNotIn("seller_common_content", facts_document)
+        self.assertEqual(current_hash, before_hash)
+        self.assertEqual(pack["fact_hash"], before_hash)
+        readiness = MarketplaceDraftService.mapping_readiness(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+        )
+        self.assertEqual(readiness["overall"], "ready")
+        self.assertTrue(readiness["source"]["facts_fresh"])
+
+    def test_common_overrides_are_explicit_draft_projection_not_observed_facts(self):
+        product = self._product(external_id="common-override-projection")
+        original = json.loads(product.original_data)
+        first_photo = "https://img.test/common-override-projection.jpg"
+        second_photo = "https://img.test/common-override-second.jpg"
+        original["photo_urls"] = [first_photo, second_photo]
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.photo_urls = json.dumps(original["photo_urls"])
+        db.session.commit()
+        original_snapshot = product.original_data
+
+        preview = CommonProductContentService.preview(
+            seller_id=self.seller1_id,
+            user_id=1,
+            raw_items=[{
+                "product_id": product.id,
+                "expected_content_edit_version": product.content_edit_version,
+                "changes": {
+                    "title": {"mode": "override", "value": "Моё название"},
+                    "description": {"mode": "override", "value": "Моё описание"},
+                    "photos": {"mode": "override", "value": [second_photo, first_photo]},
+                },
+                "recipients": [],
+            }],
+        )
+        CommonProductContentService.apply(
+            seller_id=self.seller1_id,
+            user_id=1,
+            token=preview["preview_token"],
+        )
+        db.session.commit()
+        db.session.refresh(product)
+
+        pack = MarketplaceFactPackBuilder.build(product)
+        self.assertEqual(product.original_data, original_snapshot)
+        self.assertEqual(pack["facts"]["identity"]["title"], "Моё название")
+        self.assertEqual(
+            pack["provenance"]["identity.title"]["trust"],
+            "seller_override",
+        )
+        self.assertEqual(
+            pack["facts"]["media"]["images"],
+            [first_photo, second_photo],
+        )
+        self.assertEqual(
+            pack["seller_common_content"]["fields"]["photos"],
+            {"value": [second_photo, first_photo], "origin": "seller_override"},
+        )
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        self.assertEqual(
+            json.loads(draft.content_json),
+            {"name": "Моё название", "description": "Моё описание"},
+        )
+        self.assertEqual(
+            json.loads(draft.media_json),
+            {"images": [second_photo, first_photo]},
+        )
+
+    def test_intentionally_empty_common_fields_bootstrap_empty_draft_content(self):
+        product = self._product(external_id="common-override-empty")
+        preview = CommonProductContentService.preview(
+            seller_id=self.seller1_id,
+            user_id=1,
+            raw_items=[{
+                "product_id": product.id,
+                "expected_content_edit_version": 1,
+                "changes": {
+                    "description": {"mode": "override", "value": ""},
+                    "photos": {"mode": "override", "value": []},
+                },
+                "recipients": [],
+            }],
+        )
+        CommonProductContentService.apply(
+            seller_id=self.seller1_id,
+            user_id=1,
+            token=preview["preview_token"],
+        )
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        self.assertEqual(json.loads(draft.content_json)["description"], "")
+        self.assertEqual(json.loads(draft.media_json), {"images": []})
+
+    def test_common_save_does_not_rewrite_an_existing_draft_snapshot(self):
+        product = self._product(external_id="common-override-keeps-draft")
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        before_content = draft.content_json
+        before_media = draft.media_json
+        before_version = draft.version
+        preview = CommonProductContentService.preview(
+            seller_id=self.seller1_id,
+            user_id=1,
+            raw_items=[{
+                "product_id": product.id,
+                "expected_content_edit_version": 1,
+                "changes": {"title": {"mode": "override", "value": "После создания draft"}},
+                "recipients": [{"kind": "marketplace_draft", "id": draft.id}],
+            }],
+        )
+        CommonProductContentService.apply(
+            seller_id=self.seller1_id,
+            user_id=1,
+            token=preview["preview_token"],
+        )
+        db.session.commit()
+        db.session.refresh(draft)
+
+        self.assertEqual(draft.content_json, before_content)
+        self.assertEqual(draft.media_json, before_media)
+        self.assertEqual(draft.version, before_version)
 
     def test_fact_pack_v3_builds_and_rebases_a_fact_only_description(self):
         product = self._product(

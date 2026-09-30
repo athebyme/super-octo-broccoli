@@ -29,6 +29,7 @@ from services.common_product_content import (
     normalize_value,
     refresh_from_source,
 )
+from services.ozon_draft_ai_validation import _source_facts
 
 
 @pytest.fixture
@@ -404,6 +405,81 @@ def test_supplier_source_drift_after_preview_is_rejected(content_app):
         assert product.content_edit_version == 1
 
 
+@pytest.mark.parametrize("field,value", [
+    ("description_source", "manual"),
+    ("ai_marketplace_json", '{"_meta":{"source":"supplier_catalog_enrichment"},"Материал":"Лён"}'),
+])
+def test_supplier_metadata_only_drift_invalidates_review(content_app, field, value):
+    with content_app.app_context():
+        seller = _seller()
+        supplier = Supplier(name="Feed", code=f"feed-metadata-{field}")
+        db.session.add(supplier)
+        db.session.flush()
+        shared = _supplier_product(supplier, description=None, ai_description="Generated")
+        product = _imported(
+            seller.id,
+            supplier_id=supplier.id,
+            supplier_product_id=shared.id,
+            supplier_product=shared,
+        )
+        db.session.commit()
+        preview = CommonProductContentService.preview(
+            seller_id=seller.id,
+            user_id=781,
+            raw_items=[{
+                "product_id": product.id,
+                "expected_content_edit_version": 1,
+                "changes": {"title": {"mode": "override", "value": "Reviewed"}},
+                "recipients": [],
+            }],
+        )
+        # Keep the timestamp and revision fixed to exercise the exact metadata seal.
+        db.session.execute(
+            update(SupplierProduct)
+            .where(SupplierProduct.id == shared.id)
+            .values(**{field: value}, updated_at=shared.updated_at)
+        )
+        db.session.expire_all()
+
+        with pytest.raises(CommonProductContentConflict):
+            CommonProductContentService.apply(
+                seller_id=seller.id,
+                user_id=781,
+                token=preview["preview_token"],
+            )
+
+        db.session.expire_all()
+        assert db.session.get(ImportedProduct, product.id).title == "Source title"
+        assert db.session.get(ImportedProduct, product.id).content_edit_version == 1
+
+
+def test_raw_legacy_current_snapshot_drift_invalidates_review(content_app):
+    with content_app.app_context():
+        seller = _seller()
+        product = _imported(seller.id)
+        db.session.commit()
+        preview = CommonProductContentService.preview(
+            seller_id=seller.id,
+            user_id=782,
+            raw_items=[{
+                "product_id": product.id,
+                "expected_content_edit_version": 1,
+                "changes": {"title": {"mode": "override", "value": "Reviewed"}},
+                "recipients": [],
+            }],
+        )
+        before = product.characteristics
+        product.characteristics = json.dumps(json.loads(before), ensure_ascii=False, indent=2)
+        db.session.commit()
+
+        with pytest.raises(CommonProductContentConflict):
+            CommonProductContentService.apply(
+                seller_id=seller.id,
+                user_id=782,
+                token=preview["preview_token"],
+            )
+
+
 def test_two_item_apply_rolls_back_first_update_when_later_cas_fails(content_app):
     with content_app.app_context():
         seller = _seller()
@@ -562,6 +638,114 @@ def test_recipient_context_drift_after_write_rolls_back_common_save(content_app)
         assert db.session.get(MarketplaceProductDraft, draft.id).version == 1
         assert db.session.get(MarketplaceProductDraft, draft.id).content_json == '{"name":"Draft title"}'
         assert AgentChangeSnapshot.query.count() == 0
+
+
+def test_malformed_recipient_and_raw_only_context_drift_are_safe(content_app):
+    with content_app.app_context():
+        seller = _seller()
+        product = _imported(seller.id)
+        marketplace = Marketplace(name="Ozon", code="ozon", adapter_code="ozon")
+        db.session.add(marketplace)
+        db.session.flush()
+        account = SellerMarketplaceAccount(
+            seller_id=seller.id,
+            marketplace_id=marketplace.id,
+            external_account_id="account-legacy",
+            label="Legacy cabinet",
+            is_active=True,
+        )
+        db.session.add(account)
+        db.session.flush()
+        draft = MarketplaceProductDraft(
+            seller_id=seller.id,
+            marketplace_id=marketplace.id,
+            account_id=account.id,
+            imported_product_id=product.id,
+            offer_id="offer-legacy",
+            status="needs_category",
+            source_fact_hash="b" * 64,
+            content_json="[]",
+            media_json='"legacy scalar"',
+        )
+        db.session.add(draft)
+        db.session.commit()
+        preview = CommonProductContentService.preview(
+            seller_id=seller.id,
+            user_id=783,
+            raw_items=[{
+                "product_id": product.id,
+                "expected_content_edit_version": 1,
+                "changes": {"title": {"mode": "override", "value": "Reviewed"}},
+                "recipients": [{"kind": "marketplace_draft", "id": draft.id}],
+            }],
+        )
+        diff = preview["items"][0]["recipients"][0]["diff"][0]
+        assert diff["current"] is None
+        assert diff["matches"] is False
+
+        # Keep recipient version/time unchanged; the exact raw context still seals the review.
+        db.session.execute(
+            update(MarketplaceProductDraft)
+            .where(MarketplaceProductDraft.id == draft.id)
+            .values(content_json="[ ]", media_json="null", updated_at=draft.updated_at)
+        )
+        db.session.expire_all()
+        with pytest.raises(CommonProductContentConflict):
+            CommonProductContentService.apply(
+                seller_id=seller.id,
+                user_id=783,
+                token=preview["preview_token"],
+            )
+
+
+def test_nonfinite_and_oversized_characteristic_numbers_are_safe(content_app):
+    rows = _characteristic_rows([{"name": "Размер", "value": float("nan")}, {
+        "name": "Длина", "value": [float("inf")],
+    }])
+    assert "некорректное число источника" in rows[0]["value"]
+    assert "некорректное число источника" in rows[1]["value"][0]
+    with pytest.raises(CommonProductContentError, match="Число характеристики"):
+        normalize_value("characteristics", [{"name": "Размер", "value": 10**500}])
+    with pytest.raises(CommonProductContentError, match="Число характеристики"):
+        normalize_value("characteristics", [{"name": "Размер", "value": [float("inf")]}])
+
+    with content_app.app_context():
+        seller = _seller()
+        product = _imported(
+            seller.id,
+            characteristics='{"Длина":NaN}',
+            original_data='{"characteristics":{"Длина":NaN}}',
+        )
+        db.session.commit()
+        state = CommonProductContentService.read_many(seller_id=seller.id, product_ids=[product.id])[0]
+        assert "некорректное число источника" in state["fields"]["characteristics"]["effective"][0]["value"]
+        assert state["source"]["fingerprint"]
+
+
+def test_manual_common_content_never_rewrites_native_flash_source_snapshot(content_app):
+    with content_app.app_context():
+        seller = _seller()
+        product = _imported(seller.id)
+        original_snapshot = product.original_data
+        db.session.commit()
+
+        _override(
+            product,
+            784,
+            title={"mode": "override", "value": "Seller-authored title"},
+            description={"mode": "override", "value": "Seller-authored description"},
+            photos={"mode": "override", "value": ["https://images.example/source.jpg"]},
+        )
+        db.session.refresh(product)
+
+        assert product.title == "Seller-authored title"
+        assert product.description == "Seller-authored description"
+        assert product.original_data == original_snapshot
+        source_facts = _source_facts(json.loads(product.original_data))
+        assert source_facts["title"] == "Source title"
+        assert source_facts["description"] == "Source description"
+        assert "Seller-authored title" not in json.dumps(source_facts, ensure_ascii=False)
+        assert "Seller-authored description" not in json.dumps(source_facts, ensure_ascii=False)
 
 
 def test_tolerant_characteristics_keep_unrecognized_nested_rows_for_reading():

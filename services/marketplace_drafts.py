@@ -2730,6 +2730,8 @@ class MarketplaceDraftService:
             "facts": pack["facts"],
             "unverified_suggestions": pack["unverified_suggestions"],
         }
+        if pack.get("seller_common_content", {}).get("fields"):
+            facts_document["seller_common_content"] = pack["seller_common_content"]
         cls._canonical_json(facts_document, dict)
         cls._canonical_json(pack["provenance"], dict)
         return facts_document, pack["provenance"], pack["fact_hash"]
@@ -3123,16 +3125,69 @@ class MarketplaceDraftService:
         return "\n".join(lines)[:5_000]
 
     @classmethod
+    def _seller_common_override(
+        cls,
+        facts_document: dict,
+        field_name: str,
+    ) -> Tuple[bool, Any]:
+        projection = facts_document.get("seller_common_content")
+        if (
+            not isinstance(projection, dict)
+            or projection.get("schema_version") != 1
+            or isinstance(projection.get("content_edit_version"), bool)
+            or not isinstance(projection.get("content_edit_version"), int)
+            or projection["content_edit_version"] < 1
+            or not isinstance(projection.get("fields"), dict)
+        ):
+            return False, None
+        entry = projection["fields"].get(field_name)
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"value", "origin"}
+            or entry.get("origin") != "seller_override"
+        ):
+            return False, None
+        value = entry.get("value")
+        if field_name == "title":
+            return (True, value) if isinstance(value, str) and 0 < len(value) <= 500 else (False, None)
+        if field_name == "description":
+            return (True, value) if isinstance(value, str) and len(value) <= 100_000 else (False, None)
+        if field_name == "photos":
+            if (
+                isinstance(value, list)
+                and len(value) <= 30
+                and all(isinstance(url, str) and 0 < len(url) <= 2_000 for url in value)
+                and len(value) == len(set(value))
+            ):
+                return True, value
+        return False, None
+
+    @classmethod
     def _content_from_facts(cls, facts_document: dict) -> dict:
         facts = facts_document.get("facts", {})
         identity = facts.get("identity", {}) if isinstance(facts, dict) else {}
         if not isinstance(identity, dict):
             identity = {}
         result = {}
-        name = identity.get("title") or identity.get("source_title")
-        description = identity.get("description")
+        has_title_override, title_override = cls._seller_common_override(
+            facts_document, "title",
+        )
+        has_description_override, description_override = cls._seller_common_override(
+            facts_document, "description",
+        )
+        name = (
+            title_override if has_title_override
+            else identity.get("title") or identity.get("source_title")
+        )
+        description = (
+            description_override if has_description_override
+            else identity.get("description")
+        )
         if isinstance(name, str) and name.strip():
             result["name"] = name.strip()[:500]
+        if has_description_override:
+            result["description"] = description.strip()[:100_000]
+            return result
         if not isinstance(description, str) or not description.strip():
             description = identity.get("source_description")
         if (
@@ -3148,6 +3203,11 @@ class MarketplaceDraftService:
 
     @classmethod
     def _media_from_facts(cls, facts_document: dict) -> dict:
+        has_photo_override, photo_override = cls._seller_common_override(
+            facts_document, "photos",
+        )
+        if has_photo_override:
+            return {"images": list(photo_override)}
         images = facts_document.get("facts", {}).get("media", {}).get("images", [])
         if not isinstance(images, list):
             return {}
