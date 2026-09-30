@@ -1,0 +1,36 @@
+{% set pricing_nav_account = request.args.get('account_id') %}
+{% if not pricing_nav_account and filters is defined and filters.account_id is defined %}
+    {% set pricing_nav_account = filters.account_id %}
+{% endif %}
+{% if not pricing_nav_account and proposal is defined and proposal.account_id is defined %}
+    {% set pricing_nav_account = proposal.account_id %}
+{% endif %}
+{% if not pricing_nav_account and operation is defined and operation.account_id is defined %}
+    {% set pricing_nav_account = operation.account_id %}
+{% endif %}
+{% if not pricing_nav_account and config.get('MARKETPLACE_OZON_ENABLED', false) and mp_nav is defined %}
+    {% set pricing_nav_account = mp_nav().last_account_id %}
+{% endif %}
+{% set pricing_workspace_items = [
+    {'key': 'wb-current', 'label': 'Текущие цены WB', 'href': url_for('prices.prices_dashboard')},
+    {'key': 'wb-change', 'label': 'Расчёт и предложение WB', 'href': url_for('prices.prices_change')},
+    {'key': 'wb-history', 'label': 'История WB', 'href': url_for('prices.prices_history')},
+    {'key': 'wb-settings', 'label': 'Защита WB', 'href': url_for('prices.prices_settings')},
+    {'key': 'supplier-formula', 'label': 'Формула поставщика', 'href': url_for('auto_import_pricing')},
+    {'key': 'price-monitor', 'label': 'Мониторинг WB', 'href': url_for('price_monitor_settings')},
+    {'key': 'price-alerts', 'label': 'Подозрительные изменения', 'href': url_for('suspicious_price_changes')}
+] %}
+{% if config.get('MARKETPLACE_OZON_ENABLED', false) %}
+    {% set pricing_workspace_items = pricing_workspace_items + [
+        {'key': 'ozon-proposals', 'label': 'Предложения Ozon', 'href': url_for('marketplace_commercial.index', account_id=pricing_nav_account)}
+    ] %}
+{% endif %}
+<nav class="pricing-workspace-nav" aria-label="Цены, расчёты и история">
+    {% for item in pricing_workspace_items %}
+    <a href="{{ item.href }}"
+       class="pricing-workspace-link{% if pricing_workspace_current == item.key %} is-current{% endif %}"
+       {% if pricing_workspace_current == item.key %}aria-current="page"{% endif %}>
+        {{ item.label }}
+    </a>
+    {% endfor %}
+</nav>

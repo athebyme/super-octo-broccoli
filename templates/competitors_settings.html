@@ -64,11 +64,21 @@
                 </select>
                 <span class="cs-hint">Как часто монитор обходит все отслеживаемые товары</span>
             </label>
-            <label class="block">
-                <span class="cs-label">Максимум отслеживаемых товаров</span>
-                <input type="number" min="1" max="1000" step="1" x-model.number="form.max_products" class="cs-input">
-                <span class="cs-hint">До 1000 товаров суммарно по всем группам</span>
-            </label>
+            <div class="block">
+                <label for="competitor-max-products" class="cs-label">Изменить лимит обработки за цикл</label>
+                <input id="competitor-max-products" type="number" min="1" max="1000" step="1"
+                       x-model.number="maxProductsDraft" @input="maxProductsEdited = true; maxProductsError = null"
+                       class="cs-input" :aria-invalid="maxProductsError ? 'true' : 'false'"
+                       aria-describedby="competitor-max-products-help competitor-max-products-error">
+                <span id="competitor-max-products-help" class="cs-hint">
+                    Сохранённое значение настройки: <strong x-text="savedMaxProducts"></strong>.
+                    Монитор обрабатывает не более <strong x-text="effectiveMaxProducts()"></strong>
+                    выбранных товаров за один цикл; серверный предел — 1000.
+                    Изменение здесь сохранит целое значение от 1 до 1000.
+                </span>
+                <p id="competitor-max-products-error" x-show="maxProductsError" class="cs-hint"
+                   style="color:var(--danger)" role="alert" x-text="maxProductsError"></p>
+            </div>
         </div>
     </div>
 
@@ -186,6 +196,10 @@ function competitorSettings() {
     return {
         form: {{ settings.to_dict()|tojson }},
         saving: false,
+        savedMaxProducts: 100000,
+        maxProductsDraft: '',
+        maxProductsEdited: false,
+        maxProductsError: null,
         proxyMode: 'keep',      // keep | replace | delete
         proxyInput: '',
         proxyError: null,
@@ -197,6 +211,11 @@ function competitorSettings() {
                 this.form.sync_interval_minutes = allowed.reduce(
                     (a, b) => Math.abs(b - v) < Math.abs(a - v) ? b : a);
             }
+            this.savedMaxProducts = Number(this.form.max_products) || 100000;
+        },
+
+        effectiveMaxProducts() {
+            return Math.min(this.savedMaxProducts || 1000, 1000);
         },
 
         csrf() { return document.querySelector('meta[name="csrf-token"]')?.content || ''; },
@@ -259,8 +278,15 @@ function competitorSettings() {
                 sync_interval_minutes: this.form.sync_interval_minutes,
                 price_change_alert_percent: this.form.price_change_alert_percent,
                 discount_alert_pp: this.form.discount_alert_pp,
-                max_products: this.form.max_products,
             };
+            if (this.maxProductsEdited) {
+                if (!Number.isInteger(this.maxProductsDraft)
+                        || this.maxProductsDraft < 1 || this.maxProductsDraft > 1000) {
+                    this.maxProductsError = 'Введите целое число от 1 до 1000.';
+                    return;
+                }
+                payload.max_products = this.maxProductsDraft;
+            }
             let sentProxy = false;
             if (this.proxyMode === 'delete') {
                 payload.proxy_url = null;
@@ -289,12 +315,18 @@ function competitorSettings() {
                 if (!res.ok) {
                     const msg = data.error || 'Не удалось сохранить настройки';
                     if (sentProxy) this.proxyError = msg;
+                    if (this.maxProductsEdited && Object.prototype.hasOwnProperty.call(payload, 'max_products')) {
+                        this.maxProductsError = msg;
+                    }
                     this.$store.toasts.error(msg);
                     return;
                 }
                 // Ответ сервера — источник истины: нормализованные значения видны сразу
                 this.form = data;
                 this.init();
+                this.maxProductsDraft = '';
+                this.maxProductsEdited = false;
+                this.maxProductsError = null;
                 this.proxyMode = 'keep';
                 this.proxyInput = '';
                 this.$store.toasts.success('Настройки сохранены');

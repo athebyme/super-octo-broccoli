@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 
 {% block title %}Черновики маркетплейсов — Seller Hub{% endblock %}
 
@@ -19,6 +20,10 @@
         </div>
     </div>
 </div>
+
+{% set journey_account = namespace(label=none) %}
+{% for account in accounts %}{% if filters.account_id and account.id == filters.account_id %}{% set journey_account.label = account.label %}{% endif %}{% endfor %}
+{{ preparation_journey('draft', journey_account.label or (('магазин #' ~ filters.account_id) if filters.account_id else none), 'черновики Ozon', 'Откройте точный черновик и заполните обязательные поля. Сохранение не отправляет его в Ozon; проверка ниже выберет конкретные версии.', internal_url=url_for('seller_my_products', account_id=filters.account_id), draft_url=url_for('marketplace_drafts.index', account_id=filters.account_id), result_url=url_for('ozon_bulk_uploads.index', account_id=filters.account_id), listing_url=url_for('marketplace_listings.classic', marketplace='ozon', account_id=filters.account_id), channel='Ozon') }}
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
 

@@ -49,6 +49,10 @@
                 urls: bootstrap.urls || {},
                 illustration: bootstrap.illustration || '',
                 perPage: bootstrap.perPage || 60,
+                catalogReturnUrl: bootstrap.catalogReturnUrl || '/marketplaces/listings/',
+                requestedPage: bootstrap.catalogPage || 1,
+                loadedStartPage: bootstrap.catalogPage || 1,
+                historyRestoring: false,
 
                 items: [],
                 pagination: { page: 1, pages: 1, total: 0, has_next: false },
@@ -108,9 +112,7 @@
                 return this.accounts.filter(acc => !this.filters.account_id || acc.id === this.filters.account_id);
             },
             classicUrl: function () {
-                var params = this.scopeParams();
-                if (this.filters.status) params.set('status', this.filters.status);
-                return this.urls.classic + (params.size ? '?' + params.toString() : '');
+                return this.catalogUrl(this.pageForGroup(this.selectedIndex), this.urls.classic);
             },
             channelKey: function () {
                 if (this.filters.marketplace === 'wb') return 'wb';
@@ -247,11 +249,19 @@
             filters: {
                 deep: true,
                 handler: function () {
-                    var params = this.scopeParams();
-                    if (this.filters.status) params.set('status', this.filters.status);
-                    history.replaceState(null, '', location.pathname + (params.size ? '?' + params.toString() : ''));
+                    if (this.historyRestoring) return;
+                    this.requestedPage = 1;
+                    this.loadedStartPage = 1;
+                    history.replaceState(history.state, '', this.catalogUrl(1));
                     this.refresh();
                 }
+            },
+            perPage: function () {
+                if (this.historyRestoring) return;
+                this.requestedPage = 1;
+                this.loadedStartPage = 1;
+                history.replaceState(history.state, '', this.catalogUrl(1));
+                this.refresh();
             },
             'drawer.open': function (open) {
                 document.body.style.overflow = open ? 'hidden' : '';
@@ -263,7 +273,9 @@
 
         mounted: function () {
             this._onKey = this.onKey.bind(this);
+            this._onPopState = this.onPopState.bind(this);
             window.addEventListener('keydown', this._onKey);
+            window.addEventListener('popstate', this._onPopState);
             this._onVisibility = () => {
                 clearTimeout(syncTimer);
                 if (document.hidden) {
@@ -286,11 +298,85 @@
             syncRequests.forEach(controller => controller.abort());
             document.removeEventListener('visibilitychange', this._onVisibility);
             window.removeEventListener('keydown', this._onKey);
+            window.removeEventListener('popstate', this._onPopState);
             document.body.style.overflow = '';
         },
 
         methods: {
             /* ---------- загрузка данных ---------- */
+            catalogUrl: function (page, path) {
+                var source;
+                try {
+                    source = new URL(this.catalogReturnUrl, location.origin);
+                } catch (_) {
+                    source = new URL('/marketplaces/listings/', location.origin);
+                }
+                var params = new URLSearchParams(source.search);
+                var desired = this.scopeParams();
+                if (this.filters.status) desired.set('status', this.filters.status);
+                ['marketplace', 'account_id', 'status', 'link_status', 'include_unavailable', 'search'].forEach(function (key) {
+                    if (desired.has(key)) params.set(key, desired.get(key));
+                    else if (key === 'include_unavailable' && params.has(key)) params.set(key, '0');
+                    else params.delete(key);
+                });
+                if (Number.isInteger(this.perPage) && this.perPage > 0 && this.perPage <= 100) {
+                    params.set('per_page', String(this.perPage));
+                }
+                if (Number.isInteger(page) && page > 1) params.set('page', String(page));
+                else if (params.has('page')) params.set('page', '1');
+                var catalogPath = path || location.pathname;
+                if (![this.urls.base, this.urls.base.slice(0, -1) + '/beta', this.urls.classic].includes(catalogPath)) {
+                    catalogPath = source.pathname;
+                }
+                return catalogPath + (params.size ? '?' + params.toString() : '');
+            },
+            pageForGroup: function (index) {
+                var safeIndex = Number.isInteger(index) && index >= 0 ? index : 0;
+                return (this.loadedStartPage || 1) + Math.floor(safeIndex / this.perPage);
+            },
+            onPopState: function () {
+                var current = new URL(window.location.href);
+                if (![this.urls.base, this.urls.base.slice(0, -1) + '/beta'].includes(current.pathname)) return;
+                var allowed = ['marketplace', 'account_id', 'status', 'link_status', 'include_unavailable', 'search', 'page', 'per_page'];
+                var params = current.searchParams;
+                if (Array.from(params.keys()).some(function (key) { return !allowed.includes(key); }) ||
+                    allowed.some(function (key) { return params.getAll(key).length > 1; })) return;
+                var page = Number(params.get('page') || 1);
+                var perPage = Number(params.get('per_page') || bootstrap.perPage || 60);
+                if (!Number.isSafeInteger(page) || page < 1 || page > 90071992547409 ||
+                    !Number.isInteger(perPage) || perPage < 1 || perPage > 100 || current.hash || /\\/.test(current.search)) return;
+                var marketplace = (params.get('marketplace') || '').trim().toLowerCase();
+                var accountId = params.get('account_id') || '';
+                var status = params.get('status') || '';
+                var linkStatus = params.get('link_status') || '';
+                var unavailable = params.get('include_unavailable') || '';
+                var search = params.get('search') || '';
+                var parsedAccountId = accountId && /^[0-9]+$/.test(accountId) ? Number(accountId) : null;
+                if (!['', 'wb', 'ozon'].includes(marketplace) ||
+                    (accountId && (!Number.isSafeInteger(parsedAccountId) || parsedAccountId < 1))) return;
+                if (!['', 'active', 'moderation', 'creating', 'error', 'archived', 'inactive', 'unknown'].includes(status) ||
+                    !['', 'linked', 'unlinked', 'ambiguous'].includes(linkStatus) ||
+                    !['', '1', '0', 'true', 'false', 'on', 'off', 'yes', 'no'].includes(unavailable.toLowerCase()) ||
+                    search.length > 200 || /[\x00-\x1f\x7f]/.test(search)) return;
+                this.historyRestoring = true;
+                this.filters = {
+                    marketplace: marketplace || null,
+                    account_id: parsedAccountId || null,
+                    status: status,
+                    link_status: linkStatus,
+                    include_unavailable: ['1', 'true', 'yes', 'on'].includes(unavailable.toLowerCase()),
+                    search: search
+                };
+                this.catalogReturnUrl = current.pathname + current.search;
+                this.searchInput = this.filters.search;
+                this.perPage = perPage;
+                this.requestedPage = page;
+                this.loadedStartPage = page;
+                this.$nextTick(function () {
+                    this.historyRestoring = false;
+                    this.refresh();
+                });
+            },
             scopeParams: function () {
                 var params = new URLSearchParams();
                 if (this.filters.marketplace) params.set('marketplace', this.filters.marketplace);
@@ -368,7 +454,9 @@
                     this.selectedIndex = -1;
                     this.pagination = {page: 1, pages: 1, total: 0, has_next: false};
                 }
-                params.set('page', reset ? 1 : (this.pagination.page + 1));
+                var requestedPage = reset ? (this.requestedPage || 1) : (this.pagination.page + 1);
+                if (reset) this.loadedStartPage = requestedPage;
+                params.set('page', requestedPage);
                 params.set('per_page', this.perPage);
 
                 fetch(endpoint + '?' + params.toString(), {
@@ -396,6 +484,8 @@
                         });
                     }
                     self.pagination = data.pagination || self.pagination;
+                    self.requestedPage = self.pagination.page || requestedPage;
+                    if (reset) self.loadedStartPage = self.pagination.page || requestedPage;
                 }).catch(function (err) {
                     if (err && err.name === 'AbortError') return;
                     self.error = err instanceof TypeError ? 'Не удалось связаться с сервером. Проверьте соединение и повторите попытку.' : err.message || 'Не удалось загрузить каталог';
@@ -794,8 +884,11 @@
                 }
                 return 'Ozon';
             },
-            betaDetailUrl: function (listing) {
-                return this.urls.base + 'view/' + listing.id;
+            betaDetailUrl: function (listing, groupIndex) {
+                if (!listing) return this.urls.base;
+                var index = Number.isInteger(groupIndex) ? groupIndex : this.selectedIndex;
+                var returnUrl = this.catalogUrl(this.pageForGroup(index));
+                return this.urls.overviewBase + listing.id + '?return_to=' + encodeURIComponent(returnUrl);
             },
             letterOf: function (item) { return S.letterOf(item); },
             hoverItem: function (item) {

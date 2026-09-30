@@ -1,16 +1,23 @@
 {% extends "base.html" %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='operations-workspace.css', v='ux01-7') }}">
+{% endblock %}
+
 {% block content %}
-<div class="container mx-auto px-4 py-8">
+{% set operations_history_current = 'wb-bulk' %}
+<div class="operations-workspace container mx-auto px-4 py-8">
     <!-- Hero Banner -->
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
-        <div class="relative flex items-center justify-between">
+            <div class="relative flex flex-wrap items-center justify-between gap-4">
             <div>
                 <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">История массовых изменений WB</h1>
                 <p class="mt-2 text-sm text-gray-400">Просмотр и откат групповых операций над товарами</p>
             </div>
             <a href="{{ url_for('products_bulk_edit') }}"
-               class="inline-flex items-center px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition">
+               aria-label="Массовое редактирование товаров"
+               class="operations-history-create inline-flex items-center px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition"
+               >
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
                 </svg>
@@ -18,6 +25,8 @@
             </a>
         </div>
     </div>
+
+    {% include 'partials/operations_workspace_history_nav.html' %}
 
     <!-- Список операций -->
     {% if history_records %}
@@ -28,34 +37,14 @@
                 <!-- Заголовок операции -->
                 <div class="flex items-start justify-between mb-4">
                     <div class="flex-1">
-                        <div class="flex items-center space-x-3 mb-2">
+                        <div class="flex flex-wrap items-center gap-3 mb-2">
                             <h3 class="text-lg font-semibold text-gray-900">
                                 {{ operation.description or 'Массовая операция' }}
                             </h3>
 
-                            <!-- Статус -->
-                            {% if operation.reverted %}
-                            <span class="px-3 py-1 text-xs bg-gray-200 text-gray-700 rounded-full">
-                                Откачено
-                            </span>
-                            {% elif operation.status == 'completed' %}
-                            <span class="px-3 py-1 text-xs bg-green-100 text-green-800 rounded-full">
-                                Завершено
-                            </span>
-                            {% elif operation.status == 'in_progress' %}
-                            <span class="px-3 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
-                                Выполняется
-                            </span>
-                            {% elif operation.status == 'failed' %}
-                            <span class="px-3 py-1 text-xs bg-red-100 text-red-800 rounded-full">
-                                Ошибка
-                            </span>
-                            {% else %}
-                            <span class="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-full">
-                                {{ operation.status }}
-                            </span>
-                            {% endif %}
                         </div>
+
+                        {% include 'partials/operations_workspace_wb_result.html' %}
 
                         <p class="text-sm text-gray-600">
                             {{ operation.created_at.strftime('%d.%m.%Y %H:%M:%S') }}
@@ -76,7 +65,7 @@
                         <p class="text-2xl font-bold text-gray-900">{{ operation.total_products }}</p>
                     </div>
                     <div class="bg-green-50 p-3 rounded-lg">
-                        <p class="text-xs text-gray-600 mb-1">Успешно</p>
+                        <p class="text-xs text-gray-600 mb-1">Обработано без ошибки</p>
                         <p class="text-2xl font-bold text-green-700">{{ operation.success_count }}</p>
                     </div>
                     <div class="bg-red-50 p-3 rounded-lg">

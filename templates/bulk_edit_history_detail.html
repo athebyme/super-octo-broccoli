@@ -1,7 +1,13 @@
 {% extends "base.html" %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='operations-workspace.css', v='ux01-7') }}">
+{% endblock %}
+
 {% block content %}
-<div class="container mx-auto px-4 py-8">
+{% set operations_history_current = 'wb-bulk' %}
+{% set operation = bulk_operation %}
+<div class="operations-workspace container mx-auto px-4 py-8">
     <!-- Навигация -->
     <div class="mb-6">
         <a href="{{ url_for('bulk_edit_history') }}"
@@ -13,33 +19,19 @@
         </a>
     </div>
 
+    {% include 'partials/operations_workspace_history_nav.html' %}
+
     <!-- Hero Banner -->
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8 {% if bulk_operation.reverted %}opacity-75{% endif %}">
         <div class="relative">
-            <div class="flex items-center space-x-3 mb-2">
+            <div class="flex flex-wrap items-center gap-3 mb-2">
                 <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">
                     {{ bulk_operation.description or 'Массовая операция #' + bulk_operation.id|string }}
                 </h1>
-
-                <!-- Статус -->
-                {% if bulk_operation.reverted %}
-                <span class="px-3 py-1 text-sm bg-white/10 text-white rounded-full">
-                    Откачено
-                </span>
-                {% elif bulk_operation.status == 'completed' %}
-                <span class="px-3 py-1 text-sm bg-green-400/20 text-green-100 rounded-full">
-                    Завершено
-                </span>
-                {% elif bulk_operation.status == 'in_progress' %}
-                <span class="px-3 py-1 text-sm bg-blue-400/20 text-blue-100 rounded-full">
-                    Выполняется
-                </span>
-                {% elif bulk_operation.status == 'failed' %}
-                <span class="px-3 py-1 text-sm bg-red-400/20 text-red-100 rounded-full">
-                    Ошибка
-                </span>
-                {% endif %}
             </div>
+            {% set operation = bulk_operation %}
+            {% set operations_wb_result_context = 'dark-hero' %}
+            {% include 'partials/operations_workspace_wb_result.html' %}
 
             <p class="text-sm text-gray-400">
                 Создано: {{ bulk_operation.created_at.strftime('%d.%m.%Y %H:%M:%S') }}
@@ -146,13 +138,13 @@
         </div>
 
         <!-- Статистика -->
-        <div class="grid grid-cols-4 gap-4">
+        <div class="operations-stats-grid grid grid-cols-4 gap-4">
             <div class="bg-gray-50 p-4 rounded-lg">
                 <p class="text-xs text-gray-600 mb-1">Всего товаров</p>
                 <p class="text-3xl font-bold text-gray-900">{{ bulk_operation.total_products }}</p>
             </div>
             <div class="bg-green-50 p-4 rounded-lg">
-                <p class="text-xs text-gray-600 mb-1">Успешно</p>
+                <p class="text-xs text-gray-600 mb-1">Обработано без ошибки</p>
                 <p class="text-3xl font-bold text-green-700">{{ bulk_operation.success_count }}</p>
             </div>
             <div class="bg-red-50 p-4 rounded-lg">
@@ -160,7 +152,7 @@
                 <p class="text-3xl font-bold text-red-700">{{ bulk_operation.error_count }}</p>
             </div>
             <div class="bg-blue-50 p-4 rounded-lg">
-                <p class="text-xs text-gray-600 mb-1">Успешность</p>
+                <p class="text-xs text-gray-600 mb-1">Без общей ошибки</p>
                 <p class="text-3xl font-bold text-blue-700">
                     {% if bulk_operation.total_products > 0 %}
                         {{ "%.0f"|format((bulk_operation.success_count / bulk_operation.total_products) * 100) }}%
@@ -179,19 +171,161 @@
         </div>
         {% endif %}
 
-        <!-- Ошибки -->
-        {% if bulk_operation.errors_details %}
-        <details class="mt-4" open>
-            <summary class="cursor-pointer text-sm font-semibold text-red-700 hover:text-red-800">
-                Причины ошибок ({{ bulk_operation.errors_details | length }})
-            </summary>
-            <div class="mt-2 space-y-2">
-                {% for error in bulk_operation.errors_details %}
-                <div class="p-3 bg-red-50 border border-red-200 rounded-lg text-sm">
-                    <span class="font-mono text-red-800">{{ error }}</span>
-                </div>
+        <!-- Сохранённые причины показываем обычным текстом; полный payload остаётся в свернутой диагностике. -->
+        {% set raw_error_details = bulk_operation.errors_details %}
+        {% if raw_error_details is sequence and raw_error_details is not string and raw_error_details is not mapping %}
+            {% set error_rows = raw_error_details %}
+        {% elif raw_error_details %}
+            {% set error_rows = [raw_error_details] %}
+        {% else %}
+            {% set error_rows = [] %}
+        {% endif %}
+        {% if bulk_operation.error_count or error_rows %}
+        <section class="operations-error-summary mt-4" data-operations-error-summary aria-labelledby="bulk-error-summary-title">
+            <h3 id="bulk-error-summary-title">Проблемы при обработке</h3>
+            {% set reason_presentations = {
+                'content_update_failed': {
+                    'summary': 'Обновление полей товара не подтвердило успех; фото в этом проходе были пропущены.',
+                    'next_step': 'Сверьте фактические значения полей в WB перед новым изменением.'
+                },
+                'awaiting_content_reconciliation': {
+                    'summary': 'Результат предыдущей записи полей в WB ещё сверяется; отправка фото отложена.',
+                    'next_step': 'Дождитесь завершения сверки, затем проверьте карточку WB.'
+                },
+                'previous_photo_write_pending': {
+                    'summary': 'Предыдущая отправка фото в WB ещё ожидает сверки; новая отправка отложена.',
+                    'next_step': 'Дождитесь результата сверки предыдущей отправки и проверьте актуальную галерею WB.'
+                },
+                'media_operation_busy': {
+                    'summary': 'Другая операция записи фото в WB ещё выполнялась; этот шаг был отложен.',
+                    'next_step': 'Дождитесь завершения текущей операции и проверьте актуальную галерею WB.'
+                },
+                'supplier_photo_source_drift': {
+                    'summary': 'Галерея поставщика изменилась после выбора; выбранные фотографии не отправлялись.',
+                    'next_step': 'Сверьте текущую галерею поставщика и карточку WB до нового выбора.'
+                },
+                'empty_photo_list': {
+                    'summary': 'В источнике для этой карточки нет фотографий; загрузка не начиналась.',
+                    'next_step': 'Проверьте, какие фотографии доступны в карточке поставщика.'
+                },
+                'photos_not_cached_after_timeout': {
+                    'summary': 'Копии фото не появились в кэше до окончания ожидания; отправка фото в WB не начиналась.',
+                    'next_step': 'Проверьте доступность фотоисточника и актуальную галерею WB перед новым изменением.'
+                },
+                'live_photo_drift': {
+                    'summary': 'Повторная проверка галереи или фото перед дозагрузкой не прошла; операция остановлена до отправки.',
+                    'next_step': 'Сравните текущую галерею WB с выбранными фото перед новым изменением.'
+                },
+                'already_has_photos': {
+                    'summary': 'При стратегии «Только если нет фото» загрузка пропущена: галерея WB уже содержит фотографии.',
+                    'next_step': 'Проверьте текущую галерею WB; этот шаг не добавлял новые фотографии.'
+                },
+                'selective_mode': {
+                    'summary': 'Режим «Выборочно» не обрабатывает фото в общем проходе обогащения; фото были пропущены.',
+                    'next_step': 'Проверьте выбранный режим и фактическую галерею WB перед новым изменением.'
+                }
+            } %}
+            {% if error_rows %}
+            <ul class="operations-error-list" aria-label="Сохранённые строки с проблемами">
+                {% for error in error_rows %}
+                    {% set row = error if error is mapping else none %}
+                    {% set row_product_id = row.get('product_id') if row else none %}
+                    {% set row_nm_id = row.get('nm_id') if row else none %}
+                    {% set row_vendor_code = row.get('vendor_code') if row else none %}
+                    {% set row_status = row.get('status') if row else none %}
+                    {% set row_reason = row.get('reason') if row else none %}
+                    {% set row_reason_text = row_reason|trim if row_reason is string else '' %}
+                    {% set reason_presentation = reason_presentations.get(row_reason_text) if row_reason_text else none %}
+                    {% set row_error_text = row.get('error')|trim if row and row.get('error') is string else '' %}
+                    {% set row_message_text = row.get('message')|trim if row and row.get('message') is string else '' %}
+                    {% set error_text = '' %}
+                    {% if error is string %}
+                        {% set error_text = error|trim %}
+                    {% elif row_error_text %}
+                        {% set error_text = row_error_text %}
+                    {% elif row_message_text %}
+                        {% set error_text = row_message_text %}
+                    {% elif row_reason_text and not reason_presentation %}
+                        {% set error_text = row_reason_text %}
+                    {% endif %}
+                    {% set row_reason_is_code = false %}
+                    {% if row_reason_text and not reason_presentation %}
+                        {% set reason_code_body = row_reason_text.replace('_', '').replace('-', '').replace('.', '') %}
+                        {% if row_reason_text.isascii() and reason_code_body.isalnum() %}
+                            {% set row_reason_is_code = true %}
+                        {% endif %}
+                    {% endif %}
+                <li class="operations-error-row"{% if row_product_id is integer or (row_product_id is string and row_product_id|trim) %} data-operations-error-id="{{ row_product_id }}"{% endif %}>
+                    <div class="operations-error-row-heading">
+                        <strong>
+                            {% if row_vendor_code is string and row_vendor_code|trim %}
+                                {{ row_vendor_code|trim }}
+                            {% elif row_nm_id is integer or (row_nm_id is string and row_nm_id|trim) %}
+                                Артикул WB: {{ row_nm_id }}
+                            {% elif row_product_id is integer or (row_product_id is string and row_product_id|trim) %}
+                                Строка товара #{{ row_product_id }}
+                            {% else %}
+                                Запись об ошибке #{{ loop.index }}
+                            {% endif %}
+                        </strong>
+                        {% if row_status == 'failed' %}<span class="operations-error-row-status">Не выполнено</span>
+                        {% elif row_status == 'skipped' %}<span class="operations-error-row-status">Пропущено</span>
+                        {% elif row_status == 'uncertain' %}<span class="operations-error-row-status">Исход требует сверки</span>
+                        {% endif %}
+                    </div>
+                    {% if row %}
+                    <p class="operations-error-row-identity">
+                        {% if row_vendor_code is string and row_vendor_code|trim %}Артикул продавца: {{ row_vendor_code|trim }}{% endif %}
+                        {% if row_nm_id is integer or (row_nm_id is string and row_nm_id|trim) %}{% if row_vendor_code is string and row_vendor_code|trim %} · {% endif %}Артикул WB: {{ row_nm_id }}{% endif %}
+                        {% if row_product_id is integer or (row_product_id is string and row_product_id|trim) %}{% if (row_vendor_code is string and row_vendor_code|trim) or row_nm_id is integer or (row_nm_id is string and row_nm_id|trim) %} · {% endif %}ID строки: #{{ row_product_id }}{% endif %}
+                    </p>
+                    {% endif %}
+                    {% if reason_presentation %}
+                    <p class="operations-error-row-description">{{ reason_presentation.summary }}</p>
+                    {% if row_error_text and row_error_text != row_reason_text %}
+                    <p class="operations-error-row-description"><strong>Сообщение:</strong> {{ row_error_text }}</p>
+                    {% endif %}
+                    {% if row_message_text and row_message_text != row_reason_text and row_message_text != row_error_text %}
+                    <p class="operations-error-row-description"><strong>Дополнительное сообщение:</strong> {{ row_message_text }}</p>
+                    {% endif %}
+                    <p class="operations-error-row-next-step">{{ reason_presentation.next_step }}</p>
+                    {% elif row_reason_text and row_reason_is_code %}
+                    <p class="operations-error-row-description"><strong>Нераспознанный код причины:</strong> <code>{{ row_reason_text }}</code></p>
+                    {% if row_error_text and row_error_text != row_reason_text %}
+                    <p class="operations-error-row-description"><strong>Сообщение:</strong> {{ row_error_text }}</p>
+                    {% endif %}
+                    {% if row_message_text and row_message_text != row_reason_text and row_message_text != row_error_text %}
+                    <p class="operations-error-row-description"><strong>Дополнительное сообщение:</strong> {{ row_message_text }}</p>
+                    {% endif %}
+                    {% elif row_reason_text %}
+                    <p class="operations-error-row-description"><strong>Причина:</strong> {{ row_reason_text }}</p>
+                    {% if row_error_text and row_error_text != row_reason_text %}
+                    <p class="operations-error-row-description"><strong>Сообщение:</strong> {{ row_error_text }}</p>
+                    {% endif %}
+                    {% if row_message_text and row_message_text != row_reason_text and row_message_text != row_error_text %}
+                    <p class="operations-error-row-description"><strong>Дополнительное сообщение:</strong> {{ row_message_text }}</p>
+                    {% endif %}
+                    {% elif error_text %}
+                    <p class="operations-error-row-description">{{ error_text }}</p>
+                    {% else %}
+                    <p class="operations-error-row-fallback">Описание причины не сохранено в поддерживаемом текстовом поле. Исходная запись доступна в свернутых технических деталях.</p>
+                    {% endif %}
+                </li>
                 {% endfor %}
-            </div>
+            </ul>
+            {% else %}
+            <p class="operations-error-row-fallback">Подробности отдельных проблем в журнале не сохранены.</p>
+            {% endif %}
+            <p class="operations-error-next-step">Перед новым изменением проверьте актуальное состояние карточки в WB.</p>
+        </section>
+        {% endif %}
+
+        {% if raw_error_details %}
+        <details class="operations-technical-details mt-4" data-operations-raw-errors>
+            <summary class="cursor-pointer text-sm font-semibold text-red-700 hover:text-red-800">
+                Полные технические данные ошибок ({{ error_rows|length }} сохранённых записей)
+            </summary>
+            <pre class="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">{{ raw_error_details|tojson(indent=2) }}</pre>
         </details>
         {% endif %}
     </div>
@@ -219,7 +353,7 @@
                             {% endif %}
                             {% if change.wb_synced %}
                             <span class="px-2 py-0.5 text-xs bg-green-100 text-green-800 rounded">
-                                Синхронизировано
+                                WB синхронизирован
                             </span>
                             {% endif %}
                         </div>
@@ -229,6 +363,33 @@
                                 Артикул: {{ change.product.vendor_code }} | NM ID: {{ change.product.nm_id }}
                             {% endif %}
                         </p>
+
+                        <div class="operations-row-result mt-3" data-wb-sync-status="{{ change.wb_sync_status or 'unknown' }}">
+                            <strong>Результат WB:</strong>
+                            {% if change.wb_sync_status == 'success' %}
+                                WB сообщил об успехе.
+                            {% elif change.wb_sync_status == 'failed' %}
+                                WB вернул ошибку; проверьте фактическое состояние перед новым действием.
+                            {% elif change.wb_sync_status == 'pending' %}
+                                Ожидается отправка или подтверждение.
+                            {% elif change.wb_sync_status == 'submitted' %}
+                                Изменение отправлено; итог ещё требует проверки.
+                            {% elif change.wb_sync_status == 'uncertain' %}
+                                Точный исход неизвестен. Не повторяйте изменение до сверки с WB.
+                            {% elif change.wb_sync_status == 'partial' %}
+                                WB подтвердил только часть изменения; проверьте сохранённые значения.
+                            {% elif change.wb_sync_status == 'conflict' %}
+                                Состояние WB изменилось; сравните актуальные значения с записью истории.
+                            {% else %}
+                                Подтверждённый результат WB не сохранён.
+                            {% endif %}
+                        </div>
+                        {% if change.wb_error_message %}
+                        <details class="operations-technical-details mt-2">
+                            <summary>Техническая причина от WB</summary>
+                            <p class="mt-2">{{ change.wb_error_message }}</p>
+                        </details>
+                        {% endif %}
 
                         <!-- Измененные поля -->
                         {% if change.changed_fields %}
@@ -266,6 +427,10 @@
         </p>
         {% endif %}
     </div>
+
+    {% if not bulk_operation.can_revert() and bulk_operation.status == 'completed' %}
+    <p class="operations-revert-note">Безопасный откат для этой операции недоступен. Проверьте результаты строк выше.</p>
+    {% endif %}
 </div>
 <script>
 function bulkExport() {

@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% from 'macros/icons.html' import icon %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 {% block title %}Подготовка товаров Ozon — Seller Hub{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
@@ -27,6 +28,9 @@
 } | tojson }}</script>
 <div id="odl-boot-fallback" class="ode-boot">Открываем подготовку товаров… <a href="{{ url_for('marketplace_drafts.classic_index', account_id=filters.account_id, status=filters.status) }}">Упрощённый список</a></div>
 <noscript><p class="ode-boot"><a href="{{ url_for('marketplace_drafts.classic_index', account_id=filters.account_id, status=filters.status) }}">Посмотреть черновики без JavaScript</a></p></noscript>
+{% set journey_account = namespace(label=none) %}
+{% for account in accounts %}{% if filters.account_id and account.id == filters.account_id %}{% set journey_account.label = account.label %}{% endif %}{% endfor %}
+{{ preparation_journey('draft', journey_account.label or (('магазин #' ~ filters.account_id) if filters.account_id else none), 'черновики Ozon', 'Выберите карточку и заполните поля; сохранение остаётся локальным. Свежая проверка требует точного набора и сохранённых версий.', internal_url=url_for('seller_my_products', account_id=filters.account_id), draft_url=url_for('marketplace_drafts.index', account_id=filters.account_id), result_url=url_for('ozon_bulk_uploads.index', account_id=filters.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=filters.account_id), channel='Ozon') }}
 <div id="ozon-drafts-list" class="ode odl" v-cloak x-ignore>
     <header class="ode-header"><a :href="config.urls.catalog" class="ode-back">{{ icon('arrow-left', size=16) }} Каталог Ozon</a><div class="ode-header-line"><div><p class="ode-eyebrow">Ozon · Работа с карточками</p><h1>Подготовка товаров</h1></div><div class="ode-actions"><a :href="config.urls.runs" class="sh-btn sh-btn--secondary">{{ icon('clock', size=16) }} История загрузок</a><a :href="config.urls.accounts" class="sh-btn sh-btn--secondary">Магазины</a></div></div><p class="odl-intro">Соберите карточки, заполните недостающее и отправьте в нужный магазин.</p></header>
 {% raw %}

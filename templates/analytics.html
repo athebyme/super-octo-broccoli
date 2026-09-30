@@ -3,8 +3,12 @@
 
 {% block title %}Аналитика - Seller Hub{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='analytics-workspace.css', v='ux01-3') }}">
+{% endblock %}
+
 {% block content %}
-<div x-data="analyticsPage()">
+<div class="analytics-workspace" x-data="analyticsPage()">
 
     {# ── Page Header ── #}
     <div class="sh-page-header">
@@ -21,18 +25,19 @@
                     Обновить
                 </button>
                 <!-- Period selector -->
-                <div style="display:inline-flex;border-radius:6px;background:rgba(255,255,255,0.1);padding:3px">
+                <div class="analytics-period-selector" style="border-radius:6px;background:rgba(255,255,255,0.1);padding:3px">
                     <template x-for="p in periods" :key="p.value">
                         <button @click="changePeriod(p.value)"
-                            :class="period === p.value ? 'bg-white shadow-sm text-[#1a1a1a] font-semibold' : 'text-white/80 hover:text-white hover:bg-white/10'"
-                            class="px-3 py-1.5 text-sm rounded-md transition-all" x-text="p.label"></button>
+                            :class="period === p.value ? 'is-active' : ''"
+                            :aria-pressed="period === p.value"
+                            class="analytics-period-option px-3 py-1.5 text-sm rounded-md" x-text="p.label"></button>
                     </template>
                 </div>
             </div>
         </div>
     </div>
 
-    <div style="max-width:1280px;margin:0 auto;padding:0 24px">
+    <div class="analytics-content" style="max-width:1280px;margin:0 auto;padding:0 24px">
 
     {{ channel_bar(active='wb', wb_href=url_for('analytics_page'), ozon_href=url_for('marketplace_analytics_page'), class='mb-5') }}
 
@@ -50,15 +55,19 @@
     </template>
 
     <!-- Error message -->
-    <template x-if="error && !hasData">
-        <div style="background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:12px;padding:24px;margin-bottom:32px">
+    <template x-if="error">
+        <div class="analytics-error" role="alert">
             <p style="color:var(--danger)" x-text="error"></p>
+            <p class="analytics-stale-note" x-show="hasData && loadedPeriod"
+               x-text="staleMessage()"></p>
             <button @click="loadData()" style="margin-top:12px;font-size:14px;color:var(--danger);text-decoration:underline">Попробовать снова</button>
         </div>
     </template>
 
-    <template x-if="hasData || !loading">
-    <div>
+    <template x-if="hasData">
+    <div class="analytics-data">
+    <p class="analytics-period-context" role="status" aria-live="polite"
+       x-text="displayedPeriodMessage()"></p>
     {# ── KPI Stat Cards ── #}
     <div class="sh-stat-grid sh-stat-grid--4" style="margin-bottom:32px">
         <!-- Revenue -->
@@ -152,12 +161,12 @@
     </div>
 
     {# ── Charts Row ── #}
-    <div style="display:grid;grid-template-columns:1fr;gap:24px;margin-bottom:32px" class="lg:grid-cols-3">
+    <div style="display:grid;grid-template-columns:1fr;gap:24px;margin-bottom:32px" class="analytics-chart-row lg:grid-cols-3">
         <!-- Sales chart (2 cols) -->
         <div class="sh-card lg:col-span-2" style="position:relative;overflow:hidden;padding:24px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
+            <div class="analytics-chart-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
                 <h2 style="font-family:var(--font-display);font-style:italic;font-size:1.25rem;color:var(--text)">Динамика продаж</h2>
-                <div style="display:flex;align-items:center;gap:16px;font-size:12px;color:var(--text-secondary)">
+                <div class="analytics-chart-legend" style="display:flex;align-items:center;gap:16px;font-size:12px;color:var(--text-secondary)">
                     <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:50%;background:var(--chart-1)"></span> Заказы (руб)</span>
                     <span style="display:flex;align-items:center;gap:6px"><span style="width:12px;height:12px;border-radius:50%;background:var(--chart-3)"></span> Заказы (шт)</span>
                 </div>
@@ -167,12 +176,12 @@
             </div>
             <template x-if="!dailyData.length && !loadingDaily">
                 <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.8);border-radius:inherit">
-                    <div style="text-align:center">
+                    <div class="analytics-daily-empty" style="text-align:center">
                         <template x-if="dailyError">
                             <p style="font-size:14px;color:var(--danger);margin-bottom:12px" x-text="dailyError"></p>
                         </template>
-                        <button @click="loadDailyData()" class="sh-btn sh-btn--primary sh-btn--sm">
-                            <span x-text="dailyError ? 'Попробовать снова' : 'Загрузить данные по дням'"></span>
+                        <button @click="loadDailyData()" :disabled="loading || loadingDaily || period !== loadedPeriod" class="sh-btn sh-btn--primary sh-btn--sm analytics-daily-load-button">
+                            <span class="analytics-daily-load-label" x-text="dailyError ? 'Попробовать снова' : 'Загрузить данные по дням'"></span>
                         </button>
                     </div>
                 </div>
@@ -194,40 +203,40 @@
                 <canvas x-ref="funnelDonut"></canvas>
             </div>
             <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px">
-                <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
+                <div class="analytics-funnel-fact" style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
                         <span style="width:12px;height:12px;border-radius:50%;background:var(--chart-1)"></span>
                         <span style="color:var(--text-secondary)">Просмотры</span>
                     </span>
-                    <span style="font-weight:500;color:var(--text)" x-text="kpi.openCardCount.toLocaleString('ru-RU')"></span>
+                    <span class="analytics-funnel-fact-value" style="font-weight:500;color:var(--text)" x-text="kpi.openCardCount.toLocaleString('ru-RU')"></span>
                 </div>
-                <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
+                <div class="analytics-funnel-fact" style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
                         <span style="width:12px;height:12px;border-radius:50%;background:var(--chart-2)"></span>
                         <span style="color:var(--text-secondary)">В корзину</span>
                     </span>
-                    <span style="font-weight:500;color:var(--text)" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></span>
+                    <span class="analytics-funnel-fact-value" style="font-weight:500;color:var(--text)" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></span>
                 </div>
-                <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
+                <div class="analytics-funnel-fact" style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
                         <span style="width:12px;height:12px;border-radius:50%;background:var(--chart-3)"></span>
                         <span style="color:var(--text-secondary)">Заказы</span>
                     </span>
-                    <span style="font-weight:500;color:var(--text)" x-text="kpi.orders.toLocaleString('ru-RU')"></span>
+                    <span class="analytics-funnel-fact-value" style="font-weight:500;color:var(--text)" x-text="kpi.orders.toLocaleString('ru-RU')"></span>
                 </div>
-                <div style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
+                <div class="analytics-funnel-fact" style="display:flex;align-items:center;justify-content:space-between;font-size:14px">
                     <span style="display:flex;align-items:center;gap:8px">
                         <span style="width:12px;height:12px;border-radius:50%;background:var(--chart-4)"></span>
                         <span style="color:var(--text-secondary)">Выкупы</span>
                     </span>
-                    <span style="font-weight:500;color:var(--text)" x-text="kpi.buyouts.toLocaleString('ru-RU')"></span>
+                    <span class="analytics-funnel-fact-value" style="font-weight:500;color:var(--text)" x-text="kpi.buyouts.toLocaleString('ru-RU')"></span>
                 </div>
             </div>
         </div>
     </div>
 
     {# ── Bottom Row ── #}
-    <div style="display:grid;grid-template-columns:1fr;gap:24px" class="lg:grid-cols-2">
+    <div style="display:grid;grid-template-columns:1fr;gap:24px" class="analytics-bottom-row lg:grid-cols-2">
         <!-- Top Products -->
         <div class="sh-card" style="padding:24px">
             <div class="sh-section-title" style="margin-bottom:20px">
@@ -266,7 +275,8 @@
             <div class="sh-section-title" style="margin-bottom:20px">
                 <span>Детализация по товарам</span>
             </div>
-            <div class="sh-table-wrap">
+            <div class="sh-table-wrap analytics-table-scroll" role="region"
+                 aria-label="Детализация аналитики по товарам" tabindex="0">
                 <table class="sh-table">
                     <thead>
                         <tr>
@@ -324,6 +334,9 @@
 function analyticsPage() {
     return {
         period: '30d',
+        loadedPeriod: null,
+        summaryRequestRevision: 0,
+        dailyRequestRevision: 0,
         loading: false,
         loadingDaily: false,
         error: null,
@@ -344,6 +357,7 @@ function analyticsPage() {
         topProducts: [],
         productsList: [],
         dailyData: [],
+        dailyDataPeriod: null,
         salesChart: null,
         funnelChart: null,
         sparkCharts: {},
@@ -359,55 +373,107 @@ function analyticsPage() {
         changePeriod(p) {
             if (this.period === p) return;
             this.period = p;
-            this.dailyData = [];
-            this.loadData();
+            this.invalidateDailyRequest();
+            this.dailyError = null;
+            return this.loadData();
+        },
+
+        periodLabel(value) {
+            return this.periods.find(item => item.value === value)?.label || 'неизвестный период';
+        },
+
+        staleMessage() {
+            const loaded = this.periodLabel(this.loadedPeriod);
+            if (this.period === this.loadedPeriod) {
+                return `Не удалось обновить данные за ${loaded}. На экране предыдущие успешно загруженные данные за этот же период.`;
+            }
+            return `Не удалось загрузить данные за ${this.periodLabel(this.period)}. На экране остаются данные за ${loaded}.`;
+        },
+
+        displayedPeriodMessage() {
+            if (!this.loadedPeriod) return '';
+            const loaded = this.periodLabel(this.loadedPeriod);
+            if (this.loading && this.period !== this.loadedPeriod) {
+                return `Показаны данные за ${loaded}; загружаем период ${this.periodLabel(this.period)}.`;
+            }
+            return `Показаны данные за ${loaded}.`;
+        },
+
+        invalidateDailyRequest() {
+            this.dailyRequestRevision += 1;
+            this.loadingDaily = false;
+        },
+
+        isCurrentSummaryRequest(revision, requestedPeriod) {
+            return revision === this.summaryRequestRevision && requestedPeriod === this.period;
         },
 
         async loadData() {
+            const revision = ++this.summaryRequestRevision;
+            const requestedPeriod = this.period;
             this.loading = true;
             this.error = null;
             try {
-                const resp = await fetch(`/api/analytics/summary?period=${this.period}`);
+                const resp = await fetch(`/api/analytics/summary?period=${encodeURIComponent(requestedPeriod)}`);
                 const json = await resp.json();
                 if (!resp.ok) throw new Error(json.error || 'Ошибка загрузки');
-                this.applyData(json.data);
+                if (!this.isCurrentSummaryRequest(revision, requestedPeriod)) return;
+                const periodChanged = this.loadedPeriod !== requestedPeriod;
+                this.invalidateDailyRequest();
+                this.dailyError = null;
+                this.applyData(json.data, { requestedPeriod, clearDaily: periodChanged });
                 this.hasData = true;
-                // Load products list
-                this.loadProducts();
+                this.loadedPeriod = requestedPeriod;
+                if (periodChanged) this.productsList = [];
+                this.loadProducts(requestedPeriod, revision);
             } catch (e) {
-                this.error = e.message;
+                if (this.isCurrentSummaryRequest(revision, requestedPeriod)) {
+                    this.error = e.message;
+                }
             } finally {
-                this.loading = false;
+                if (this.isCurrentSummaryRequest(revision, requestedPeriod)) {
+                    this.loading = false;
+                }
             }
         },
 
         async refreshData() {
+            const revision = ++this.summaryRequestRevision;
+            const requestedPeriod = this.period;
             this.loading = true;
             this.error = null;
             try {
                 const resp = await fetch('/api/analytics/refresh', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ period: this.period }),
+                    body: JSON.stringify({ period: requestedPeriod }),
                 });
                 const json = await resp.json();
                 if (!resp.ok) throw new Error(json.error || 'Ошибка обновления');
-                this.applyData(json.data);
+                if (!this.isCurrentSummaryRequest(revision, requestedPeriod)) return;
+                this.invalidateDailyRequest();
+                this.dailyError = null;
+                this.applyData(json.data, { requestedPeriod, clearDaily: true });
                 this.hasData = true;
-                this.dailyData = [];
-                this.loadProducts();
+                this.loadedPeriod = requestedPeriod;
+                this.productsList = [];
+                this.loadProducts(requestedPeriod, revision);
             } catch (e) {
-                this.error = e.message;
+                if (this.isCurrentSummaryRequest(revision, requestedPeriod)) {
+                    this.error = e.message;
+                }
             } finally {
-                this.loading = false;
+                if (this.isCurrentSummaryRequest(revision, requestedPeriod)) {
+                    this.loading = false;
+                }
             }
         },
 
-        async loadProducts() {
+        async loadProducts(requestedPeriod = this.period, revision = this.summaryRequestRevision) {
             try {
-                const resp = await fetch(`/api/analytics/products?period=${this.period}&per_page=10`);
+                const resp = await fetch(`/api/analytics/products?period=${encodeURIComponent(requestedPeriod)}&per_page=10`);
                 const json = await resp.json();
-                if (resp.ok && json.data) {
+                if (this.isCurrentSummaryRequest(revision, requestedPeriod) && resp.ok && json.data) {
                     this.productsList = json.data.items || [];
                 }
             } catch (e) {
@@ -418,23 +484,32 @@ function analyticsPage() {
         dailyError: null,
 
         async loadDailyData() {
+            if (!this.hasData || this.period !== this.loadedPeriod) return;
+            const revision = ++this.dailyRequestRevision;
+            const requestedPeriod = this.period;
             this.loadingDaily = true;
             this.dailyError = null;
             try {
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 120000);
-                const resp = await fetch(`/api/analytics/daily?period=${this.period}`, { signal: controller.signal });
+                const resp = await fetch(`/api/analytics/daily?period=${encodeURIComponent(requestedPeriod)}`, { signal: controller.signal });
                 clearTimeout(timeout);
                 const json = await resp.json();
+                if (!this.isCurrentDailyRequest(revision, requestedPeriod)) return;
                 if (!resp.ok) {
                     this.dailyError = json.error || 'Ошибка загрузки';
                 } else if (json.data && json.data.length) {
                     this.dailyData = json.data;
+                    this.dailyDataPeriod = requestedPeriod;
                     this.$nextTick(() => this.initSalesChart());
                 } else {
                     this.dailyError = 'Нет данных за выбранный период';
+                    this.dailyData = [];
+                    this.dailyDataPeriod = null;
+                    this.$nextTick(() => this.initSalesChart());
                 }
             } catch (e) {
+                if (!this.isCurrentDailyRequest(revision, requestedPeriod)) return;
                 if (e.name === 'AbortError') {
                     this.dailyError = 'Превышено время ожидания. Попробуйте позже.';
                 } else {
@@ -442,11 +517,19 @@ function analyticsPage() {
                 }
                 console.error('Error loading daily data:', e);
             } finally {
-                this.loadingDaily = false;
+                if (this.isCurrentDailyRequest(revision, requestedPeriod)) {
+                    this.loadingDaily = false;
+                }
             }
         },
 
-        applyData(data) {
+        isCurrentDailyRequest(revision, requestedPeriod) {
+            return revision === this.dailyRequestRevision
+                && requestedPeriod === this.period
+                && requestedPeriod === this.loadedPeriod;
+        },
+
+        applyData(data, { requestedPeriod = this.period, clearDaily = false } = {}) {
             if (!data) return;
             const k = data.kpi || {};
             this.kpi = {
@@ -461,8 +544,12 @@ function analyticsPage() {
                 conversions: data.conversions || { addToCartPercent: 0, cartToOrderPercent: 0, buyoutPercent: 0 },
             };
             this.topProducts = data.topProducts || [];
-            if (data.dailyData && data.dailyData.length) {
+            if (Array.isArray(data.dailyData) && (data.dailyData.length || clearDaily)) {
                 this.dailyData = data.dailyData;
+                this.dailyDataPeriod = data.dailyData.length ? requestedPeriod : null;
+            } else if (clearDaily) {
+                this.dailyData = [];
+                this.dailyDataPeriod = null;
             }
             if (data.created_at) {
                 this.dataAge = new Date(data.created_at).toLocaleString('ru-RU');
@@ -522,8 +609,11 @@ function analyticsPage() {
         },
 
         initSalesChart() {
+            if (this.salesChart) {
+                this.salesChart.destroy();
+                this.salesChart = null;
+            }
             if (!this.dailyData.length || !this.$refs.salesChart) return;
-            if (this.salesChart) this.salesChart.destroy();
 
             const labels = this.dailyData.map(d => {
                 const dt = new Date(d.date);

@@ -1,14 +1,24 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
 {% block title %}Цены и остатки Ozon — Seller Hub{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css') }}">{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}"><link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='ozon-commercial.css') }}">{% endblock %}
 {% block content %}
 <script type="application/json" id="oc-bootstrap">{{ {'mode':'list', 'filters':filters, 'base':url_for('marketplace_commercial.index'), 'catalog':url_for('marketplace_listings.index'), 'writeEnabled':write_enabled} | tojson }}</script>
 <div class="oc-fallback" id="oc-fallback">Загружаем цены и остатки… <a href="{{ url_for('marketplace_commercial.classic', account_id=filters.account_id) }}">Открыть упрощённую версию</a></div>
-<div id="ozon-commercial-app" class="oc-page" v-cloak>
+<div id="ozon-commercial-app" class="oc-page pricing-workspace" v-cloak>
+    {% set pricing_workspace_current = 'ozon-proposals' %}
+    {% include 'partials/pricing_workspace_nav.html' %}
+    {% include 'partials/pricing_workspace_ozon_facts.html' %}
     <header class="oc-header"><div><h1>Цены и остатки</h1><p>Изменения в Ozon с проверкой и вашим подтверждением.</p></div><button class="sh-btn sh-btn--primary" @click="openCreate">{{ icon('plus',18) }} Изменить цену или остаток</button></header>
+    {% if config.get('MARKETPLACE_OZON_ENABLED', false) %}
+    <nav class="oc-nav" aria-label="Связанные разделы">
+        <a href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=filters.account_id) }}">Каталог Ozon</a>
+        <a href="{{ url_for('marketplace_operations.index', account_id=filters.account_id) }}">Журнал операций</a>
+        <a href="{{ url_for('marketplace_accounts.index', account_id=filters.account_id) }}">Подключение магазинов</a>
+    </nav>
+    {% endif %}
     {% raw %}
-    <nav class="oc-nav" aria-label="Связанные разделы"><a :href="catalogUrl">Каталог Ozon</a><a href="/marketplaces/operations/">Журнал операций</a><a href="/marketplaces/accounts/">Подключение магазинов</a></nav>
     <p v-if="!writeEnabled" class="oc-notice">Изменения можно подготовить и сохранить. Отправка в Ozon временно выключена администратором.</p>
     <div v-if="error" class="oc-alert" role="alert"><p>{{ error }}</p><button type="button" class="sh-btn sh-btn--secondary" :disabled="loading || busy || sessionEnded" @click="loadList()">Обновить данные</button><a v-if="sessionEnded" href="/login">Войти снова</a></div>
     <p v-if="notice" class="oc-notice" role="status">{{ notice }}</p>
@@ -21,7 +31,7 @@
     <details v-if="observedFilters.account_id" class="oc-warehouses"><summary>Склады магазина <span>{{ warehouses.length }}</span></summary>
         <div class="oc-between"><p>Остатки меняются для выбранного склада FBS/rFBS. Дата ниже — последнее полное обновление списка.</p><button class="sh-btn sh-btn--secondary" :disabled="busy || loading || warehouseRefreshes[observedFilters.account_id]?.active" @click="syncWarehouses(observedFilters.account_id)">{{ busy === 'warehouses' ? 'Ставим в очередь…' : 'Обновить склады' }}</button></div>
         <p v-if="refreshError" class="oc-alert" role="alert">{{ refreshError }} <button type="button" class="sh-btn sh-btn--secondary" @click="readRefresh('warehouses',Number(observedFilters.account_id))">Проверить состояние</button></p>
-        <p v-if="warehouseRefreshes[observedFilters.account_id]" class="oc-refresh-state" role="status" aria-live="polite">{{ refreshText(warehouseRefreshes[observedFilters.account_id]) }} <a v-if="warehouseRefreshes[observedFilters.account_id]?.code === 'access_denied'" href="/marketplaces/accounts/">Настройки кабинета</a></p>
+        <p v-if="warehouseRefreshes[observedFilters.account_id]" class="oc-refresh-state" role="status" aria-live="polite">{{ refreshText(warehouseRefreshes[observedFilters.account_id]) }} <a v-if="warehouseRefreshes[observedFilters.account_id]?.code === 'access_denied'" href="{{ url_for('marketplace_accounts.index', account_id=filters.account_id) }}">Настройки кабинета</a></p>
         <ul v-if="warehouses.length" class="oc-warehouse-list"><li v-for="w in warehouses" :key="w.id"><strong>{{ w.name }}</strong><span>{{ w.is_available ? (w.warehouse_type || 'Тип не указан') : 'Недоступен' }}</span><small>{{ date(w.last_synced_at) }}</small></li></ul><p v-else>Список складов ещё не загружен. Обновите его перед изменением остатков.</p>
     </details>
     <div class="oc-between oc-list-heading"><h2>Заявки на изменение <span>{{ pagination.total }}</span></h2><button v-if="selected.length" class="sh-btn sh-btn--primary" :disabled="loading || busy" @click="openBatch">Проверить выбранные: {{ selected.length }}</button><button v-else class="sh-btn sh-btn--secondary" :disabled="loading || busy" @click="loadList()">Обновить</button></div>

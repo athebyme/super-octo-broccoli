@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "macros/components.html" import channel_bar %}
 {% block title %}Качество карточек - Seller Hub{% endblock %}
 {% block content %}
 <div x-data="cardQualityPage()" x-init="init()">
@@ -17,8 +16,6 @@
     <div><h1 class="sh-page-title">Качество карточек</h1>
       <p class="sh-page-subtitle">WB-рейтинг и наш Quality Score</p></div>
     <div class="sh-page-actions">
-      <a href="{{ url_for('card_quality_beta_page') }}" class="sh-btn sh-btn--accent sh-btn--sm"
-         title="Очередь работ: сверху карточки, где исправление принесёт больше всего">Новая версия</a>
       <button @click="refresh()" :disabled="refreshing" class="sh-btn sh-btn--white-outline sh-btn--sm" x-text="refreshing ? 'Обновление…' : 'Обновить рейтинги'"></button>
       <a href="{{ url_for('card_quality_bulk_improve_page') }}"
          :class="!summary.need_attention ? 'opacity-50 pointer-events-none' : ''"
@@ -28,7 +25,9 @@
     </div>
   </div></div>
 
-  {{ channel_bar(active='wb', wb_href=url_for('card_quality_page'), ozon_href=url_for('marketplace_quality_page'), class='mb-5') }}
+  {% with seller_workspace_quality_mode='classic' %}
+  {% include "partials/seller_workspace_quality_media.html" %}
+  {% endwith %}
 
   {# ── Сводная лента ── #}
   <div class="sh-card" style="margin-bottom:32px">

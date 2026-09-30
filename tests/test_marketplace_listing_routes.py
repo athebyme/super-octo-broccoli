@@ -167,6 +167,11 @@ class MarketplaceListingRoutesTest(unittest.TestCase):
             "templates/marketplace_listings.html",
             "templates/partials/marketplace_catalog_products.html",
             "templates/marketplace_listing_beta_detail.html",
+            "templates/partials/listing_workspace_beta_header.html",
+            "templates/partials/listing_workspace_classic_header.html",
+            "templates/partials/preparation_workspace_journey.html",
+            "templates/partials/seller_workspace_nav.html",
+            "templates/partials/seller_workspace_utility.html",
         ):
             endpoint_names.update(re.findall(
                 r"url_for\(['\"]([^'\"]+)",

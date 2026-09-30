@@ -5,35 +5,39 @@
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-catalog-beta.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='marketplace-prices.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='marketplace-listing-detail-beta.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='preparation-workspace.css') }}">
 
 <script type="application/json" id="mdet-bootstrap">{{ {
     'listingId': listing_id,
     'members': members,
+    'returnUrl': return_url,
     'ozonEnabled': ozon_enabled,
     'urls': {
         'base': url_for('marketplace_listings.index'),
-        'catalog': url_for('marketplace_listings.index'),
+        'overviewBase': url_for('marketplace_listings.index') ~ 'view/',
+        'managementBase': url_for('marketplace_listings.index'),
         'myProducts': url_for('seller_my_products'),
+        'drafts': url_for('marketplace_drafts.index'),
+        'uploadHistory': url_for('ozon_bulk_uploads.index'),
     },
 } | tojson }}</script>
 
 <div id="marketplace-detail-app" v-cloak>
 {% raw %}
-    <div class="mdet-top">
-        <a class="mdet-back" :href="urls.catalog">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
-            Каталог
-        </a>
-        <nav class="sh-channel-bar" v-if="members.length > 1" aria-label="Каналы товара">
-            <button v-for="m in members" :key="m.id" type="button" class="sh-channel-tab"
-                    :class="{'sh-channel-tab--active': m.id === listingId}"
-                    @click="switchMember(m)">
-                <span class="sh-mp-dot" :class="'sh-mp-dot--' + (m.marketplace_code || 'wb')"></span>
-                {{ memberLabel(m) }}
-            </button>
+    {% endraw %}{% include "partials/listing_workspace_beta_header.html" %}{% raw %}
+
+    <aside v-if="listing && listing.id === listingId && listing.marketplace_code === 'ozon'" class="preparation-listing-end-state" aria-label="Путь карточки Ozon: каталог">
+        <div>
+            <p class="preparation-journey-kicker">Последний этап пути</p>
+            <strong>Карточка Ozon</strong>
+            <p>Статус площадки и видимость показаны в сведениях карточки выше. Синхронизированная запись каталога сама по себе не подтверждает предыдущие этапы.</p>
+        </div>
+        <nav aria-label="Действия с Ozon-карточкой">
+            <a :href="urls.drafts + '?account_id=' + encodeURIComponent(listing.account_id)">Подготовить черновик</a>
+            <a :href="urls.uploadHistory + '?account_id=' + encodeURIComponent(listing.account_id)">История запусков</a>
         </nav>
-        <a class="sh-btn sh-btn--secondary mdet-classic" :href="urls.base + listingId">Управление карточкой</a>
-    </div>
+    </aside>
 
     <div v-if="error" class="mcat-error" role="alert">
         <span>{{ error }}</span>
@@ -73,21 +77,6 @@
             </div>
 
             <div class="mdet-info">
-                <p class="mdet-mp-line">
-                    <i class="mcat-dot" :class="'mcat-dot--' + (listing.marketplace_code || 'wb')" aria-hidden="true"></i>
-                    <span>{{ channelFull(listing) }}</span>
-                    <span class="mcat-mono mdet-offer">{{ listing.offer_id }}</span>
-                </p>
-                <h1 class="mdet-title">{{ listing.title || 'Без названия' }}</h1>
-                <div class="mdet-badges">
-                    <span class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + statusMeta(listing).tone">{{ statusMeta(listing).label }}</span>
-                    <span v-if="!listing.is_available" class="mcat-badge mcat-badge--flat mcat-badge--warn">не найден при последней синхронизации</span>
-                    <span v-if="visibilityBadge" class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + visibilityBadge.tone"
-                          :title="visibilityBadge.hint || listing.visibility">{{ visibilityBadge.label }}</span>
-                    <span v-if="providerBadge" class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + providerBadge.tone"
-                          :title="listing.provider_status">{{ providerBadge.label }}</span>
-                </div>
-
                 <div class="mdet-price-card">
                     <ozon-prices v-if="listing.marketplace_code === 'ozon'" :listing="listing"></ozon-prices>
                     <div v-else class="mdet-price-main">
@@ -183,7 +172,7 @@
 
             <div>
                 <section class="mdet-sect">
-                    <h3>Связь с общей карточкой</h3>
+                    <h3>Связь с внутренним товаром</h3>
                     <p class="mcat-linkline">
                         <span class="mcat-link" :class="'mcat-link--' + listing.link_status">{{ linkLabel(listing) }}</span>
                         <span v-if="listing.link_source" class="mcat-muted"> · {{ linkSourceLabel(listing.link_source) }}</span>
@@ -192,7 +181,7 @@
                         <candidate-photo :key="canonical.id + ':' + (canonical.photo_preview_url || '')" :src="canonical.photo_preview_url" :candidate-id="canonical.id"></candidate-photo>
                         <a class="mlink-body" :href="urls.myProducts + '/' + canonical.id + '/wb-preview'"
                            title="Открыть внутреннюю карточку в «Моих товарах»">
-                            <span class="mlink-kind">Внутренняя карточка · #{{ canonical.id }}</span>
+                            <span class="mlink-kind">Внутренний товар · #{{ canonical.id }}</span>
                             <span class="mlink-title">{{ canonical.title || listing.title || 'Без названия' }}</span>
                             <span v-if="canonical.external_vendor_code" class="mlink-sub mcat-mono">{{ canonical.external_vendor_code }}</span>
                         </a>
@@ -205,7 +194,7 @@
                     <template v-if="otherMembers.length">
                         <h4>Этот товар на других каналах</h4>
                         <a v-for="m in otherMembers" :key="m.id" class="mlink-card"
-                           :href="urls.base + 'beta/' + m.id">
+                           :href="overviewUrlFor(m.id)">
                             <span class="mlink-thumb">
                                 <img v-image-deadline v-if="m.primary_image && !imgFailed[m.primary_image]"
                                      :src="m.primary_image" loading="lazy" alt=""
@@ -249,6 +238,17 @@
                 </section>
             </div>
         </div>
+        <details class="mdet-sect listing-workspace-diagnostics">
+            <summary>Диагностика · сохранённые сведения карточки</summary>
+            <p class="mcat-muted">Это локальный снимок известных полей и времени наблюдения. Ответы API, ключи и полные тела запросов сюда не включаются.</p>
+            <div class="mcat-kv mdet-kv">
+                <div><dt>Синхронизация списка</dt><dd>{{ relTime(listing.list_synced_at) }}</dd></div>
+                <div><dt>Последнее наблюдение</dt><dd>{{ relTime(listing.last_seen_at) }}</dd></div>
+                <div><dt>Версия связи</dt><dd>{{ listing.link_version }}</dd></div>
+                <div><dt>Отпечаток снимка</dt><dd class="mcat-mono">{{ listing.sync_fingerprint || '—' }}</dd></div>
+            </div>
+            <pre class="listing-workspace-diagnostic-json">{{ JSON.stringify({identifiers:listing.identifiers, statuses:listing.statuses, price_summary:listing.price_summary, stock_summary:listing.stock_summary, media:listing.media, dimensions:listing.dimensions, barcodes:listing.barcodes}, null, 2) }}</pre>
+        </details>
     </template>
     <dialog ref="linkDialog" class="mdet-link-dialog" aria-labelledby="mdet-link-title" @cancel.prevent="closeLinkReview" @click="$event.target === $event.currentTarget && closeLinkReview()">
         <template v-if="linkReview.open">

@@ -1,0 +1,260 @@
+/* Layout fixes for the legacy WB analytics workspace only. */
+.analytics-workspace,
+.analytics-workspace .analytics-content,
+.analytics-workspace .analytics-data {
+    min-width: 0;
+}
+
+.analytics-workspace .sh-page-header-content,
+.analytics-workspace .sh-page-header-content > *,
+.analytics-workspace .sh-page-actions,
+.analytics-workspace .sh-page-actions > * {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.analytics-workspace .sh-page-title {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+.analytics-workspace .analytics-period-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    max-width: 100%;
+}
+
+.analytics-workspace .analytics-period-option {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    border: 1px solid transparent;
+    color: rgba(255, 255, 255, .84);
+    line-height: 1.35;
+}
+
+.analytics-workspace .analytics-period-option:hover {
+    background: rgba(255, 255, 255, .1);
+    color: #fff;
+}
+
+.analytics-workspace .analytics-period-option.is-active,
+.analytics-workspace .analytics-period-option.is-active:hover {
+    border-color: var(--border);
+    background: var(--bg-card);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .16);
+    color: var(--text);
+    font-weight: 600;
+}
+
+.analytics-workspace .analytics-period-option:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+
+.analytics-workspace .analytics-error {
+    margin: 0 24px 24px;
+    padding: 20px 24px;
+    border: 1px solid var(--danger-border);
+    border-radius: 12px;
+    background: var(--danger-bg);
+}
+
+.analytics-workspace .analytics-error > :first-child {
+    margin: 0;
+}
+
+.analytics-workspace .analytics-stale-note {
+    margin: 8px 0 0;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.analytics-workspace .analytics-period-context {
+    margin: 0 0 16px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.analytics-workspace .sh-stat-grid,
+.analytics-workspace .analytics-chart-row,
+.analytics-workspace .analytics-bottom-row {
+    min-width: 0;
+}
+
+.analytics-workspace .analytics-chart-header {
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.analytics-workspace .analytics-chart-header h2 {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+.analytics-workspace .analytics-chart-legend {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+    gap: 8px 16px !important;
+}
+
+.analytics-workspace .analytics-chart-legend > span {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.analytics-workspace .analytics-chart-legend > span > span:first-child {
+    flex: 0 0 12px;
+}
+
+.analytics-workspace .analytics-daily-empty {
+    box-sizing: border-box;
+    display: flex;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px;
+}
+
+.analytics-workspace .analytics-daily-empty > *,
+.analytics-workspace .analytics-daily-load-button,
+.analytics-workspace .analytics-daily-load-label {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: center;
+}
+
+.analytics-workspace .analytics-daily-load-button {
+    box-sizing: border-box;
+    width: auto;
+    height: auto;
+    min-height: 44px;
+    line-height: 1.4;
+    justify-content: center;
+}
+
+.analytics-workspace .analytics-funnel-fact {
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+}
+
+.analytics-workspace .analytics-funnel-fact > span:first-child {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow-wrap: anywhere;
+}
+
+.analytics-workspace .analytics-funnel-fact > span:first-child > span:first-child {
+    flex: 0 0 12px;
+}
+
+.analytics-workspace .analytics-funnel-fact-value {
+    min-width: 0;
+    max-width: 100%;
+    flex: 0 1 auto;
+    overflow-wrap: anywhere;
+    text-align: right;
+}
+
+.analytics-workspace .sh-stat-grid--4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.analytics-workspace .sh-stat-grid > *,
+.analytics-workspace .analytics-chart-row > *,
+.analytics-workspace .analytics-bottom-row > *,
+.analytics-workspace .sh-card,
+.analytics-workspace .sh-stat-card {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.analytics-workspace .sh-stat-header,
+.analytics-workspace .sh-stat-label,
+.analytics-workspace .sh-stat-value,
+.analytics-workspace .sh-stat-card > div {
+    min-width: 0;
+}
+
+.analytics-workspace .sh-stat-header {
+    align-items: flex-start;
+}
+
+.analytics-workspace .sh-stat-label,
+.analytics-workspace .sh-stat-value {
+    overflow-wrap: anywhere;
+}
+
+.analytics-workspace .sh-stat-card canvas,
+.analytics-workspace .sh-card canvas {
+    display: block;
+    max-width: 100%;
+}
+
+.analytics-workspace .analytics-bottom-row {
+    grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.analytics-workspace .analytics-table-scroll {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+}
+
+.analytics-workspace .analytics-table-scroll:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+
+@media (min-width: 1024px) {
+    .analytics-workspace .analytics-bottom-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+}
+
+@media (max-width: 1199px) {
+    .analytics-workspace .sh-stat-grid--4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 639px) {
+    .analytics-workspace .sh-page-header {
+        padding: 24px 20px;
+    }
+
+    .analytics-workspace .sh-stat-grid--4 {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .analytics-workspace .analytics-period-selector {
+        width: 100%;
+    }
+
+    .analytics-workspace .analytics-period-selector button {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .analytics-workspace .analytics-error {
+        margin-right: 16px;
+        margin-left: 16px;
+        padding: 16px;
+    }
+}

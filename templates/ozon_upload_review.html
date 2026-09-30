@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 {% block title %}Проверка карточек Ozon — Seller Hub{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
@@ -17,6 +18,7 @@
     }
 } | tojson }}</script>
 <div id="our-boot-fallback" class="our-boot">Открываем проверку карточек…</div>
+{{ preparation_journey('review', review.account_label, 'набор из ' ~ review.pagination.total ~ ' черновиков · страница ' ~ review.pagination.page, 'Проверьте текущие версии и ошибки; выберите только подходящие строки и используйте отдельное подтверждение отправки ниже.', internal_url=url_for('seller_my_products', account_id=review.account_id), draft_url=url_for('marketplace_drafts.index', account_id=review.account_id), result_url=url_for('ozon_bulk_uploads.index', account_id=review.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=review.account_id), channel='Ozon') }}
 <section id="ozon-upload-review" class="our" v-cloak x-ignore aria-labelledby="our-title">
     <header class="our-header">
         <a class="our-back" :href="config.urls.drafts">← Черновики магазина</a>

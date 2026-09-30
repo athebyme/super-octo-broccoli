@@ -1,0 +1,33 @@
+{% set operations_nav_account = operations_history_account_id if operations_history_account_id is defined else request.args.get('account_id') %}
+{% if not operations_nav_account and filters is defined and filters.account_id is defined %}
+    {% set operations_nav_account = filters.account_id %}
+{% endif %}
+{% if not operations_nav_account and operation is defined and operation.account_id is defined %}
+    {% set operations_nav_account = operation.account_id %}
+{% endif %}
+{% if not operations_nav_account and config.get('MARKETPLACE_OZON_ENABLED', false) and mp_nav is defined %}
+    {% set operations_nav_account = mp_nav().last_account_id %}
+{% endif %}
+{% set operation_history_items = [
+    {'key': 'wb-bulk', 'label': 'Изменения WB', 'href': url_for('bulk_edit_history')},
+    {'key': 'wb-prices', 'label': 'Цены WB', 'href': url_for('prices.prices_history')},
+    {'key': 'wb-merge', 'label': 'Объединение WB', 'href': url_for('products_merge_history_list')}
+] %}
+{% if config.get('MARKETPLACE_OZON_ENABLED', false) %}
+    {% set operation_history_items = operation_history_items + [
+        {'key': 'ozon-upload', 'label': 'Загрузки Ozon', 'href': url_for('ozon_bulk_uploads.index', account_id=operations_nav_account)},
+        {'key': 'ozon-operations', 'label': 'Операции Ozon', 'href': url_for('marketplace_operations.index', account_id=operations_nav_account)}
+    ] %}
+{% endif %}
+<nav class="operations-history-nav" aria-label="Истории изменений по каналу">
+    <span class="operations-history-nav-label">Истории по каналу</span>
+    <div class="operations-history-nav-links">
+        {% for item in operation_history_items %}
+        <a href="{{ item.href }}"
+           class="operations-history-link{% if operations_history_current == item.key %} is-current{% endif %}"
+           {% if operations_history_current == item.key %}aria-current="page"{% endif %}>
+            {{ item.label }}
+        </a>
+        {% endfor %}
+    </div>
+</nav>

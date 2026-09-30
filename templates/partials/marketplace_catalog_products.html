@@ -62,7 +62,7 @@
         {% for listing in listings %}
         {% set preview = listing_previews.get(listing.id) %}
         {% set status = listing.normalized_status %}
-        <a href="{{ url_for('marketplace_listings.detail', listing_id=listing.id) }}" class="catalog-product"
+        <a href="{{ url_for('marketplace_listings.detail', listing_id=listing.id, return_to=catalog_return_url) }}" class="catalog-product"
            aria-labelledby="catalog-product-{{ listing.id }}">
             <div class="catalog-product-main">
                 <div class="catalog-photo">

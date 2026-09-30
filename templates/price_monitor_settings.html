@@ -2,8 +2,14 @@
 
 {% block title %}Настройки мониторинга цен WB - Seller Hub{% endblock %}
 
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% endblock %}
+
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% set pricing_workspace_current = 'price-monitor' %}
+    {% include 'partials/pricing_workspace_nav.html' %}
+    <p class="pricing-lane-note">Это мониторинг сохранённых цен и остатков Wildberries. Он сообщает об изменениях, но не отправляет новые цены.</p>
+
     <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative">
             <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Мониторинг цен и остатков WB</h1>

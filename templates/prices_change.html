@@ -2,8 +2,13 @@
 
 {% block title %}Изменить цены - Seller Hub{% endblock %}
 
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% endblock %}
+
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="priceChangeApp()" x-init="init()">
+<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="priceChangeApp()" x-init="init()">
+    {% set pricing_workspace_current = 'wb-change' %}
+    {% include 'partials/pricing_workspace_nav.html' %}
+
     <!-- Хлебные крошки -->
     <nav class="mb-6 text-sm">
         <ol class="flex items-center space-x-2 text-gray-500">
@@ -207,6 +212,7 @@
             <!-- Предпросмотр -->
             <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6" x-show="selectedIds.length > 0 && (changeValue || formula || changeType === 'supplier_pricing')">
                 <h2 class="text-lg font-medium text-gray-900 mb-4">Предпросмотр</h2>
+                <p class="pricing-lane-note">Сохранённая цена продавца служит исходным значением. Новая цена рассчитана по выбранным условиям и остаётся предложением до отдельного подтверждения; предпросмотр ничего не отправляет.</p>
 
                 <template x-if="preview">
                     <div class="space-y-3">
@@ -298,8 +304,8 @@
                     </div>
 
                     <!-- Управление выбором -->
-                    <div class="flex items-center justify-between text-sm">
-                        <div class="flex items-center space-x-4">
+                    <div class="pricing-selection-toolbar flex items-center justify-between text-sm">
+                        <div class="pricing-selection-actions flex items-center space-x-4">
                             <button @click="selectAllOnPage" class="text-indigo-600 hover:text-indigo-800">
                                 Выбрать на странице
                             </button>
@@ -331,7 +337,7 @@
                 </div>
 
                 <!-- Таблица товаров -->
-                <div x-show="!loading" class="overflow-x-auto">
+                <div x-show="!loading" class="pricing-table-scroll" role="region" aria-label="Предпросмотр цен товаров Wildberries" tabindex="0">
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">
                             <tr>
@@ -346,14 +352,14 @@
                                     Закупочная
                                 </th>
                                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                                    <span x-show="!useMarketplacePrices">Текущая цена</span>
+                                    <span x-show="!useMarketplacePrices">Цена продавца в каталоге</span>
                                     <span x-show="useMarketplacePrices" class="inline-flex items-center">
-                                        Цена
+                                        Цена из WB
                                         <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded">WB</span>
                                     </span>
                                 </th>
                                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                                    Новая цена
+                                    Предлагаемая цена WB
                                 </th>
                                 <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
                                     Изменение
@@ -376,25 +382,24 @@
                                         <div class="text-xs text-gray-400" x-text="product.brand"></div>
                                     </td>
                                     <td class="px-4 py-3 text-right whitespace-nowrap text-sm" x-show="changeType === 'supplier_pricing'">
-                                        <span class="text-gray-900" x-show="product.supplier_price" x-text="product.supplier_price.toLocaleString('ru-RU') + ' ₽'"></span>
-                                        <span class="text-red-400 text-xs" x-show="!product.supplier_price">нет</span>
+                                        <span class="text-gray-900" x-text="product.supplier_price == null ? 'нет данных' : Number(product.supplier_price).toLocaleString('ru-RU') + ' ₽'"></span>
                                     </td>
                                     <td class="px-4 py-3 text-right whitespace-nowrap text-sm">
-                                        <template x-if="useMarketplacePrices && product.wb_price">
+                                        <template x-if="useMarketplacePrices && product.wb_price != null">
                                             <div>
                                                 <span class="text-purple-700 font-medium" x-text="product.wb_price.toLocaleString('ru-RU') + ' ₽'"></span>
                                                 <div class="text-[10px] text-gray-400" x-show="product.wb_discount">
                                                     скидка <span x-text="product.wb_discount"></span>% &rarr;
-                                                    <span x-text="product.wb_discounted_price ? product.wb_discounted_price.toLocaleString('ru-RU') + ' ₽' : ''"></span>
+                                                    <span x-text="product.wb_discounted_price != null ? Number(product.wb_discounted_price).toLocaleString('ru-RU') + ' ₽' : '—'"></span>
                                                 </div>
                                                 <div class="text-[10px] text-gray-400" x-show="product.wb_price_synced_at" x-text="product.wb_price_synced_at"></div>
                                             </div>
                                         </template>
-                                        <template x-if="useMarketplacePrices && !product.wb_price">
+                                        <template x-if="useMarketplacePrices && product.wb_price == null">
                                             <span class="text-gray-400 text-xs">не синхр.</span>
                                         </template>
                                         <template x-if="!useMarketplacePrices">
-                                            <span class="text-gray-900" x-text="product.price ? product.price.toLocaleString('ru-RU') + ' ₽' : '—'"></span>
+                                            <span class="text-gray-900" x-text="product.price != null ? Number(product.price).toLocaleString('ru-RU') + ' ₽' : '—'"></span>
                                         </template>
                                     </td>
                                     <td class="px-4 py-3 text-right whitespace-nowrap text-sm font-medium"

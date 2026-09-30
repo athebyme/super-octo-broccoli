@@ -3,10 +3,16 @@
 {% block title %}Заявка Ozon #{{ proposal.id }} — Seller Hub{% endblock %}
 
 {% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">
 {% if proposal.status in ['approved','applying','uncertain'] %}<meta http-equiv="refresh" content="15">{% endif %}
 {% endblock %}
 
 {% block content %}
+{% set pricing_workspace_current = 'ozon-proposals' %}
+<div class="pricing-workspace">
+    {% include 'partials/pricing_workspace_nav.html' %}
+    {% include 'partials/pricing_workspace_ozon_facts.html' %}
+
 {% set before = proposal_data.baseline_state %}
 {% set proposed = proposal_data.proposed_state %}
 {% set guardrails = proposal_data.guardrails %}
@@ -51,7 +57,7 @@
             <h1 class="mt-2 text-2xl font-semibold break-all" style="color:var(--text)">{{ proposal.listing.offer_id if proposal.listing else 'Листинг удалён' }}</h1>
             <p class="mt-1 text-sm" style="color:var(--text-secondary)">{{ status_labels.get(proposal.status, proposal.status) }} · версия {{ proposal.version }}</p>
         </div>
-        {% if proposal.operation %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id) }}">Открыть журнал операции</a>{% endif %}
+        {% if proposal.operation %}<a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id, account_id=proposal.account_id) }}">Открыть журнал операции</a>{% endif %}
     </div>
 
 
@@ -75,13 +81,13 @@
 
     <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <section class="sh-card p-4">
-            <div class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">Сейчас в Ozon</div>
-            <div class="mt-3 text-3xl font-semibold" style="color:var(--text)">{% if is_price %}{{ before.get('price', '—') }} <span class="text-base">{{ before.get('currency_code','RUB') }}</span>{% else %}{{ before.get('stock', '—') }} <span class="text-base">шт.</span>{% endif %}</div>
+            <div class="pricing-value-caption">{{ 'Снимок до предложения' if is_price else 'Снимок остатка при создании заявки' }}</div>
+            <div class="mt-3 text-3xl font-semibold" style="color:var(--text)">{% if is_price %}{{ before.get('price') if before.get('price') is not none else '—' }} <span class="text-base">{{ before.get('currency_code') or 'валюта неизвестна' }}</span>{% else %}{{ before.get('stock') if before.get('stock') is not none else '—' }} <span class="text-base">шт.</span>{% endif %}</div>
             {% if not is_price %}<p class="mt-2 text-xs" style="color:var(--text-muted)">Точный доступный остаток выбранного склада</p>{% endif %}
         </section>
         <section class="sh-card p-4">
-            <div class="text-xs uppercase tracking-wide" style="color:var(--text-muted)">{{ 'Восстановить' if proposal.source == 'rollback' else 'Предлагается' }}</div>
-            <div class="mt-3 text-3xl font-semibold" style="color:var(--accent)">{% if is_price %}{{ proposed.get('price', '—') }} <span class="text-base">{{ proposed.get('currency_code','RUB') }}</span>{% else %}{{ proposed.get('stock', '—') }} <span class="text-base">шт.</span>{% endif %}</div>
+            <div class="pricing-value-caption">{{ 'Предложение продавца' if is_price and proposal.source != 'rollback' else ('Восстановить' if proposal.source == 'rollback' else 'Предлагаемый остаток') }}</div>
+            <div class="mt-3 text-3xl font-semibold" style="color:var(--accent)">{% if is_price %}{{ proposed.get('price') if proposed.get('price') is not none else '—' }} <span class="text-base">{{ proposed.get('currency_code') or 'валюта неизвестна' }}</span>{% else %}{{ proposed.get('stock') if proposed.get('stock') is not none else '—' }} <span class="text-base">шт.</span>{% endif %}</div>
             {% if guardrails.get('direction') %}<p class="mt-2 text-xs" style="color:var(--text-muted)">{{ 'Повышение' if guardrails.direction == 'increase' else 'Снижение' }}{% if guardrails.get('change_pct') %} на {{ guardrails.change_pct }}%{% endif %}</p>{% endif %}
             {% if not is_price and proposed.get('stock') == 0 %}<p class="mt-2 text-xs" style="color:var(--danger)">После применения товар станет недоступен на этом складе.</p>{% endif %}
         </section>
@@ -137,7 +143,7 @@
     <section class="sh-card p-4 mt-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
             <div><h2 class="font-semibold" style="color:var(--text)">Операция #{{ proposal.operation.id }}</h2><p class="mt-1 text-sm" style="color:var(--text-secondary)">{{ operation_kind_labels.get(proposal.operation.operation_kind, proposal.operation.operation_kind) }} · {{ operation_status_labels.get(proposal.operation.status, proposal.operation.status) }} · попыток записи {{ proposal.operation.attempt_count }} · сверок {{ proposal.operation.reconcile_count }}</p></div>
-            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id) }}">Открыть полный аудит</a>
+            <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_operations.detail', operation_id=proposal.operation.id, account_id=proposal.account_id) }}">Открыть полный аудит</a>
         </div>
     </section>
     {% endif %}
@@ -145,10 +151,11 @@
     <details class="sh-card p-4 mt-4">
         <summary class="cursor-pointer font-semibold" style="color:var(--text)">Технические данные и отпечатки состояния</summary>
         <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Текущее состояние в Ozon</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ before | tojson(indent=2) }}</pre><p class="mt-2 break-all text-xs" style="color:var(--text-muted)">{{ proposal.baseline_fingerprint }}</p></div>
+            <div><div class="text-xs mb-2" style="color:var(--text-muted)">Снимок состояния Ozon при создании заявки</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ before | tojson(indent=2) }}</pre><p class="mt-2 break-all text-xs" style="color:var(--text-muted)">{{ proposal.baseline_fingerprint }}</p></div>
             <div><div class="text-xs mb-2" style="color:var(--text-muted)">Предлагаемое состояние</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ proposed | tojson(indent=2) }}</pre><p class="mt-2 break-all text-xs" style="color:var(--text-muted)">{{ proposal.proposed_fingerprint }}</p></div>
         </div>
         <div class="mt-4"><div class="text-xs mb-2" style="color:var(--text-muted)">Ограничения безопасности</div><pre class="overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ guardrails | tojson(indent=2) }}</pre></div>
     </details>
+</div>
 </div>
 {% endblock %}

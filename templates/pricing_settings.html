@@ -2,8 +2,14 @@
 
 {% block title %}Ценообразование - Seller Hub{% endblock %}
 
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% endblock %}
+
 {% block content %}
-<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="pricingApp()">
+<div class="pricing-workspace max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="pricingApp()">
+    {% set pricing_workspace_current = 'supplier-formula' %}
+    {% include 'partials/pricing_workspace_nav.html' %}
+    <p class="pricing-lane-note">Формула применяется к закупочной цене в настройках расчёта и может быть отдельно выбрана в предпросмотре WB. Она не задаёт цену Ozon и не рассчитывает цену покупателя.</p>
+
     <!-- Заголовок -->
     <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative">
@@ -26,7 +32,7 @@
         <p class="mt-2 text-xs text-gray-400">Формула поставщика остаётся общей исходной калькуляцией. Ozon price/stock writes выполняются отдельно для выбранного кабинета через proposal и live drift check.</p>
     </nav>
 
-    <form method="POST" action="{{ url_for('auto_import_pricing') }}">
+    <form class="pricing-settings-form" method="POST" action="{{ url_for('auto_import_pricing') }}">
         <!-- Основные настройки -->
         <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
             <h3 class="text-lg font-medium text-gray-900 mb-4">Основные настройки</h3>
@@ -238,7 +244,7 @@
 
         <!-- Таблица наценок -->
         <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
-            <div class="flex items-center justify-between mb-4">
+            <div class="pricing-settings-range-heading flex items-center justify-between mb-4">
                 <h3 class="text-lg font-medium text-gray-900">Таблица наценок по диапазонам</h3>
                 <button type="button" @click="addRange()"
                         class="px-3 py-1 text-xs bg-[#1a1a1a] text-white rounded-md hover:opacity-85">
@@ -246,7 +252,7 @@
                 </button>
             </div>
 
-            <div class="overflow-x-auto">
+            <div class="pricing-table-scroll" role="region" aria-label="Диапазоны формулы цены поставщика" tabindex="0">
                 <table class="min-w-full text-sm">
                     <thead class="bg-gray-50">
                         <tr>
@@ -305,7 +311,7 @@
         </div>
 
         <!-- Кнопки -->
-        <div class="flex items-center gap-4 mb-6">
+        <div class="pricing-settings-actions flex items-center gap-4 mb-6">
             <button type="submit"
                     class="px-6 py-2 bg-[#1a1a1a] text-white rounded-md hover:opacity-85 transition-colors font-medium">
                 Сохранить настройки
@@ -342,15 +348,15 @@
     <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
         <h3 class="text-lg font-medium text-gray-900 mb-4">Калькулятор цены</h3>
         <p class="text-xs text-gray-500 mb-4">Введите закупочную цену. Каждое нажатие "Рассчитать" генерирует новый случайный разброс.</p>
-        <div class="flex items-end gap-4 mb-4">
-            <div>
+        <div class="pricing-calculator-row flex items-end gap-4 mb-4">
+            <div class="pricing-calculator-field">
                 <label class="block text-xs font-medium text-gray-600 mb-1">Закупочная цена (руб.)</label>
                 <input type="number" x-model="previewPrice" @keyup.enter="previewCalc()"
                        class="sm:text-sm border-gray-300 rounded-md w-40"
                        placeholder="Например: 1500">
             </div>
             <button @click="previewCalc()" :disabled="!previewPrice || previewLoading"
-                    class="px-4 py-2 bg-[#1a1a1a] text-white rounded-md hover:opacity-85 disabled:opacity-40 text-sm font-medium flex items-center gap-2">
+                    class="pricing-calculator-button px-4 py-2 bg-[#1a1a1a] text-white rounded-md hover:opacity-85 disabled:opacity-40 text-sm font-medium flex items-center gap-2">
                 <svg x-show="previewLoading" class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>

@@ -74,6 +74,10 @@
     </div>
 </div>
 
+<div class="max-w-5xl mx-auto px-4 sm:px-6 pt-4">
+    {% include "partials/seller_workspace_settings_nav.html" %}
+</div>
+
 <div id="ozon-setup-bootstrap-fallback" class="max-w-5xl mx-auto px-4 py-6" role="status">
     <p class="text-sm mb-3" style="color:var(--text-secondary)">Открываем настройки магазина…</p>
     <a class="sh-btn sh-btn--secondary" href="{{ url_for('api_settings') }}">Открыть настройки API</a>
@@ -117,6 +121,16 @@
                     <a class="sh-btn sh-btn--primary" href="{{ url_for('marketplace_drafts.index', account_id=aid) }}">Подготовить товар</a>
                 </div>
             </div>
+            <div v-cloak v-show="connected({{ aid }})" class="seller-workspace-note mt-3" role="status">
+                <strong>Права метода отправки карточек:</strong>
+                <span v-show="canWrite({{ aid }})">разрешение найдено в правах ключа; каждая отправка всё равно требует отдельного подтверждения и проверки.</span>
+                <span v-show="!canWrite({{ aid }})">разрешение не подтверждено. Просмотр каталога и подготовка черновиков не подтверждают доступ к отправке.</span>
+            </div>
+            {% if not publication_enabled %}
+            <p class="seller-workspace-note mt-2" role="status">Отправка карточек Ozon отключена настройкой платформы. Локальная подготовка доступна; включение настройки не подтверждает фактический доступ метода.</p>
+            {% else %}
+            <p class="seller-workspace-note mt-2" role="status">Отправка карточек Ozon включена в настройках платформы; реальный доступ метода и состояние кабинета проверяются отдельно.</p>
+            {% endif %}
             <section v-if="(accounts[{{ aid }}] || {}).has_credentials" class="ozon-key-expiry" :data-state="expiry({{ aid }}).state" aria-label="Срок ключа" aria-live="polite">
                 <div class="ozon-key-expiry-copy">
                     <strong v-text="expiry({{ aid }}).label"></strong>
@@ -137,6 +151,7 @@
                 {% endfor %}
             </div>
             <div class="text-sm rounded-md px-3 py-3" style="background:var(--bg-hover)" aria-live="polite">
+                <p class="text-xs mb-2" style="color:var(--text-muted)"><span class="sh-mp-dot sh-mp-dot--ozon" aria-hidden="true"></span> Ozon · каталог карточек кабинета <span v-text="(accounts[{{ aid }}] || {}).label || {{ account.label | tojson | forceescape }}"></span></p>
                 <div class="flex items-start gap-2">
                     <span class="sh-spinner mt-0.5 shrink-0" v-show="active({{ aid }})" v-cloak aria-hidden="true"></span>
                     <p v-text="message({{ aid }})" :style="(jobs[{{ aid }}] || {}).status === 'failed' ? 'color:var(--danger)' : ''"></p>
@@ -173,11 +188,6 @@
             <details id="ozon-key-settings-{{ aid }}" data-key-settings @toggle="keyOpen[{{ aid }}] = $event.currentTarget.open" class="border-t mt-4 pt-3" style="border-color:var(--border)">
                 <summary class="cursor-pointer text-sm" style="color:var(--text-secondary)">Доступы, настройки и замена ключа</summary>
                 <div class="space-y-4 mt-3 text-sm">
-                    <p style="color:var(--text-secondary)" v-show="connected({{ aid }})">
-                        <span v-show="canWrite({{ aid }})">В правах ключа найдено разрешение на отправку карточек. Каждая отправка всё равно требует отдельного подтверждения и проверки.</span>
-                        <span v-show="!canWrite({{ aid }})">Право ключа на отправку карточек не подтверждено. Просмотр каталога и подготовка черновиков доступны; перед отправкой проверьте права ключа в Ozon.</span>
-                    </p>
-                    {% if not publication_enabled %}<p style="color:var(--text-muted)">Отправка карточек сейчас выключена настройкой сервиса. Локальная подготовка доступна.</p>{% endif %}
                     {% if account.connection_checked_at %}<p class="text-xs" style="color:var(--text-muted)">Последняя проверка: {{ account.connection_checked_at.strftime('%d.%m.%Y %H:%M') }} UTC.</p>{% endif %}
                     {% if ozon_enabled %}
                     <form method="post" action="{{ url_for('marketplace_accounts.update', account_id=aid) }}" data-account-id="{{ aid }}"

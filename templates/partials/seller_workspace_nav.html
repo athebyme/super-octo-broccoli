@@ -1,0 +1,125 @@
+{% from "macros/icons.html" import icon %}
+{% set endpoint = request.endpoint or '' %}
+{% set mp_last_account = mp_nav().last_account_id if config.get('MARKETPLACE_OZON_ENABLED') and mp_nav is defined else none %}
+
+{% set overview_active = endpoint in ['dashboard', 'dashboard_beta'] %}
+{% set products_active = endpoint in [
+    'products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit',
+    'products_merge', 'products_merge_history_list', 'products_merge_history',
+    'products_merge_recommendations', 'blocked_cards', 'blocked_cards_export',
+    'product_enrich', 'products_enrich_bulk', 'product_edit_history',
+    'card_quality_page', 'card_quality_beta_page', 'marketplace_quality_page', 'image_lab_page',
+    'seller_my_products', 'seller_my_products_beta', 'seller_product_wb_preview', 'supplier_catalog',
+    'auto_publish_settings', 'supplier_updates_page', 'product_sync_status_page'
+] or endpoint.startswith('marketplace_listings.') or endpoint.startswith('marketplace_drafts.') or endpoint.startswith('supplier_catalog_') %}
+{% set prices_active = endpoint.startswith('prices.') or endpoint.startswith('marketplace_commercial.') or endpoint in ['auto_import_pricing', 'price_monitor_settings', 'suspicious_price_changes'] %}
+{% set operations_active = endpoint in ['bulk_edit_history', 'bulk_edit_history_detail'] or endpoint.startswith('ozon_bulk_uploads.') or endpoint.startswith('marketplace_operations.') or endpoint.startswith('marketplace_fulfillment.') %}
+{% set communication_active = endpoint in ['reviews_page', 'sentiment_page'] or endpoint.startswith('marketplace_inbox.') %}
+{% set analytics_active = endpoint in ['analytics_page', 'marketplace_analytics_page', 'finances_page', 'finance_detail_page', 'cancellations_page', 'regional_page', 'warehouse_page', 'inventory_page', 'returns_page'] or endpoint.startswith('marketplace_finance.') %}
+{% set competitors_active = endpoint in ['competitors_dashboard', 'competitors_groups', 'competitors_group_detail', 'competitors_comparison', 'competitors_alerts', 'competitors_settings'] %}
+{% set promotion_active = endpoint in ['content_factory_dashboard', 'content_factory_create', 'content_factory_edit', 'content_factory_items', 'content_factory_calendar', 'content_factory_accounts'] %}
+{% set settings_active = endpoint in ['api_settings', 'api_logs', 'product_defaults_page', 'auto_publish_settings', 'telegram_alerts_page'] or endpoint.startswith('prohibited_words.seller') or endpoint.startswith('marketplace_accounts.') or endpoint.startswith('marketplace_readiness.') or endpoint.startswith('ozon_account_health.') %}
+{% set active_group = 'overview' if overview_active else 'products' if products_active else 'prices' if prices_active else 'operations' if operations_active else 'communication' if communication_active else 'analytics' if analytics_active else 'competitors' if competitors_active else 'promotion' if promotion_active else '' %}
+
+{% macro workspace_group(key, label, icon_name) %}
+<section class="sidebar-section seller-workspace-group" data-workspace-group="{{ key }}">
+    <button type="button" id="seller-workspace-toggle-{{ key }}"
+            class="sidebar-group-toggle seller-workspace-group-toggle{% if active_group == key %} is-current{% endif %}"
+            :class="{ 'is-current': activeGroup === '{{ key }}' }"
+            aria-expanded="false"
+            :aria-expanded="activeGroup === '{{ key }}' && sidebarOpen ? 'true' : 'false'"
+            aria-controls="seller-workspace-links-{{ key }}"
+            aria-label="{{ label }}"
+            title="{{ label }}"
+            @click="if (!sidebarOpen) { sidebarOpen = true; activeGroup = '{{ key }}'; } else { activeGroup = activeGroup === '{{ key }}' ? '' : '{{ key }}'; }">
+        {{ icon(icon_name, size=18, stroke=1.7) }}
+        <span x-show="sidebarOpen" x-cloak class="seller-workspace-group-label">{{ label }}</span>
+        {{ icon('chevron-down', size=14, stroke=1.8, cls='sidebar-chevron seller-workspace-chevron') }}
+    </button>
+    <div id="seller-workspace-links-{{ key }}" class="sidebar-subnav seller-workspace-sublinks"
+         x-show="activeGroup === '{{ key }}' && sidebarOpen" x-collapse x-cloak
+         :aria-hidden="activeGroup !== '{{ key }}' || !sidebarOpen">
+        {{ caller() }}
+    </div>
+</section>
+{% endmacro %}
+
+<div class="seller-workspace-groups" x-data="{ activeGroup: '{{ active_group }}' }" data-active-group="{{ active_group }}">
+    {% call workspace_group('overview', 'Обзор', 'home') %}
+    <a href="{{ url_for('dashboard') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'dashboard' %} active{% endif %}"{% if endpoint == 'dashboard' %} aria-current="page"{% endif %}>Главная</a>
+    <a href="{{ url_for('dashboard_beta') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'dashboard_beta' %} active{% endif %}"{% if endpoint == 'dashboard_beta' %} aria-current="page"{% endif %}>Очередь внимания</a>
+    {% endcall %}
+
+    {% call workspace_group('products', 'Товары', 'package') %}
+    <div class="seller-workspace-link-group-title">Карточки и подготовка</div>
+    <a href="{{ url_for('products_list') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_edit_history'] %} active{% endif %}"{% if endpoint in ['products_list', 'product_detail', 'product_edit', 'product_create', 'products_bulk_edit', 'product_edit_history'] %} aria-current="page"{% endif %}>Карточки WB</a>
+    {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+    <a href="{{ url_for('marketplace_listings.index') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('marketplace_listings.') %} active{% endif %}"{% if endpoint.startswith('marketplace_listings.') %} aria-current="page"{% endif %}>Карточки кабинетов</a>
+    {% endif %}
+    <a href="{{ url_for('seller_my_products') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['seller_my_products', 'seller_my_products_beta', 'seller_product_wb_preview'] %} active{% endif %}"{% if endpoint in ['seller_my_products', 'seller_my_products_beta', 'seller_product_wb_preview'] %} aria-current="page"{% endif %}>Внутренние товары</a>
+    {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+    <a href="{{ url_for('marketplace_drafts.index', account_id=mp_last_account) }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('marketplace_drafts.') %} active{% endif %}"{% if endpoint.startswith('marketplace_drafts.') %} aria-current="page"{% endif %}>Черновики Ozon</a>
+    {% endif %}
+    <div class="seller-workspace-link-group-title">Качество и медиа</div>
+    <a href="{{ url_for('card_quality_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'card_quality_page' %} active{% endif %}"{% if endpoint == 'card_quality_page' %} aria-current="page"{% endif %}>Качество WB · классика</a>
+    <a href="{{ url_for('card_quality_beta_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'card_quality_beta_page' %} active{% endif %}"{% if endpoint == 'card_quality_beta_page' %} aria-current="page"{% endif %}>Качество WB · очередь</a>
+    {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+    <a href="{{ url_for('marketplace_quality_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'marketplace_quality_page' %} active{% endif %}"{% if endpoint == 'marketplace_quality_page' %} aria-current="page"{% endif %}>Качество Ozon</a>
+    {% endif %}
+    <a href="{{ url_for('image_lab_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'image_lab_page' %} active{% endif %}"{% if endpoint == 'image_lab_page' %} aria-current="page"{% endif %}>Фотостудия</a>
+    <div class="seller-workspace-link-group-title">Инструменты Wildberries</div>
+    <a href="{{ url_for('products_merge') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations'] %} active{% endif %}"{% if endpoint in ['products_merge', 'products_merge_history_list', 'products_merge_history', 'products_merge_recommendations'] %} aria-current="page"{% endif %}>Объединить карточки WB</a>
+    <a href="{{ url_for('blocked_cards') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['blocked_cards', 'blocked_cards_export'] %} active{% endif %}"{% if endpoint in ['blocked_cards', 'blocked_cards_export'] %} aria-current="page"{% endif %}>Проблемы карточек WB</a>
+    <a href="{{ url_for('product_sync_status_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'product_sync_status_page' %} active{% endif %}"{% if endpoint == 'product_sync_status_page' %} aria-current="page"{% endif %}>Состояние данных WB</a>
+    <a href="{{ url_for('supplier_updates_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'supplier_updates_page' %} active{% endif %}"{% if endpoint == 'supplier_updates_page' %} aria-current="page"{% endif %}>Обновления WB из поставщика</a>
+    <div class="seller-workspace-link-group-title">Источники</div>
+    <a href="{{ url_for('supplier_catalog') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint and 'supplier_catalog' in endpoint %} active{% endif %}"{% if endpoint and 'supplier_catalog' in endpoint %} aria-current="page"{% endif %}>Каталог поставщиков</a>
+    <a href="{{ url_for('auto_publish_settings') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'auto_publish_settings' %} active{% endif %}"{% if endpoint == 'auto_publish_settings' %} aria-current="page"{% endif %}>Автопубликация</a>
+    {% endcall %}
+
+    {% call workspace_group('prices', 'Цены', 'currency') %}
+    <a href="{{ url_for('prices.prices_dashboard') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('prices.') or endpoint.startswith('marketplace_commercial.') %} active{% endif %}"{% if endpoint.startswith('prices.') or endpoint.startswith('marketplace_commercial.') %} aria-current="page"{% endif %}>Текущие цены и предложения</a>
+    <a href="{{ url_for('auto_import_pricing') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'auto_import_pricing' %} active{% endif %}"{% if endpoint == 'auto_import_pricing' %} aria-current="page"{% endif %}>Правила и себестоимость</a>
+    <a href="{{ url_for('price_monitor_settings') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'price_monitor_settings' %} active{% endif %}"{% if endpoint == 'price_monitor_settings' %} aria-current="page"{% endif %}>Мониторинг цен WB</a>
+    <a href="{{ url_for('suspicious_price_changes') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'suspicious_price_changes' %} active{% endif %}"{% if endpoint == 'suspicious_price_changes' %} aria-current="page"{% endif %}>Подозрительные изменения</a>
+    {% endcall %}
+
+    {% call workspace_group('operations', 'Операции', 'refresh') %}
+    <a href="{{ url_for('bulk_edit_history') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['bulk_edit_history', 'bulk_edit_history_detail'] %} active{% endif %}"{% if endpoint in ['bulk_edit_history', 'bulk_edit_history_detail'] %} aria-current="page"{% endif %}>Изменения WB</a>
+    {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+    <a href="{{ url_for('ozon_bulk_uploads.index', account_id=mp_last_account) }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('ozon_bulk_uploads.') %} active{% endif %}"{% if endpoint.startswith('ozon_bulk_uploads.') %} aria-current="page"{% endif %}>Загрузки карточек Ozon</a>
+    <a href="{{ url_for('marketplace_operations.index', account_id=mp_last_account) }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('marketplace_operations.') %} active{% endif %}"{% if endpoint.startswith('marketplace_operations.') %} aria-current="page"{% endif %}>Операции Ozon</a>
+    <a href="{{ url_for('marketplace_fulfillment.orders_page', account_id=mp_last_account) }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('marketplace_fulfillment.') %} active{% endif %}"{% if endpoint.startswith('marketplace_fulfillment.') %} aria-current="page"{% endif %}>Заказы Ozon · просмотр</a>
+    {% endif %}
+    {% endcall %}
+
+    {% call workspace_group('communication', 'Общение', 'chat') %}
+    <a href="{{ url_for('reviews_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'reviews_page' %} active{% endif %}"{% if endpoint == 'reviews_page' %} aria-current="page"{% endif %}>Отзывы WB</a>
+    {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+    <a href="{{ url_for('marketplace_inbox.page', account_id=mp_last_account) }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint.startswith('marketplace_inbox.') %} active{% endif %}"{% if endpoint.startswith('marketplace_inbox.') %} aria-current="page"{% endif %}>Отзывы и вопросы Ozon</a>
+    {% endif %}
+    <a href="{{ url_for('sentiment_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'sentiment_page' %} active{% endif %}"{% if endpoint == 'sentiment_page' %} aria-current="page"{% endif %}>Анализ отзывов</a>
+    {% endcall %}
+
+    {% call workspace_group('analytics', 'Аналитика', 'chart') %}
+    <a href="{{ url_for('analytics_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['analytics_page', 'marketplace_analytics_page'] %} active{% endif %}"{% if endpoint in ['analytics_page', 'marketplace_analytics_page'] %} aria-current="page"{% endif %}>Продажи</a>
+    <a href="{{ url_for('finances_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'finances_page' or endpoint.startswith('marketplace_finance.') %} active{% endif %}"{% if endpoint == 'finances_page' or endpoint.startswith('marketplace_finance.') %} aria-current="page"{% endif %}>Финансы</a>
+    <a href="{{ url_for('finance_detail_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'finance_detail_page' %} active{% endif %}"{% if endpoint == 'finance_detail_page' %} aria-current="page"{% endif %}>Детальный P&amp;L</a>
+    <a href="{{ url_for('cancellations_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'cancellations_page' %} active{% endif %}"{% if endpoint == 'cancellations_page' %} aria-current="page"{% endif %}>Отмены WB</a>
+    <a href="{{ url_for('inventory_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['inventory_page', 'warehouse_page', 'returns_page'] %} active{% endif %}"{% if endpoint in ['inventory_page', 'warehouse_page', 'returns_page'] %} aria-current="page"{% endif %}>Остатки и возвраты WB</a>
+    <a href="{{ url_for('regional_page') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'regional_page' %} active{% endif %}"{% if endpoint == 'regional_page' %} aria-current="page"{% endif %}>Регионы</a>
+    {% endcall %}
+
+    {% call workspace_group('competitors', 'Конкуренты', 'eye') %}
+    <a href="{{ url_for('competitors_dashboard') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'competitors_dashboard' %} active{% endif %}"{% if endpoint == 'competitors_dashboard' %} aria-current="page"{% endif %}>Обзор</a>
+    <a href="{{ url_for('competitors_groups') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['competitors_groups', 'competitors_group_detail'] %} active{% endif %}"{% if endpoint in ['competitors_groups', 'competitors_group_detail'] %} aria-current="page"{% endif %}>Отслеживаемые продавцы</a>
+    <a href="{{ url_for('competitors_comparison') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'competitors_comparison' %} active{% endif %}"{% if endpoint == 'competitors_comparison' %} aria-current="page"{% endif %}>Сравнение с нами</a>
+    <a href="{{ url_for('competitors_alerts') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'competitors_alerts' %} active{% endif %}"{% if endpoint == 'competitors_alerts' %} aria-current="page"{% endif %}>Изменения и предупреждения</a>
+    <a href="{{ url_for('competitors_settings') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'competitors_settings' %} active{% endif %}"{% if endpoint == 'competitors_settings' %} aria-current="page"{% endif %}>Настройки мониторинга</a>
+    {% endcall %}
+
+    {% call workspace_group('promotion', 'Продвижение', 'content') %}
+    <a href="{{ url_for('content_factory_dashboard') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint in ['content_factory_dashboard', 'content_factory_create', 'content_factory_edit', 'content_factory_items', 'content_factory_calendar'] %} active{% endif %}"{% if endpoint in ['content_factory_dashboard', 'content_factory_create', 'content_factory_edit', 'content_factory_items', 'content_factory_calendar'] %} aria-current="page"{% endif %}>Контент-фабрики</a>
+    <a href="{{ url_for('content_factory_accounts') }}" class="sidebar-sublink seller-workspace-sublink{% if endpoint == 'content_factory_accounts' %} active{% endif %}"{% if endpoint == 'content_factory_accounts' %} aria-current="page"{% endif %}>Социальные подключения</a>
+    {% endcall %}
+</div>

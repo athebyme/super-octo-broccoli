@@ -97,11 +97,11 @@
     {% if pagination.pages > 1 %}
     <nav class="catalog-pagination" aria-label="Страницы каталога">
         {% if pagination.has_prev %}
-        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', page=pagination.prev_num, marketplace=filters.marketplace_code, account_id=filters.account_id, status=filters.normalized_status, link_status=filters.link_status, search=filters.search, include_unavailable=1 if filters.include_unavailable else 0) }}">{{ icon('chevron-left', 15) }} Назад</a>
+        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', page=pagination.prev_num, per_page=filters.per_page, marketplace=filters.marketplace_code, account_id=filters.account_id, status=filters.normalized_status, link_status=filters.link_status, search=filters.search, include_unavailable=1 if filters.include_unavailable else 0) }}">{{ icon('chevron-left', 15) }} Назад</a>
         {% endif %}
         <span class="catalog-page-note">{{ pagination.page }} / {{ pagination.pages }}</span>
         {% if pagination.has_next %}
-        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', page=pagination.next_num, marketplace=filters.marketplace_code, account_id=filters.account_id, status=filters.normalized_status, link_status=filters.link_status, search=filters.search, include_unavailable=1 if filters.include_unavailable else 0) }}">Дальше {{ icon('chevron-right', 15) }}</a>
+        <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', page=pagination.next_num, per_page=filters.per_page, marketplace=filters.marketplace_code, account_id=filters.account_id, status=filters.normalized_status, link_status=filters.link_status, search=filters.search, include_unavailable=1 if filters.include_unavailable else 0) }}">Дальше {{ icon('chevron-right', 15) }}</a>
         {% endif %}
     </nav>
     {% endif %}

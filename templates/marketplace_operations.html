@@ -3,6 +3,10 @@
 
 {% block title %}Операции Ozon — Seller Hub{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='operations-workspace.css', v='ux01-7') }}">
+{% endblock %}
+
 {% block content %}
 {% set status_labels = {
     'queued': 'В очереди', 'submitting': 'Отправляется', 'submitted': 'Отправлено',
@@ -15,6 +19,7 @@
     'price_update': 'Изменение цены', 'stock_update': 'Изменение остатков',
     'price_rollback': 'Откат цены', 'stock_rollback': 'Откат остатков'
 } %}
+<div class="operations-workspace">
 <div class="sh-page-header">
     <div class="sh-page-header-content">
         <div>
@@ -22,14 +27,16 @@
             <p class="sh-page-subtitle">Журнал всех публикаций и изменений в Ozon: статусы задач и сверка результата.</p>
         </div>
         <div class="sh-page-actions">
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index') }}">Массовые загрузки</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index') }}">Черновики</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Листинги</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('ozon_bulk_uploads.index', account_id=filters.account_id) }}">Массовые загрузки</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_drafts.index', account_id=filters.account_id) }}">Черновики</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=filters.account_id) }}">Листинги</a>
         </div>
     </div>
 </div>
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    {% set operations_history_current = 'ozon-operations' %}
+    {% include 'partials/operations_workspace_history_nav.html' %}
     {{ channel_bar(
         active='ozon' if filters.account_id else 'all',
         account_id=filters.account_id,
@@ -67,7 +74,7 @@
     <div class="mt-3 space-y-3">
         {% for operation in operations %}
         {% set summary = operation._json_value(operation.request_summary_json, {}) %}
-        <a class="sh-card block p-4" href="{{ url_for('marketplace_operations.detail', operation_id=operation.id) }}">
+        <a class="sh-card operations-operation-link block p-4" href="{{ url_for('marketplace_operations.detail', operation_id=operation.id) }}">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2 text-xs" style="color:var(--text-muted)">
@@ -77,10 +84,11 @@
                         <span>{{ kind_labels.get(operation.operation_kind, operation.operation_kind) }}</span>
                     </div>
                     <h2 class="mt-2 font-semibold break-all" style="color:var(--text)">{{ summary.get('offer_id', 'артикул не сохранён') }}</h2>
-                    {% if operation.error_message %}<p class="mt-1 text-xs" style="color:var(--danger)">{{ operation.error_message }}</p>{% endif %}
+                    {% if operation.error_message %}<p class="mt-1 text-xs" style="color:var(--danger)">Есть сведения об ошибке; откройте подробности операции.</p>{% endif %}
+                    {% include 'partials/operations_workspace_status_note.html' %}
                 </div>
                 <div class="sm:text-right shrink-0">
-                    <div class="text-sm font-medium" style="color:var(--text)">{{ status_labels.get(operation.status, operation.status) }}</div>
+                    <div class="text-sm font-medium" style="color:var(--text)">{{ status_labels.get(operation.status, 'Неизвестный статус') }}</div>
                     <div class="mt-1 text-xs" style="color:var(--text-muted)">{{ operation.created_at.strftime('%d.%m.%Y %H:%M:%S') if operation.created_at else '—' }}</div>
                 </div>
             </div>
@@ -101,5 +109,6 @@
         {% endif %}
     </nav>
     {% endif %}
+</div>
 </div>
 {% endblock %}

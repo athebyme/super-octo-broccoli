@@ -316,12 +316,32 @@ class SettingsTest(RoutesTestBase):
         with self._as_user():
             resp = self.client.put('/api/competitors/settings', json={
                 'is_enabled': True, 'sync_interval_minutes': 5,
-                'max_products': 99999, 'discount_alert_pp': 200})
+                'max_products': 1000, 'discount_alert_pp': 200})
         data = resp.get_json()
         self.assertEqual(data['sync_interval_minutes'], 30)   # clamp снизу
-        self.assertEqual(data['max_products'], 1000)          # clamp cap
+        self.assertEqual(data['max_products'], 1000)          # valid explicit cap
         self.assertEqual(data['discount_alert_pp'], 50)       # clamp
         self.assertIsNotNone(data['next_sync_due_at'])
+
+    def test_put_rejects_over_cap_without_committing_other_settings(self):
+        settings = CompetitorMonitorSettings(
+            seller_id=self.seller.id, is_enabled=False,
+            sync_interval_minutes=60, max_products=100000)
+        db.session.add(settings)
+        db.session.commit()
+        with self._as_user():
+            resp = self.client.put('/api/competitors/settings', json={
+                'is_enabled': True, 'sync_interval_minutes': 120,
+                'max_products': 99999,
+            })
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('целым числом от 1 до 1000', resp.get_json()['error'])
+        db.session.refresh(settings)
+        self.assertFalse(settings.is_enabled)
+        self.assertEqual(settings.sync_interval_minutes, 60)
+        self.assertEqual(settings.max_products, 100000)
+        self.assertIsNone(settings.next_sync_due_at)
 
     def test_proxy_masked_in_response(self):
         import os

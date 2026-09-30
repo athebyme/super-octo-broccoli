@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 {% from "macros/components.html" import page_header, stat_card, stat_grid, badge, card, empty_state, section_title, btn %}
 
 {% block title %}Каталог поставщиков - Seller Hub{% endblock %}
@@ -164,6 +165,8 @@
 <div class="sh-page">
 
     {{ page_header("Каталог поставщиков", "Просматривайте товары подключённых поставщиков и импортируйте к себе") }}
+
+    {{ preparation_journey('source', none, 'каталог поставщиков', 'Импортируйте выбранный источник в отдельный внутренний товар продавца; это не создаёт карточку Ozon.', channel='Ozon') }}
 
     {% if suppliers_data %}
 

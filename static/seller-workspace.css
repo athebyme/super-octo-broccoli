@@ -1,0 +1,311 @@
+/* Shared navigation and context primitives for the Seller Hub workspace. */
+.seller-workspace-sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.seller-workspace-groups,
+.seller-workspace-group,
+.seller-workspace-sublinks {
+    min-width: 0;
+}
+
+.seller-workspace-group {
+    margin-bottom: 3px;
+}
+
+.seller-workspace-group-toggle {
+    min-height: 40px;
+    padding: 7px 10px;
+    border-radius: var(--r-sm);
+    gap: 10px;
+}
+
+.seller-workspace-group-toggle.is-current {
+    color: var(--text-sidebar);
+    background: var(--bg-sidebar-hover);
+}
+
+.seller-workspace-group-toggle:hover,
+.seller-workspace-group-toggle:active {
+    color: var(--text-sidebar);
+    background: var(--bg-sidebar-hover);
+}
+
+.seller-workspace-group-toggle .seller-workspace-group-label {
+    flex: 1;
+    text-align: left;
+}
+
+.seller-workspace-group-toggle .seller-workspace-chevron {
+    opacity: .58;
+    transition: transform var(--dur-2) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+
+.seller-workspace-group-toggle[aria-expanded="true"] .seller-workspace-chevron {
+    transform: rotate(180deg);
+    opacity: .9;
+}
+
+.seller-workspace-sublinks {
+    padding: 5px 0 8px;
+    margin: 0;
+}
+
+.seller-workspace-link-group-title {
+    padding: 8px 8px 4px 30px;
+    color: var(--text-sidebar);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.seller-workspace-sublink {
+    display: flex;
+    align-items: center;
+    min-height: 34px;
+    padding: 6px 8px 6px 30px;
+    border-radius: var(--r-xs);
+    line-height: 1.35;
+    white-space: normal;
+}
+
+.seller-workspace-sublink:hover,
+.seller-workspace-sublink:active {
+    color: var(--text-sidebar);
+    background: rgba(255, 255, 255, .06);
+}
+
+.seller-workspace-sublink.active {
+    color: var(--text-sidebar);
+    font-weight: 600;
+    background: rgba(255, 255, 255, .08);
+}
+
+.seller-workspace-utility {
+    position: sticky;
+    bottom: -16px;
+    z-index: 2;
+    display: grid;
+    gap: 2px;
+    margin-top: auto;
+    padding: 8px 0 16px;
+    background: var(--bg-sidebar);
+    border-top: 1px solid rgba(255, 255, 255, .12);
+}
+
+.seller-workspace-utility-link {
+    min-height: 40px;
+    margin-bottom: 0;
+    padding: 7px 10px;
+    gap: 10px;
+    border-radius: var(--r-sm);
+}
+
+.seller-workspace-utility-link.active {
+    color: var(--text-sidebar);
+    background: var(--bg-sidebar-hover);
+}
+
+.seller-workspace-utility-link:hover,
+.seller-workspace-utility-link:active {
+    color: var(--text-sidebar);
+    background: var(--bg-sidebar-hover);
+}
+
+.seller-workspace-groups :focus-visible,
+.seller-workspace-utility :focus-visible {
+    outline: 2px solid var(--text-sidebar);
+    outline-offset: 2px;
+}
+
+.seller-workspace-settings-nav :focus-visible,
+.seller-workspace-context :focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+
+.seller-workspace-settings-nav {
+    display: flex;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    min-width: 0;
+    margin: 0 0 16px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--bg-card);
+}
+
+.seller-workspace-settings-group {
+    display: flex;
+    flex: 1 1 175px;
+    align-content: flex-start;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 3px 7px;
+    min-width: 0;
+}
+
+.seller-workspace-settings-label {
+    flex: 0 0 100%;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.seller-workspace-settings-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    padding: 4px 7px;
+    border-radius: var(--r-xs);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.35;
+    text-decoration: none;
+}
+
+.seller-workspace-settings-link:hover,
+.seller-workspace-settings-link:active {
+    color: var(--accent-strong);
+    background: var(--bg-hover);
+}
+
+.seller-workspace-settings-link.is-active {
+    color: var(--accent-strong);
+    font-weight: 600;
+    background: var(--accent-light);
+}
+
+.seller-workspace-context {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    min-width: 0;
+    margin: 0 0 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.seller-workspace-context-links {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+}
+
+.seller-workspace-context-label {
+    margin-right: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.seller-workspace-context-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    padding: 6px 9px;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.35;
+    text-decoration: none;
+}
+
+.seller-workspace-context-link:hover,
+.seller-workspace-context-link:active {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+
+.seller-workspace-context-link.is-active {
+    color: var(--accent-strong);
+    border-color: var(--border);
+    background: var(--bg-card);
+    font-weight: 600;
+}
+
+.seller-workspace-quality-channel {
+    min-width: 0;
+}
+
+.seller-workspace-quality-channel .sh-channel-bar {
+    margin: 0;
+}
+
+.seller-workspace-note {
+    min-width: 0;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.seller-workspace-scope {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    max-width: 100%;
+    padding: 3px 7px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.3;
+}
+
+.main-content,
+.main-content > main {
+    min-width: 0;
+}
+
+@media (max-width: 639px) {
+    .seller-workspace-group-toggle,
+    .seller-workspace-utility-link {
+        min-height: 44px;
+    }
+
+    .seller-workspace-sublink {
+        min-height: 44px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+    }
+
+    .seller-workspace-settings-nav {
+        gap: 12px;
+        padding: 10px;
+    }
+
+    .seller-workspace-settings-group {
+        flex-basis: 100%;
+    }
+
+    .seller-workspace-settings-link,
+    .seller-workspace-context-link {
+        min-height: 44px;
+    }
+
+    .seller-workspace-quality-channel .sh-channel-tab {
+        min-height: 44px;
+    }
+
+    .seller-workspace-context {
+        align-items: flex-start;
+    }
+
+    .seller-workspace-quality-channel {
+        width: 100%;
+    }
+}

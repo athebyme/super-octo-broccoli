@@ -121,6 +121,20 @@ def passed(name):
     report['checks'].append(name)
     print(json.dumps({'vue_link_category_check':name}), flush=True)
 
+def photo_response_predicate(source_id, query):
+    expected_path = f'/api/photos/imported-product/{source_id}/0'
+    return lambda response: response.request.method == 'GET' \
+        and urlsplit(response.url).path == expected_path \
+        and urlsplit(response.url).query == query
+
+def assert_pending_photo_response(response_info, source_id, query):
+    response = response_info.value
+    expected_path = f'/api/photos/imported-product/{source_id}/0'
+    assert response.status == 202, (response.url, response.status)
+    assert urlsplit(response.url).path == expected_path, response.url
+    assert urlsplit(response.url).query == query, response.url
+    assert query in photo['calls'], (query, photo['calls'])
+
 def layout(page, name):
     page.bring_to_front()
     for theme in ('light', 'dark'):
@@ -197,11 +211,15 @@ try:
 
         dialog.get_by_role('button',name='Вернуться к карточке').click()
         photo.update(mode='pending', calls=[])
-        page.get_by_role('button',name='Выбрать вручную',exact=True).click()
-        dialog = page.get_by_role('dialog')
-        dialog.get_by_role('searchbox',name='Поиск сохранённой внутренней карточки').fill('Тестовый товар для подготовки')
-        thumb = dialog.locator(f'.mdet-link-candidate:has(#mdet-link-candidate-{fixture["source_id"]}) .mdet-link-thumb')
-        thumb.get_by_text('Загружаем фото…', exact=True).wait_for()
+        with page.expect_response(photo_response_predicate(fixture['source_id'], 'deferred=1'), timeout=5000) as photo_response:
+            page.get_by_role('button',name='Выбрать вручную',exact=True).click()
+            dialog = page.get_by_role('dialog')
+            searchbox = dialog.get_by_role('searchbox',name='Поиск сохранённой внутренней карточки')
+            searchbox.fill('Тестовый товар для подготовки')
+            dialog.get_by_text('Тестовый товар для подготовки',exact=True).wait_for()
+            thumb = dialog.locator(f'.mdet-link-candidate:has(#mdet-link-candidate-{fixture["source_id"]}) .mdet-link-thumb')
+            thumb.get_by_text('Загружаем фото…', exact=True).wait_for()
+        assert_pending_photo_response(photo_response, fixture['source_id'], 'deferred=1')
         assert len(photo['calls']) == 1, photo['calls']
         page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))")
         thumb.get_by_role('button',name=f'Продолжить загрузку фото внутренней карточки {fixture["source_id"]}').wait_for()
@@ -221,8 +239,11 @@ try:
         assert retry_button.evaluate('(node)=>node.getBoundingClientRect().height >= 44')
         retry_button.focus()
         assert retry_button.evaluate('(node)=>document.activeElement===node')
-        page.keyboard.press('Enter')
-        thumb.get_by_text('Загружаем фото…', exact=True).wait_for()
+        retry_query = 'deferred=1&manual_retry=2'
+        with page.expect_response(photo_response_predicate(fixture['source_id'], retry_query), timeout=5000) as photo_response:
+            page.keyboard.press('Enter')
+            thumb.get_by_text('Загружаем фото…', exact=True).wait_for()
+        assert_pending_photo_response(photo_response, fixture['source_id'], retry_query)
         assert len(photo['calls']) == 6, photo['calls']
         assert dialog.get_by_role('radio').first.is_checked() is False
         dialog.get_by_role('button',name='Вернуться к карточке').click()
@@ -240,8 +261,11 @@ try:
         assert not photo['calls'], photo['calls']
         page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))")
         assert not photo['calls'], photo['calls']
-        thumb.get_by_role('button',name=f'Продолжить загрузку фото внутренней карточки {fixture["source_id"]}').click()
-        thumb.get_by_text('Загружаем фото…',exact=True).wait_for()
+        resume_query = 'deferred=1&manual_retry=1'
+        with page.expect_response(photo_response_predicate(fixture['source_id'], resume_query), timeout=5000) as photo_response:
+            thumb.get_by_role('button',name=f'Продолжить загрузку фото внутренней карточки {fixture["source_id"]}').click()
+            thumb.get_by_text('Загружаем фото…',exact=True).wait_for()
+        assert_pending_photo_response(photo_response, fixture['source_id'], resume_query)
         assert len(photo['calls']) == 1, photo['calls']
         dialog.get_by_role('button',name='Вернуться к карточке').click()
         passed('candidate_photo_simulated_initial_hidden_has_no_get_until_manual_resume')

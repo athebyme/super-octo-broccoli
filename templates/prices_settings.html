@@ -2,8 +2,14 @@
 
 {% block title %}Настройки безопасности цен - Seller Hub{% endblock %}
 
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% endblock %}
+
 {% block content %}
-<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="pricing-workspace max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% set pricing_workspace_current = 'wb-settings' %}
+    {% include 'partials/pricing_workspace_nav.html' %}
+    <p class="pricing-lane-note">Эти пороги защищают пакетные изменения цен Wildberries. Они не рассчитывают цену покупателя и не меняют цены сами по себе.</p>
+
     <!-- Хлебные крошки -->
     <nav class="mb-6 text-sm">
         <ol class="flex items-center space-x-2 text-gray-500">
@@ -244,7 +250,7 @@
         </div>
 
         <!-- Кнопки -->
-        <div class="flex items-center justify-between">
+        <div class="pricing-settings-actions flex items-center justify-between">
             <a href="{{ url_for('prices.prices_dashboard') }}"
                class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
                 Отмена

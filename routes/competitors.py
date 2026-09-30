@@ -209,14 +209,24 @@ def register_competitor_routes(app):
         if not seller:
             return jsonify({'error': 'Магазин не настроен'}), 403
 
-        settings = _get_or_create_settings(seller.id)
-
         if request.method == 'GET':
+            settings = _get_or_create_settings(seller.id)
             return jsonify(settings.to_dict())
 
         data = request.get_json()
-        if not data:
+        if not isinstance(data, dict) or not data:
             return jsonify({'error': 'Нет данных'}), 400
+
+        max_products = None
+        if 'max_products' in data:
+            value = data['max_products']
+            if type(value) is not int or not 1 <= value <= 1000:
+                return jsonify({
+                    'error': 'Лимит обработки за цикл должен быть целым числом от 1 до 1000.'
+                }), 400
+            max_products = value
+
+        settings = _get_or_create_settings(seller.id)
 
         if 'is_enabled' in data:
             enabling = bool(data['is_enabled']) and not settings.is_enabled
@@ -233,7 +243,7 @@ def register_competitor_routes(app):
             settings.discount_alert_pp = max(
                 1.0, min(50.0, float(data['discount_alert_pp'])))
         if 'max_products' in data:
-            settings.max_products = max(1, min(1000, int(data['max_products'])))
+            settings.max_products = max_products
         if 'proxy_url' in data:
             try:
                 settings.proxy_url = (data['proxy_url'] or '').strip() or None

@@ -1,0 +1,69 @@
+{% set endpoint = request.endpoint or '' %}
+{% set workspace_mp_nav = mp_nav() if config.get('MARKETPLACE_OZON_ENABLED') and mp_nav is defined else none %}
+{% set mp_accounts = workspace_mp_nav.accounts if workspace_mp_nav else [] %}
+{% set mp_last_account = workspace_mp_nav.last_account_id if workspace_mp_nav else none %}
+{% set requested_marketplace = request.args.get('marketplace') %}
+{% set ozon_account_context = endpoint.startswith('marketplace_accounts.') or endpoint.startswith('ozon_account_health.') %}
+{% set selected_marketplace = 'ozon' if requested_marketplace == 'ozon' or ozon_account_context else 'wb' %}
+{% set requested_account_id = request.args.get('account_id', '') %}
+{% set account_choice = namespace(requested=none, default=none, context=none) %}
+{% if endpoint.startswith('ozon_account_health.') and account_id is defined %}
+    {# This route passes the seller-owned account returned by its exact scope check. #}
+    {% set account_choice.context = account_id %}
+{% endif %}
+{% if requested_account_id and requested_account_id.isascii() and requested_account_id.isdecimal() and not requested_account_id.startswith('0') and requested_account_id|length <= 18 %}
+    {% if endpoint.startswith('marketplace_accounts.') and accounts is defined %}
+        {# The page already loaded this seller's accounts, including inactive rows. #}
+        {% for account in accounts %}
+            {% if account.marketplace.code == 'ozon' and account.id|string == requested_account_id %}{% set account_choice.requested = account.id %}{% endif %}
+        {% endfor %}
+    {% else %}
+        {% for account in mp_accounts %}
+            {% if account.id|string == requested_account_id %}{% set account_choice.requested = account.id %}{% endif %}
+        {% endfor %}
+    {% endif %}
+{% endif %}
+{% for account in mp_accounts %}
+    {% if account.is_default %}{% set account_choice.default = account.id %}{% endif %}
+{% endfor %}
+{% set selected_account_id = none %}
+{% if selected_marketplace == 'ozon' %}
+    {% if account_choice.context is not none %}
+        {% set selected_account_id = account_choice.context %}
+    {% elif account_choice.requested is not none %}
+        {% set selected_account_id = account_choice.requested %}
+    {% elif mp_last_account is not none %}
+        {% set selected_account_id = mp_last_account %}
+    {% else %}
+        {% set selected_account_id = account_choice.default %}
+    {% endif %}
+{% endif %}
+{% set ozon_destination_account_id = selected_account_id if selected_account_id is not none and (ozon_account_context or requested_marketplace == 'ozon') else mp_last_account %}
+<nav class="seller-workspace-settings-nav" aria-label="Разделы настроек">
+    <div class="seller-workspace-settings-group">
+        <span class="seller-workspace-settings-label">Подключения</span>
+        <a href="{{ url_for('api_settings') }}" class="seller-workspace-settings-link{% if endpoint == 'api_settings' %} is-active{% endif %}"{% if endpoint == 'api_settings' %} aria-current="page"{% endif %}>Wildberries и API</a>
+        {% if config.get('MARKETPLACE_OZON_ENABLED') %}
+        <a href="{{ url_for('marketplace_accounts.index', account_id=ozon_destination_account_id) }}" class="seller-workspace-settings-link{% if endpoint.startswith('marketplace_accounts.') %} is-active{% endif %}"{% if endpoint.startswith('marketplace_accounts.') %} aria-current="page"{% endif %}>Кабинеты Ozon</a>
+        {% endif %}
+    </div>
+    <div class="seller-workspace-settings-group">
+        <span class="seller-workspace-settings-label">Товары</span>
+        <a href="{{ url_for('product_defaults_page') }}" class="seller-workspace-settings-link{% if endpoint == 'product_defaults_page' %} is-active{% endif %}"{% if endpoint == 'product_defaults_page' %} aria-current="page"{% endif %}>Значения по умолчанию WB</a>
+        <a href="{{ url_for('auto_publish_settings', marketplace=selected_marketplace, account_id=selected_account_id) }}" class="seller-workspace-settings-link{% if endpoint == 'auto_publish_settings' %} is-active{% endif %}"{% if endpoint == 'auto_publish_settings' %} aria-current="page"{% endif %}>Автопубликация</a>
+        <a href="{{ url_for('prohibited_words.seller_index') }}" class="seller-workspace-settings-link{% if endpoint.startswith('prohibited_words.seller') %} is-active{% endif %}"{% if endpoint.startswith('prohibited_words.seller') %} aria-current="page"{% endif %}>Ограничения контента</a>
+    </div>
+    <div class="seller-workspace-settings-group">
+        <span class="seller-workspace-settings-label">Уведомления</span>
+        <a href="{{ url_for('telegram_alerts_page') }}" class="seller-workspace-settings-link{% if endpoint == 'telegram_alerts_page' %} is-active{% endif %}"{% if endpoint == 'telegram_alerts_page' %} aria-current="page"{% endif %}>Аналитические уведомления</a>
+        <a href="{{ url_for('notifications_page') }}" class="seller-workspace-settings-link">Центр уведомлений</a>
+    </div>
+    <div class="seller-workspace-settings-group">
+        <span class="seller-workspace-settings-label">Диагностика</span>
+        <a href="{{ url_for('marketplace_readiness.index') }}" class="seller-workspace-settings-link{% if endpoint.startswith('marketplace_readiness.') %} is-active{% endif %}"{% if endpoint.startswith('marketplace_readiness.') %} aria-current="page"{% endif %}>Готовность и флаги</a>
+        <a href="{{ url_for('api_logs') }}" class="seller-workspace-settings-link{% if endpoint == 'api_logs' %} is-active{% endif %}"{% if endpoint == 'api_logs' %} aria-current="page"{% endif %}>Журнал запросов WB</a>
+        {% if ozon_destination_account_id %}
+        <a href="{{ url_for('ozon_account_health.page', account_id=ozon_destination_account_id) }}" class="seller-workspace-settings-link{% if endpoint.startswith('ozon_account_health.') %} is-active{% endif %}"{% if endpoint.startswith('ozon_account_health.') %} aria-current="page"{% endif %}>Состояние кабинета Ozon</a>
+        {% endif %}
+    </div>
+</nav>

@@ -1,0 +1,41 @@
+{% from "macros/icons.html" import icon %}
+<header class="listing-workspace-head" aria-label="Карточка маркетплейса">
+    <div class="listing-workspace-identity">
+        <a class="listing-workspace-back" href="{{ workspace_navigation.return_url }}">
+            {{ icon('chevron-left', 17) }}
+            Вернуться к найденным карточкам
+        </a>
+        <div class="listing-workspace-context">
+            <span class="listing-workspace-channel listing-workspace-channel--{{ listing.marketplace.code }}">
+                <i class="sh-mp-dot sh-mp-dot--{{ listing.marketplace.code }}" aria-hidden="true"></i>
+                {{ 'Wildberries' if listing.marketplace.code == 'wb' else 'Ozon' }}
+            </span>
+            {% if listing.account %}<span class="listing-workspace-account">{{ listing.account.label }}</span>{% endif %}
+        </div>
+        <h1 class="listing-workspace-title">{{ listing.title or 'Без названия' }}</h1>
+        <p class="listing-workspace-identifiers">
+            <span>offer_id</span> <code>{{ listing.offer_id }}</code>
+            <span>· ID товара площадки</span> <code>{{ listing.external_product_id }}</code>
+            {% if listing.primary_sku %}<span>· SKU</span> <code>{{ listing.primary_sku }}</code>{% endif %}
+        </p>
+        <div class="listing-workspace-statuses">
+            <span class="sh-badge sh-badge--{{ 'red' if listing.normalized_status == 'error' else ('yellow' if listing.normalized_status in ['moderation', 'creating'] else ('green' if listing.normalized_status == 'active' else 'gray')) }} sh-badge--sm">
+                {{ normalized_status_labels.get(listing.normalized_status, listing.normalized_status) }}
+            </span>
+            {% if listing.visibility %}<span class="sh-badge sh-badge--gray sh-badge--sm">{{ listing.visibility }}</span>{% endif %}
+            {% if listing.provider_status %}<span class="sh-badge sh-badge--gray sh-badge--sm">{{ listing.provider_status }}</span>{% endif %}
+            {% if not listing.is_available %}<span class="sh-badge sh-badge--yellow sh-badge--sm">Не найден при последней синхронизации</span>{% endif %}
+        </div>
+        {% if not listing.is_available or listing.normalized_status == 'error' or listing_data.moderation_errors %}
+        <p class="listing-workspace-warning" role="status">
+            {% if not listing.is_available %}Данные карточки не подтверждены последней синхронизацией.{% endif %}
+            {% if listing.normalized_status == 'error' %} Проверьте причину ошибки площадки ниже.{% endif %}
+            {% if listing_data.moderation_errors %} Откройте ошибки модерации ниже и проверьте следующий шаг.{% endif %}
+        </p>
+        {% endif %}
+    </div>
+    <nav class="listing-workspace-modes" aria-label="Режим карточки">
+        <a class="listing-workspace-mode" href="{{ workspace_navigation.overview_url }}">Обзор</a>
+        <a class="listing-workspace-mode is-active" href="{{ workspace_navigation.management_url }}" aria-current="page">Управление</a>
+    </nav>
+</header>

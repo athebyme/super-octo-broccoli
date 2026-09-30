@@ -93,6 +93,7 @@
                 listingId: bootstrap.listingId,
                 members: bootstrap.members || [],
                 urls: bootstrap.urls || {},
+                returnUrl: bootstrap.returnUrl || '/marketplaces/listings/',
                 ozonEnabled: !!bootstrap.ozonEnabled,
 
                 listing: null,
@@ -120,6 +121,10 @@
             currentMember: function () {
                 var id = this.listingId;
                 return this.members.find(function (m) { return m.id === id; }) || null;
+            },
+            overviewUrl: function () { return this.overviewUrlFor(this.listingId); },
+            managementUrl: function () {
+                return this.urls.managementBase + this.listingId + '?return_to=' + encodeURIComponent(this.returnUrl);
             },
             wbPublicUrl: function () {
                 var member = this.currentMember;
@@ -274,7 +279,7 @@
             this._onPop = this.onPopState.bind(this);
             window.addEventListener('popstate', this._onPop);
             if (window.history && window.history.replaceState) {
-                window.history.replaceState({ listingId: this.listingId }, '');
+                window.history.replaceState({ listingId: this.listingId, returnUrl: this.returnUrl }, '');
             }
             this.load();
         },
@@ -326,9 +331,9 @@
                 this.actionMessage = null;
                 if (window.history && window.history.pushState) {
                     window.history.pushState(
-                        { listingId: member.id },
+                        { listingId: member.id, returnUrl: this.returnUrl },
                         '',
-                        this.urls.base + 'view/' + member.id
+                        this.overviewUrlFor(member.id)
                     );
                 }
                 this.load();
@@ -340,6 +345,7 @@
                     10
                 );
                 var target = state.listingId || (isFinite(fromUrl) ? fromUrl : null);
+                if (typeof state.returnUrl === 'string') this.returnUrl = state.returnUrl;
                 if (target && target !== this.listingId) {
                     this.closeLinkReview();
                     this.listingId = target;
@@ -368,7 +374,7 @@
                     if (data.busy) {
                         self.actionMessage = 'Сейчас идёт фоновая сверка каталога — повторите через минуту.';
                     } else if (status === 'linked') {
-                        self.actionMessage = 'Связь с общей карточкой установлена.';
+                        self.actionMessage = 'Связь с внутренним товаром установлена.';
                     } else if (status === 'ambiguous') {
                         self.actionMessage = 'Найдено несколько точных совпадений — выберите внутреннюю карточку вручную.';
                     } else {
@@ -510,17 +516,20 @@
                 if (member.marketplace_code === 'wb') return 'Wildberries';
                 return member.account_label ? 'Ozon · ' + member.account_label : 'Ozon';
             },
+            overviewUrlFor: function (listingId) {
+                return this.urls.overviewBase + listingId + '?return_to=' + encodeURIComponent(this.returnUrl);
+            },
             channelFull: function (listing) {
                 if (listing.marketplace_code === 'wb') return 'Wildberries';
-                return listing.account_label ? 'Ozon · ' + listing.account_label : 'Ozon';
+                return 'Ozon';
             },
             letterOf: function (listing) { return S.letterOf(listing); },
             statusMeta: function (listing) { return S.statusMeta(listing); },
             linkLabel: function (listing) {
                 if (!listing) return '';
-                if (listing.link_status === 'linked') return 'Связан с общей карточкой';
+                if (listing.link_status === 'linked') return 'Связан с внутренним товаром';
                 if (listing.link_status === 'ambiguous') return 'Несколько совпадений';
-                return 'Без связи с общей карточкой';
+                return 'Без связи с внутренним товаром';
             },
             linkSourceLabel: function (source) { return S.linkSourceLabel(source); },
             fmtMoney: function (value) { return S.fmtMoney(value, this.currency); },

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 
 {% block title %}Черновик {{ draft.offer_id }} — Seller Hub{% endblock %}
 
@@ -16,6 +17,7 @@
     'price_update': 'Изменение цены', 'stock_update': 'Изменение остатков',
     'price_rollback': 'Откат цены', 'stock_rollback': 'Откат остатков'
 } %}
+{{ preparation_journey('draft', draft.account.label, 'черновик №' ~ draft.id ~ ' · внутренний товар №' ~ draft.imported_product_id, 'Сохраните изменения локально и проверьте точную версию. Локальная проверка не публикует карточку; отправка подтверждается отдельной формой.', internal_url=url_for('seller_my_products', account_id=draft.account_id), draft_url=url_for('marketplace_drafts.index', account_id=draft.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=draft.account_id, draft_ids=draft.id), result_url=url_for('ozon_bulk_uploads.index', account_id=draft.account_id), listing_url=url_for('marketplace_listings.classic', marketplace='ozon', account_id=draft.account_id), channel='Ozon') }}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
     <a href="{{ url_for('marketplace_drafts.index', account_id=draft.account_id) }}" class="text-sm" style="color:var(--accent)">← Черновики Ozon</a>
     <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

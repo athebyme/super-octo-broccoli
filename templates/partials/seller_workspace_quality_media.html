@@ -1,0 +1,19 @@
+{% from "macros/components.html" import channel_bar %}
+{% set quality_mode = seller_workspace_quality_mode|default('media') %}
+{% set mp_last_account = mp_nav().last_account_id if config.get('MARKETPLACE_OZON_ENABLED') and mp_nav is defined else none %}
+<div class="seller-workspace-context" aria-label="Переходы между качеством и медиа">
+    <div class="seller-workspace-context-links">
+        <span class="seller-workspace-context-label">Качество и медиа</span>
+        <a href="{{ url_for('card_quality_page') }}" class="seller-workspace-context-link{% if quality_mode == 'classic' %} is-active{% endif %}"{% if quality_mode == 'classic' %} aria-current="page"{% endif %}>Качество WB · классика</a>
+        <a href="{{ url_for('card_quality_beta_page') }}" class="seller-workspace-context-link{% if quality_mode == 'queue' %} is-active{% endif %}"{% if quality_mode == 'queue' %} aria-current="page"{% endif %}>Качество WB · очередь</a>
+        {% if config.get('MARKETPLACE_OZON_ENABLED') and quality_mode == 'media' %}
+        <a href="{{ url_for('marketplace_quality_page', account_id=mp_last_account) }}" class="seller-workspace-context-link{% if quality_mode == 'ozon' %} is-active{% endif %}"{% if quality_mode == 'ozon' %} aria-current="page"{% endif %}>Качество Ozon</a>
+        {% endif %}
+        <a href="{{ url_for('image_lab_page') }}" class="seller-workspace-context-link{% if quality_mode == 'media' %} is-active{% endif %}"{% if quality_mode == 'media' %} aria-current="page"{% endif %}>Фотостудия</a>
+    </div>
+    {% if quality_mode in ['classic', 'queue'] %}
+    <div class="seller-workspace-quality-channel">
+        {{ channel_bar(active='wb', wb_href=url_for('card_quality_page' if quality_mode == 'classic' else 'card_quality_beta_page'), ozon_href=url_for('marketplace_quality_page'), class='') }}
+    </div>
+    {% endif %}
+</div>

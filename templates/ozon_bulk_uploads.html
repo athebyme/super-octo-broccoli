@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 
 {% block title %}Подготовка и отправка Ozon — Seller Hub{% endblock %}
 
@@ -17,6 +18,7 @@
 </div>
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+    {{ preparation_journey('result', ('магазин #' ~ selected_account_id) if selected_account_id else none, 'история запусков Ozon', 'Откройте результат нужного запуска; локальная подготовка и отправка проверенных версий имеют разные итоги.', internal_url=url_for('seller_my_products', account_id=selected_account_id), draft_url=url_for('marketplace_drafts.index', account_id=selected_account_id), result_url=url_for('ozon_bulk_uploads.index', account_id=selected_account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=selected_account_id), channel='Ozon') }}
     {% if not ozon_enabled %}
     <div class="sh-alert sh-alert--warning mb-5" role="status">
         <div class="sh-alert-content">Новые запуски Ozon сейчас выключены. Уже начатые операции сохраняют результат и безопасную сверку.</div>

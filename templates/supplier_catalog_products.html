@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 
 {% block title %}Каталог — {{ supplier.name }} - Seller Hub{% endblock %}
 
@@ -21,6 +22,8 @@
             </p>
         </div>
     </div>
+
+    {{ preparation_journey('source', none, 'каталог «' ~ supplier.name ~ '»', 'Импортируйте выбранный источник в отдельный внутренний товар; Ozon-черновик создаётся позже и отдельно.', channel='Ozon') }}
 
     {% if supplier_update_count %}
     <div class="sh-alert sh-alert--warning" role="status">

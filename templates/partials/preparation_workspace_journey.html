@@ -1,0 +1,62 @@
+{% macro journey(current, account, object, next_action, source_url=none, internal_url=none, draft_url=none, review_url=false, publish_url=false, result_url=none, listing_url=none, channel='Ozon', review_reason='Сначала сохраните черновик и выберите точный набор.', publish_reason='Доступно после свежей проверки выбранных версий.') -%}
+{% set source_href = source_url if source_url is not none else url_for('supplier_catalog') %}
+{% set internal_href = internal_url if internal_url is not none else url_for('seller_my_products') %}
+{% set draft_href = draft_url if draft_url is not none else url_for('marketplace_drafts.index') %}
+{% set result_href = result_url if result_url is not none else url_for('ozon_bulk_uploads.index') %}
+{% set listing_href = listing_url if listing_url is not none else url_for('marketplace_listings.index', marketplace='ozon') %}
+{% set labels = {'source': 'Источник поставщика', 'internal': 'Внутренний товар', 'draft': 'Черновик ' ~ channel, 'review': 'Свежая проверка', 'publish': 'Отдельная отправка', 'result': 'Результат операции', 'listing': 'Карточка ' ~ channel} %}
+{% set number = {'source': 1, 'internal': 2, 'draft': 3, 'review': 4, 'publish': 5, 'result': 6, 'listing': 7} %}
+{% set steps = [
+    ('source', 'Источник поставщика', 'Данные каталога поставщика', source_href, 'Откройте исходные сведения; импорт сохранит отдельный внутренний товар и не создаст карточку Ozon.'),
+    ('internal', 'Внутренний товар', 'Данные продавца', internal_href, 'Выберите товар и магазин для локальной подготовки.'),
+    ('draft', 'Черновик ' ~ channel, 'Сохранённая версия', draft_href, 'Заполните обязательные поля и сохраните локальный черновик.'),
+    ('review', 'Свежая проверка', 'Версия и требования', review_url, review_reason),
+    ('publish', 'Отдельная отправка', 'Явное подтверждение', publish_url, publish_reason),
+    ('result', 'Результат операции', 'Состояние и ответ Ozon', result_href, 'Читайте результат и связанные операции; неопределённое состояние нельзя повторять вслепую.'),
+    ('listing', 'Карточка ' ~ channel, 'Статус площадки и видимость', listing_href, 'Сверьте синхронизированную карточку: обработка не означает, что она видна покупателю.')
+] %}
+<link rel="stylesheet" href="{{ url_for('static', filename='preparation-workspace.css') }}">
+<section class="preparation-journey" aria-labelledby="preparation-journey-title-{{ current }}">
+    <div class="preparation-journey-head">
+        <div>
+            <p class="preparation-journey-kicker">Путь карточки {{ channel }} · шаг {{ number.get(current, 0) }} из 7</p>
+            <h2 id="preparation-journey-title-{{ current }}">Сейчас: {{ labels.get(current, 'Подготовка карточки') }}</h2>
+        </div>
+        <p class="preparation-journey-note"><strong>Дальше:</strong> {{ next_action }}</p>
+    </div>
+    <p class="preparation-journey-context">
+        <span><strong>Канал:</strong> {{ channel }}</span>
+        <span><strong>Магазин:</strong> {{ account or 'выберите при подготовке' }}</span>
+        <span><strong>Объект:</strong> {{ object or 'товар продавца' }}</span>
+    </p>
+    <details class="preparation-journey-path">
+        <summary>Показать все этапы</summary>
+        <ol>
+            {% for key, label, detail, href, reason in steps %}
+            <li class="preparation-journey-step{% if key == current %} is-current{% elif not href %} is-unavailable{% endif %}"{% if key == current %} aria-current="step"{% elif not href %} aria-disabled="true"{% endif %}>
+                {% if href and key != current %}<a href="{{ href }}">{% else %}<span>{% endif %}
+                    <strong>{{ label }}</strong>
+                    <small>{{ detail }}</small>
+                    {% if not href and key != current %}<small class="preparation-journey-reason">{{ reason }}</small>{% endif %}
+                {% if href and key != current %}</a>{% else %}</span>{% endif %}
+            </li>
+            {% endfor %}
+        </ol>
+    </details>
+</section>
+{%- endmacro %}
+
+{% macro listing_end_state(account_id) -%}
+<link rel="stylesheet" href="{{ url_for('static', filename='preparation-workspace.css') }}">
+<aside class="preparation-listing-end-state" aria-label="Путь карточки Ozon: каталог">
+    <div>
+        <p class="preparation-journey-kicker">Последний этап пути</p>
+        <strong>Карточка Ozon</strong>
+        <p>Статус площадки и видимость показаны в сведениях карточки. Запись каталога сама по себе не подтверждает предыдущие этапы.</p>
+    </div>
+    <nav aria-label="Действия с Ozon-карточкой">
+        <a href="{{ url_for('marketplace_drafts.index', account_id=account_id) }}">Подготовить черновик</a>
+        <a href="{{ url_for('ozon_bulk_uploads.index', account_id=account_id) }}">История запусков</a>
+    </nav>
+</aside>
+{%- endmacro %}

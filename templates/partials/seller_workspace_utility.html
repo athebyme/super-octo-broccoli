@@ -1,0 +1,17 @@
+{% from "macros/icons.html" import icon %}
+{% set endpoint = request.endpoint or '' %}
+{% set settings_active = endpoint in ['api_settings', 'api_logs', 'product_defaults_page', 'auto_publish_settings', 'telegram_alerts_page'] or endpoint.startswith('prohibited_words.seller') or endpoint.startswith('marketplace_accounts.') or endpoint.startswith('marketplace_readiness.') or endpoint.startswith('ozon_account_health.') %}
+<div class="seller-workspace-utility" aria-label="Полезные ссылки">
+    <a href="{{ url_for('api_settings') }}" class="sidebar-link seller-workspace-utility-link{% if settings_active %} active{% endif %}"{% if settings_active %} aria-current="page"{% endif %} title="Настройки">
+        {{ icon('settings', size=18, stroke=1.7) }}
+        <span x-show="sidebarOpen" x-cloak>Настройки</span>
+    </a>
+    <a href="{{ url_for('agents_dashboard') }}" class="sidebar-link seller-workspace-utility-link{% if endpoint in ['agents_dashboard', 'agent_task_detail'] %} active{% endif %}"{% if endpoint in ['agents_dashboard', 'agent_task_detail'] %} aria-current="page"{% endif %} title="Помощник">
+        {{ icon('agent', size=18, stroke=1.7) }}
+        <span x-show="sidebarOpen" x-cloak>Помощник</span>
+    </a>
+    <a href="{{ url_for('docs.docs_index') }}" class="sidebar-link seller-workspace-utility-link{% if endpoint.startswith('docs.') %} active{% endif %}"{% if endpoint.startswith('docs.') %} aria-current="page"{% endif %} title="Документация">
+        {{ icon('document', size=18, stroke=1.7) }}
+        <span x-show="sidebarOpen" x-cloak>Документация</span>
+    </a>
+</div>

@@ -226,8 +226,18 @@ def register_auto_publish_routes(app):
             AutoPublishRun.created_at.desc()
         ).limit(20).all()
         runs_data = [r.to_dict() for r in runs_query]
+        from services.wb_credentials import token_public_status
+        wb_credential = token_public_status(seller.wb_api_key)
+        ozon_credential_expiry = None
+        if marketplace_code == 'ozon' and settings.account is not None:
+            from services.marketplace_credential_expiry import expiry_notice
+            ozon_credential_expiry = expiry_notice(
+                settings.account.credential_expires_at,
+                active=settings.account.is_active,
+            )
 
         # Статистика
+        pending_count_unavailable = False
         if settings.marketplace_code == 'ozon':
             from services.marketplace_auto_publish import (
                 MarketplaceAutoPublishError,
@@ -239,7 +249,8 @@ def register_auto_publish_routes(app):
                     seller, settings
                 ).pending_candidate_count()
             except MarketplaceAutoPublishError as exc:
-                pending_count = 0
+                pending_count = None
+                pending_count_unavailable = True
                 flash(str(exc), 'warning')
         else:
             pending_count = ImportedProduct.query.filter_by(
@@ -256,6 +267,9 @@ def register_auto_publish_routes(app):
             selected_marketplace=marketplace_code,
             selected_account_id=account_id,
             ozon_auto_publish_enabled=_ozon_auto_write_enabled(),
+            wb_credential=wb_credential,
+            ozon_credential_expiry=ozon_credential_expiry,
+            pending_count_unavailable=pending_count_unavailable,
         )
 
     # ========================= API: НАСТРОЙКИ =========================

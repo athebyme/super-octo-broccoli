@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 
 {% block title %}{{ product.title or 'Товар' }} — {{ supplier.name }} - Seller Hub{% endblock %}
 
@@ -29,6 +30,8 @@
             {% endif %}
         </div>
     </div>
+
+    {{ preparation_journey('source', none, 'товар поставщика №' ~ product.id, 'Импортируйте товар в свой внутренний каталог. Исходные сведения и импортированная строка остаются разными объектами.', channel='Ozon') }}
 
     <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
 

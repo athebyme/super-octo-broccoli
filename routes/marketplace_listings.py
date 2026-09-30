@@ -33,6 +33,11 @@ from services.marketplace_canonical_content import (
 )
 from services.marketplace_warehouses import MarketplaceWarehouseService
 from services.marketplace_listing_display import listing_display
+from services.listing_navigation import (
+    build_listing_catalog_url,
+    current_listing_catalog_url,
+    listing_return_url,
+)
 
 
 marketplace_listings_bp = Blueprint(
@@ -131,7 +136,29 @@ def _error_response(error: Exception, status_code: int = 400):
     ), status_code
 
 
-def _listing_filters() -> Dict[str, Any]:
+def _catalog_bootstrap_integer(name: str, default: int, maximum: int) -> int:
+    """Normalize catalog-only pagination before it reaches Vue/JavaScript."""
+    raw = request.args.get(name)
+    if not raw or not raw.isascii() or not raw.isdigit():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if 1 <= value <= maximum else default
+
+
+def _listing_filters(*, normalize_pagination: bool = False) -> Dict[str, Any]:
+    if normalize_pagination:
+        # Keep the initial Vue request aligned with pagination accepted by its
+        # JSON API and with page numbers JavaScript can represent precisely.
+        page = _catalog_bootstrap_integer(
+            "page", 1, 90_071_992_547_409,
+        )
+        per_page = _catalog_bootstrap_integer("per_page", 60, 100)
+    else:
+        page = _integer(request.args.get("page"), "page", 1)
+        per_page = _integer(request.args.get("per_page"), "per_page", 50)
     return {
         "marketplace_code": request.args.get("marketplace") or None,
         "account_id": (
@@ -146,9 +173,43 @@ def _listing_filters() -> Dict[str, Any]:
             False,
         ),
         "search": request.args.get("search") or None,
-        "page": _integer(request.args.get("page"), "page", 1),
-        "per_page": _integer(request.args.get("per_page"), "per_page", 50),
+        "page": page,
+        "per_page": per_page,
     }
+
+
+def _catalog_return_url(filters: Dict[str, Any]) -> str:
+    try:
+        query = request.query_string.decode("ascii")
+    except UnicodeDecodeError:
+        return build_listing_catalog_url(request.path, filters)
+    return current_listing_catalog_url(
+        request.path,
+        query,
+        fallback_filters=filters,
+    )
+
+
+def _detail_return_url(listing=None) -> str:
+    marketplace_code = (
+        listing.marketplace.code
+        if listing is not None and listing.marketplace is not None
+        else None
+    )
+    account_id = getattr(listing, "account_id", None) if listing is not None else None
+    return listing_return_url(
+        request.args.getlist("return_to"),
+        marketplace_code=marketplace_code,
+        account_id=account_id,
+    )
+
+
+def _redirect_to_detail(listing_id: int, listing=None):
+    return redirect(url_for(
+        "marketplace_listings.detail",
+        listing_id=listing_id,
+        return_to=_detail_return_url(listing),
+    ))
 
 
 @marketplace_listings_bp.route("/classic")
@@ -192,6 +253,7 @@ def classic():
             'ozon_enabled': bool(current_app.config.get('MARKETPLACE_OZON_ENABLED', False)),
         },
         filters=filters,
+        catalog_return_url=_catalog_return_url(filters),
         ozon_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
         ),
@@ -207,7 +269,7 @@ def index():
     if seller_id is None:
         return "Seller account required", 403
     try:
-        filters = _listing_filters()
+        filters = _listing_filters(normalize_pagination=True)
         if filters['account_id'] is not None:
             MarketplaceAccountService.get_owned_account(
                 seller_id=seller_id, account_id=filters['account_id'], marketplace_code='ozon',
@@ -244,6 +306,9 @@ def index():
         "marketplace_listings_beta.html",
         accounts_payload=accounts_payload,
         initial_filters=filters,
+        catalog_return_url=_catalog_return_url(filters),
+        catalog_page=filters["page"],
+        catalog_per_page=filters["per_page"],
         ozon_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
         ),
@@ -291,6 +356,7 @@ def beta_detail(listing_id: int):
         "marketplace_listing_beta_detail.html",
         listing_id=listing.id,
         members=members,
+        return_url=_detail_return_url(listing),
         ozon_enabled=bool(
             current_app.config.get("MARKETPLACE_OZON_ENABLED", False)
         ),
@@ -534,6 +600,21 @@ def detail(listing_id: int):
         link_search=request.args.get("link_search", ""),
         warehouse_stocks=warehouse_stocks,
         commercial_proposals=proposals,
+        return_url=_detail_return_url(listing),
+        workspace_navigation={
+            "overview_url": url_for(
+                "marketplace_listings.view",
+                listing_id=listing.id,
+                return_to=_detail_return_url(listing),
+            ),
+            "management_url": url_for(
+                "marketplace_listings.detail",
+                listing_id=listing.id,
+                return_to=_detail_return_url(listing),
+            ),
+            "return_url": _detail_return_url(listing),
+            "mode": "management",
+        },
         canonical_content=canonical_content,
         canonical_content_proposals=canonical_content_proposals,
         canonical_content_proposal_data=[
@@ -584,6 +665,7 @@ def _canonical_failure(
         return redirect(url_for(
             "marketplace_listings.detail",
             listing_id=target_listing_id,
+            return_to=_detail_return_url(),
         ))
     return redirect(url_for("marketplace_listings.index"))
 
@@ -627,7 +709,7 @@ def link_product(listing_id: int):
         "Ozon-листинг связан с общей внутренней карточкой; AI-парсинг и контент будут переиспользованы",
         "success",
     )
-    return redirect(url_for("marketplace_listings.detail", listing_id=listing.id))
+    return _redirect_to_detail(listing.id, listing=listing)
 
 
 @marketplace_listings_bp.route("/<int:listing_id>/unlink", methods=["POST"])
@@ -658,7 +740,7 @@ def unlink_product(listing_id: int):
             "listing": listing.to_public_dict(detail=True),
         })
     flash("Связь с внутренней карточкой удалена", "success")
-    return redirect(url_for("marketplace_listings.detail", listing_id=listing.id))
+    return _redirect_to_detail(listing.id, listing=listing)
 
 
 @marketplace_listings_bp.route("/<int:listing_id>/reconcile-link", methods=["POST"])
@@ -695,6 +777,7 @@ def reconcile_product_link(listing_id: int):
         return redirect(url_for(
             "marketplace_listings.detail",
             listing_id=listing.id,
+            return_to=_detail_return_url(listing),
         ))
     if listing.imported_product_id:
         flash("Найдена одна точная внутренняя карточка; связь создана", "success")
@@ -702,7 +785,7 @@ def reconcile_product_link(listing_id: int):
         flash("Найдено несколько точных совпадений — выберите карточку вручную", "warning")
     else:
         flash("Точного совпадения не найдено; выберите карточку вручную", "info")
-    return redirect(url_for("marketplace_listings.detail", listing_id=listing.id))
+    return _redirect_to_detail(listing.id, listing=listing)
 
 
 @marketplace_listings_bp.route(
@@ -741,6 +824,7 @@ def create_canonical_content_proposal(listing_id: int):
     return redirect(url_for(
         "marketplace_listings.detail",
         listing_id=proposal.listing_id,
+        return_to=_detail_return_url(),
     ))
 
 
@@ -788,6 +872,7 @@ def apply_canonical_content_proposal(proposal_id: int):
     return redirect(url_for(
         "marketplace_listings.detail",
         listing_id=proposal.listing_id,
+        return_to=_detail_return_url(),
     ))
 
 
@@ -825,6 +910,7 @@ def reject_canonical_content_proposal(proposal_id: int):
     return redirect(url_for(
         "marketplace_listings.detail",
         listing_id=proposal.listing_id,
+        return_to=_detail_return_url(),
     ))
 
 
@@ -863,6 +949,7 @@ def rollback_canonical_content_proposal(proposal_id: int):
     return redirect(url_for(
         "marketplace_listings.detail",
         listing_id=proposal.listing_id,
+        return_to=_detail_return_url(),
     ))
 
 

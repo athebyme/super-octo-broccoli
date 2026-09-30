@@ -15,6 +15,10 @@
         </div>
     </div>
 
+    {% include "partials/seller_workspace_settings_nav.html" %}
+
+    <p class="seller-workspace-note">Наличие сохранённого ключа и отметка подключения показывают наблюдавшееся состояние, но не подтверждают доступ каждого метода API. Срок ключа и ошибки подключения показаны рядом с соответствующим кабинетом.</p>
+
     <section class="sh-card p-5 sm:p-6" aria-labelledby="ozon-api-settings-title">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div class="flex items-start gap-3">
@@ -294,13 +298,12 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
                     </svg>
                 </div>
-                <h3 class="font-semibold text-gray-900">Данные аналитики</h3>
+                <h3 class="font-semibold text-gray-900">Данные Wildberries · аналитика</h3>
             </div>
         </div>
         <div class="p-6">
             <p class="text-sm text-gray-600 mb-4">
-                Продажи, заказы, отзывы и финансовые отчёты синхронизируются из WB каждые 3 часа.
-                Первую синхронизацию нужно запустить вручную.
+                Синхронизируются данные WB: продажи, заказы, отзывы и отчёты реализации. Плановый интервал — 3 часа; первую синхронизацию нужно запустить вручную. Это не синхронизация каталога карточек или FBW-остатков.
             </p>
 
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
@@ -364,7 +367,7 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                 </svg>
             </div>
-            <h3 class="font-semibold text-gray-900">Статус синхронизации</h3>
+            <h3 class="font-semibold text-gray-900">Синхронизация каталога Wildberries</h3>
         </div>
         <div class="grid grid-cols-2 gap-4 text-sm">
             <div>
@@ -388,6 +391,7 @@
                 </p>
             </div>
         </div>
+        <p class="mt-3 text-xs text-gray-500">Эта отметка относится к каталогу WB. Аналитические данные и FBW-остатки обновляются отдельными синхронизациями.</p>
     </div>
     {% endif %}
 </div>

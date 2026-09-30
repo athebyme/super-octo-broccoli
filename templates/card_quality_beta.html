@@ -37,11 +37,13 @@
                 <svg v-if="!refreshing" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="shk-btn-icon"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6"/></svg>
                 {{ refreshing ? 'Считаем заново…' : 'Обновить с Wildberries' }}
             </button>
-            <a class="shk-quiet-link" :href="urls.classic" title="Открыть прежний интерфейс этой страницы">
-                Старая версия
-            </a>
         </div>
     </header>
+{% endraw %}
+    {% with seller_workspace_quality_mode='queue' %}
+    {% include "partials/seller_workspace_quality_media.html" %}
+    {% endwith %}
+{% raw %}
 
     <div v-if="!wbConnected" class="shk-error" role="status">
         <span>Wildberries не подключён — оценивать пока нечего.</span>

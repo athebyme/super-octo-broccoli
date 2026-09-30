@@ -5,6 +5,7 @@
 {% block topbar_left %}<nav class="sh-crumbs" aria-label="Хлебные крошки"><a href="{{ url_for('marketplace_listings.index',account_id=account_id) }}">Ozon</a><span aria-hidden="true">/</span><span>Состояние магазина</span></nav>{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static',filename='ozon-account-health.css') }}">
+{% include "partials/seller_workspace_settings_nav.html" %}
 <div id="oh-fallback" class="oh-page" role="status"><h1>Состояние магазина</h1><p>Открываем последнее наблюдение…</p><noscript>Включите JavaScript для просмотра состояния.</noscript><a href="{{ url_for('marketplace_accounts.index',account_id=account_id) }}">Настройки магазина</a></div>
 <div id="oh-app" class="oh-page" x-ignore v-cloak>
   <header class="oh-header"><div><h1>Состояние магазина</h1><p>{{ account_label }} · Ozon</p><small v-if="data">Проверено <time :datetime="data.observed_at" v-text="instant(data.observed_at)"></time></small></div><button type="button" class="sh-btn sh-btn--secondary" :disabled="loading || sessionEnded" @click="load()">{{ icon('refresh',size=17) }}<span v-text="loading?'Проверяем…':'Проверить состояние'"></span></button></header>

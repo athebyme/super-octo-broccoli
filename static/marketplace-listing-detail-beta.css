@@ -1,0 +1,236 @@
+.listing-workspace-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px 24px;
+    align-items: start;
+    min-width: 0;
+    padding: 0 0 18px;
+    margin: 0 0 22px;
+    border-bottom: 1px solid var(--border);
+}
+
+.listing-workspace-identity { min-width: 0; }
+.listing-workspace-back {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    gap: 7px;
+    color: var(--accent-strong);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+}
+.listing-workspace-back:hover { text-decoration: underline; }
+.listing-workspace-back:focus-visible,
+.listing-workspace-mode:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+.listing-workspace-back svg { width: 17px; height: 17px; flex: none; }
+
+.listing-workspace-context,
+.listing-workspace-statuses {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    min-width: 0;
+}
+.listing-workspace-context { margin: 2px 0 7px; }
+.listing-workspace-channel,
+.listing-workspace-account {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+.listing-workspace-title {
+    max-width: 100%;
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-serif, inherit);
+    font-size: clamp(24px, 3vw, 32px);
+    font-weight: 500;
+    line-height: 1.18;
+    overflow-wrap: anywhere;
+}
+.listing-workspace-identifiers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px 6px;
+    margin: 7px 0 9px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+.listing-workspace-identifiers code { color: var(--text); overflow-wrap: anywhere; }
+.listing-workspace-statuses { margin-top: 8px; }
+.listing-workspace-warning {
+    max-width: 76ch;
+    margin: 10px 0 0;
+    padding: 8px 10px;
+    border-inline-start: 3px solid var(--warn);
+    background: var(--warn-bg);
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.listing-workspace-controls {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 9px;
+}
+.listing-workspace-modes {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: stretch;
+    gap: 3px;
+    padding: 3px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--bg-card);
+}
+.listing-workspace-mode {
+    display: inline-flex;
+    min-width: 96px;
+    min-height: 36px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 12px;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+}
+.listing-workspace-mode:hover { color: var(--text); background: var(--bg-hover); }
+.listing-workspace-mode.is-active {
+    background: var(--accent);
+    color: var(--text-on-accent, #fff);
+}
+.listing-workspace-members { max-width: min(64vw, 520px); }
+.listing-workspace-diagnostics { margin-top: 22px; }
+.listing-workspace-diagnostics > summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    color: var(--accent-strong);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.listing-workspace-diagnostics > summary:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+.listing-workspace-diagnostic-json {
+    max-height: 32rem;
+    overflow: auto;
+    margin: 10px 0 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.listing-workspace-members .sh-channel-tab:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+[data-listing-id] form {
+    min-width: 0;
+    max-width: 100%;
+}
+[data-listing-id] form > * {
+    min-width: 0;
+    max-width: 100%;
+}
+[data-listing-id] .sh-btn {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+[data-listing-id] .sh-btn span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+[data-listing-id] .flex.flex-wrap.gap-2.shrink-0 {
+    min-width: 0;
+    max-width: 100%;
+    flex-shrink: 1;
+    flex-wrap: wrap;
+}
+[data-listing-id] .flex.flex-wrap.gap-2.shrink-0 > form {
+    min-width: 0;
+    max-width: 100%;
+}
+[data-listing-id] .flex.flex-wrap.gap-2.shrink-0 .sh-btn {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+[data-listing-id] .flex.flex-wrap.gap-2.shrink-0 .sh-btn span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+#marketplace-detail-app .mdet-price-card {
+    width: 100%;
+    min-width: 0;
+}
+#marketplace-detail-app .mdet-price-card > .mcat-prices {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+}
+#marketplace-detail-app .mdet-price-card .mcat-prices :is(dt, dd, p) {
+    overflow-wrap: anywhere;
+}
+#marketplace-detail-app .mcat-linkline > .mcat-link {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+    .listing-workspace-head { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .listing-workspace-controls { align-items: stretch; }
+    .listing-workspace-modes { width: 100%; }
+    .listing-workspace-mode { flex: 1; min-height: 44px; }
+    .listing-workspace-members { max-width: 100%; width: 100%; overflow-x: auto; }
+    .listing-workspace-members .sh-channel-tab { flex: none; }
+
+    #marketplace-detail-app form,
+    [data-listing-id] form {
+        min-width: 0;
+        max-width: 100%;
+    }
+    #marketplace-detail-app .sh-btn,
+    [data-listing-id] .sh-btn {
+        min-width: 0;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    #marketplace-detail-app .sh-btn span,
+    [data-listing-id] .sh-btn span {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+}

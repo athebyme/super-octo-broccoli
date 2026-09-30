@@ -1,0 +1,52 @@
+{% from "macros/icons.html" import icon %}
+{% raw %}
+<header class="listing-workspace-head" aria-label="Карточка маркетплейса">
+    <div class="listing-workspace-identity">
+        <a class="listing-workspace-back" :href="returnUrl">
+            {% endraw %}{{ icon('chevron-left', 17) }}{% raw %}
+            Вернуться к найденным карточкам
+        </a>
+        <div v-if="listing && listing.id === listingId" class="listing-workspace-context">
+            <span class="listing-workspace-channel" :class="'listing-workspace-channel--' + (listing.marketplace_code || 'wb')">
+                <i class="mcat-dot" :class="'mcat-dot--' + (listing.marketplace_code || 'wb')" aria-hidden="true"></i>
+                <span v-text="channelFull(listing)"></span>
+            </span>
+            <span v-if="listing.account_label" class="listing-workspace-account" v-text="listing.account_label"></span>
+        </div>
+        <h1 class="listing-workspace-title" v-if="listing && listing.id === listingId" v-text="listing.title || 'Без названия'"></h1>
+        <h1 class="listing-workspace-title" v-else-if="loading">Загружаем карточку…</h1>
+        <p class="listing-workspace-identifiers" v-if="listing && listing.id === listingId">
+            <span>offer_id</span> <code v-text="listing.offer_id || '—'"></code>
+            <span>· ID товара площадки</span> <code v-text="listing.external_product_id || '—'"></code>
+            <template v-if="listing.primary_sku"><span>· SKU</span> <code v-text="listing.primary_sku"></code></template>
+        </p>
+        <div v-if="listing && listing.id === listingId" class="listing-workspace-statuses">
+            <span class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + statusMeta(listing).tone" v-text="statusMeta(listing).label"></span>
+            <span v-if="!listing.is_available" class="mcat-badge mcat-badge--flat mcat-badge--warn">Не найден при последней синхронизации</span>
+            <span v-if="visibilityBadge" class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + visibilityBadge.tone" :title="visibilityBadge.hint || listing.visibility" v-text="visibilityBadge.label"></span>
+            <span v-if="providerBadge" class="mcat-badge mcat-badge--flat" :class="'mcat-badge--' + providerBadge.tone" :title="listing.provider_status" v-text="providerBadge.label"></span>
+        </div>
+        <p v-if="listing && listing.id === listingId && (!listing.is_available || (visibilityBadge && ['danger', 'warn'].includes(visibilityBadge.tone)) || providerBadge || statusMeta(listing).tone === 'danger')" class="listing-workspace-warning" role="alert">
+            <span v-if="!listing.is_available">Данные карточки не подтверждены последней синхронизацией.</span>
+            <span v-if="statusMeta(listing).tone === 'danger'">Статус карточки требует проверки: <span v-text="statusMeta(listing).label"></span>.</span>
+            <span v-if="visibilityBadge && ['danger', 'warn'].includes(visibilityBadge.tone)" v-text="visibilityBadge.hint || ('Проверьте видимость карточки: ' + visibilityBadge.label + '.')"></span>
+            <span v-if="providerBadge" v-text="providerBadge.hint || listing.provider_status || providerBadge.label"></span>
+        </p>
+    </div>
+    <div class="listing-workspace-controls">
+        <nav class="listing-workspace-modes" aria-label="Режим карточки">
+            <a class="listing-workspace-mode is-active" :href="overviewUrl" aria-current="page">Обзор</a>
+            <a class="listing-workspace-mode" :href="managementUrl">Управление</a>
+        </nav>
+        <nav v-if="members.length > 1" class="sh-channel-bar listing-workspace-members" aria-label="Каналы товара">
+            <button v-for="m in members" :key="m.id" type="button" class="sh-channel-tab"
+                    :class="{'sh-channel-tab--active': m.id === listingId}"
+                    :aria-pressed="m.id === listingId"
+                    @click="switchMember(m)">
+                <span class="sh-mp-dot" :class="'sh-mp-dot--' + (m.marketplace_code || 'wb')"></span>
+                <span v-text="memberLabel(m)"></span>
+            </button>
+        </nav>
+    </div>
+</header>
+{% endraw %}

@@ -1,8 +1,14 @@
 {% extends "base.html" %}
 {% from "macros/components.html" import channel_bar %}
 {% block title %}Цены и остатки Ozon — Seller Hub{% endblock %}
-{% block extra_head %}<style>@media(max-width:600px){.oc-classic-warehouse-form{width:100%;min-width:0}.oc-classic-warehouse-button{width:100%;max-width:100%;white-space:normal;overflow-wrap:anywhere}}</style>{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}"><style>@media(max-width:600px){.oc-classic-warehouse-form{width:100%;min-width:0}.oc-classic-warehouse-button{width:100%;max-width:100%;white-space:normal;overflow-wrap:anywhere}}</style>{% endblock %}
 {% block content %}
+{% set pricing_workspace_current = 'ozon-proposals' %}
+<div class="pricing-workspace">
+    {% include 'partials/pricing_workspace_nav.html' %}
+    {% include 'partials/pricing_workspace_ozon_facts.html' %}
+
 {% set status_labels = {
     'pending_review': 'Ждёт решения', 'approved': 'Подтверждено',
     'applying': 'Проверяем Ozon', 'uncertain': 'Нужна сверка',
@@ -19,8 +25,8 @@
         </div>
         <div class="sh-page-actions">
             <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('auto_import_pricing') }}">Формула WB</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index', marketplace='ozon') }}">Открыть каталог</a>
-            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_operations.index') }}">Журнал операций</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_listings.index', marketplace='ozon', account_id=filters.account_id) }}">Открыть каталог</a>
+            <a class="sh-btn sh-btn--white-outline sh-btn--md" href="{{ url_for('marketplace_operations.index', account_id=filters.account_id) }}">Журнал операций</a>
         </div>
     </div>
 </div>
@@ -106,7 +112,7 @@
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div><div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)"><span style="color:var(--accent)">{{ 'Цена' if proposal.proposal_kind == 'price' else 'Остатки' }}</span><span>{{ source_labels.get(proposal.source, proposal.source) }}</span><span>#{{ proposal.id }}</span><span>{{ proposal.account.label if proposal.account else 'кабинет удалён' }}</span></div>
                     <p class="mt-2 text-sm break-all" style="color:var(--text)">{{ proposal.listing.offer_id if proposal.listing else 'карточка удалена' }}</p>
-                    <p class="mt-1 text-xs" style="color:var(--text-secondary)">{% if proposal.proposal_kind == 'price' %}{{ before.get('price') }} → {{ proposed.get('price') }} {{ proposed.get('currency_code','') }}{% else %}Остатки: {{ before.get('stock') }} → {{ proposed.get('stock') }} · {{ proposal.warehouse.name if proposal.warehouse else 'склад удалён' }}{% endif %}</p>
+                    <p class="mt-1 text-xs" style="color:var(--text-secondary)">{% if proposal.proposal_kind == 'price' %}Снимок → предложение: {{ before.get('price') if before.get('price') is not none else '—' }} → {{ proposed.get('price') if proposed.get('price') is not none else '—' }} {{ proposed.get('currency_code') or 'валюта неизвестна' }}{% else %}Снимок остатка → предложение: {{ before.get('stock') if before.get('stock') is not none else '—' }} → {{ proposed.get('stock') if proposed.get('stock') is not none else '—' }} шт. · {{ proposal.warehouse.name if proposal.warehouse else 'склад удалён' }}{% endif %}</p>
                 </div>
                 <div class="sm:text-right"><div class="text-sm" style="color:var(--text)">{{ status_labels.get(proposal.status, proposal.status) }}</div><div class="mt-1 text-xs" style="color:var(--text-muted)">v{{ proposal.version }}</div></div>
             </div>
@@ -115,5 +121,7 @@
     </div>{% if batch_mode %}</form>{% endif %}
     {% else %}<div class="sh-card mt-3 p-10 text-center text-sm" style="color:var(--text-muted)">Заявок пока нет.</div>{% endif %}
 </div>
+</div>
 {% endblock %}
-{% block extra_scripts %}<script defer src="{{ url_for('static', filename='ozon-commercial.js') }}"></script>{% endblock %}
+{% block extra_scripts %}<script defer src="{{ url_for('static', filename='ozon-commercial.js') }}"></script>
+{% endblock %}

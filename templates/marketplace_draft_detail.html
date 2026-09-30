@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from 'macros/icons.html' import icon %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 {% block title %}Подготовка карточки Ozon — Seller Hub{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='ozon-draft-editor.css') }}">
@@ -35,6 +36,7 @@
 } | tojson }}</script>
 <div id="ode-boot-fallback" class="ode-boot">Загружаем редактор карточки… <a href="{{ url_for('marketplace_drafts.classic_detail', draft_id=draft.id) }}">Открыть упрощённый редактор</a></div>
 <noscript><p class="ode-boot">Для нового редактора нужен JavaScript. <a href="{{ url_for('marketplace_drafts.classic_detail', draft_id=draft.id) }}">Открыть упрощённый редактор</a></p></noscript>
+{{ preparation_journey('draft', draft.account.label, 'черновик №' ~ draft.id ~ ' · внутренний товар №' ~ draft.imported_product_id, 'Сохраните правки локально, затем откройте свежую проверку именно для версии этого черновика. Отправка доступна отдельно после подтверждения.', internal_url=url_for('seller_my_products', account_id=draft.account_id), draft_url=url_for('marketplace_drafts.index', account_id=draft.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=draft.account_id, draft_ids=draft.id), result_url=url_for('ozon_bulk_uploads.index', account_id=draft.account_id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=draft.account_id), channel='Ozon') }}
 <div id="ozon-draft-editor" class="ode" v-cloak x-ignore>
     <header class="ode-header">
         <a :href="config.urls.back" class="ode-back">{{ icon('arrow-left', size=16) }} Все черновики</a>

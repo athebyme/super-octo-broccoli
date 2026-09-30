@@ -3,6 +3,12 @@
 {% block title %}Авто-публикация - Seller Hub{% endblock %}
 
 {% block content %}
+{% set selected_target = namespace(value=none) %}
+{% for candidate in targets %}
+    {% if candidate.marketplace_code == selected_marketplace and candidate.account_id == selected_account_id %}
+        {% set selected_target.value = candidate %}
+    {% endif %}
+{% endfor %}
 <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="autoPublishPage()">
 
     <!-- Header -->
@@ -16,21 +22,41 @@
         </div>
     </div>
 
+    {% include "partials/seller_workspace_settings_nav.html" %}
+
     <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 mb-6">
-        <p class="text-xs font-medium uppercase tracking-wide text-gray-400 mb-3">Куда публикуем</p>
+        <p class="text-xs font-medium uppercase tracking-wide text-gray-400 mb-3">Очередь подготовки и публикации</p>
         <div class="flex flex-wrap gap-2">
             {% for target in targets %}
             {% set selected = target.marketplace_code == selected_marketplace and target.account_id == selected_account_id %}
             <a href="{{ url_for('auto_publish_settings', marketplace=target.marketplace_code, account_id=target.account_id) }}"
                class="px-3 py-2 rounded-lg border text-sm transition {{ 'border-[var(--accent)] bg-[var(--accent-light)] text-[var(--accent)]' if selected else 'border-gray-200 text-gray-600 hover:bg-gray-50' }}">
                 {{ target.label }}
-                <span class="ml-1 text-xs opacity-70">{{ target.connection_status }}</span>
+                <span class="ml-1 text-xs opacity-70">{% if target.marketplace_code == 'wb' %}{% if wb_credential.expired %}срок JWT истёк{% elif wb_credential.configured %}ключ сохранён{% else %}ключ не настроен{% endif %}{% elif target.connection_status == 'connected' %}подключён{% elif target.connection_status == 'not_configured' %}ключ не настроен{% elif target.connection_status == 'invalid' %}ключ отклонён{% elif target.connection_status == 'error' %}ошибка проверки{% elif target.connection_status == 'limited' %}доступ ограничен{% elif target.connection_status == 'disconnected' %}отключён{% else %}{{ target.connection_status }}{% endif %}</span>
             </a>
             {% endfor %}
         </div>
-        {% if selected_marketplace == 'ozon' and not ozon_auto_publish_enabled %}
-        <p class="mt-3 text-xs text-amber-700">Настройки можно просматривать, но Ozon auto-publish выключен отдельным rollout-флагом. Уже начатые операции продолжат только сверку.</p>
+        {% if selected_target.value %}
+        <div class="seller-workspace-note mt-3" role="status">
+            <strong>{{ selected_target.value.label }} · состояние подключения:</strong>
+            {% if selected_marketplace == 'wb' %}
+                {% if wb_credential.expired %}У сохранённого WB JWT распознан истёкший срок {{ wb_credential.expires_at }}.{% elif wb_credential.configured %}Ключ сохранён; распознанный срок: {{ wb_credential.expires_at or 'не указан' }}.{% else %}Ключ Wildberries не настроен.{% endif %}
+                Срок — только подсказка из JWT, не подтверждение личности, доступности методов или фактического доступа.
+            {% elif selected_target.value.connection_status == 'connected' %}кабинет отмечен как подключённый при последней проверке.{% elif selected_target.value.connection_status == 'not_configured' %}ключ не настроен.{% elif selected_target.value.connection_status == 'invalid' %}ключ отклонён; публикация требует проверки подключения.{% elif selected_target.value.connection_status == 'error' %}последняя проверка завершилась ошибкой.{% elif selected_target.value.connection_status == 'limited' %}подключение ограничено.{% elif selected_target.value.connection_status == 'disconnected' %}кабинет отключён.{% else %}последняя проверка не подтвердила подключение.{% endif %}
+            {% if selected_marketplace == 'ozon' and selected_account_id %}
+            {% if settings.account.connection_checked_at %}<span> Проверено: {{ settings.account.connection_checked_at.strftime('%d.%m.%Y %H:%M UTC') }}.</span>{% endif %}
+            {% if ozon_credential_expiry %}<span class="block"><strong>{{ ozon_credential_expiry.label }}.</strong> {{ ozon_credential_expiry.message }}</span>{% endif %}
+            {% if settings.account.last_error_message %}<span class="block">Причина последней ошибки: {{ settings.account.last_error_message }}</span>{% elif settings.account.last_error_code %}<span class="block">Причина последней ошибки: {{ settings.account.last_error_code }}</span>{% endif %}
+            <a href="{{ url_for('marketplace_accounts.index', account_id=selected_account_id, _anchor='ozon-account-' ~ selected_account_id) }}">Настройки и срок ключа</a> · <a href="{{ url_for('ozon_account_health.page', account_id=selected_account_id) }}">Состояние кабинета</a>
+            {% else %}
+            <a href="{{ url_for('api_settings') }}">Настройки ключа WB и его срока</a>
+            {% endif %}
+        </div>
         {% endif %}
+        {% if selected_marketplace == 'ozon' and not ozon_auto_publish_enabled %}
+        <p class="seller-workspace-note mt-2" role="status">Автопубликация Ozon отключена настройкой платформы. Уже начатые операции продолжат только сверку.</p>
+        {% endif %}
+        <p class="text-xs text-gray-500 mt-2">Включение очереди подтверждает только конфигурацию запуска. Оно не подтверждает здоровье ключа, разрешение конкретного метода или фактическую публикацию.</p>
     </div>
 
     <!-- Status banner -->
@@ -61,7 +87,7 @@
                 <template x-if="settings.is_enabled && !settings.is_paused">
                     <span class="text-green-600">
                         <span class="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse mr-1"></span>
-                        Активна
+                        Включена для запусков
                     </span>
                 </template>
                 <template x-if="settings.is_paused">
@@ -74,7 +100,8 @@
         </div>
         <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
             <p class="text-xs text-gray-500">Ожидают публикации</p>
-            <p class="text-lg font-semibold mt-1" x-text="pendingCount"></p>
+            <p class="text-lg font-semibold mt-1" x-text="pendingCount === null ? '—' : pendingCount"></p>
+            {% if pending_count_unavailable %}<p class="text-xs mt-1 text-amber-700" role="status">Количество неизвестно: источник кандидатов временно недоступен.</p>{% endif %}
         </div>
         <div class="bg-white rounded-xl border border-gray-100 p-4 text-center">
             <p class="text-xs text-gray-500">Опубликовано сегодня</p>
@@ -96,7 +123,7 @@
         <!-- Enable toggle -->
         <div class="flex items-center justify-between">
             <div>
-                <h3 class="font-medium text-gray-900">Авто-публикация</h3>
+                <h3 class="font-medium text-gray-900">Очередь автопубликации</h3>
                 <p class="text-sm text-gray-500">Автоматически загружать валидированные товары на маркетплейс</p>
             </div>
             <button @click="toggle()" class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
@@ -419,7 +446,7 @@ function autoPublishPage() {
             notify_on_failure: {{ 'true' if settings.notify_on_failure else 'false' }},
             notify_on_pause: {{ 'true' if settings.notify_on_pause else 'false' }},
         },
-        pendingCount: {{ pending_count }},
+        pendingCount: {{ pending_count | tojson }},
         runs: {{ runs_data | tojson }}.map(r => ({...r, _expanded: false, _items: null})),
         saving: false,
         triggering: false,

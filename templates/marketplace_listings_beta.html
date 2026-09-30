@@ -12,25 +12,28 @@
     'ozonEnabled': ozon_enabled,
     'accounts': accounts_payload,
     'filters': initial_filters,
+    'catalogReturnUrl': catalog_return_url,
+    'catalogPage': catalog_page,
+    'perPage': catalog_per_page,
     'urls': {
         'api': url_for('marketplace_listings.list_api'),
         'groups': url_for('marketplace_listings.groups_api'),
         'facets': url_for('marketplace_listings.facets_api'),
         'base': url_for('marketplace_listings.index'),
+        'overviewBase': url_for('marketplace_listings.index') ~ 'view/',
         'classic': url_for('marketplace_listings.classic'),
         'drafts': url_for('marketplace_drafts.index'),
         'accountsPage': url_for('marketplace_accounts.index'),
         'accountsStatus': url_for('marketplace_accounts.list_api'),
         'myProducts': url_for('seller_my_products'),
     },
-    'perPage': 60,
     'illustration': url_for('static', filename='images/ozon-shop-start.webp'),
 } | tojson }}</script>
 
-<noscript><div class="sh-alert sh-alert--warning">Для интерактивного каталога нужен JavaScript. <a href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0) }}">Открыть упрощённый каталог</a></div></noscript>
+<noscript><div class="sh-alert sh-alert--warning">Для интерактивного каталога нужен JavaScript. <a href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0, page=initial_filters.page, per_page=initial_filters.per_page) }}">Открыть упрощённый каталог</a></div></noscript>
 <div id="mcat-bootstrap-fallback" class="mcat-bootstrap-fallback" role="status">
     <p>Открываем каталог…</p>
-    <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0) }}">Открыть упрощённый каталог</a>
+    <a class="sh-btn sh-btn--secondary" href="{{ url_for('marketplace_listings.classic', marketplace=initial_filters.marketplace_code, account_id=initial_filters.account_id, search=initial_filters.search, status=initial_filters.normalized_status, link_status=initial_filters.link_status, include_unavailable=1 if initial_filters.include_unavailable else 0, page=initial_filters.page, per_page=initial_filters.per_page) }}">Открыть упрощённый каталог</a>
 </div>
 <div id="marketplace-catalog-app" v-cloak>
 {% raw %}
@@ -236,7 +239,7 @@
                 </div>
                 <span v-if="groupBadge(g)" class="mcat-badge" :class="'mcat-badge--' + groupBadge(g).tone">{{ groupBadge(g).label }}</span>
                 <span v-if="discountOf(g._p)" class="mcat-disc">−{{ discountOf(g._p) }}%</span>
-                <a class="mcat-open" :href="betaDetailUrl(g._p)" @click.stop
+                <a class="mcat-open" :href="betaDetailUrl(g._p, i)" @click.stop
                    :title="'Открыть карточку товара'" aria-label="Открыть карточку товара">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
                 </a>
@@ -475,7 +478,7 @@
             </div>
 
             <footer class="mcat-drawer-foot" v-if="current">
-                <a class="sh-btn sh-btn--primary" :href="betaDetailUrl(current)">Открыть карточку товара</a>
+                <a class="sh-btn sh-btn--primary" :href="betaDetailUrl(current, selectedIndex)">Открыть карточку товара</a>
             </footer>
         </aside>
     </transition>

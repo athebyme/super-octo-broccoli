@@ -2,8 +2,14 @@
 
 {% block title %}История изменений цен - Seller Hub{% endblock %}
 
+{% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% endblock %}
+
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% set pricing_workspace_current = 'wb-history' %}
+    {% include 'partials/pricing_workspace_nav.html' %}
+    <p class="pricing-lane-note">История показывает значения, сохранённые для операций. Статус «отправлено» означает передачу в WB, а не подтверждение цены на витрине.</p>
+
     <!-- Заголовок -->
     <div class="relative bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
         <div class="relative flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -75,7 +81,7 @@
     <!-- Таблица -->
     <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         {% if batches.items %}
-        <div class="overflow-x-auto">
+        <div class="pricing-table-scroll" role="region" aria-label="История изменений цен Wildberries" tabindex="0">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>

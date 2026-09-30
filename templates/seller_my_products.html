@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/components.html" import channel_bar %}
+{% from "partials/preparation_workspace_journey.html" import journey as preparation_journey %}
 {% from "macros/icons.html" import icon %}
 
 {% block title %}Мои товары — Seller Hub{% endblock %}
@@ -176,6 +177,7 @@
         <a class="underline" href="{{ url_for('marketplace_accounts.index', account_id=selected_ozon_account.id, _anchor='ozon-account-' ~ selected_ozon_account.id) }}">Настройки кабинета</a>
         {% endif %}
     </div>
+    {{ preparation_journey('internal', selected_ozon_account.label, 'внутренний товар продавца', 'Выберите товар и сохраните локальный черновик для этого магазина Ozon. Действия WB остаются в строках и массовой панели.', internal_url=url_for('seller_my_products', account_id=selected_ozon_account.id), draft_url=url_for('marketplace_drafts.index', account_id=selected_ozon_account.id), result_url=url_for('ozon_bulk_uploads.index', account_id=selected_ozon_account.id), listing_url=url_for('marketplace_listings.index', marketplace='ozon', account_id=selected_ozon_account.id), channel='Ozon') }}
     {% endif %}
 
     <!-- Stats -->

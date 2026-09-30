@@ -1,0 +1,411 @@
+/* Price lanes share one compact route map and make each value's meaning explicit. */
+.pricing-workspace,
+.pricing-workspace * {
+    box-sizing: border-box;
+}
+
+.pricing-workspace {
+    min-width: 0;
+    color: var(--text);
+}
+
+.pricing-workspace nav:not(.pricing-workspace-nav) ol {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    min-width: 0;
+    padding: 0;
+}
+
+.pricing-workspace nav:not(.pricing-workspace-nav) li {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.pricing-workspace .sh-stat-grid,
+.pricing-workspace .sh-stat-card,
+.pricing-workspace .sh-stat-header,
+.pricing-workspace .sh-stat-label {
+    min-width: 0;
+}
+
+.pricing-workspace .sh-stat-card {
+    width: 100%;
+}
+
+.pricing-workspace .sh-stat-header {
+    flex-wrap: wrap;
+}
+
+.pricing-workspace .sh-stat-label {
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.pricing-workspace h1,
+.pricing-workspace h2,
+.pricing-workspace h3,
+.pricing-workspace p,
+.pricing-workspace dd,
+.pricing-workspace td,
+.pricing-workspace th,
+.pricing-workspace label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.pricing-workspace-nav {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-width: 0;
+    margin: 0 0 20px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md, 8px);
+    background: var(--bg-card);
+}
+
+.pricing-workspace-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    max-width: 100%;
+    padding: 8px 11px;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm, 6px);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    text-decoration: none;
+}
+
+.pricing-workspace-link:hover,
+.pricing-workspace-link:active {
+    background: var(--bg-hover);
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.pricing-workspace-link.is-current {
+    border-color: var(--accent);
+    background: var(--accent-light);
+    color: var(--accent-strong);
+    font-weight: 600;
+}
+
+.pricing-workspace-link:focus-visible,
+.pricing-workspace :focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+
+.pricing-lane-note,
+.pricing-ozon-facts {
+    min-width: 0;
+    max-width: 88ch;
+    margin: 0 0 18px;
+    padding: 12px 15px;
+    border-left: 3px solid var(--accent-strong);
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.pricing-lane-note > :first-child,
+.pricing-ozon-facts > :first-child {
+    margin-top: 0;
+}
+
+.pricing-lane-note > :last-child,
+.pricing-ozon-facts > :last-child {
+    margin-bottom: 0;
+}
+
+.pricing-lane-note strong,
+.pricing-ozon-facts strong {
+    color: var(--text);
+}
+
+.pricing-ozon-facts details {
+    margin-top: 6px;
+}
+
+.pricing-ozon-facts summary {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    width: fit-content;
+    max-width: 100%;
+    color: var(--accent-strong);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1.45;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.pricing-ozon-facts summary:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+
+.pricing-value-caption {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.pricing-selection-toolbar,
+.pricing-selection-actions {
+    min-width: 0;
+}
+
+.pricing-selection-toolbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+}
+
+.pricing-selection-actions {
+    display: flex;
+    flex: 1 1 100%;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+}
+
+.pricing-selection-actions button {
+    min-height: 44px;
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+.pricing-selection-toolbar > .text-gray-500 {
+    flex: 1 1 100%;
+    overflow-wrap: anywhere;
+}
+
+.pricing-calculator-row,
+.pricing-calculator-field {
+    min-width: 0;
+}
+
+.pricing-calculator-field {
+    flex: 0 1 10rem;
+}
+
+.pricing-calculator-button {
+    min-height: 44px;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.pricing-workspace .price-class-labels {
+    flex-wrap: wrap;
+    gap: 4px 10px;
+}
+
+.pricing-workspace .price-class-labels > span {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+.pricing-workspace .price-class-legend-item {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+.pricing-batch-heading {
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.pricing-batch-heading > h1,
+.pricing-batch-heading > span {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+.pricing-workspace .oc-comparison {
+    min-width: 0;
+}
+
+.pricing-workspace .oc-comparison span,
+.pricing-workspace .oc-comparison small {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.pricing-table-scroll {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-color: var(--text-muted) var(--bg-hover);
+}
+
+.pricing-settings-range-heading {
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+}
+
+.pricing-settings-range-heading > * {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+.pricing-settings-range-heading > button {
+    min-height: 44px;
+    white-space: normal;
+}
+
+.pricing-table-scroll:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
+
+.pricing-table-scroll table {
+    min-width: 680px;
+}
+
+.pricing-table-scroll > .sh-table-wrap {
+    width: max-content;
+    min-width: 100%;
+    margin-bottom: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+}
+
+.pricing-table-scroll > .sh-table-wrap > table {
+    min-width: 760px;
+}
+
+/* Older WB pages use light Tailwind utility colors outside the theme token system. */
+.pricing-workspace .bg-white {
+    background-color: var(--bg-card) !important;
+}
+
+.pricing-workspace .bg-gray-50,
+.pricing-workspace .bg-gray-100 {
+    background-color: var(--bg-hover) !important;
+}
+
+.pricing-workspace .border-gray-200,
+.pricing-workspace .border-gray-300 {
+    border-color: var(--border) !important;
+}
+
+.pricing-workspace .text-gray-900,
+.pricing-workspace .text-gray-800 {
+    color: var(--text) !important;
+}
+
+.pricing-workspace .text-gray-700,
+.pricing-workspace .text-gray-600,
+.pricing-workspace .text-gray-500 {
+    color: var(--text-secondary) !important;
+}
+
+.pricing-workspace .text-gray-400 {
+    color: var(--text-muted) !important;
+}
+
+.pricing-workspace .hover\:bg-gray-50:hover,
+.pricing-workspace .hover\:bg-gray-100:hover {
+    background-color: var(--bg-hover) !important;
+}
+
+.pricing-workspace input,
+.pricing-workspace select,
+.pricing-workspace textarea {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.pricing-workspace .grid > * {
+    min-width: 0;
+}
+
+.pricing-workspace .pricing-settings-form {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.pricing-workspace .pricing-batch-summary,
+.pricing-workspace .pricing-batch-summary * {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 680px) {
+    .pricing-workspace-nav {
+        gap: 3px;
+    }
+
+    .pricing-workspace-link {
+        flex: 1 1 145px;
+        justify-content: flex-start;
+    }
+
+    .pricing-calculator-row {
+        align-items: stretch;
+        flex-wrap: wrap;
+    }
+
+    .pricing-calculator-field,
+    .pricing-calculator-button {
+        flex: 1 1 100%;
+    }
+
+    .pricing-workspace .pricing-settings-actions {
+        align-items: stretch;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        gap: 10px;
+    }
+
+    .pricing-settings-actions > a,
+    .pricing-settings-actions > button {
+        min-height: 44px;
+        max-width: 100%;
+        flex: 1 1 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+@media (max-width: 600px) {
+    .pricing-workspace .oc-comparison {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 10px;
+    }
+
+    .pricing-workspace .oc-comparison .oc-arrow {
+        justify-self: center;
+    }
+}
+
+@media (max-width: 420px) {
+    .pricing-workspace .pricing-settings-form .grid-cols-2,
+    .pricing-workspace .pricing-settings-form .grid-cols-3,
+    .pricing-workspace .pricing-settings-form .grid-cols-4 {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

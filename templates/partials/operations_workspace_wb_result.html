@@ -1,0 +1,28 @@
+<div class="operations-wb-result{% if operations_wb_result_context|default('') == 'dark-hero' %} operations-wb-result--dark-hero{% endif %}" data-execution-status="{{ operation.status }}">
+    {% if operation.status == 'completed' and operation.error_count > 0 and operation.success_count > 0 %}
+    <span class="operations-wb-outcome is-partial">Завершено частично</span>
+    <p>Без ошибки обработано {{ operation.success_count }} из {{ operation.total_products }} строк; ошибок: {{ operation.error_count }}. Результат отправки в WB смотрите отдельно по каждой строке.</p>
+    {% elif operation.status == 'completed' and operation.error_count > 0 %}
+    <span class="operations-wb-outcome is-error">Завершено с ошибками</span>
+    <p>Без ошибки обработано {{ operation.success_count }} из {{ operation.total_products }} строк; ошибок: {{ operation.error_count }}. Откройте детали, чтобы проверить причины и доступные действия.</p>
+    {% elif operation.status == 'completed' and operation.total_products > 0 and operation.success_count >= operation.total_products %}
+    <span class="operations-wb-outcome is-complete">Завершено</span>
+    <p>Без общей ошибки обработано {{ operation.success_count }} строк. Состояние синхронизации с WB показывается отдельно.</p>
+    {% elif operation.status == 'completed' %}
+    <span class="operations-wb-outcome is-unknown">Завершено; успешный результат не подтверждён счётчиками</span>
+    <p>Проверьте детали и статусы строк в WB. Не повторяйте изменение, пока исход не установлен.</p>
+    {% elif operation.status == 'in_progress' %}
+    <span class="operations-wb-outcome is-running">Выполняется</span>
+    <p>Дождитесь окончания обработки, затем откройте результат по строкам.</p>
+    {% elif operation.status == 'failed' %}
+    <span class="operations-wb-outcome is-error">Ошибка выполнения</span>
+    <p>Откройте причины и статусы строк. Новый запуск требует проверки фактического состояния WB и повторного просмотра значений.</p>
+    {% elif operation.status == 'pending' %}
+    <span class="operations-wb-outcome is-running">Ожидает выполнения</span>
+    <p>Операция ещё не завершена. Сверьте строки после обработки.</p>
+    {% else %}
+    <span class="operations-wb-outcome is-unknown">Исход не распознан</span>
+    <p>Проверьте детали истории. Повтор не предлагается, пока исход не установлен.</p>
+    {% endif %}
+    {% if operation.reverted %}<p class="operations-wb-reverted">Для этой операции зарегистрирован откат.</p>{% endif %}
+</div>

@@ -59,6 +59,10 @@
     </div>
   </div>
 
+  {% with seller_workspace_quality_mode='media' %}
+  {% include "partials/seller_workspace_quality_media.html" %}
+  {% endwith %}
+
   <div x-show="message" x-cloak class="mb-4 rounded-lg border px-4 py-3 text-sm"
        :class="messageType==='error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-green-50 border-green-200 text-green-700'">
     <span x-text="message"></span>

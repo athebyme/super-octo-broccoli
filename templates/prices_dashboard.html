@@ -4,6 +4,7 @@
 {% block title %}Управление ценами - Seller Hub{% endblock %}
 
 {% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">
 <style>
     /* Classification bar */
     .price-class-bar {
@@ -115,7 +116,11 @@
 {% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% set pricing_workspace_current = 'wb-current' %}
+    {% include 'partials/pricing_workspace_nav.html' %}
+    <p class="pricing-lane-note">Здесь показаны сохранённые в Seller Hub цены продавца Wildberries. Покупательская цена и скидка площадки этими значениями не подтверждаются.</p>
+
 
     {# ── Page Header ── #}
     {% call(actions) page_header_with_actions(
@@ -234,6 +239,7 @@
         </div>
 
         {% if recent_batches %}
+        <div class="pricing-table-scroll" role="region" aria-label="Недавние пакетные изменения цен Wildberries" tabindex="0">
         {% call data_table([
             'Дата',
             'Название',
@@ -299,6 +305,7 @@
             </tr>
             {% endfor %}
         {% endcall %}
+        </div>
         {% else %}
             {{ empty_state(
                 'Нет операций',

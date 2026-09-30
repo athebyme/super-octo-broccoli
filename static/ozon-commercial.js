@@ -68,7 +68,7 @@
       photo(p) { const url = p?.primary_image; return typeof url === 'string' && /^https:\/\//.test(url) && !this.failedImages[url] ? url : ''; },
       imageError(p) { if (p?.primary_image) this.failedImages[p.primary_image] = true; },
       date(value) { if (!value) return 'Дата неизвестна'; const d = new Date(/[zZ]$|[+-]\d\d:\d\d$/.test(value) ? value : value + 'Z'); return Number.isNaN(d.getTime()) ? 'Дата неизвестна' : new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short'}).format(d); },
-      money(value, currency) { if (!['string','number'].includes(typeof value) || !/^\d+(\.\d+)?$/.test(String(value)) || !Number.isFinite(Number(value))) return '—'; const formatted = new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(Number(value)); return formatted + (currency === 'RUB' ? ' ₽' : typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) ? ' ' + currency : ''); },
+      money(value, currency) { if (!['string','number'].includes(typeof value) || !/^\d+(\.\d+)?$/.test(String(value)) || !Number.isFinite(Number(value))) return '—'; const formatted = new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(Number(value)); return formatted + (currency === 'RUB' ? ' ₽' : typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) ? ' ' + currency : ' · валюта неизвестна'); },
       quantity(value) { return Number.isSafeInteger(value) && value >= 0 ? new Intl.NumberFormat('ru-RU').format(value) + ' шт.' : '—'; },
       value(p, side) { const state = p[side] || {}; return p.proposal_kind === 'price' ? this.money(state.price, state.currency_code) : this.quantity(state.stock); },
       reviewUrl(hold) {
