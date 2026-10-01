@@ -62,6 +62,11 @@ REPORT = {
         "expected_apply_conflicts": 0,
         "empty_description_override_requests": 0,
         "empty_route_api_reads": 0,
+        "empty_route_shared_shell_reads": 0,
+        "empty_route_shared_shell_read_categories": {
+            "notifications_unread_count": 0,
+            "background_tasks_tray": 0,
+        },
         "empty_route_mutating_requests": 0,
         "empty_state_catalog_link_available": False,
         "provider_attempts": 0,
@@ -79,6 +84,10 @@ REPORT = {
 EXPECTED_CONFLICTS = {
     "/api/my-products/common-content/preview": [0],
     "/api/my-products/common-content/apply": [0],
+}
+SHARED_SHELL_READ_PATH_CATEGORIES = {
+    "/api/notifications/unread-count": "notifications_unread_count",
+    "/api/tasks/tray": "background_tasks_tray",
 }
 
 os.environ.update({
@@ -261,7 +270,23 @@ def bridge(route):
     if parsed.hostname == "127.0.0.1" and parsed.port == server.server_port:
         if request.method in {"GET", "HEAD"}:
             if parsed.path.startswith("/api/"):
-                REPORT["browser_api_reads"].append({"method": request.method, "kind": "local_read"})
+                shared_category = SHARED_SHELL_READ_PATH_CATEGORIES.get(parsed.path)
+                if shared_category:
+                    read_kind = "shared_shell_read"
+                    path_category = shared_category
+                elif parsed.path.startswith("/api/my-products/"):
+                    read_kind = "product_read"
+                    path_category = "common_product_content"
+                else:
+                    # Keep every unallowlisted API request visible to the
+                    # empty-editor guard without storing IDs or query values.
+                    read_kind = "other_api_read"
+                    path_category = "non_allowlisted_api"
+                REPORT["browser_api_reads"].append({
+                    "method": request.method,
+                    "kind": read_kind,
+                    "path_category": path_category,
+                })
         elif request.method == "POST" and parsed.path == "/api/my-products/common-content/preview":
             REPORT["synthetic_actions"]["preview_requests"] += 1
             REPORT["writes"].append({"method": "POST", "path": parsed.path, "kind": "synthetic_preview"})
@@ -420,9 +445,27 @@ def layout_case(page, path: str, width: int, theme: str, state: str, catalog_pat
         link_handle = link.element_handle()
         assert link_handle and page.evaluate("target => document.activeElement === target", link_handle)
         REPORT["synthetic_actions"]["empty_state_catalog_link_available"] = True
-        REPORT["synthetic_actions"]["empty_route_api_reads"] += (
-            len(REPORT["browser_api_reads"]) - api_reads_before
-        )
+        empty_page_reads = REPORT["browser_api_reads"][api_reads_before:]
+        shared_shell_reads = [
+            read for read in empty_page_reads
+            if read.get("kind") == "shared_shell_read"
+        ]
+        non_shell_reads = [
+            read for read in empty_page_reads
+            if read.get("kind") != "shared_shell_read"
+        ]
+        REPORT["synthetic_actions"]["empty_route_shared_shell_reads"] += len(shared_shell_reads)
+        REPORT["synthetic_actions"]["empty_route_api_reads"] += len(non_shell_reads)
+        shell_category_counts = REPORT["synthetic_actions"]["empty_route_shared_shell_read_categories"]
+        for read in shared_shell_reads:
+            category = read.get("path_category")
+            if category in shell_category_counts:
+                shell_category_counts[category] += 1
+            else:
+                # This should be unreachable because bridge() only emits
+                # shared_shell_read for the exact allowlist above.
+                REPORT["synthetic_actions"]["empty_route_api_reads"] += 1
+                REPORT["synthetic_actions"]["empty_route_shared_shell_reads"] -= 1
         REPORT["synthetic_actions"]["empty_route_mutating_requests"] += (
             len(REPORT["writes"]) - writes_before
         )
