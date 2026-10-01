@@ -11,6 +11,9 @@ from services.marketplace_drafts import (
     MarketplaceDraftConflict, MarketplaceDraftNotFound,
 )
 from services.marketplace_publications import MarketplacePublicationService
+from services.ozon_catalog_operation_fence import (
+    active_catalog_listing_operation,
+)
 from services.ozon_reference_service import OzonReferenceService
 from services.source_photo_display import imported_photo_previews
 
@@ -95,6 +98,17 @@ class MarketplaceDraftEditor:
         )
         active = next((op.id for op in operations
                        if op.status in MarketplacePublicationService.ACTIVE_STATUSES), None)
+        if active is None and draft.published_listing_id is not None:
+            listing_operation = active_catalog_listing_operation(
+                seller_id=draft.seller_id,
+                marketplace_id=draft.marketplace_id,
+                account_id=draft.account_id,
+                listing_id=draft.published_listing_id,
+            )
+            if listing_operation is not None:
+                if all(op.id != listing_operation.id for op in operations):
+                    operations.append(listing_operation)
+                active = listing_operation.id
         suggestions = []
         if not draft.product_type_id:
             suggestions = MarketplaceDraftService.suggest_product_types(

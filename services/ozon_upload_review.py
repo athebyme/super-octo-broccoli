@@ -14,6 +14,9 @@ from services.ozon_bulk_upload import (
     OzonBulkUploadValidationError, OzonBulkUploadNotFound,
 )
 from services.ozon_write_quarantine import draft_hold
+from services.ozon_catalog_operation_fence import (
+    active_catalog_listing_operation,
+)
 
 
 class OzonUploadReviewService:
@@ -97,9 +100,19 @@ class OzonUploadReviewService:
             if not enabled:
                 blocked.append({"code": "publication_disabled", "field": "account",
                                 "message": "Отправка карточек Ozon сейчас выключена"})
-            if pk in active:
+            active_operation_id = active.get(pk)
+            if active_operation_id is None and draft.published_listing_id is not None:
+                listing_operation = active_catalog_listing_operation(
+                    seller_id=draft.seller_id,
+                    marketplace_id=draft.marketplace_id,
+                    account_id=draft.account_id,
+                    listing_id=draft.published_listing_id,
+                )
+                if listing_operation is not None:
+                    active_operation_id = listing_operation.id
+            if active_operation_id is not None:
                 blocked.append({"code": "already_in_progress", "field": "draft",
-                                "message": "По этой карточке уже выполняется операция"})
+                                "message": "По этому товару Ozon уже выполняется операция; сначала сверьте её результат"})
             if hold is not None:
                 blocked.append({"code": "write_quarantined", "field": "draft",
                                 "message": "Сначала разберите незавершённую запись этой карточки"})
@@ -120,7 +133,7 @@ class OzonUploadReviewService:
                 "errors": blocked, "warnings": validation.get("warnings", []),
                 "checked_at": validation["validated_at"],
                 "schema": validation["schema"],
-                "active_operation_id": active.get(pk),
+                "active_operation_id": active_operation_id,
                 "commercial": {key: (documents.get("commercial") or {}).get(key)
                                for key in ("price", "old_price", "vat", "currency_code")},
                 "dimensions": {key: (documents.get("dimensions") or {}).get(key)

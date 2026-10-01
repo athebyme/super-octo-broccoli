@@ -75,6 +75,10 @@ from services.ozon_product_state import (
 )
 from services import ozon_write_quarantine as write_quarantine
 from services.ozon_quarantine_scope import incoming_scope
+from services.ozon_catalog_operation_fence import (
+    active_catalog_listing_operation,
+    queued_catalog_listing_blocker,
+)
 
 
 class MarketplacePublicationError(RuntimeError):
@@ -155,6 +159,26 @@ class MarketplacePublicationService:
             operation,
             code="ozon_write_quarantined",
             message=write_quarantine.hold_message(hold),
+            now=now,
+        )
+        return True
+
+    @classmethod
+    def _stop_conflicting_listing_write(cls, operation, *, now):
+        """Terminalize only an untouched queued write blocked by an older op."""
+        if operation.status != "queued" or operation.attempt_count != 0:
+            return False
+        blocker = queued_catalog_listing_blocker(operation)
+        if blocker is None:
+            return False
+        cls._mark_failed(
+            operation,
+            code="listing_operation_in_progress",
+            message=(
+                "Отправка остановлена: по этой карточке Ozon уже есть "
+                "незавершённая операция. Сверьте её результат и заново "
+                "проверьте карточку перед повтором."
+            ),
             now=now,
         )
         return True
@@ -1075,6 +1099,17 @@ class MarketplacePublicationService:
             raise MarketplacePublicationConflict(
                 "Для черновика уже выполняется другая публикация"
             )
+        if listing is not None:
+            active_listing_operation = active_catalog_listing_operation(
+                seller_id=draft.seller_id,
+                marketplace_id=draft.marketplace_id,
+                account_id=draft.account_id,
+                listing_id=listing.id,
+            )
+            if active_listing_operation is not None:
+                raise MarketplacePublicationConflict(
+                    "Для этой карточки Ozon уже выполняется другая операция"
+                )
 
         summary = cls._request_summary(draft=draft, payload=payload)
         summary["operation_mode"] = (
@@ -2095,6 +2130,10 @@ class MarketplacePublicationService:
         credentials: MarketplaceCredentials,
         now: datetime,
     ) -> MarketplaceOperation:
+        if cls._stop_conflicting_listing_write(operation, now=now):
+            return cls._owned_operation(
+                seller_id=operation.seller_id, operation_id=operation.id,
+            )
         if cls._stop_quarantined_write(operation, now=now):
             return cls._owned_operation(
                 seller_id=operation.seller_id, operation_id=operation.id,
@@ -2280,6 +2319,10 @@ class MarketplacePublicationService:
         if operation.operation_kind != "product_import_rollback":
             raise MarketplacePublicationValidationError(
                 "Archive submit получил неверный operation_kind"
+            )
+        if cls._stop_conflicting_listing_write(operation, now=now):
+            return cls._owned_operation(
+                seller_id=operation.seller_id, operation_id=operation.id,
             )
         if cls._stop_quarantined_write(operation, now=now):
             return cls._owned_operation(
@@ -2917,6 +2960,20 @@ class MarketplacePublicationService:
             error.code = "already_in_progress"
             error.operation_id = existing.id
             raise error
+        if listing is not None:
+            active_listing_operation = active_catalog_listing_operation(
+                seller_id=seller_id,
+                marketplace_id=draft.marketplace_id,
+                account_id=account_id,
+                listing_id=listing.id,
+            )
+            if active_listing_operation is not None:
+                error = MarketplacePublicationConflict(
+                    "Для этой карточки Ozon уже выполняется другая операция"
+                )
+                error.code = "already_in_progress"
+                error.operation_id = active_listing_operation.id
+                raise error
 
         # End any read transaction before taking SQLite's short writer lock.
         run_id = run.id
@@ -3016,6 +3073,20 @@ class MarketplacePublicationService:
                 error.code = "already_in_progress"
                 error.operation_id = active.id
                 raise error
+            if fresh_listing is not None:
+                active_listing_operation = active_catalog_listing_operation(
+                    seller_id=seller_id,
+                    marketplace_id=draft.marketplace_id,
+                    account_id=account_id,
+                    listing_id=fresh_listing.id,
+                )
+                if active_listing_operation is not None:
+                    error = MarketplacePublicationConflict(
+                        "Для этой карточки Ozon уже выполняется другая операция"
+                    )
+                    error.code = "already_in_progress"
+                    error.operation_id = active_listing_operation.id
+                    raise error
             if (
                 item is None or item.phase != "reviewed"
                 or item.operation_id is not None
@@ -3371,6 +3442,16 @@ class MarketplacePublicationService:
             return cls._owned_operation(
                 seller_id=parent.seller_id,
                 operation_id=existing.id,
+            )
+        active_listing_operation = active_catalog_listing_operation(
+            seller_id=parent.seller_id,
+            marketplace_id=parent.marketplace_id,
+            account_id=parent.account_id,
+            listing_id=parent.listing_id,
+        )
+        if active_listing_operation is not None:
+            raise MarketplacePublicationConflict(
+                "Для этой карточки Ozon уже выполняется другая операция"
             )
         if (
             not isinstance(offer_id, str)
@@ -4763,6 +4844,12 @@ class MarketplacePublicationService:
                 return operation
             if operation.status == "queued" and allow_submission:
                 if cls._stop_quarantined_write(operation, now=current_time):
+                    return cls._owned_operation(
+                        seller_id=seller_id, operation_id=operation_id,
+                    )
+                if cls._stop_conflicting_listing_write(
+                    operation, now=current_time,
+                ):
                     return cls._owned_operation(
                         seller_id=seller_id, operation_id=operation_id,
                     )

@@ -53,6 +53,9 @@ from services.marketplace_operation_locks import (
     release_marketplace_category_mapping_lock,
     try_marketplace_category_mapping_lock,
 )
+from services.ozon_catalog_operation_fence import (
+    active_catalog_listing_operation,
+)
 from services.ozon_brand_policy import first_forbidden_ozon_brand
 from services.ozon_product_state import (
     OzonProductStateContract,
@@ -195,6 +198,13 @@ class MarketplaceDraftService:
             MarketplaceOperation.draft_id == draft.id,
             MarketplaceOperation.status.in_(cls.ACTIVE_PUBLICATION_STATUSES),
         ).first()
+        if active is None and draft.published_listing_id is not None:
+            active = active_catalog_listing_operation(
+                seller_id=draft.seller_id,
+                marketplace_id=draft.marketplace_id,
+                account_id=draft.account_id,
+                listing_id=draft.published_listing_id,
+            )
         if active is not None:
             raise MarketplaceDraftConflict(
                 "Черновик нельзя менять, пока публикация не завершена"
