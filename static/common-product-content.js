@@ -163,6 +163,55 @@
         return item;
     }
 
+    function focusIfAvailable(item) {
+        if (!item || item.disabled || item.hidden
+                || (item.getAttribute && item.getAttribute('aria-disabled') === 'true')) {
+            return false;
+        }
+        var parent = item;
+        while (parent) {
+            if (parent.hidden || parent.inert) return false;
+            parent = parent.parentNode;
+        }
+        if (typeof item.focus !== 'function') return false;
+        item.focus();
+        return document.activeElement === item;
+    }
+
+    function focusAction(container, action, matches) {
+        if (!container) return false;
+        var controls = container.querySelectorAll('[data-action]');
+        for (var index = 0; index < controls.length; index++) {
+            var item = controls[index];
+            if (item.dataset.action !== action || (matches && !matches(item))) continue;
+            if (focusIfAvailable(item)) return true;
+        }
+        return false;
+    }
+
+    function focusModeControl(field) {
+        return focusAction(fieldsNode, 'toggle-mode', function (item) {
+            return item.dataset.field === field;
+        });
+    }
+
+    function focusFirstModeControl() {
+        return focusAction(fieldsNode, 'toggle-mode');
+    }
+
+    function focusPhotoControl(url, direction) {
+        return focusAction(fieldsNode, 'move-photo', function (item) {
+            return item.dataset.photoUrl === url
+                && item.dataset.direction === String(direction);
+        });
+    }
+
+    function focusCurrentProductChoice(productId) {
+        return focusAction(listNode, 'choose-product', function (item) {
+            return item.dataset.productId === String(productId);
+        });
+    }
+
     function originLabel(value) { return originLabels[value] || originLabels.unknown; }
 
     function sourceLabel(source) {
@@ -809,6 +858,9 @@
 
     async function applyPreview() {
         if (!state.previewToken || !state.acknowledged || state.busy) return;
+        var requestedProductId = state.currentId;
+        var expectedDisplayedProductId = requestedProductId;
+        var focusStartedInside = !!(root && root.contains(document.activeElement));
         clearError();
         var previewSnapshot = clone(state.preview);
         var previewToken = state.previewToken;
@@ -820,6 +872,7 @@
                 throw new Error('Сервер не подтвердил сохранение общего товара. Проверьте данные перед повтором.');
             }
             var changedIds = response.applied.map(function (row) { return row.product_id; });
+            if (changedIds.length) expectedDisplayedProductId = changedIds[0];
             response.applied.forEach(function (applied) {
                 var previous = state.byId.get(applied.product_id);
                 var product = previous ? clone(previous.state) : null;
@@ -877,7 +930,15 @@
         } finally {
             setBusy(false);
             renderCurrent();
-            if (failureMessage) showError(failureMessage);
+            if (failureMessage) {
+                showError(failureMessage);
+            } else {
+                var focusCanBeRestored = document.activeElement === document.body
+                    || !!(root && root.contains(document.activeElement));
+                if (state.currentId === expectedDisplayedProductId && focusStartedInside && focusCanBeRestored) {
+                    focusFirstModeControl();
+                }
+            }
         }
     }
 
@@ -914,6 +975,7 @@
         discardPreview();
         renderCurrent();
         showStatus('');
+        focusModeControl(field);
     }
 
     function resetCurrent() {
@@ -927,14 +989,18 @@
         discardPreview();
         renderCurrent();
         showStatus('Правки отменены. На странице площадки ничего не менялось.');
+        focusFirstModeControl();
     }
 
     async function refreshCurrent() {
         if (!state.byId.get(state.currentId) || state.busy) return;
+        var requestedProductId = state.currentId;
+        var focusStartedInside = !!(root && root.contains(document.activeElement));
         var hasDirty = state.records.some(isDirty);
         if (hasDirty && !window.confirm('Перечитать выбранные товары и отменить все несохранённые правки?')) return;
         clearError();
         setBusy(true);
+        var refreshSucceeded = false;
         try {
             var ids = state.records.map(function (row) { return row.state.product_id; });
             var refreshed = [];
@@ -955,10 +1021,20 @@
             discardPreview();
             renderCurrent();
             showStatus('Данные выбранных товаров перечитаны. Проверьте источник и версии перед новым diff.');
+            refreshSucceeded = true;
         } catch (error) {
             showError(error && error.message);
         } finally {
             setBusy(false);
+            var focusCanBeRestored = document.activeElement === document.body
+                || !!(root && root.contains(document.activeElement));
+            if (state.currentId === requestedProductId && focusStartedInside && focusCanBeRestored) {
+                if (refreshSucceeded) {
+                    focusAction(fieldsNode, 'refresh-product');
+                } else if (!refreshSucceeded && errorNode && !errorNode.hidden) {
+                    focusIfAvailable(errorNode);
+                }
+            }
         }
     }
 
@@ -981,6 +1057,9 @@
         rows.splice(index, 1);
         discardPreview();
         renderCurrent();
+        var inputs = fieldsNode.querySelectorAll('[data-char-part="name"]');
+        if (inputs.length) focusIfAvailable(inputs[Math.min(index, inputs.length - 1)]);
+        else focusAction(fieldsNode, 'add-characteristic');
     }
 
     function togglePhoto(record, url) {
@@ -1004,6 +1083,11 @@
         field.value = photos;
         discardPreview();
         renderCurrent();
+        if (!focusAction(fieldsNode, 'toggle-photo', function (item) {
+            return item.dataset.photoUrl === url;
+        })) {
+            focusModeControl('photos');
+        }
     }
 
     function movePhoto(record, url, direction) {
@@ -1018,9 +1102,9 @@
         field.value = photos;
         discardPreview();
         renderCurrent();
-        var selector = '[data-action="move-photo"][data-photo-url="' + CSS.escape(url) + '"][data-direction="' + direction + '"]';
-        var next = fieldsNode.querySelector(selector);
-        if (next) next.focus();
+        if (!focusPhotoControl(url, direction)) {
+            focusPhotoControl(url, direction * -1) || focusModeControl('photos');
+        }
     }
 
     function handleClick(event) {
@@ -1033,6 +1117,7 @@
             discardPreview();
             renderCurrent();
             showStatus('');
+            focusCurrentProductChoice(state.currentId);
             return;
         }
         if (action === 'toggle-mode') {
@@ -1063,7 +1148,12 @@
         if (action === 'reset-product') { resetCurrent(); return; }
         if (action === 'refresh-product') { refreshCurrent(); return; }
         if (action === 'preview') { preview(); return; }
-        if (action === 'back-to-fields') { discardPreview(); renderCurrent(); return; }
+        if (action === 'back-to-fields') {
+            discardPreview();
+            renderCurrent();
+            if (!focusAction(fieldsNode, 'preview')) focusFirstModeControl();
+            return;
+        }
         if (action === 'apply') { applyPreview(); }
     }
 
@@ -1129,6 +1219,8 @@
         var reset = fieldsNode.querySelector('[data-action="reset-product"]');
         var current = state.byId.get(state.currentId);
         if (reset) reset.disabled = !current || !isDirty(current) || state.busy;
+        var refresh = fieldsNode.querySelector('[data-action="refresh-product"]');
+        if (refresh) refresh.disabled = state.busy;
     }
 
     if (!Array.isArray(bootstrap.products) || !bootstrap.products.length) return;

@@ -116,3 +116,31 @@ assert.equal(photoPreviewFallbackLabel(false, true), 'Предпросмотр �
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_production_editor_handlers_restore_native_focus_after_dom_replacement():
+    node = shutil.which("node")
+    assert node, "Node is required to exercise the production editor event handlers"
+    harness = ROOT / "tests/ux01/common_product_content_focus_dom.js"
+    result = subprocess.run(
+        [node, str(harness)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["status"] == "passed"
+    assert set(report["checks"]) >= {
+        "common_photo_boundary_focus_first",
+        "common_photo_boundary_focus_last",
+        "common_preview_cancel_focus_return",
+        "successful_apply_restores_focus",
+        "saved_but_readback_failed_restores_focus_and_keeps_status",
+        "apply_completion_does_not_steal_external_focus",
+        "mode_photo_characteristic_product_reset_focus_restored",
+        "refresh_success_and_error_focus_restored_after_busy",
+        "refresh_completion_does_not_steal_external_focus",
+    }
