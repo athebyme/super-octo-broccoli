@@ -1108,7 +1108,7 @@ class MarketplacePublicationService:
             )
             if active_listing_operation is not None:
                 raise MarketplacePublicationConflict(
-                    "Для этой карточки Ozon уже выполняется другая операция"
+                    "По этой карточке Ozon уже выполняется другая операция"
                 )
 
         summary = cls._request_summary(draft=draft, payload=payload)
@@ -2969,7 +2969,7 @@ class MarketplacePublicationService:
             )
             if active_listing_operation is not None:
                 error = MarketplacePublicationConflict(
-                    "Для этой карточки Ozon уже выполняется другая операция"
+                    "По этой карточке Ozon уже выполняется другая операция"
                 )
                 error.code = "already_in_progress"
                 error.operation_id = active_listing_operation.id
@@ -3082,7 +3082,7 @@ class MarketplacePublicationService:
                 )
                 if active_listing_operation is not None:
                     error = MarketplacePublicationConflict(
-                        "Для этой карточки Ozon уже выполняется другая операция"
+                        "По этой карточке Ozon уже выполняется другая операция"
                     )
                     error.code = "already_in_progress"
                     error.operation_id = active_listing_operation.id
