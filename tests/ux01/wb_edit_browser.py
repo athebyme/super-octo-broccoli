@@ -1417,12 +1417,76 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             page.goto(BASE + "/products?search=Pipedream&brand=Synthetic%20reviewed%20brand&sort=title&order=asc&page=1&per_page=50")
             assert page.locator("#selectedCount").inner_text().strip() == "0"
             interaction("changing_filter_clears_prior_selection_without_expansion")
-            page.get_by_role("button", name="Выбрать все отфильтрованные (50)").click()
+            select_filtered = page.get_by_role(
+                "button", name="Выбрать все отфильтрованные (50)",
+            )
+            with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + "/products/selection/resolve",
+                timeout=5000,
+            ) as all_filtered_response:
+                select_filtered.click()
+            resolved_response = all_filtered_response.value
+            assert resolved_response.status == 200
+            resolver_request = json.loads(resolved_response.request.post_data or "{}")
+            assert resolver_request.get("mode") == "all_filtered"
+            assert resolver_request.get("ids") == []
+            assert resolver_request.get("filters") == {
+                "search": "Pipedream",
+                "brand": "Synthetic reviewed brand",
+                "active_only": False,
+                "disabled_only": False,
+                "category": "",
+                "has_stock": "",
+                "block_status": "",
+                "rating_min": None,
+                "rating_max": None,
+                "quality_weak": False,
+                "supplier_id": None,
+            }
+            assert resolver_request.get("sort") == "title"
+            assert resolver_request.get("order") == "asc"
+            assert resolver_request.get("page") == 1
+            assert resolver_request.get("per_page") == 50
+            resolver_ids = resolved_response.json().get("ids")
+            assert isinstance(resolver_ids, list)
+            assert sorted(int(product_id) for product_id in resolver_ids) == expected_product_ids
+            page.wait_for_function(
+                "expected => document.querySelector('#selectedCount')?.textContent?.trim() === String(expected)",
+                arg=len(expected_product_ids),
+                timeout=5000,
+            )
             assert page.locator("#selectedCount").inner_text().strip() == "50"
+            selected_ids = page.locator(
+                '#bulkActionForm input[name="product_ids"]',
+            ).evaluate_all("inputs => inputs.map(input => Number(input.value))")
+            assert sorted(selected_ids) == expected_product_ids
+            check(
+                "all_filtered_resolver_returns_exact_current_filter_ids",
+                resolver_status=resolved_response.status,
+                selected=len(selected_ids),
+            )
+            excluded_id = int(page.locator(".product-checkbox").first.get_attribute("value"))
             page.locator(".product-checkbox").first.uncheck()
+            page.wait_for_function(
+                "expected => document.querySelector('#selectedCount')?.textContent?.trim() === String(expected)",
+                arg=len(expected_product_ids) - 1,
+                timeout=5000,
+            )
             assert page.locator("#selectedCount").inner_text().strip() == "49"
+            selected_ids = page.locator(
+                '#bulkActionForm input[name="product_ids"]',
+            ).evaluate_all("inputs => inputs.map(input => Number(input.value))")
+            assert sorted(selected_ids) == [
+                product_id for product_id in expected_product_ids
+                if product_id != excluded_id
+            ]
             interaction("all_filtered_is_explicit_and_manual_uncheck_is_an_exact_exclusion")
             page.locator("button").filter(has_text="Отменить выбор").click()
+            page.wait_for_function(
+                "() => document.querySelector('#selectedCount')?.textContent?.trim() === '0'",
+                timeout=5000,
+            )
             assert page.locator("#selectedCount").inner_text().strip() == "0"
 
             assert REPORT["provider_attempts"] == 0
