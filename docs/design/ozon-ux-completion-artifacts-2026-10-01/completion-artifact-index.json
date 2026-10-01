@@ -18,8 +18,8 @@
     },
     {
       "path": "final-r24/artifact-index.json",
-      "sha256": "8d35855d1e1fd9cc80cca69bd9d49a60846faf3033b90e49b07303655f564c82",
-      "bytes": 9529
+      "sha256": "e8d491945795abffc9ab2f367a2163b89b60a162df08c2ff9e1702f228f0fd72",
+      "bytes": 9687
     },
     {
       "path": "final-r24/ozon-account-history-browser.json",
@@ -235,6 +235,11 @@
       "path": "final-r24/startup-rehearsal.json",
       "sha256": "d660341d897a18ffe57f49677e3c359e40e8a5307b3dc02808325cc066bb36e9",
       "bytes": 2872
+    },
+    {
+      "path": "final-r24/startup-wal-offline.json",
+      "sha256": "caa5f4746ad41363f149a0ef03a488e56fc3684bcaf93268ce38a2208aefdeee",
+      "bytes": 620
     },
     {
       "path": "final-r24/ux-analytics.json",

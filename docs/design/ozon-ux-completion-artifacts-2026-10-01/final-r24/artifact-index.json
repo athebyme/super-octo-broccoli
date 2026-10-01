@@ -217,6 +217,11 @@
       "bytes": 2872
     },
     {
+      "path": "startup-wal-offline.json",
+      "sha256": "caa5f4746ad41363f149a0ef03a488e56fc3684bcaf93268ce38a2208aefdeee",
+      "bytes": 620
+    },
+    {
       "path": "ux-analytics.json",
       "sha256": "8f3f7fd453c7292ae41fe09e0b6f1817524594b3ffeb7a8b2df45146d94057ea",
       "bytes": 305673

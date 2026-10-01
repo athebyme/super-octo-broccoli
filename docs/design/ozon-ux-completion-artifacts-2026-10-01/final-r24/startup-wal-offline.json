@@ -1,0 +1,17 @@
+{
+  "scope": "temporary SQLite only; not application DB/CI gate",
+  "status": "passed",
+  "cases": 3,
+  "root_independently_executed": true,
+  "test_sha256": "9b81ffc0386781635d9508c147c96786264c6dbbdf569cd958524c7c27b99468",
+  "cases_checked": [
+    "WAL missing sidecars requires writable metadata directory",
+    "URI mode=ro/query_only rejects data mutation",
+    "uncheckpointed WAL committed facts remain visible; no immutable or checkpoint"
+  ],
+  "sources": [
+    "https://www.sqlite.org/wal.html#readonly",
+    "https://www.sqlite.org/uri.html",
+    "https://www.sqlite.org/pragma.html#pragma_query_only"
+  ]
+}
