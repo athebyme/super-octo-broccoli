@@ -3196,6 +3196,7 @@ def products_bulk_edit():
     if request.method != 'POST' or not selection_token:
         flash('Вернитесь в каталог и передайте проверенный точный выбор товаров', 'warning')
         return redirect(url_for('products_list'))
+    selection_payload = None
     try:
         selection_payload = load_product_selection_token(
             selection_token,
@@ -3237,7 +3238,12 @@ def products_bulk_edit():
         return_to = safe_products_return_url(selection_payload.get('return_to'))
     except ProductSelectionError as exc:
         flash(str(exc), 'warning')
-        return redirect(url_for('products_list'))
+        safe_return_to = (
+            safe_products_return_url(selection_payload.get('return_to'))
+            if isinstance(selection_payload, dict)
+            else url_for('products_list')
+        )
+        return redirect(safe_return_to)
 
     filter_type = None
     categories = bulk_subject_groups(products)

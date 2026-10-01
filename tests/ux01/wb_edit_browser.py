@@ -1192,24 +1192,81 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 first_product = db.session.get(Product, fixture["product_id"])
                 first_product.brand = "Concurrent local change"
                 db.session.commit()
-            page.get_by_role("button", name="Подтвердить и применить 50 карточек").click()
-            page.wait_for_url("**/products/bulk-edit")
-            assert "измен" in page.locator("body").inner_text().casefold()
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                page.get_by_role("button", name="Подтвердить и применить 50 карточек").click()
+            _assert_local_products_url(page.url, expected_return_query)
+            assert "Точный выбор изменился или больше не соответствует фильтрам" in page.locator("body").inner_text()
+            assert page.locator("#selectedCount").inner_text().strip() == "50"
+            expected_selection_ids = list(range(fixture["product_id"], fixture["product_id"] + 50))
+            restored_selection_ids = page.locator(
+                '#bulkActionForm input[name="product_ids"]',
+            ).evaluate_all("inputs => inputs.map(input => Number(input.value))")
+            assert sorted(restored_selection_ids) == expected_selection_ids, {
+                "expected_count": len(expected_selection_ids),
+                "actual_count": len(restored_selection_ids),
+            }
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
             check(
-                "local_review_drift_rejected_before_provider",
+                "filter_drift_returns_to_signed_context_and_preserves_exact_selection",
+                selected=50,
+                safe_return_query=expected_return_query,
                 fake_wb_client_instances=REPORT["fake_wb_client_instances"],
             )
+            interaction("filter_drift_notice_keeps_safe_context_and_exact_50_id_set")
 
             with seller_app.app_context():
                 first_product = db.session.get(Product, fixture["product_id"])
                 first_product.brand = "Pipedream"
                 db.session.commit()
+            page.reload(wait_until="domcontentloaded")
+            _assert_local_products_url(page.url, expected_return_query)
+            assert page.locator("#selectedCount").inner_text().strip() == "50"
+            restored_selection_ids = page.locator(
+                '#bulkActionForm input[name="product_ids"]',
+            ).evaluate_all("inputs => inputs.map(input => Number(input.value))")
+            assert sorted(restored_selection_ids) == expected_selection_ids
+            page.get_by_role("button", name="Редактировать", exact=True).click()
+            page.wait_for_url("**/products/bulk-edit")
+            assert "50 товаров" in page.locator("body").inner_text()
+            assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
+            check("restored_filter_allows_exact_50_to_reopen_through_ui", selected=50)
+            interaction("restored_filter_reopens_exact_50_product_selection_through_ui")
+
+            # Exercise content-fingerprint drift independently of filter drift:
+            # description changes do not alter the signed brand filter.
             page.locator('input[name="operation"][value="update_brand"]').check()
             page.locator("#value_brand").fill("Synthetic reviewed brand")
             page.locator('form[action="/products/bulk-edit"] button[type="submit"]').click()
             page.wait_for_selector("section[aria-label='Сводка предпросмотра']")
             assert_review_summary(page, changed="50")
+            with seller_app.app_context():
+                first_product = db.session.get(Product, fixture["product_id"])
+                original_description = first_product.description
+                first_product.description = "Concurrent local description drift"
+                db.session.commit()
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                page.get_by_role("button", name="Подтвердить и применить 50 карточек").click()
+            page.wait_for_url("**/products/bulk-edit")
+            assert "Локальные данные товара изменились после предпросмотра" in page.locator("body").inner_text()
+            assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
+            check("description_fingerprint_drift_rejected_before_provider", selected=50)
+            interaction("non_filter_description_drift_rejected_without_provider_io")
+            with seller_app.app_context():
+                first_product = db.session.get(Product, fixture["product_id"])
+                first_product.description = original_description
+                db.session.commit()
+
+            # A fresh review after the local description is restored is the
+            # only path to the fake provider boundary.
+            page.locator('input[name="operation"][value="update_brand"]').check()
+            page.locator("#value_brand").fill("Synthetic reviewed brand")
+            page.locator('form[action="/products/bulk-edit"] button[type="submit"]').click()
+            page.wait_for_selector("section[aria-label='Сводка предпросмотра']")
+            assert_review_summary(page, changed="50")
+            assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
+            check("fresh_preview_after_description_restore_reports_exact_selection", selected=50)
+            interaction("fresh_review_created_after_restoring_local_description")
+
             page.get_by_role("button", name="Подтвердить и применить 50 карточек").click()
             page.wait_for_url("**/bulk-history/*")
             assert REPORT["fake_wb_write_calls"] == 1

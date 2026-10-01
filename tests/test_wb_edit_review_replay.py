@@ -1436,6 +1436,68 @@ class WBBulkReviewReplayTest(unittest.TestCase):
         })
         self.assertEqual(drift.status_code, 409)
 
+    def test_bulk_filter_drift_returns_only_to_signed_safe_catalog_context(self):
+        from models import Product
+        from services.product_selection import (
+            issue_product_selection_token,
+            parse_product_list_state,
+            safe_products_return_url,
+        )
+
+        return_to = (
+            '/products?brand=Pipedream&sort=title&order=asc&page=2&per_page=50'
+        )
+        state = parse_product_list_state({
+            'brand': 'Pipedream',
+            'sort': 'title',
+            'order': 'asc',
+            'page': 2,
+            'per_page': 50,
+        }, strict=True)
+        with self.app.app_context():
+            token = issue_product_selection_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                product_ids=[self.product_id],
+                state=state,
+                return_to=return_to,
+                wb_account_id='synthetic-wb-account',
+            )
+            product = Product.query.filter_by(
+                id=self.product_id, seller_id=self.seller_id,
+            ).one()
+            product.brand = 'Local brand drift'
+            self.db.session.commit()
+
+        client = self._client()
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('filter drift must fail before WB'),
+        ):
+            response = client.post('/products/bulk-edit', data={
+                'selection_token': token,
+            })
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, safe_products_return_url(return_to))
+            catalog = client.get(response.location)
+            self.assertEqual(catalog.status_code, 200)
+            self.assertIn(
+                'Точный выбор изменился или больше не соответствует фильтрам'.encode(),
+                catalog.data,
+            )
+
+        # The posted return_to field is untrusted. Without a valid signed
+        # selection token, a hostile local/external target falls back to the
+        # catalog root.
+        forged = self._client().post('/products/bulk-edit', data={
+            'selection_token': 'forged.selection.token',
+            'return_to': 'https://outside.example/collect',
+        })
+        self.assertEqual(forged.status_code, 302)
+        self.assertEqual(forged.location, '/products')
+
     def test_all_filtered_over_cap_returns_no_partial_selection(self):
         from models import Product
 
