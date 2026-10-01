@@ -218,12 +218,43 @@
             </div>
         </div>
 
+        {% set operation_params = bulk_operation.operation_params if bulk_operation.operation_params is mapping else {} %}
+        {% set review_summary = operation_params.get('review_summary') %}
+        {% if review_summary is mapping
+            and review_summary.get('selected') is integer and review_summary.get('selected') is not boolean and review_summary.get('selected') >= 0
+            and review_summary.get('eligible') is integer and review_summary.get('eligible') is not boolean and review_summary.get('eligible') >= 0
+            and review_summary.get('changed') is integer and review_summary.get('changed') is not boolean and review_summary.get('changed') >= 0
+            and review_summary.get('skipped') is integer and review_summary.get('skipped') is not boolean and review_summary.get('skipped') >= 0 %}
+        <section class="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4" data-operations-review-summary aria-labelledby="operations-review-summary-title">
+            <h3 id="operations-review-summary-title" class="mb-3 font-semibold text-gray-900">Итог проверенного массового изменения</h3>
+            <dl class="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div><dt class="text-xs text-gray-600">Выбрано</dt><dd class="text-xl font-semibold text-gray-900">{{ review_summary.selected }}</dd></div>
+                <div><dt class="text-xs text-gray-600">Допущено к изменению</dt><dd class="text-xl font-semibold text-gray-900">{{ review_summary.eligible }}</dd></div>
+                <div><dt class="text-xs text-gray-600">Подготовлено к записи</dt><dd class="text-xl font-semibold text-gray-900">{{ review_summary.changed }}</dd></div>
+                <div><dt class="text-xs text-gray-600">Пропущено</dt><dd class="text-xl font-semibold text-gray-900">{{ review_summary.skipped }}</dd></div>
+            </dl>
+            <p class="mt-4 text-sm text-gray-700">
+                Фактически обработано без ошибки: <strong>{{ bulk_operation.success_count }}</strong>
+                из {{ review_summary.changed }} подготовленных карточек.
+                {% if review_summary.changed > 0 %}
+                    Это {{ "%.0f"|format((bulk_operation.success_count / review_summary.changed) * 100) }}% подготовленных карточек.
+                {% else %}
+                    Доля успеха не рассчитывается: к записи не было подготовлено карточек.
+                {% endif %}
+                Ошибок операции: <strong>{{ bulk_operation.error_count }}</strong>.
+                {% if review_summary.get('errors') is integer and review_summary.get('errors') is not boolean and review_summary.get('errors') >= 0 %}
+                    Ошибок при проверке и подготовке: <strong>{{ review_summary.errors }}</strong>.
+                {% endif %}
+            </p>
+        </section>
+        {% endif %}
+
         <!-- Параметры операции -->
         {% if bulk_operation.operation_params %}
-        <div class="mt-4 p-4 bg-gray-50 rounded-lg">
-            <h3 class="font-semibold text-gray-900 mb-2">Параметры операции:</h3>
+        <details class="operations-technical-details mt-4">
+            <summary>Технические параметры операции</summary>
             <pre class="text-sm text-gray-700">{{ bulk_operation.operation_params | tojson(indent=2) }}</pre>
-        </div>
+        </details>
         {% endif %}
 
         <!-- Сохранённые причины показываем обычным текстом; полный payload остаётся в свернутой диагностике. -->

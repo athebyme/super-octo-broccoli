@@ -198,6 +198,9 @@ def _render_bulk_history_detail(
     operation_id=44,
     product_changes=None,
     owned_product_ids=None,
+    operation_params=None,
+    total_products=2,
+    success_count=0,
 ):
     app = _app()
     operation = SimpleNamespace(
@@ -205,15 +208,15 @@ def _render_bulk_history_detail(
         seller_id=92,
         description="Synthetic bulk operation",
         status="completed",
-        total_products=2,
-        success_count=0,
+        total_products=total_products,
+        success_count=success_count,
         error_count=error_count,
         reverted=False,
         reverted_at=None,
         created_at=datetime(2026, 9, 30, 12, 0, 0),
         completed_at=datetime(2026, 9, 30, 12, 0, 1),
         duration_seconds=1.0,
-        operation_params=None,
+        operation_params=operation_params,
         errors_details=errors_details,
         can_revert=lambda: False,
     )
@@ -224,6 +227,52 @@ def _render_bulk_history_detail(
             product_changes=product_changes or [],
             owned_product_ids=owned_product_ids or [],
         )
+
+
+def test_reviewed_batch31_summary_counts_skips_and_uses_changed_denominator():
+    import re
+    html = _render_bulk_history_detail(
+        [],
+        error_count=0,
+        total_products=50,
+        success_count=2,
+        operation_params={
+            "review_summary": {
+                "selected": 50,
+                "eligible": 50,
+                "changed": 2,
+                "skipped": 48,
+                "errors": 0,
+                "changed_product_ids": [814, 815],
+                "mode": "update_characteristic",
+                "subject_id": 123,
+            },
+        },
+    )
+    summary_start = html.index('<section class="mt-6 rounded-lg border border-blue-200')
+    stats_end = html.index("<!-- Параметры операции -->", summary_start)
+    summary = html[summary_start:stats_end]
+    plain_summary = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", summary))
+
+    assert "Выбрано" in summary and "50" in summary
+    assert "Допущено к изменению" in summary
+    assert "Подготовлено к записи" in summary and "2" in summary
+    assert "Пропущено" in summary and "48" in summary
+    assert "2 из 2 подготовленных карточек" in plain_summary
+    assert "100% подготовленных карточек" in plain_summary
+    assert "Ошибок операции: <strong>0</strong>" in summary
+    assert 'data-operations-review-summary' in summary
+    assert "subject_id" not in summary
+    technical_start = html.index("Технические параметры операции")
+    details_start = html.rfind("<details", 0, technical_start)
+    assert "\"subject_id\": 123" in html[technical_start:]
+    assert html.startswith('<details class="operations-technical-details mt-4">', details_start)
+
+
+def test_legacy_history_without_review_summary_keeps_legacy_summary_only():
+    html = _render_bulk_history_detail([], error_count=1)
+    assert 'data-operations-review-summary' not in html
+    assert "Всего товаров" in html
 
 
 def test_bulk_detail_shows_row_identity_and_typed_error_outside_collapsed_raw_data():
