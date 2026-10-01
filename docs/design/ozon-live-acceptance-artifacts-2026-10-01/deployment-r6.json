@@ -1,0 +1,19 @@
+{
+  "status": "guarded_cutover_verified",
+  "source_head": "19a880d0caa0cdc19c11bc984cc909f80de45f45",
+  "manifest": "ed67c808b46867e610c453e7300234eaf4352d9ed31daaf40050b5eba1aef6df",
+  "image": "sha256:9be55794f39c74e1957d49d284e5a7a9849b6e94f0d84b516046f00441762884",
+  "started_at_utc": "2026-10-01T22:48:20.581844935Z",
+  "source_files": 1243,
+  "runtime_environment_preserved": true,
+  "mounts_network_preserved": true,
+  "auto_publish_disabled": true,
+  "caddy_unchanged": true,
+  "healthy": true,
+  "restart_count": 0,
+  "observer": "passed",
+  "smoke": "passed_with_restrictions",
+  "cutover_helper_offline_tests": 11,
+  "initial_operator_attempt": "rejected before stop; Docker Id casing corrected; prior runtime remained healthy",
+  "pilot_publication_verified": false
+}

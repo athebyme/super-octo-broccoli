@@ -1,0 +1,1742 @@
+{
+  "status": "completed",
+  "source": "worktree",
+  "scope": "synthetic_full_flask_jinja_alpine_vue_workspace",
+  "database": "disposable_sqlite",
+  "network_policy": "loopback_only_pinned_browser_assets_no_provider_calls",
+  "widths": [
+    320,
+    390,
+    768,
+    1024
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "layouts": [
+    {
+      "width": 320,
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "overflows": false,
+      "theme": "light",
+      "main": {
+        "left": 0,
+        "right": 320,
+        "width": 320,
+        "height": 2052
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": "overview",
+      "focusColor": "rgb(232, 232, 232)",
+      "layout_settle": {
+        "width": 320,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 320,
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "overflows": false,
+      "theme": "dark",
+      "main": {
+        "left": 0,
+        "right": 320,
+        "width": 320,
+        "height": 2052
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": "overview",
+      "focusColor": "rgb(232, 232, 232)",
+      "layout_settle": {
+        "width": 320,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 390,
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "overflows": false,
+      "theme": "light",
+      "main": {
+        "left": 0,
+        "right": 390,
+        "width": 390,
+        "height": 1918
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": "overview",
+      "focusColor": "rgb(232, 232, 232)",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 390,
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "overflows": false,
+      "theme": "dark",
+      "main": {
+        "left": 0,
+        "right": 390,
+        "width": 390,
+        "height": 1918
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": "overview",
+      "focusColor": "rgb(232, 232, 232)",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 768,
+      "clientWidth": 768,
+      "scrollWidth": 768,
+      "overflows": false,
+      "theme": "light",
+      "main": {
+        "left": 0,
+        "right": 768,
+        "width": 768,
+        "height": 1277
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": "overview",
+      "focusColor": "rgb(232, 232, 232)",
+      "layout_settle": {
+        "width": 768,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 768,
+      "clientWidth": 768,
+      "scrollWidth": 768,
+      "overflows": false,
+      "theme": "dark",
+      "main": {
+        "left": 0,
+        "right": 768,
+        "width": 768,
+        "height": 1277
+      },
+      "sidebar": {
+        "left": -260,
+        "right": 0,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": "overview",
+      "focusColor": "rgb(232, 232, 232)",
+      "layout_settle": {
+        "width": 768,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 1024,
+      "clientWidth": 1024,
+      "scrollWidth": 1024,
+      "overflows": false,
+      "theme": "light",
+      "main": {
+        "left": 260,
+        "right": 1024,
+        "width": 764,
+        "height": 1277
+      },
+      "sidebar": {
+        "left": 0,
+        "right": 260,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": "overview",
+      "focusColor": "rgb(232, 232, 232)",
+      "layout_settle": {
+        "width": 1024,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "width": 1024,
+      "clientWidth": 1024,
+      "scrollWidth": 1024,
+      "overflows": false,
+      "theme": "dark",
+      "main": {
+        "left": 260,
+        "right": 1024,
+        "width": 764,
+        "height": 1277
+      },
+      "sidebar": {
+        "left": 0,
+        "right": 260,
+        "width": 260,
+        "height": 1000
+      },
+      "activeGroup": "overview",
+      "focusColor": "rgb(232, 232, 232)",
+      "layout_settle": {
+        "width": 1024,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_classic",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "light",
+      "link_count": 5,
+      "min_link_height": 44,
+      "primitive_scroll_width": 390,
+      "primitive_client_width": 390,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_classic",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "dark",
+      "link_count": 5,
+      "min_link_height": 44,
+      "primitive_scroll_width": 390,
+      "primitive_client_width": 390,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_classic",
+      "primitive": ".seller-workspace-context",
+      "width": 1440,
+      "theme": "light",
+      "link_count": 5,
+      "min_link_height": 31.5,
+      "primitive_scroll_width": 1180,
+      "primitive_client_width": 1180,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_classic",
+      "primitive": ".seller-workspace-context",
+      "width": 1440,
+      "theme": "dark",
+      "link_count": 5,
+      "min_link_height": 31.5,
+      "primitive_scroll_width": 1180,
+      "primitive_client_width": 1180,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_beta",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "light",
+      "link_count": 5,
+      "min_link_height": 44,
+      "primitive_scroll_width": 362,
+      "primitive_client_width": 362,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_beta",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "dark",
+      "link_count": 5,
+      "min_link_height": 44,
+      "primitive_scroll_width": 362,
+      "primitive_client_width": 362,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_beta",
+      "primitive": ".seller-workspace-context",
+      "width": 1440,
+      "theme": "light",
+      "link_count": 5,
+      "min_link_height": 31.5,
+      "primitive_scroll_width": 1132,
+      "primitive_client_width": 1132,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_beta",
+      "primitive": ".seller-workspace-context",
+      "width": 1440,
+      "theme": "dark",
+      "link_count": 5,
+      "min_link_height": 31.5,
+      "primitive_scroll_width": 1132,
+      "primitive_client_width": 1132,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "image_lab",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "light",
+      "link_count": 4,
+      "min_link_height": 44,
+      "primitive_scroll_width": 358,
+      "primitive_client_width": 358,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "image_lab",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "dark",
+      "link_count": 4,
+      "min_link_height": 44,
+      "primitive_scroll_width": 358,
+      "primitive_client_width": 358,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "image_lab",
+      "primitive": ".seller-workspace-context",
+      "width": 1440,
+      "theme": "light",
+      "link_count": 4,
+      "min_link_height": 34,
+      "primitive_scroll_width": 1148,
+      "primitive_client_width": 1148,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "image_lab",
+      "primitive": ".seller-workspace-context",
+      "width": 1440,
+      "theme": "dark",
+      "link_count": 4,
+      "min_link_height": 34,
+      "primitive_scroll_width": 1148,
+      "primitive_client_width": 1148,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "api_settings",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "light",
+      "link_count": 10,
+      "min_link_height": 44,
+      "primitive_scroll_width": 356,
+      "primitive_client_width": 356,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "api_settings",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "dark",
+      "link_count": 10,
+      "min_link_height": 44,
+      "primitive_scroll_width": 356,
+      "primitive_client_width": 356,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "api_settings",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 1440,
+      "theme": "light",
+      "link_count": 10,
+      "min_link_height": 30,
+      "primitive_scroll_width": 606,
+      "primitive_client_width": 606,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "api_settings",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 1440,
+      "theme": "dark",
+      "link_count": 10,
+      "min_link_height": 30,
+      "primitive_scroll_width": 606,
+      "primitive_client_width": 606,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "marketplace_accounts",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "light",
+      "link_count": 10,
+      "min_link_height": 44,
+      "primitive_scroll_width": 356,
+      "primitive_client_width": 356,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "marketplace_accounts",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "dark",
+      "link_count": 10,
+      "min_link_height": 44,
+      "primitive_scroll_width": 356,
+      "primitive_client_width": 356,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "marketplace_accounts",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 1440,
+      "theme": "light",
+      "link_count": 10,
+      "min_link_height": 30,
+      "primitive_scroll_width": 1130,
+      "primitive_client_width": 1130,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "marketplace_accounts",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 1440,
+      "theme": "dark",
+      "link_count": 10,
+      "min_link_height": 30,
+      "primitive_scroll_width": 1130,
+      "primitive_client_width": 1130,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "marketplace_readiness",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "light",
+      "link_count": 10,
+      "min_link_height": 44,
+      "primitive_scroll_width": 340,
+      "primitive_client_width": 340,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "marketplace_readiness",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "dark",
+      "link_count": 10,
+      "min_link_height": 44,
+      "primitive_scroll_width": 340,
+      "primitive_client_width": 340,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "marketplace_readiness",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 1440,
+      "theme": "light",
+      "link_count": 10,
+      "min_link_height": 30,
+      "primitive_scroll_width": 1114,
+      "primitive_client_width": 1114,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "marketplace_readiness",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 1440,
+      "theme": "dark",
+      "link_count": 10,
+      "min_link_height": 30,
+      "primitive_scroll_width": 1114,
+      "primitive_client_width": 1114,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "auto_publish_ozon",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "light",
+      "link_count": 10,
+      "min_link_height": 44,
+      "primitive_scroll_width": 356,
+      "primitive_client_width": 356,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "auto_publish_ozon",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "dark",
+      "link_count": 10,
+      "min_link_height": 44,
+      "primitive_scroll_width": 356,
+      "primitive_client_width": 356,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 390,
+        "left": 0,
+        "marginLeft": "0px",
+        "expected": 0,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "auto_publish_ozon",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 1440,
+      "theme": "light",
+      "link_count": 10,
+      "min_link_height": 30,
+      "primitive_scroll_width": 958,
+      "primitive_client_width": 958,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "auto_publish_ozon",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 1440,
+      "theme": "dark",
+      "link_count": 10,
+      "min_link_height": 30,
+      "primitive_scroll_width": 958,
+      "primitive_client_width": 958,
+      "root_overflow_x": "visible",
+      "body_overflow_x": "visible",
+      "layout_settle": {
+        "width": 1440,
+        "left": 260,
+        "marginLeft": "260px",
+        "expected": 260,
+        "sidebarWidth": 260
+      }
+    },
+    {
+      "page": "quality_classic",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "light",
+      "text_zoom": "200%",
+      "link_count": 5,
+      "min_link_height": 44,
+      "text_overflow_count": 0
+    },
+    {
+      "page": "quality_beta",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "light",
+      "text_zoom": "200%",
+      "link_count": 5,
+      "min_link_height": 44,
+      "text_overflow_count": 0
+    },
+    {
+      "page": "image_lab",
+      "primitive": ".seller-workspace-context",
+      "width": 390,
+      "theme": "light",
+      "text_zoom": "200%",
+      "link_count": 4,
+      "min_link_height": 44,
+      "text_overflow_count": 0
+    },
+    {
+      "page": "api_settings",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "light",
+      "text_zoom": "200%",
+      "link_count": 10,
+      "min_link_height": 44,
+      "text_overflow_count": 0
+    },
+    {
+      "page": "marketplace_accounts",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "light",
+      "text_zoom": "200%",
+      "link_count": 10,
+      "min_link_height": 44,
+      "text_overflow_count": 0
+    },
+    {
+      "page": "marketplace_readiness",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "light",
+      "text_zoom": "200%",
+      "link_count": 10,
+      "min_link_height": 44,
+      "text_overflow_count": 0
+    },
+    {
+      "page": "auto_publish_ozon",
+      "primitive": ".seller-workspace-settings-nav",
+      "width": 390,
+      "theme": "light",
+      "text_zoom": "200%",
+      "link_count": 10,
+      "min_link_height": 44,
+      "text_overflow_count": 0
+    }
+  ],
+  "pages": [
+    {
+      "path": "/dashboard",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/dashboard",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality/beta",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/marketplaces/accounts/",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/api-settings",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/marketplaces/readiness/",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/auto-publish",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/settings/product-defaults",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/api-logs",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/image-lab",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/marketplaces/status",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality/beta",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/image-lab",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/api-settings",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/marketplaces/accounts/",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/marketplaces/readiness/",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/auto-publish",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality/beta",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/image-lab",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/api-settings",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/marketplaces/accounts/",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/marketplaces/readiness/",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/auto-publish",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/dashboard",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/dashboard",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/api-settings",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/dashboard",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/api-settings",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/dashboard",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/card-quality",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/api-settings",
+      "status": 200,
+      "source": "worktree"
+    },
+    {
+      "path": "/admin",
+      "status": 200,
+      "source": "worktree"
+    }
+  ],
+  "interactions": [
+    {
+      "check": "render_dashboard",
+      "status": "passed"
+    },
+    {
+      "check": "render_quality_classic",
+      "status": "passed"
+    },
+    {
+      "check": "render_quality_beta",
+      "status": "passed"
+    },
+    {
+      "check": "render_marketplace_accounts",
+      "status": "passed"
+    },
+    {
+      "check": "render_api_settings",
+      "status": "passed"
+    },
+    {
+      "check": "render_marketplace_readiness",
+      "status": "passed"
+    },
+    {
+      "check": "render_auto_publish_ozon",
+      "status": "passed"
+    },
+    {
+      "check": "render_product_defaults",
+      "status": "passed"
+    },
+    {
+      "check": "render_api_logs",
+      "status": "passed"
+    },
+    {
+      "check": "render_image_lab",
+      "status": "passed"
+    },
+    {
+      "check": "render_account_health",
+      "status": "passed"
+    },
+    {
+      "check": "workspace_primitives_responsive_and_200pct_text",
+      "status": "passed"
+    },
+    {
+      "check": "sidebar_normal_link_text_contrast_light",
+      "status": "passed",
+      "font_size": 12,
+      "color": "rgb(163, 163, 163)",
+      "background": "rgb(10, 10, 10)",
+      "contrast": 7.85,
+      "actual_theme": "light"
+    },
+    {
+      "check": "sidebar_focus_after_enter_light",
+      "status": "passed",
+      "outline_width": 2,
+      "outline_color": "rgb(232, 232, 232)",
+      "background": "rgb(10, 10, 10)",
+      "contrast": 16.16,
+      "actual_theme": "light"
+    },
+    {
+      "check": "sidebar_focus_after_tab_light",
+      "status": "passed",
+      "outline_width": 3,
+      "outline_color": "rgb(163, 163, 163)",
+      "background": "rgb(10, 10, 10)",
+      "contrast": 7.85,
+      "actual_theme": "light"
+    },
+    {
+      "check": "quality_context_focus_after_tab_light",
+      "status": "passed",
+      "outline_width": 3,
+      "outline_color": "rgb(107, 107, 107)",
+      "background": "rgb(250, 249, 247)",
+      "contrast": 5.06,
+      "actual_theme": "light"
+    },
+    {
+      "check": "settings_focus_after_tab_light",
+      "status": "passed",
+      "outline_width": 3,
+      "outline_color": "rgb(107, 107, 107)",
+      "background": "rgb(255, 255, 255)",
+      "contrast": 5.33,
+      "actual_theme": "light"
+    },
+    {
+      "check": "sidebar_normal_link_text_contrast_dark",
+      "status": "passed",
+      "font_size": 12,
+      "color": "rgb(163, 163, 163)",
+      "background": "rgb(10, 10, 10)",
+      "contrast": 7.85,
+      "actual_theme": "dark"
+    },
+    {
+      "check": "sidebar_focus_after_enter_dark",
+      "status": "passed",
+      "outline_width": 3,
+      "outline_color": "rgb(163, 163, 163)",
+      "background": "rgb(10, 10, 10)",
+      "contrast": 7.85,
+      "actual_theme": "dark"
+    },
+    {
+      "check": "sidebar_focus_after_tab_dark",
+      "status": "passed",
+      "outline_width": 3,
+      "outline_color": "rgb(163, 163, 163)",
+      "background": "rgb(10, 10, 10)",
+      "contrast": 7.85,
+      "actual_theme": "dark"
+    },
+    {
+      "check": "quality_context_focus_after_tab_dark",
+      "status": "passed",
+      "outline_width": 3,
+      "outline_color": "rgb(163, 157, 150)",
+      "background": "rgb(19, 18, 17)",
+      "contrast": 6.97,
+      "actual_theme": "dark"
+    },
+    {
+      "check": "settings_focus_after_tab_dark",
+      "status": "passed",
+      "outline_width": 3,
+      "outline_color": "rgb(163, 157, 150)",
+      "background": "rgb(28, 26, 25)",
+      "contrast": 6.46,
+      "actual_theme": "dark"
+    },
+    {
+      "check": "keyboard_group_toggle_single_open",
+      "status": "passed"
+    },
+    {
+      "check": "collapsed_sidebar_group_click_opens_sidebar_and_panel",
+      "status": "passed"
+    },
+    {
+      "check": "command_palette_search_arrow_escape",
+      "status": "passed"
+    },
+    {
+      "check": "command_palette_object_labels",
+      "status": "passed"
+    },
+    {
+      "check": "server_active_group_and_settings",
+      "status": "passed"
+    },
+    {
+      "check": "admin_branch_not_replaced_by_seller_menu",
+      "status": "passed"
+    }
+  ],
+  "browser_api_reads": [
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/finances/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/finances/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/sync-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/sync-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/sync-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/finances/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/finances/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/sync-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/finances/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/sync-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/finances/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/summary"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/filters"
+    },
+    {
+      "method": "GET",
+      "path": "/api/card-quality/list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    },
+    {
+      "method": "GET",
+      "path": "/api/analytics/sync-status"
+    },
+    {
+      "method": "GET",
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/tray"
+    }
+  ],
+  "browser_mutations": [],
+  "http_errors": [],
+  "unexpected_external_requests": [],
+  "provider_attempts": 0,
+  "javascript_errors": [],
+  "console_errors": [],
+  "source_hashes": {
+    "templates/base.html": "f56edc8e2ad7f0774b789ff9ac9fd55e2d4b77bdd0e7dcacd8a739f4d1435428",
+    "templates/api_settings.html": "debb58ccfbbf114af195ab97c2d4d9e4c94255310452afef3d1fbb0789ce591b",
+    "templates/marketplace_accounts.html": "c437235ea471aa24de659d4a54755d413c544d4e0da343dd22494bdc8405b0b0",
+    "templates/marketplace_readiness.html": "79a4b5e5d2c2216431e652f25b1a1e63263a18ddfe7f2385ee6bbacb7fb7da2b",
+    "templates/card_quality.html": "f5bbd1995f37fde8fca4eea96b0ee6a3f5b987527f578e2b3919ece9677c100e",
+    "templates/card_quality_beta.html": "0e08372a339c6df6e4da828b526f4f5672f643dd621bd779445b6093fca8d89a",
+    "templates/image_lab.html": "10093da715b05967d2e016d2d7837de4cedb3cd192f844c05db6705b202c9737",
+    "templates/product_defaults.html": "fd9f486649cc53d2f3e76ca3416efa3d044da795caa521d2f64f7f48e5b904a6",
+    "templates/auto_publish.html": "72d9aad226617e0d5fd60380314076467b9f01d8e6ccaa7453b337ba1dfd6880",
+    "templates/api_logs.html": "43670639ebc37c5803dc47fc5d493324411e7ea81267add6e9dd58676fa1fa9f",
+    "static/seller-workspace.css": "06ad2a44b4433601695259dd699b604782862c2c42fe185d6043023e1abeca35"
+  },
+  "pinned_asset_hashes": {
+    "https://cdn.tailwindcss.com": "176e894661aa9cdc9a5cba6c720044cbbf7b8bd80d1c9a142a7c24b1b6c50d15",
+    "https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.x.x/dist/cdn.min.js": "c7661d4e2cf0465e3cd693190debb5f592ac72dcc4cfe650581273767558b27b",
+    "https://cdn.jsdelivr.net/npm/@alpinejs/focus@3.x.x/dist/cdn.min.js": "ea7e215444f5110619549621cd0760cedfe273f708b144d4e658a87b702555f9",
+    "https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js": "232519394c6c8fdba6f362b1d9da16106db513cdbf899011f00daab4051df31c",
+    "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&display=swap": "5c5ca91e8131dd1bcddb7a5d13413bc84a2396b262b1e3edc6ceb7bbe04e74b9",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa2ZL7SUc.woff2": "6e9e020a25f9b56d418f2c085b1d3c09725a4da23fe693a5b463064606732190",
+    "https://fonts.gstatic.com/s/instrumentserif/v5/jizHRFtNs2ka5fXjeivQ4LroWlx-6zAjjH7M.woff2": "5a51946dfffa82972bc98745359c46761515641fda557c25116459a9f83da4a7",
+    "https://fonts.gstatic.com/s/instrumentserif/v5/jizBRFtNs2ka5fXjeivQ4LroWlx-6zUTjg.woff2": "5eb09b5ac0e28b67c2f041c8ba6d244604ca0c0980d65912ab2d47fed84ddc31",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa2pL7SUc.woff2": "5c66f9e07e90c6d4ac4922cc68d60de26c17b1858e677fb5e603fce3952b3ff2",
+    "https://fonts.gstatic.com/s/instrumentserif/v5/jizHRFtNs2ka5fXjeivQ4LroWlx-6zAjgn7MsNo.woff2": "d0014821252a8a770bf7551641572f239a8ede83d75652d84fef0c3627751baf",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2": "71d5ee93cc1e9f1d520a3a8b66456de18c7879d8df09d57fcd2eaff75fef0075",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa2JL7SUc.woff2": "ca157063339ac4ad418f214f3abfed119b0798ab4d377386ce5c9e5a7a435ebd",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1pL7SUc.woff2": "1be3448e292fbf05ffe176fe1e43f135013d50b1e7d324ad1a558f623d3bb6f6",
+    "https://fonts.gstatic.com/s/instrumentserif/v5/jizBRFtNs2ka5fXjeivQ4LroWlx-6zsTjmbI.woff2": "290e6267dd833bf5f899eba4c29ad0a9b09dbe53f6075b18af38057159e1ff20",
+    "https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa25L7SUc.woff2": "34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956",
+    "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js": "0e2326c6868072bec1592760c6729043caeea2960a2b46cee6a2192aac6abff0",
+    "https://cdn.jsdelivr.net/npm/vue@3.4.38/dist/vue.global.prod.js": "b50eeefe35d41636bb96c92b40f1df0b4fb7914e07b3c625b1ec15e9748767b9"
+  },
+  "authenticated_synthetic_users": [
+    "ozon-ci-seller",
+    "ux01-synthetic-admin"
+  ],
+  "account_id": 1
+}

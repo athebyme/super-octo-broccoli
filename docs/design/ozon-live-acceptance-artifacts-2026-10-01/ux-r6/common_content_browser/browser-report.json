@@ -1,0 +1,3242 @@
+{
+  "source": "worktree",
+  "status": "passed",
+  "scope": "synthetic_seller_common_content_editor",
+  "database": "disposable_sqlite",
+  "network_policy": "loopback_and_pinned_assets_only",
+  "layouts": [
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 320,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 320,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 360,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 360,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 390,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 390,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 768,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 768,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 1024,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 1024,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 1280,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 1280,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 1440,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "empty_editor",
+      "state": "empty",
+      "width": 1440,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 320,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 320,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 360,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 360,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 390,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 390,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 768,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 768,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 1024,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 1024,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 1280,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 1280,
+      "theme": "dark",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 1440,
+      "theme": "light",
+      "page_overflow": false
+    },
+    {
+      "kind": "selected_editor",
+      "state": "selected",
+      "width": 1440,
+      "theme": "dark",
+      "page_overflow": false
+    }
+  ],
+  "pages": [
+    {
+      "kind": "classic_catalog",
+      "status": 200
+    },
+    {
+      "kind": "beta_catalog",
+      "status": 200
+    }
+  ],
+  "checks": [
+    "classic_catalog_single_product_link",
+    "beta_bulk_selection_preserves_exact_product_ids",
+    {
+      "name": "common_mobile_touch_targets_44px",
+      "status": "passed",
+      "ok": true,
+      "passed": true,
+      "layouts": 6,
+      "expected_layouts": 6,
+      "failed_layouts": []
+    },
+    {
+      "name": "common_mobile_product_navigator_bounded_accessible_keyboard",
+      "status": "passed",
+      "ok": true,
+      "passed": true,
+      "layouts": 6,
+      "expected_layouts": 6,
+      "failed_layouts": []
+    },
+    "common_empty_editor_no_product_api_or_writes",
+    "common_empty_editor_internal_catalog_link",
+    "empty_and_selected_layout_matrix_28_exact_combinations",
+    "known_source_and_draft_statuses_are_localized",
+    "long_inherited_description_has_collapsed_accessible_readback",
+    "common_photo_boundary_focus_first",
+    "common_photo_boundary_focus_last",
+    "common_focus_visible_geometry",
+    "review_diff_is_explicit_and_apply_requires_acknowledgement",
+    "common_preview_cancel_focus_return",
+    "preview_cancel_keeps_local_edits_without_writing",
+    "delayed_preview_blocks_edit_and_product_switch",
+    "photo_diff_preserves_identity_when_order_changes_at_same_count",
+    "signed_preview_apply_and_common_only_success_notice",
+    "delayed_apply_and_readback_keep_captured_product_context",
+    "database_readback_confirms_common_save_and_no_channel_write",
+    "cancel_reopen_discards_unapplied_edits_and_preserves_other_product",
+    "stale_preview_conflict_clears_review_and_keeps_actionable_error",
+    "dirty_navigation_triggers_beforeunload_guard",
+    "intentional_empty_description_remains_override_in_request",
+    "stale_apply_conflict_discards_token_and_requires_readback",
+    "seller_facing_labels_replace_raw_json",
+    "expected_conflict_console_errors_scoped_by_endpoint_and_count"
+  ],
+  "interactions": [
+    "override_title_with_explicit_source_label",
+    "restore_description_from_inherited_source",
+    "keyboard_reorder_selected_source_photos_at_both_boundaries",
+    "edit_named_characteristic_without_provider_ids"
+  ],
+  "screenshots": [
+    "common-content-empty-light-390.png",
+    "common-content-empty-dark-390.png",
+    "common-content-empty-light-1440.png",
+    "common-content-empty-dark-1440.png",
+    "common-content-selected-light-390.png",
+    "common-content-selected-dark-390.png",
+    "common-content-selected-light-1440.png",
+    "common-content-selected-dark-1440.png"
+  ],
+  "mobile_touch_target_observations": [
+    {
+      "state": "selected",
+      "width": 320,
+      "theme": "light",
+      "page_overflow": false,
+      "viewport_width": 320,
+      "page_width": 320,
+      "page_width_while_expanded": 320,
+      "page_overflow_while_expanded": false,
+      "page_width_after_restore": 320,
+      "page_overflow_after_restore": false,
+      "local_modes_restored": true,
+      "targets": [
+        {
+          "name": "mode_inherit",
+          "selector": ".cpc-mode-button",
+          "candidate_count": 4,
+          "enabled_count": 4,
+          "samples": [
+            {
+              "label": "Изменить значение",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.453125,
+                "width": 155.90625,
+                "height": 44,
+                "right": 178.90625,
+                "bottom": 547.453125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.859375,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.859375
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.046875,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 547.046875
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.875,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "quiet",
+          "selector": ".cpc-quiet-button",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Добавить характеристику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.703125,
+                "width": 200.703125,
+                "height": 44,
+                "right": 223.703125,
+                "bottom": 546.703125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Перечитать выбранные",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 877.625,
+                "width": 274,
+                "height": 44,
+                "right": 297,
+                "bottom": 921.625
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "characteristic_remove",
+          "selector": ".cpc-char-remove",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Убрать характеристику 1",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 229.15625,
+                "y": 503.265625,
+                "width": 67.84375,
+                "height": 44,
+                "right": 297,
+                "bottom": 547.265625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Убрать характеристику 2",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 229.15625,
+                "y": 502.6875,
+                "width": 67.84375,
+                "height": 44,
+                "right": 297,
+                "bottom": 546.6875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "photo_arrows",
+          "selector": ".cpc-photo-order-actions button",
+          "candidate_count": 4,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Переместить Фото 1 вниз",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 241,
+                "y": 503.296875,
+                "width": 44,
+                "height": 44,
+                "right": 285,
+                "bottom": 547.296875
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Переместить Фото 2 вверх",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 193,
+                "y": 502.890625,
+                "width": 44,
+                "height": 44,
+                "right": 237,
+                "bottom": 546.890625
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 320,
+      "theme": "dark",
+      "page_overflow": false,
+      "viewport_width": 320,
+      "page_width": 320,
+      "page_width_while_expanded": 320,
+      "page_overflow_while_expanded": false,
+      "page_width_after_restore": 320,
+      "page_overflow_after_restore": false,
+      "local_modes_restored": true,
+      "targets": [
+        {
+          "name": "mode_inherit",
+          "selector": ".cpc-mode-button",
+          "candidate_count": 4,
+          "enabled_count": 4,
+          "samples": [
+            {
+              "label": "Изменить значение",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.453125,
+                "width": 155.90625,
+                "height": 44,
+                "right": 178.90625,
+                "bottom": 547.453125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.859375,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.859375
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.046875,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 547.046875
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.875,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "quiet",
+          "selector": ".cpc-quiet-button",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Добавить характеристику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.703125,
+                "width": 200.703125,
+                "height": 44,
+                "right": 223.703125,
+                "bottom": 546.703125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Перечитать выбранные",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 877.625,
+                "width": 274,
+                "height": 44,
+                "right": 297,
+                "bottom": 921.625
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "characteristic_remove",
+          "selector": ".cpc-char-remove",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Убрать характеристику 1",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 229.15625,
+                "y": 503.265625,
+                "width": 67.84375,
+                "height": 44,
+                "right": 297,
+                "bottom": 547.265625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Убрать характеристику 2",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 229.15625,
+                "y": 502.6875,
+                "width": 67.84375,
+                "height": 44,
+                "right": 297,
+                "bottom": 546.6875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "photo_arrows",
+          "selector": ".cpc-photo-order-actions button",
+          "candidate_count": 4,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Переместить Фото 1 вниз",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 241,
+                "y": 503.296875,
+                "width": 44,
+                "height": 44,
+                "right": 285,
+                "bottom": 547.296875
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Переместить Фото 2 вверх",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 193,
+                "y": 502.890625,
+                "width": 44,
+                "height": 44,
+                "right": 237,
+                "bottom": 546.890625
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 360,
+      "theme": "light",
+      "page_overflow": false,
+      "viewport_width": 360,
+      "page_width": 360,
+      "page_width_while_expanded": 360,
+      "page_overflow_while_expanded": false,
+      "page_width_after_restore": 360,
+      "page_overflow_after_restore": false,
+      "local_modes_restored": true,
+      "targets": [
+        {
+          "name": "mode_inherit",
+          "selector": ".cpc-mode-button",
+          "candidate_count": 4,
+          "enabled_count": 4,
+          "samples": [
+            {
+              "label": "Изменить значение",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.078125,
+                "width": 155.90625,
+                "height": 44,
+                "right": 178.90625,
+                "bottom": 547.078125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.640625,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.640625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.828125,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.828125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.65625,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.65625
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "quiet",
+          "selector": ".cpc-quiet-button",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Добавить характеристику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.484375,
+                "width": 200.703125,
+                "height": 44,
+                "right": 223.703125,
+                "bottom": 547.484375
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Перечитать выбранные",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 877.328125,
+                "width": 314,
+                "height": 44,
+                "right": 337,
+                "bottom": 921.328125
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "characteristic_remove",
+          "selector": ".cpc-char-remove",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Убрать характеристику 1",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 269.15625,
+                "y": 503.046875,
+                "width": 67.84375,
+                "height": 44,
+                "right": 337,
+                "bottom": 547.046875
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Убрать характеристику 2",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 269.15625,
+                "y": 503.46875,
+                "width": 67.84375,
+                "height": 44,
+                "right": 337,
+                "bottom": 547.46875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "photo_arrows",
+          "selector": ".cpc-photo-order-actions button",
+          "candidate_count": 4,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Переместить Фото 1 вниз",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 281,
+                "y": 503.078125,
+                "width": 44,
+                "height": 44,
+                "right": 325,
+                "bottom": 547.078125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Переместить Фото 2 вверх",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 233,
+                "y": 502.671875,
+                "width": 44,
+                "height": 44,
+                "right": 277,
+                "bottom": 546.671875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 360,
+      "theme": "dark",
+      "page_overflow": false,
+      "viewport_width": 360,
+      "page_width": 360,
+      "page_width_while_expanded": 360,
+      "page_overflow_while_expanded": false,
+      "page_width_after_restore": 360,
+      "page_overflow_after_restore": false,
+      "local_modes_restored": true,
+      "targets": [
+        {
+          "name": "mode_inherit",
+          "selector": ".cpc-mode-button",
+          "candidate_count": 4,
+          "enabled_count": 4,
+          "samples": [
+            {
+              "label": "Изменить значение",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.078125,
+                "width": 155.90625,
+                "height": 44,
+                "right": 178.90625,
+                "bottom": 547.078125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.640625,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.640625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.828125,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.828125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.65625,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.65625
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "quiet",
+          "selector": ".cpc-quiet-button",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Добавить характеристику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.484375,
+                "width": 200.703125,
+                "height": 44,
+                "right": 223.703125,
+                "bottom": 547.484375
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Перечитать выбранные",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 877.328125,
+                "width": 314,
+                "height": 44,
+                "right": 337,
+                "bottom": 921.328125
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "characteristic_remove",
+          "selector": ".cpc-char-remove",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Убрать характеристику 1",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 269.15625,
+                "y": 503.046875,
+                "width": 67.84375,
+                "height": 44,
+                "right": 337,
+                "bottom": 547.046875
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Убрать характеристику 2",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 269.15625,
+                "y": 503.46875,
+                "width": 67.84375,
+                "height": 44,
+                "right": 337,
+                "bottom": 547.46875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "photo_arrows",
+          "selector": ".cpc-photo-order-actions button",
+          "candidate_count": 4,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Переместить Фото 1 вниз",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 281,
+                "y": 503.078125,
+                "width": 44,
+                "height": 44,
+                "right": 325,
+                "bottom": 547.078125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Переместить Фото 2 вверх",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 233,
+                "y": 502.671875,
+                "width": 44,
+                "height": 44,
+                "right": 277,
+                "bottom": 546.671875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 390,
+      "theme": "light",
+      "page_overflow": false,
+      "viewport_width": 390,
+      "page_width": 390,
+      "page_width_while_expanded": 390,
+      "page_overflow_while_expanded": false,
+      "page_width_after_restore": 390,
+      "page_overflow_after_restore": false,
+      "local_modes_restored": true,
+      "targets": [
+        {
+          "name": "mode_inherit",
+          "selector": ".cpc-mode-button",
+          "candidate_count": 4,
+          "enabled_count": 4,
+          "samples": [
+            {
+              "label": "Изменить значение",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.015625,
+                "width": 155.90625,
+                "height": 44,
+                "right": 178.90625,
+                "bottom": 547.015625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.578125,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.578125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.765625,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.765625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.59375,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.59375
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "quiet",
+          "selector": ".cpc-quiet-button",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Добавить характеристику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.421875,
+                "width": 200.703125,
+                "height": 44,
+                "right": 223.703125,
+                "bottom": 547.421875
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Перечитать выбранные",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 876.71875,
+                "width": 344,
+                "height": 44,
+                "right": 367,
+                "bottom": 920.71875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "characteristic_remove",
+          "selector": ".cpc-char-remove",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Убрать характеристику 1",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 299.15625,
+                "y": 502.984375,
+                "width": 67.84375,
+                "height": 44,
+                "right": 367,
+                "bottom": 546.984375
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Убрать характеристику 2",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 299.15625,
+                "y": 503.40625,
+                "width": 67.84375,
+                "height": 44,
+                "right": 367,
+                "bottom": 547.40625
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "photo_arrows",
+          "selector": ".cpc-photo-order-actions button",
+          "candidate_count": 4,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Переместить Фото 1 вниз",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 311,
+                "y": 503.015625,
+                "width": 44,
+                "height": 44,
+                "right": 355,
+                "bottom": 547.015625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Переместить Фото 2 вверх",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 263,
+                "y": 502.609375,
+                "width": 44,
+                "height": 44,
+                "right": 307,
+                "bottom": 546.609375
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 390,
+      "theme": "dark",
+      "page_overflow": false,
+      "viewport_width": 390,
+      "page_width": 390,
+      "page_width_while_expanded": 390,
+      "page_overflow_while_expanded": false,
+      "page_width_after_restore": 390,
+      "page_overflow_after_restore": false,
+      "local_modes_restored": true,
+      "targets": [
+        {
+          "name": "mode_inherit",
+          "selector": ".cpc-mode-button",
+          "candidate_count": 4,
+          "enabled_count": 4,
+          "samples": [
+            {
+              "label": "Изменить значение",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.015625,
+                "width": 155.90625,
+                "height": 44,
+                "right": 178.90625,
+                "bottom": 547.015625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.578125,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.578125
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.765625,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.765625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Вернуть к источнику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 502.59375,
+                "width": 163.4375,
+                "height": 44,
+                "right": 186.4375,
+                "bottom": 546.59375
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "quiet",
+          "selector": ".cpc-quiet-button",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Добавить характеристику",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 503.421875,
+                "width": 200.703125,
+                "height": 44,
+                "right": 223.703125,
+                "bottom": 547.421875
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Перечитать выбранные",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 23,
+                "y": 876.71875,
+                "width": 344,
+                "height": 44,
+                "right": 367,
+                "bottom": 920.71875
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "characteristic_remove",
+          "selector": ".cpc-char-remove",
+          "candidate_count": 2,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Убрать характеристику 1",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 299.15625,
+                "y": 502.984375,
+                "width": 67.84375,
+                "height": 44,
+                "right": 367,
+                "bottom": 546.984375
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Убрать характеристику 2",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 299.15625,
+                "y": 503.40625,
+                "width": 67.84375,
+                "height": 44,
+                "right": 367,
+                "bottom": 547.40625
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        },
+        {
+          "name": "photo_arrows",
+          "selector": ".cpc-photo-order-actions button",
+          "candidate_count": 4,
+          "enabled_count": 2,
+          "samples": [
+            {
+              "label": "Переместить Фото 1 вниз",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 311,
+                "y": 503.015625,
+                "width": 44,
+                "height": 44,
+                "right": 355,
+                "bottom": 547.015625
+              },
+              "meets_minimum": true
+            },
+            {
+              "label": "Переместить Фото 2 вверх",
+              "enabled": true,
+              "visible": true,
+              "in_viewport": true,
+              "rect": {
+                "x": 263,
+                "y": 502.609375,
+                "width": 44,
+                "height": 44,
+                "right": 307,
+                "bottom": 546.609375
+              },
+              "meets_minimum": true
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "mobile_product_navigator_observations": [
+    {
+      "state": "selected",
+      "width": 320,
+      "theme": "light",
+      "card_count": 2,
+      "selection_height_px": 216.375,
+      "card_widths_px": [
+        230.390625,
+        230.390625
+      ],
+      "card_button_heights_px": [
+        75.5625,
+        108.859375
+      ],
+      "local_horizontal_scroll": true,
+      "local_scroll_after_tab_px": 198,
+      "page_overflow": false,
+      "page_scroll_stable": true,
+      "keyboard_reached_second_by_tab": true,
+      "keyboard_returned_first_by_shift_tab": true,
+      "second_focus_visible": true,
+      "first_focus_visible": true,
+      "second_focus_geometry_wait_completed": true,
+      "first_focus_geometry_wait_completed": true,
+      "second_focus_outline_within_scrollport": true,
+      "first_focus_outline_within_scrollport": true,
+      "second_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 60.171875,
+          "top": 590.765625,
+          "right": 298.5625,
+          "bottom": 707.625
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 589.171875,
+          "right": 299.59375,
+          "bottom": 710.171875
+        }
+      },
+      "first_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 21.390625,
+          "top": 590.765625,
+          "right": 259.78125,
+          "bottom": 674.328125
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 589.171875,
+          "right": 299.59375,
+          "bottom": 710.171875
+        }
+      },
+      "current_product_preserved": true,
+      "full_second_title_dom": true,
+      "full_second_sku_dom": true,
+      "full_second_accessible_name": true,
+      "full_second_title_tooltip": true,
+      "full_second_external_id_within_model_limit": true,
+      "full_current_heading": true,
+      "product_api_reads_during": 0,
+      "mutating_requests_during": 0,
+      "preview_apply_requests_during": 0,
+      "no_product_api_reads": true,
+      "no_mutating_requests": true,
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 320,
+      "theme": "dark",
+      "card_count": 2,
+      "selection_height_px": 216.375,
+      "card_widths_px": [
+        230.390625,
+        230.390625
+      ],
+      "card_button_heights_px": [
+        75.5625,
+        108.859375
+      ],
+      "local_horizontal_scroll": true,
+      "local_scroll_after_tab_px": 198,
+      "page_overflow": false,
+      "page_scroll_stable": true,
+      "keyboard_reached_second_by_tab": true,
+      "keyboard_returned_first_by_shift_tab": true,
+      "second_focus_visible": true,
+      "first_focus_visible": true,
+      "second_focus_geometry_wait_completed": true,
+      "first_focus_geometry_wait_completed": true,
+      "second_focus_outline_within_scrollport": true,
+      "first_focus_outline_within_scrollport": true,
+      "second_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 60.171875,
+          "top": 590.765625,
+          "right": 298.5625,
+          "bottom": 707.625
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 589.171875,
+          "right": 299.59375,
+          "bottom": 710.171875
+        }
+      },
+      "first_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 21.390625,
+          "top": 590.765625,
+          "right": 259.78125,
+          "bottom": 674.328125
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 589.171875,
+          "right": 299.59375,
+          "bottom": 710.171875
+        }
+      },
+      "current_product_preserved": true,
+      "full_second_title_dom": true,
+      "full_second_sku_dom": true,
+      "full_second_accessible_name": true,
+      "full_second_title_tooltip": true,
+      "full_second_external_id_within_model_limit": true,
+      "full_current_heading": true,
+      "product_api_reads_during": 0,
+      "mutating_requests_during": 0,
+      "preview_apply_requests_during": 0,
+      "no_product_api_reads": true,
+      "no_mutating_requests": true,
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 360,
+      "theme": "light",
+      "card_count": 2,
+      "selection_height_px": 216.375,
+      "card_widths_px": [
+        240,
+        240
+      ],
+      "card_button_heights_px": [
+        75.5625,
+        108.859375
+      ],
+      "local_horizontal_scroll": true,
+      "local_scroll_after_tab_px": 177,
+      "page_overflow": false,
+      "page_scroll_stable": true,
+      "keyboard_reached_second_by_tab": true,
+      "keyboard_returned_first_by_shift_tab": true,
+      "second_focus_visible": true,
+      "first_focus_visible": true,
+      "second_focus_geometry_wait_completed": true,
+      "first_focus_geometry_wait_completed": true,
+      "second_focus_outline_within_scrollport": true,
+      "first_focus_outline_within_scrollport": true,
+      "second_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 90.78125,
+          "top": 569.078125,
+          "right": 338.78125,
+          "bottom": 685.9375
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 567.484375,
+          "right": 339.59375,
+          "bottom": 688.484375
+        }
+      },
+      "first_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 21.390625,
+          "top": 569.078125,
+          "right": 269.390625,
+          "bottom": 652.640625
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 567.484375,
+          "right": 339.59375,
+          "bottom": 688.484375
+        }
+      },
+      "current_product_preserved": true,
+      "full_second_title_dom": true,
+      "full_second_sku_dom": true,
+      "full_second_accessible_name": true,
+      "full_second_title_tooltip": true,
+      "full_second_external_id_within_model_limit": true,
+      "full_current_heading": true,
+      "product_api_reads_during": 0,
+      "mutating_requests_during": 0,
+      "preview_apply_requests_during": 0,
+      "no_product_api_reads": true,
+      "no_mutating_requests": true,
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 360,
+      "theme": "dark",
+      "card_count": 2,
+      "selection_height_px": 216.375,
+      "card_widths_px": [
+        240,
+        240
+      ],
+      "card_button_heights_px": [
+        75.5625,
+        108.859375
+      ],
+      "local_horizontal_scroll": true,
+      "local_scroll_after_tab_px": 177,
+      "page_overflow": false,
+      "page_scroll_stable": true,
+      "keyboard_reached_second_by_tab": true,
+      "keyboard_returned_first_by_shift_tab": true,
+      "second_focus_visible": true,
+      "first_focus_visible": true,
+      "second_focus_geometry_wait_completed": true,
+      "first_focus_geometry_wait_completed": true,
+      "second_focus_outline_within_scrollport": true,
+      "first_focus_outline_within_scrollport": true,
+      "second_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 90.78125,
+          "top": 569.078125,
+          "right": 338.78125,
+          "bottom": 685.9375
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 567.484375,
+          "right": 339.59375,
+          "bottom": 688.484375
+        }
+      },
+      "first_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 21.390625,
+          "top": 569.078125,
+          "right": 269.390625,
+          "bottom": 652.640625
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 567.484375,
+          "right": 339.59375,
+          "bottom": 688.484375
+        }
+      },
+      "current_product_preserved": true,
+      "full_second_title_dom": true,
+      "full_second_sku_dom": true,
+      "full_second_accessible_name": true,
+      "full_second_title_tooltip": true,
+      "full_second_external_id_within_model_limit": true,
+      "full_current_heading": true,
+      "product_api_reads_during": 0,
+      "mutating_requests_during": 0,
+      "preview_apply_requests_during": 0,
+      "no_product_api_reads": true,
+      "no_mutating_requests": true,
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 390,
+      "theme": "light",
+      "card_count": 2,
+      "selection_height_px": 198,
+      "card_widths_px": [
+        240,
+        240
+      ],
+      "card_button_heights_px": [
+        75.5625,
+        108.859375
+      ],
+      "local_horizontal_scroll": true,
+      "local_scroll_after_tab_px": 147,
+      "page_overflow": false,
+      "page_scroll_stable": true,
+      "keyboard_reached_second_by_tab": true,
+      "keyboard_returned_first_by_shift_tab": true,
+      "second_focus_visible": true,
+      "first_focus_visible": true,
+      "second_focus_geometry_wait_completed": true,
+      "first_focus_geometry_wait_completed": true,
+      "second_focus_outline_within_scrollport": true,
+      "first_focus_outline_within_scrollport": true,
+      "second_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 120.78125,
+          "top": 529.015625,
+          "right": 368.78125,
+          "bottom": 645.875
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 527.421875,
+          "right": 369.59375,
+          "bottom": 648.421875
+        }
+      },
+      "first_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 21.390625,
+          "top": 529.015625,
+          "right": 269.390625,
+          "bottom": 612.578125
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 527.421875,
+          "right": 369.59375,
+          "bottom": 648.421875
+        }
+      },
+      "current_product_preserved": true,
+      "full_second_title_dom": true,
+      "full_second_sku_dom": true,
+      "full_second_accessible_name": true,
+      "full_second_title_tooltip": true,
+      "full_second_external_id_within_model_limit": true,
+      "full_current_heading": true,
+      "product_api_reads_during": 0,
+      "mutating_requests_during": 0,
+      "preview_apply_requests_during": 0,
+      "no_product_api_reads": true,
+      "no_mutating_requests": true,
+      "passed": true
+    },
+    {
+      "state": "selected",
+      "width": 390,
+      "theme": "dark",
+      "card_count": 2,
+      "selection_height_px": 198,
+      "card_widths_px": [
+        240,
+        240
+      ],
+      "card_button_heights_px": [
+        75.5625,
+        108.859375
+      ],
+      "local_horizontal_scroll": true,
+      "local_scroll_after_tab_px": 147,
+      "page_overflow": false,
+      "page_scroll_stable": true,
+      "keyboard_reached_second_by_tab": true,
+      "keyboard_returned_first_by_shift_tab": true,
+      "second_focus_visible": true,
+      "first_focus_visible": true,
+      "second_focus_geometry_wait_completed": true,
+      "first_focus_geometry_wait_completed": true,
+      "second_focus_outline_within_scrollport": true,
+      "first_focus_outline_within_scrollport": true,
+      "second_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 120.78125,
+          "top": 529.015625,
+          "right": 368.78125,
+          "bottom": 645.875
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 527.421875,
+          "right": 369.59375,
+          "bottom": 648.421875
+        }
+      },
+      "first_focus_ring_geometry": {
+        "focus_ring": {
+          "left": 21.390625,
+          "top": 529.015625,
+          "right": 269.390625,
+          "bottom": 612.578125
+        },
+        "scrollport": {
+          "left": 20.59375,
+          "top": 527.421875,
+          "right": 369.59375,
+          "bottom": 648.421875
+        }
+      },
+      "current_product_preserved": true,
+      "full_second_title_dom": true,
+      "full_second_sku_dom": true,
+      "full_second_accessible_name": true,
+      "full_second_title_tooltip": true,
+      "full_second_external_id_within_model_limit": true,
+      "full_current_heading": true,
+      "product_api_reads_during": 0,
+      "mutating_requests_during": 0,
+      "preview_apply_requests_during": 0,
+      "no_product_api_reads": true,
+      "no_mutating_requests": true,
+      "passed": true
+    }
+  ],
+  "browser_api_reads": [
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "product_read",
+      "path_category": "common_product_content"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "product_read",
+      "path_category": "common_product_content"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "notifications_unread_count"
+    },
+    {
+      "method": "GET",
+      "kind": "shared_shell_read",
+      "path_category": "background_tasks_tray"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "other_api_read",
+      "path_category": "non_allowlisted_api"
+    },
+    {
+      "method": "GET",
+      "kind": "product_read",
+      "path_category": "common_product_content"
+    },
+    {
+      "method": "GET",
+      "kind": "product_read",
+      "path_category": "common_product_content"
+    },
+    {
+      "method": "GET",
+      "kind": "product_read",
+      "path_category": "common_product_content"
+    },
+    {
+      "method": "GET",
+      "kind": "product_read",
+      "path_category": "common_product_content"
+    }
+  ],
+  "writes": [
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/apply",
+      "kind": "synthetic_apply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/apply",
+      "kind": "synthetic_apply"
+    }
+  ],
+  "synthetic_actions": {
+    "preview_requests": 4,
+    "apply_requests": 2,
+    "expected_preview_conflicts": 1,
+    "expected_apply_conflicts": 1,
+    "empty_description_override_requests": 1,
+    "empty_route_api_reads": 0,
+    "empty_route_shared_shell_reads": 56,
+    "empty_route_shared_shell_read_categories": {
+      "notifications_unread_count": 28,
+      "background_tasks_tray": 28
+    },
+    "empty_route_mutating_requests": 0,
+    "empty_state_catalog_link_available": true,
+    "provider_attempts": 0,
+    "selected_photo_order_persisted": true,
+    "channel_record_unchanged": true,
+    "cancelled_local_edits": true
+  },
+  "focus_observations": [
+    {
+      "check": "common_photo_boundary_focus_first",
+      "observed": true,
+      "target_supported": true,
+      "enabled": true,
+      "visible": true,
+      "focus_visible": true,
+      "outline_visible": true,
+      "outline": {
+        "style": "solid",
+        "width": 2,
+        "color": "rgb(163, 74, 47)"
+      },
+      "rect": {
+        "x": 1351,
+        "y": 471.078125,
+        "width": 32,
+        "height": 32
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 1050
+      },
+      "focused_photo_url": "https://ozon-fixture.test/common-content-side.svg",
+      "focused_direction": "1",
+      "focused_action": "move-photo",
+      "same_photo": true,
+      "target": {
+        "photo_url": "https://ozon-fixture.test/common-content-side.svg",
+        "direction": "1"
+      }
+    },
+    {
+      "check": "common_photo_boundary_focus_last",
+      "observed": true,
+      "target_supported": true,
+      "enabled": true,
+      "visible": true,
+      "focus_visible": true,
+      "outline_visible": true,
+      "outline": {
+        "style": "solid",
+        "width": 2,
+        "color": "rgb(163, 74, 47)"
+      },
+      "rect": {
+        "x": 1315,
+        "y": 508.671875,
+        "width": 32,
+        "height": 32
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 1050
+      },
+      "focused_photo_url": "https://ozon-fixture.test/common-content-side.svg",
+      "focused_direction": "-1",
+      "focused_action": "move-photo",
+      "same_photo": true,
+      "target": {
+        "photo_url": "https://ozon-fixture.test/common-content-side.svg",
+        "direction": "-1"
+      }
+    },
+    {
+      "check": "common_preview_cancel_focus_return",
+      "observed": true,
+      "target_supported": true,
+      "enabled": true,
+      "visible": true,
+      "focus_visible": true,
+      "outline_visible": true,
+      "outline": {
+        "style": "solid",
+        "width": 2,
+        "color": "rgb(163, 74, 47)"
+      },
+      "rect": {
+        "x": 1207.390625,
+        "y": 927.8125,
+        "width": 187.609375,
+        "height": 39
+      },
+      "viewport": {
+        "width": 1440,
+        "height": 1050
+      },
+      "focused_photo_url": null,
+      "focused_direction": null,
+      "focused_action": "preview",
+      "target_action": "preview",
+      "same_trigger": true
+    }
+  ],
+  "unexpected_http_requests": [],
+  "unexpected_external_requests": [],
+  "javascript_errors": [],
+  "console_errors": [],
+  "console_error_locations": [],
+  "expected_conflict_console_errors": [
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "status": 409,
+      "message": "Failed to load resource: the server responded with a status of 409 (Conflict)",
+      "location": {
+        "origin": "http://127.0.0.1:38253",
+        "path": "/api/my-products/common-content/preview",
+        "has_query": false,
+        "has_fragment": false,
+        "url_present": true,
+        "url_too_long": false
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/apply",
+      "status": 409,
+      "message": "Failed to load resource: the server responded with a status of 409 (Conflict)",
+      "location": {
+        "origin": "http://127.0.0.1:38253",
+        "path": "/api/my-products/common-content/apply",
+        "has_query": false,
+        "has_fragment": false,
+        "url_present": true,
+        "url_too_long": false
+      }
+    }
+  ],
+  "provider_attempts": 0,
+  "seller_facing_label_evidence": {
+    "field_headings": {
+      "title": "Название",
+      "description": "Описание",
+      "photos": "Фотографии",
+      "characteristics": "Характеристики"
+    },
+    "expected_field_headings": {
+      "title": "Название",
+      "description": "Описание",
+      "photos": "Фотографии",
+      "characteristics": "Характеристики"
+    },
+    "title_control_count": 1,
+    "title_control_visible": true,
+    "description_control_count": 1,
+    "description_control_visible": true,
+    "recipient_heading_count": 1,
+    "scope_note_count": 1,
+    "scope_note_visible": true,
+    "scope_copy_present": {
+      "Сохранится только общий товар в Seller Hub.": true,
+      "Черновики и опубликованные карточки на площадках останутся без изменений.": true,
+      "Чтобы применить новые данные к каналу, отдельно проверьте его карточку и подтвердите действие там.": true
+    },
+    "raw_pre_count": 0,
+    "scope_note_excerpt": "≡\n\nСохранится только общий товар в Seller Hub. Черновики и опубликованные карточки на площадках останутся без изменений. Чтобы применить новые данные к каналу, отдельно проверьте его карточку и подтвердите действие там."
+  }
+}

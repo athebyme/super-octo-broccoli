@@ -1,0 +1,33 @@
+{
+  "exit_code": 0,
+  "result": {
+    "analytics_read_grant_observation": "unobserved",
+    "domain_persistence_proven": false,
+    "endpoint": "analytics_data",
+    "endpoint_results": {
+      "analytics_data": {
+        "http_status": 200,
+        "parser_acceptance_proven": true,
+        "requested_day_match": true,
+        "response_timestamp_present": true,
+        "row_count": 1,
+        "status": "sample_ok",
+        "totals_count": 2
+      }
+    },
+    "failure": null,
+    "full_sync_proven": false,
+    "llm_calls": 0,
+    "max_physical_http_attempts": 1,
+    "phase": "ozon_live_analytics_phase4",
+    "physical_http_attempts": 1,
+    "provider_writes": 0,
+    "read_retries": 0,
+    "redirects": false,
+    "response_byte_limit": 1048576,
+    "status": "sample_ok_with_restrictions",
+    "trust_env": false,
+    "window_utc_day": "2026-09-30"
+  },
+  "stderr_bytes": 0
+}
