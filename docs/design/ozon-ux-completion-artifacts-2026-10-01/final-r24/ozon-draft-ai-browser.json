@@ -1,0 +1,221 @@
+{
+  "status": "passed",
+  "checks": [
+    "one_visible_checkbox_mode_preserves_independent_ai_selection",
+    "lost_accepted_generate_reads_same_key_without_second_post",
+    "exact_item_evidence_and_values_visible_without_auto_apply",
+    "lost_apply_replays_exact_key_once_and_never_auto_publishes",
+    "not_arrived_generate_404_requires_explicit_same_payload_retry"
+  ],
+  "layouts": [
+    {
+      "name": "selection-mode",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "selection-mode",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "selection-mode",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "selection-mode",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "selection-mode",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "selection-mode",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "selection-mode",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "selection-mode",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "run-progress",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "run-progress",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "run-progress",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "run-progress",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "run-progress",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "run-progress",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "run-progress",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "run-progress",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "literal-evidence",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "literal-evidence",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "literal-evidence",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "literal-evidence",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "literal-evidence",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "literal-evidence",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "literal-evidence",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "literal-evidence",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "accepted-review",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "accepted-review",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "accepted-review",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "accepted-review",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "accepted-review",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "accepted-review",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "accepted-review",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "accepted-review",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "manual-same-key-retry",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "manual-same-key-retry",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "manual-same-key-retry",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "manual-same-key-retry",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "manual-same-key-retry",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "manual-same-key-retry",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "manual-same-key-retry",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "manual-same-key-retry",
+      "theme": "dark",
+      "width": 1440
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "posts": {
+    "/marketplaces/api/drafts/ai-completions": 3,
+    "/marketplaces/api/drafts/1/ai-suggestions/apply": 2
+  },
+  "scope": "synthetic_seller_ai_review"
+}

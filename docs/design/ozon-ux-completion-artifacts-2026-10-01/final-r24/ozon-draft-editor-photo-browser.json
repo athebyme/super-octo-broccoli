@@ -1,0 +1,158 @@
+{
+  "status": "passed",
+  "checks": [
+    "cold_cache_202_then_jpeg_without_reload_or_overlay",
+    "late_old_image_error_cannot_change_new_source",
+    "hung_visible_image_has_12s_deadline_and_bounded_wait_state",
+    "unmount_cancels_pending_retry",
+    "four_bounded_gets_then_actionable_fallback",
+    "manual_retry_is_separate_and_succeeds",
+    "hidden_mount_uses_no_get_and_requires_explicit_resume",
+    "compact_bulk_repair_fallback_has_independent_manual_retry"
+  ],
+  "layouts": [
+    {
+      "name": "ready",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "ready",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "ready",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "ready",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "fallback",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "fallback",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "fallback",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "fallback",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "compact-fallback",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "compact-fallback",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "compact-fallback",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "compact-fallback",
+      "theme": "dark",
+      "width": 390
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "scope": "synthetic_draft_editor_photo_component",
+  "visibility_simulated": true,
+  "photo_gets": [
+    {
+      "slot": 0,
+      "query": "deferred=1",
+      "mode": "cold"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=1",
+      "mode": "cold"
+    },
+    {
+      "slot": 1,
+      "query": "deferred=1",
+      "mode": "cold"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1",
+      "mode": "hang"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=1",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=2",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=3",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&manual_retry=1",
+      "mode": "ready"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&manual_retry=1",
+      "mode": "ready"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=1",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=2",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=3",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&manual_retry=1",
+      "mode": "ready"
+    }
+  ]
+}

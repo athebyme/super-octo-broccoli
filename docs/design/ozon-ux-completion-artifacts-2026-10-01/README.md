@@ -1,15 +1,7 @@
 # Evidence продолжения 01.10.2026
 
-Здесь сохраняются только synthetic результаты и screenshots. Они не содержат production БД, credentials или raw buyer/provider responses. Этот каталог — изменяемые результаты приёмки, не runtime/test/CI input.
+Актуальная приёмка — [final-r24](final-r24/artifact-index.json): один frozen snapshot1243файла,8/8UX и13/13Ozon,actual copy-only startup81/counts/no-op. [Текущий отчёт](../../operations/2026-10-01-ozon-ux-acceptance.md) содержит все19кодов и отдельно учитывает production cutover и внешние ограничения.
 
-`scoped-ozon-journey.json` и два Ozon изображения относятся к worker fixture до финального объединения: 12 checks/20 layouts, zero real provider attempts. В исходной Ozon квитанции нет source hashes; её scope и зафиксированная история запуска не удостоверяют окончательное source tree.
+В final-r24 находятся полные synthetic JSON/JUnit/log и выбранные actual screenshots. Они не содержат production DB, ключей, cookie или raw buyer/provider bodies. Backup/startup/production receipts публикуются только в безопасном агрегированном виде; оригиналы приватны. Результаты не являются runtime/test/CI inputs.
 
-`scoped-analytics.json` и два изображения аналитики относятся к отдельному worker source: 48 layouts/16 state cases, с source hashes внутри отчёта. Они не заменяют новый полный merged browser gate. Остальные изображения той же scoped сессии остались в её исходном временном каталоге.
-
-[Индекс](scoped-artifact-index.json) фиксирует SHA-256 сохранённых артефактов. [Текущий отчёт](../../operations/2026-10-01-ozon-ux-acceptance.md) различает accepted code, unit evidence, scoped browser evidence и blocked заключительные проверки. Новые общий/WB редакторы ещё не имеют passed actual browser evidence: запрет loopback bind останавливает проверку до browser launch. Отсутствующее изображение не подменяется макетом.
-
-`host-contracts.json` / `host-ux.json` и их JUnit/logs относятся к прежнему sealed source `65c9ced`: 2172 tests/523 subtests и 219 tests/42 subtests, SHA-256 1240 inputs до/после совпали. Они не удостоверяют поздний focus/protocol follow-up.
-
-`host-ux-r2.json` и его JUnit/log — actual повтор всех 22 UX unit файлов на `52bdced`: 220 tests/54 subtests, все 1243 source hashes до/после совпали. `common-focus-root.json` — независимый production-handler Node proof: текущий JS прошёл 9 cases, старый `e44df45` воспроизвёл disabled boundary-photo focus failure. Это synthetic DOM semantics, не actual browser geometry. Новый common fixture требует точные 28 empty/selected layouts и focus/outline/viewport observations, но здесь не исполнялся.
-
-`startup-source-comparison.json` на текущем source подтверждает только expected fingerprints, не actual DB startup. `environment-blocks.json` и `resume-checklist.md` фиксируют препятствия и оставшиеся действия. [Полный индекс](completion-artifact-index.json) включает все сохранённые результаты, отдельно от исторического scoped index. Ни один из host результатов не является Docker/browser gate либо production release.
+Остальные файлы исторические: scoped worker/host/Node доказательства относятся к своим commits, отказ доступа среды — к раннему этапу. Они не заменяют final frozen acceptance. Прежний подробный статус сохранён в historical-acceptance-before-r24.md. Старый scoped index удостоверяет только свой набор; completion-artifact-index содержит полный текущий каталог. Макеты вместо отсутствующих actual screenshots не создавались.

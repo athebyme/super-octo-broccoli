@@ -1,0 +1,17 @@
+{
+  "format_version": 1,
+  "status": "complete",
+  "snapshot_utc": "2026-10-01T08:16:54.334487+00:00",
+  "completed_at_utc": "2026-10-01T08:26:02.424291+00:00",
+  "uncompressed_bytes": 13996392448,
+  "compressed_bytes": 1830447462,
+  "sha256": "3a440578c07e6fb61762cade9d789bc389245c965b72d94054d481b5a30074dc",
+  "archive_sha256": "33079f69bd81ffdea0c0aff62884fb53e24cb71362bd0750dbf974d2314cc06b",
+  "quick_check": "ok",
+  "quick_check_scope": "restored_snapshot",
+  "restored_quick_check": "ok",
+  "round_trip_verified": true,
+  "restore_file_verified": true,
+  "seconds": 548.09,
+  "storage": "private production backup directory; no external upload"
+}

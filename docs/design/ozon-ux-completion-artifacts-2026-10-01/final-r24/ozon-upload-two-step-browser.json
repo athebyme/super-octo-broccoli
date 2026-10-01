@@ -1,0 +1,264 @@
+{
+  "status": "passed",
+  "checks": [
+    "fresh_first_page_shows_real_facts_and_blocks_partial_rows",
+    "classic_page_requires_selected_ids_versions_and_explicit_confirmation",
+    "selection_persists_across_pages_without_selecting_unseen_rows",
+    "stale_cross_page_version_requires_new_explicit_selection",
+    "dialog_keyboard_escape_restores_focus_without_post",
+    "lost_post_survives_reload_and_readback_never_duplicates_publication",
+    "unreached_post_404_then_explicit_same_key_exact_payload_retry",
+    "beta_local_prepare_404_manual_same_key_recovery_without_provider_write"
+  ],
+  "layouts": [
+    {
+      "name": "first-page",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "first-page",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "first-page",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "first-page",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "first-page",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "first-page",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "first-page",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "first-page",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "cross-page",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "cross-page",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "cross-page",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "cross-page",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "cross-page",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "cross-page",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "cross-page",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "cross-page",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "stale-selection",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "stale-selection",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "stale-selection",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "stale-selection",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "stale-selection",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "stale-selection",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "stale-selection",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "stale-selection",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "confirmation",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "confirmation",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "confirmation",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "confirmation",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "confirmation",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "confirmation",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "confirmation",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "confirmation",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "unknown-result",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "unknown-result",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "unknown-result",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "unknown-result",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "unknown-result",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "unknown-result",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "unknown-result",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "unknown-result",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "prepare-confirmation",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "prepare-confirmation",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "prepare-confirmation",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "prepare-confirmation",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "prepare-confirmation",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "prepare-confirmation",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "prepare-confirmation",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "prepare-confirmation",
+      "theme": "dark",
+      "width": 1440
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "posts": {
+    "/marketplaces/ozon/uploads/from-drafts": 3,
+    "/marketplaces/ozon/uploads/": 2
+  },
+  "scope": "synthetic_upload_two_step_review"
+}

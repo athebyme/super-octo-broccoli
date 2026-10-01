@@ -1,0 +1,149 @@
+{
+  "status": "passed",
+  "checks": [
+    "lazy_keyboard_history_empty_without_fabricated_events",
+    "settings_save_with_uncertain_operation_preserves_key_and_existing_draft",
+    "two_real_tabs_explicit_read_compare_rebase_and_separate_save",
+    "lost_post_response_readback_without_retry_or_duplicate_event",
+    "key_review_independent_of_settings_no_secret_saved_or_operation_replayed",
+    "real_settings_csrf_failure_preserves_saved_state",
+    "bounded_history_keyset_no_duplicates_responsive_and_200_percent",
+    "history_failure_foreign_response_retry_and_expired_session_gates"
+  ],
+  "layouts": [
+    {
+      "name": "saved-history",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "saved-history",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "saved-history",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "saved-history",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "saved-history",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "saved-history",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "saved-history",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "saved-history",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "review-conflict",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "review-conflict",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "review-conflict",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "review-conflict",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "review-conflict",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "review-conflict",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "review-conflict",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "review-conflict",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "history-pages",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "history-pages",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "history-pages",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "history-pages",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "history-pages",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "history-pages",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "history-pages",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "history-pages",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "history",
+      "css_width": 720,
+      "screen_width": 1440,
+      "emulated_zoom_percent": 200
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "posts": 8,
+  "history_gets": 11,
+  "scope": "synthetic_full_app_account_settings_history",
+  "checked_at": "2026-10-01T12:35:28.464141+00:00"
+}

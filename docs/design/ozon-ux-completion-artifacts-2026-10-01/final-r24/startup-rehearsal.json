@@ -1,0 +1,77 @@
+{
+  "status": "passed",
+  "scope": "isolated restored task copy; actual first startup + manual fail-closed verifier continuation + second startup",
+  "source": {
+    "head": "7e9f0770c12d66d63c143f5e6cf868eb56c134f0",
+    "source_manifest": "3e8093ab4a1c68be4714a5126e6aca4bf3a05d900877446ef384990ecd7f652d",
+    "source_file_count": 1243
+  },
+  "image": "sha256:1bc653df3bdfaed4b033206b26a83125507bbf54e7d490529b887dd73b8fd5a5",
+  "first_startup_summary": "Database startup: migration plan complete (8 changed step(s))",
+  "repeat_startup_summary": "Database startup: verified per-step plan and schema are current",
+  "first_verification": {
+    "active_run_absent": true,
+    "added_steps": [
+      "migrate-add-imported-content-overrides",
+      "migrate-add-wb-bulk-review-key"
+    ],
+    "changed_existing_steps": [
+      "bootstrap-database",
+      "migrate-add-admin-features",
+      "migrate-add-blocked-cards",
+      "migrate-add-marketplace-tables",
+      "migrate-add-price-monitoring",
+      "migrate-add-product-sync-settings"
+    ],
+    "changed_receipt_origins_executed": true,
+    "counts_match_baseline": true,
+    "is_current": true,
+    "ok": true,
+    "phase": "after-first",
+    "receipt_count": 81,
+    "receipt_fingerprints_and_ordinals_valid": true,
+    "removed_steps": [],
+    "state_sha256": "021004d3db8aa63cc0b55d8f994dbe7f5abf7c815ee01e928b5678784582c373",
+    "unchanged_receipts_match": true,
+    "whole_receipt_consistent": true
+  },
+  "repeat_verification": {
+    "active_run_absent": true,
+    "added_steps": [
+      "migrate-add-imported-content-overrides",
+      "migrate-add-wb-bulk-review-key"
+    ],
+    "changed_existing_steps": [
+      "bootstrap-database",
+      "migrate-add-admin-features",
+      "migrate-add-blocked-cards",
+      "migrate-add-marketplace-tables",
+      "migrate-add-price-monitoring",
+      "migrate-add-product-sync-settings"
+    ],
+    "changed_receipt_origins_executed": true,
+    "counts_match_baseline": true,
+    "is_current": true,
+    "ok": true,
+    "phase": "after-repeat",
+    "receipt_count": 81,
+    "receipt_fingerprints_and_ordinals_valid": true,
+    "removed_steps": [],
+    "state_sha256": "021004d3db8aa63cc0b55d8f994dbe7f5abf7c815ee01e928b5678784582c373",
+    "unchanged_receipts_match": true,
+    "whole_receipt_consistent": true
+  },
+  "repeat_exact_state_unchanged": true,
+  "logical_readonly_verifiers": "SQLite URI mode=ro plus PRAGMA query_only=ON; only copy directory writable for WAL metadata",
+  "network": "none",
+  "scheduler": "disabled",
+  "provider_attempts": 0,
+  "credentials_passed": false,
+  "all_actual_containers_exit_zero": true,
+  "all_oom_false": true,
+  "prior_helper_failures": [
+    "r4 import before DB (baseline manually unchanged)",
+    "r5 filesystem-readonly WAL verifier (SQL never read; first startup successful)"
+  ],
+  "automatic_startup_retry": false
+}

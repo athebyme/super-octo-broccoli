@@ -1,0 +1,26 @@
+{
+  "source_head": "7e9f0770c12d66d63c143f5e6cf868eb56c134f0",
+  "image": "sha256:1bc653df3bdfaed4b033206b26a83125507bbf54e7d490529b887dd73b8fd5a5",
+  "manifest": "3e8093ab4a1c68be4714a5126e6aca4bf3a05d900877446ef384990ecd7f652d",
+  "files": 1243,
+  "ux_stages": 8,
+  "ozon_stages": 13,
+  "scope": "synthetic isolated release gates; no production writes; not hosted CI",
+  "ux_tests": 222,
+  "ux_subtests": 61,
+  "ozon_tests": 2182,
+  "ozon_subtests": 523,
+  "warnings": {
+    "ux": 46,
+    "ozon": 255
+  },
+  "source_verified_before_after": true,
+  "containers": {
+    "ux_exit": 0,
+    "ozon_exit": 0,
+    "oom": false
+  },
+  "ozon_host_observer_exit": 143,
+  "ozon_actual_container_exit": 0,
+  "ozon_report_recovered_after_completion": true
+}

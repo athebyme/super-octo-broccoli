@@ -1,0 +1,225 @@
+{
+  "status": "passed",
+  "checks": [
+    "vue_202_is_pending_and_projection_unchanged",
+    "vue_reload_get_completed_exact_scope",
+    "stock_form_202_pending_last_good_not_fabricated",
+    "stock_form_reload_get_completed_exact_listing",
+    "session_relogin_scoped_get_renews_csrf_preserves_stock_input_and_post_succeeds",
+    "lost_post_recovers_by_get_without_second_post",
+    "hidden_tab_stops_poll_visible_tab_resumes_get",
+    "classic_warehouse_and_listing_status_are_local_reads",
+    "tenant_denial_and_csrf_reject_without_provider_io"
+  ],
+  "layouts": [
+    {
+      "name": "warehouse-queued",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "warehouse-queued",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "warehouse-queued",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "warehouse-queued",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "warehouse-queued",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "warehouse-queued",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "warehouse-queued",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "warehouse-queued",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "warehouse-completed",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "warehouse-completed",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "warehouse-completed",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "warehouse-completed",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "warehouse-completed",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "warehouse-completed",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "warehouse-completed",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "warehouse-completed",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "stock-queued",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "stock-queued",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "stock-queued",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "stock-queued",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "stock-queued",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "stock-queued",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "stock-queued",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "stock-queued",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "stock-completed",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "stock-completed",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "stock-completed",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "stock-completed",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "stock-completed",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "stock-completed",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "stock-completed",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "stock-completed",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "classic-warehouse-pending",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "classic-warehouse-pending",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "classic-warehouse-pending",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "classic-warehouse-pending",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "classic-warehouse-pending",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "classic-warehouse-pending",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "classic-warehouse-pending",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "classic-warehouse-pending",
+      "theme": "dark",
+      "width": 1440
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "postcounts": {
+    "/marketplaces/commercial/accounts/1/warehouses/sync": 3,
+    "/marketplaces/commercial/listings/1/stocks/refresh": 2
+  },
+  "scope": "synthetic_warehouse_read_browser"
+}

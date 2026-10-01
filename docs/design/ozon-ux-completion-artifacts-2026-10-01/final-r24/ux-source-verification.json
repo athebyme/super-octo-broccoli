@@ -1,0 +1,14 @@
+{
+  "scope": "full ux release gate",
+  "manifest": "3e8093ab4a1c68be4714a5126e6aca4bf3a05d900877446ef384990ecd7f652d",
+  "files": 1243,
+  "before": {
+    "verified": true,
+    "issues": []
+  },
+  "after": {
+    "verified": true,
+    "issues": []
+  },
+  "exit_code": 0
+}

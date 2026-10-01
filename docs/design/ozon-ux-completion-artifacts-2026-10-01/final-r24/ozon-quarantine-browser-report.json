@@ -1,0 +1,229 @@
+{
+  "status": "passed",
+  "checks": [
+    "csrf_and_foreign_account_denied_without_leak",
+    "product_preview_keyboard_200_percent_reflow",
+    "lost_post_readback_single_decision_unknown_preserved",
+    "held_draft_links_to_exact_origin_without_write",
+    "note_journal_and_unproven_release_hidden",
+    "stale_decision_needs_separate_review_choice",
+    "release_requires_read_proven_original_outcome",
+    "explicit_account_wide_scope_and_hold",
+    "bounded_journal_pagination",
+    "session_expiry_clear_action"
+  ],
+  "layouts": [
+    {
+      "name": "product-preview",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "product-preview",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "product-preview",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "product-preview",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "product-preview",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "product-preview",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "product-preview",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "product-preview",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "product-held",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "product-held",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "product-held",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "product-held",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "product-held",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "product-held",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "product-held",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "product-held",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "product-released",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "product-released",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "product-released",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "product-released",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "product-released",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "product-released",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "product-released",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "product-released",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "account-preview",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "account-preview",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "account-preview",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "account-preview",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "account-preview",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "account-preview",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "account-preview",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "account-preview",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "account-held",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "account-held",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "account-held",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "account-held",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "account-held",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "account-held",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "account-held",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "account-held",
+      "theme": "dark",
+      "width": 1440
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "posts": 7,
+  "post_paths": {
+    "/marketplaces/operations/api/3/quarantine": 1,
+    "/marketplaces/operations/api/1/quarantine": 1,
+    "/marketplaces/operations/api/1/quarantine/decision": 4,
+    "/marketplaces/operations/api/2/quarantine": 1
+  },
+  "scope": "synthetic_full_app_quarantine_review"
+}

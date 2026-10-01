@@ -1,0 +1,179 @@
+{
+  "status": "passed",
+  "checks": [
+    "held_price_list_exact_link_checkbox_disabled",
+    "held_price_detail_no_approve_exact_origin",
+    "held_stock_detail_no_approve_exact_origin",
+    "frozen_batch_new_hold_one_409_no_write_exact_link"
+  ],
+  "layouts": [
+    {
+      "name": "price-list",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "price-list",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "price-list",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "price-list",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "price-list",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "price-list",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "price-list",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "price-list",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "price-detail",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "price-detail",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "price-detail",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "price-detail",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "price-detail",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "price-detail",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "price-detail",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "price-detail",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "stock-detail",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "stock-detail",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "stock-detail",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "stock-detail",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "stock-detail",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "stock-detail",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "stock-detail",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "stock-detail",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "batch-conflict",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "batch-conflict",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "batch-conflict",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "batch-conflict",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "batch-conflict",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "batch-conflict",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "batch-conflict",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "batch-conflict",
+      "theme": "dark",
+      "width": 1440
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "postcounts": {
+    "/marketplaces/commercial/batch-approve": 1
+  },
+  "scope": "synthetic_commercial_quarantine_browser"
+}

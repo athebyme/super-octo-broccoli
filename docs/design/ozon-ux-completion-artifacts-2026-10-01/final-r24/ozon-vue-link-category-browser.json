@@ -1,0 +1,190 @@
+{
+  "status": "passed",
+  "checks": [
+    "candidate_photo_202_then_jpeg_ready_without_reload",
+    "candidate_photo_simulated_hidden_stop_bounded_fallback_manual_retry_and_unmount",
+    "candidate_photo_simulated_initial_hidden_has_no_get_until_manual_resume",
+    "canonical_tile_202_then_jpeg_uses_same_exact_source",
+    "manual_owned_link_lost_post_single_attempt_and_explicit_readback",
+    "foreign_scope_and_missing_csrf_fail_closed",
+    "unlink_impact_review_without_implicit_rebind",
+    "new_session_csrf_readback_and_reviewed_unlink",
+    "category_preview_rejects_unknown_duplicate_and_unbounded_query",
+    "dirty_input_separate_save_exact_impact_lost_post_and_readback",
+    "new_session_csrf_readback_new_preview_and_category_apply"
+  ],
+  "layouts": [
+    {
+      "name": "photo-fallback",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "photo-fallback",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "photo-fallback",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "photo-fallback",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "photo-fallback",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "photo-fallback",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "photo-fallback",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "photo-fallback",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "link-review",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "link-review",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "link-review",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "link-review",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "link-review",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "link-review",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "link-review",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "link-review",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "unlink-review",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "unlink-review",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "unlink-review",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "unlink-review",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "unlink-review",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "unlink-review",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "unlink-review",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "unlink-review",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "category-impact",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "category-impact",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "category-impact",
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "name": "category-impact",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "category-impact",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "category-impact",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "category-impact",
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "name": "category-impact",
+      "theme": "dark",
+      "width": 1440
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "posts": {
+    "/marketplaces/listings/1/link": 1,
+    "/marketplaces/listings/37/link": 1,
+    "/marketplaces/listings/1/unlink": 3,
+    "/marketplaces/drafts/1": 4
+  },
+  "scope": "synthetic_vue_link_category",
+  "visibility_simulated": true
+}

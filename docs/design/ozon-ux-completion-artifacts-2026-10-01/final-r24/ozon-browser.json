@@ -1,0 +1,617 @@
+{
+  "status": "passed",
+  "checks": [
+    "real_login_form_csrf_failure_and_success",
+    "thirty_six_catalog_photos_and_responsive_layout",
+    "six_distinct_categories_present_in_catalog",
+    "same_price_facts_in_grid_and_table_without_false_marketplace_discount",
+    "unicode_search_url_and_reload",
+    "six_category_details_and_unknown_buyer_price",
+    "foreign_listing_denied_without_data_leak",
+    "real_draft_save_csrf_reload_and_publication_gate",
+    "quality_selection_pagination_reload_unassessed_and_keyboard_dialog",
+    "offline_and_wrong_scope_preserve_last_good_data",
+    "lost_post_one_durable_job_closed_browser_completion",
+    "eleven_full_app_workspaces_new_seller_states",
+    "session_expiry_disables_new_writes",
+    "real_csrf_login_rejects_external_and_browser_normalized_redirects"
+  ],
+  "layouts": [
+    {
+      "name": "catalog",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "catalog",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "catalog",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "catalog",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "catalog",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "catalog",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "catalog-table",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "catalog-table",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "catalog-table",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "catalog-table",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "catalog-table",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "catalog-table",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "listing-detail",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "listing-detail",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "listing-detail",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "listing-detail",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "listing-detail",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "listing-detail",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "draft-editor",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "draft-editor",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "draft-editor",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "draft-editor",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "draft-editor",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "draft-editor",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "quality-detail",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "quality-detail",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "quality-detail",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "quality-detail",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "quality-detail",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "quality-detail",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "quality-offline",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "quality-offline",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "quality-offline",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "quality-offline",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "quality-offline",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "quality-offline",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "quality-completed",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "quality-completed",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "quality-completed",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "quality-completed",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "quality-completed",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "quality-completed",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-accounts",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-accounts",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-accounts",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-accounts",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-drafts",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-drafts",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-drafts",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-drafts",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-commercial",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-commercial",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-commercial",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-commercial",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-analytics",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-analytics",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-analytics",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-analytics",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-finance",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-finance",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-finance",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-finance",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-finance-changes",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-finance-changes",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-finance-changes",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-finance-changes",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-orders",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-orders",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-orders",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-orders",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-returns",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-returns",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-returns",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-returns",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-cancellations",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-cancellations",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-cancellations",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-cancellations",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-reviews",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-reviews",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-reviews",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-reviews",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-status",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-status",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "marketplaces-status",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "marketplaces-status",
+      "theme": "dark",
+      "width": 320
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "unexpected_external": [],
+  "provider_attempts": 0,
+  "scope": "synthetic_full_app_local_http",
+  "mutations": [
+    {
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "method": "POST",
+      "path": "/marketplaces/drafts/1"
+    },
+    {
+      "method": "POST",
+      "path": "/marketplaces/api/quality/refresh"
+    }
+  ],
+  "documents": [
+    {
+      "path": "/login",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/login",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/login",
+      "status": 302,
+      "redirect": "/marketplaces/listings/"
+    },
+    {
+      "path": "/marketplaces/listings/",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/listings/view/1",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/listings/view/2",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/listings/view/3",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/listings/view/4",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/listings/view/5",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/listings/view/6",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/listings/view/37",
+      "status": 404,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/drafts/1",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/drafts/1",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/quality",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/quality",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/quality",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/accounts/",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/drafts/",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/commercial/",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/analytics",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/finance",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/finance/changes",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/orders",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/returns",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/cancellations",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/reviews",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/status",
+      "status": 200,
+      "redirect": ""
+    },
+    {
+      "path": "/marketplaces/quality",
+      "status": 200,
+      "redirect": ""
+    }
+  ],
+  "checked_at": "2026-10-01T12:34:09.115552+00:00"
+}
