@@ -1105,8 +1105,14 @@ def run_browser(app, fixture: dict[str, int]) -> None:
 
             page.get_by_role("button", name="Редактировать", exact=True).click()
             page.wait_for_url("**/products/bulk-edit")
-            assert "WB edit synthetic shop" in page.locator("body").inner_text()
-            assert "wb-edit-account-synthetic" in page.locator("body").inner_text()
+            account_summary = page.locator("p.uppercase.tracking-wide")
+            assert account_summary.count() == 1, (
+                f"Expected one scoped WB account/channel label, got {account_summary.count()}"
+            )
+            account_summary_text = " ".join(account_summary.inner_text().casefold().split())
+            assert account_summary_text.startswith("аккаунт: wb edit synthetic shop"), account_summary_text
+            assert "wb account wb-edit-account-synthetic" in account_summary_text, account_summary_text
+            assert account_summary_text.endswith("канал: wildberries"), account_summary_text
             assert "50 товаров" in page.locator("body").inner_text()
             assert "Pipedream" in page.locator("body").inner_text()
             assert_keyboard_focus(page, "bulk_editor")
