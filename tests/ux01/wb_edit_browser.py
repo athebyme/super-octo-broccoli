@@ -34,9 +34,15 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 TEMP = tempfile.TemporaryDirectory(prefix="ux01-wb-edit-")
 TEMP_PATH = Path(TEMP.name)
-REPORT_PATH = Path(os.environ.get(
-    "WB_EDIT_BROWSER_REPORT", "/tmp/wb-edit-browser-report.json",
-))
+REPORT_PATH = Path(
+    os.environ.get("UX01_WB_EDIT_REPORT")
+    or os.environ.get("WB_EDIT_BROWSER_REPORT")
+    or "/tmp/wb-edit-browser-report.json"
+)
+ARTIFACTS_PATH = Path(
+    os.environ.get("UX01_WB_EDIT_ARTIFACTS")
+    or REPORT_PATH.parent / "wb-edit-browser-artifacts"
+)
 ASSET_DIR = ROOT / "tests/ozon_release/assets"
 USERNAME = "ux01-wb-edit-seller"
 PASSWORD = "synthetic-wb-edit-password"
@@ -54,6 +60,8 @@ REPORT = {
     "layouts": [],
     "checks": [],
     "interactions": [],
+    "artifacts": [],
+    "artifact_errors": [],
     "javascript_errors": [],
     "browser_mutations": [],
     "unexpected_external_requests": [],
@@ -537,6 +545,40 @@ def assert_review_summary(page, *, changed: str, skipped: str = "0") -> None:
     assert "Предпросмотр" in page.content() and "не отправляет данные в WB" in page.content()
 
 
+def click_next_product_page(page, *, sort: str, expected_page: int = 2) -> None:
+    """Click the visible next-page anchor and verify its full local query state."""
+    links = page.locator('nav[aria-label="Навигация по страницам"] a[aria-label="Следующая"]')
+    assert links.count() == 1, f"Expected exactly one next-page link, got {links.count()}"
+    href = links.get_attribute("href")
+    assert href, "Next-page link has no href"
+    target = urlsplit(href)
+    target_query = parse_qs(target.query, keep_blank_values=True)
+    expected_query = {
+        "search": ["Pipedream"],
+        "brand": ["Pipedream"],
+        "sort": [sort],
+        "order": ["asc"],
+        "page": [str(expected_page)],
+        "per_page": ["50"],
+    }
+    assert target.path == "/products" and all(
+        target_query.get(key) == value for key, value in expected_query.items()
+    ), {"href": href, "parsed_path": target.path, "query": target_query}
+
+    with page.expect_navigation(wait_until="domcontentloaded"):
+        links.click()
+    current = urlsplit(page.url)
+    current_query = parse_qs(current.query, keep_blank_values=True)
+    assert current.path == "/products" and all(
+        current_query.get(key) == value for key, value in expected_query.items()
+    ), {"url": page.url, "parsed_path": current.path, "query": current_query}
+    check(
+        "pagination_anchor_preserves_exact_filter_sort_and_page",
+        expected_page=expected_page,
+        sort=sort,
+    )
+
+
 def run_browser(app, fixture: dict[str, int]) -> None:
     from seller_platform import app as seller_app
     from models import Product, db
@@ -544,7 +586,13 @@ def run_browser(app, fixture: dict[str, int]) -> None:
     assets = load_pinned_assets()
     origin = BASE
     with sync_playwright() as playwright:
-        executable = os.environ.get("WB_EDIT_CHROMIUM") or shutil.which("chromium") or "/opt/google/chrome/chrome"
+        executable = (
+            os.environ.get("UX01_CHROMIUM")
+            or os.environ.get("CHROMIUM_BIN")
+            or os.environ.get("WB_EDIT_CHROMIUM")
+            or shutil.which("chromium")
+            or "/opt/google/chrome/chrome"
+        )
         browser = playwright.chromium.launch(
             executable_path=executable,
             headless=True,
@@ -570,11 +618,16 @@ def run_browser(app, fixture: dict[str, int]) -> None:
         page.on("response", record_http_response)
 
         try:
-            page.goto(BASE + "/login", wait_until="domcontentloaded")
+            # Avoid the legacy dashboard's automatic WB analytics/finance reads;
+            # authenticate directly to the page under test. Those APIs remain
+            # blocked by forbidden_python_network everywhere in this fixture.
+            page.goto(BASE + "/login?next=%2Fproducts", wait_until="domcontentloaded")
             page.locator('input[name="username"]').fill(USERNAME)
             page.locator('input[name="password"]').fill(PASSWORD)
-            page.locator('form button[type="submit"]').click()
-            page.wait_for_url("**/dashboard")
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                page.locator('form button[type="submit"]').click()
+            assert urlsplit(page.url).path == "/products", page.url
+            assert REPORT["provider_attempts"] == 0
             interaction("authenticated_login_with_csrf_enabled")
 
             list_url = (
@@ -613,19 +666,28 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 "code": foreign_probe["code"],
             })
 
-            page.locator('a[aria-label="Следующая"]').click()
-            page.wait_for_url("**page=2**")
+            click_next_product_page(page, sort="vendor_code")
             assert page.locator("#selectedCount").inner_text().strip() == "50"
             assert page.locator(".product-checkbox").count() == 1
             interaction("selection_survives_cross_page_navigation")
 
             page.locator('select[name="sort"]').select_option("title")
             page.locator('select[name="order"]').select_option("asc")
-            page.locator('form[method="GET"] button[type="submit"]').first.click()
-            page.wait_for_url("**sort=title**")
+            filter_form = page.locator('form[method="GET"][action="/products"]')
+            assert filter_form.count() == 1, f"Expected one catalog filter form, got {filter_form.count()}"
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                filter_form.locator('button[type="submit"]').click()
+            sorted_url = urlsplit(page.url)
+            sorted_query = parse_qs(sorted_url.query, keep_blank_values=True)
+            assert sorted_url.path == "/products" and all(
+                sorted_query.get(key) == value for key, value in {
+                    "search": ["Pipedream"], "brand": ["Pipedream"],
+                    "sort": ["title"], "order": ["asc"],
+                    "per_page": ["50"],
+                }.items()
+            ), {"url": page.url, "query": sorted_query}
             assert page.locator("#selectedCount").inner_text().strip() == "50"
-            page.locator('a[aria-label="Следующая"]').click()
-            page.wait_for_url("**page=2**")
+            click_next_product_page(page, sort="title")
             assert page.locator("#selectedCount").inner_text().strip() == "50"
             interaction("selection_survives_sort_and_second_page")
             capture_layout(page, "products_list")
@@ -693,8 +755,29 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             capture_layout(page, "bulk_editor")
             interaction("bulk_editor_names_wb_account_channel_and_safe_return_context")
 
-            page.locator('a[href^="/products?"]').first.click()
-            page.wait_for_url("**page=2**")
+            return_links = page.locator('nav a[href^="/products?"]')
+            assert return_links.count() == 1, f"Expected one safe products return link, got {return_links.count()}"
+            return_href = return_links.get_attribute("href")
+            assert return_href, "Safe products return link has no href"
+            return_target = urlsplit(return_href)
+            return_query = parse_qs(return_target.query, keep_blank_values=True)
+            expected_return_query = {
+                "search": ["Pipedream"], "brand": ["Pipedream"],
+                "sort": ["title"], "order": ["asc"],
+                "page": ["2"], "per_page": ["50"],
+            }
+            assert return_target.path == "/products" and all(
+                return_query.get(key) == value
+                for key, value in expected_return_query.items()
+            ), {"href": return_href, "query": return_query}
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                return_links.click()
+            returned = urlsplit(page.url)
+            returned_query = parse_qs(returned.query, keep_blank_values=True)
+            assert returned.path == "/products" and all(
+                returned_query.get(key) == value
+                for key, value in expected_return_query.items()
+            ), {"url": page.url, "query": returned_query}
             assert page.locator("#selectedCount").inner_text().strip() == "50"
             assert page.locator('select[name="sort"]').input_value() == "title"
             interaction("safe_return_link_restores_filter_sort_page_selection")
@@ -883,6 +966,21 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert len(REPORT["checks"]) >= 24, f"Expected at least 24 named browser checks, got {len(REPORT['checks'])}"
             assert REPORT["checks"] and REPORT["interactions"] and REPORT["layouts"]
             REPORT["status"] = "complete"
+        except Exception:
+            try:
+                ARTIFACTS_PATH.mkdir(parents=True, exist_ok=True)
+                screenshot = ARTIFACTS_PATH / "wb-edit-browser-failure.png"
+                page.screenshot(path=str(screenshot), full_page=True, timeout=5000)
+                REPORT["artifacts"].append({
+                    "kind": "failure_screenshot",
+                    "path": screenshot.name,
+                })
+            except Exception as screenshot_error:
+                REPORT["artifact_errors"].append({
+                    "kind": "failure_screenshot",
+                    "error_type": type(screenshot_error).__name__,
+                })
+            raise
         finally:
             context.close()
             browser.close()
