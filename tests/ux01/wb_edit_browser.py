@@ -1247,7 +1247,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             with page.expect_navigation(wait_until="domcontentloaded"):
                 page.get_by_role("button", name="Подтвердить и применить 50 карточек").click()
             page.wait_for_url("**/products/bulk-edit")
-            assert "Локальные данные товара изменились после предпросмотра" in page.locator("body").inner_text()
+            assert "Карточка или схема WB изменилась после предпросмотра; проверьте снова" in page.locator("body").inner_text()
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
             check("description_fingerprint_drift_rejected_before_provider", selected=50)
             interaction("non_filter_description_drift_rejected_without_provider_io")
