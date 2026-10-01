@@ -8,6 +8,7 @@ separately from provider attempts.
 from __future__ import annotations
 
 import base64
+from collections import Counter
 from datetime import datetime
 import hashlib
 from html.parser import HTMLParser
@@ -83,12 +84,21 @@ REPORT = {
     "unexpected_external_requests": [],
     "javascript_errors": [],
     "console_errors": [],
+    "expected_conflict_console_errors": [],
     "provider_attempts": 0,
 }
 EXPECTED_CONFLICTS = {
     "/api/my-products/common-content/preview": [0],
     "/api/my-products/common-content/apply": [0],
 }
+EXPECTED_CONFLICT_CONSOLE_COUNTS = {
+    "/api/my-products/common-content/preview": 1,
+    "/api/my-products/common-content/apply": 1,
+}
+EXPECTED_CONFLICT_CONSOLE_MESSAGE = (
+    "Failed to load resource: the server responded with a status of 409 (Conflict)"
+)
+PENDING_EXPECTED_CONFLICT_CONSOLES = []
 SHARED_SHELL_READ_PATH_CATEGORIES = {
     "/api/notifications/unread-count": "notifications_unread_count",
     "/api/tasks/tray": "background_tasks_tray",
@@ -343,6 +353,11 @@ def bridge(route):
                 EXPECTED_CONFLICTS[parsed.path][0] -= 1
                 conflict_key = "expected_apply_conflicts" if parsed.path.endswith("/apply") else "expected_preview_conflicts"
                 REPORT["synthetic_actions"][conflict_key] += 1
+                PENDING_EXPECTED_CONFLICT_CONSOLES.append({
+                    "method": request.method,
+                    "path": parsed.path,
+                    "status": response.status,
+                })
             else:
                 REPORT["unexpected_http_requests"].append({"method": request.method, "path": parsed.path, "status": response.status})
         route.fulfill(response=response)
@@ -373,6 +388,20 @@ def bridge(route):
 def query_ids(url: str) -> list[int]:
     values = parse_qs(urlsplit(url).query).get("product_id", [])
     return [int(value) for value in values]
+
+
+def record_console_message(message) -> None:
+    if message.type != "error":
+        return
+    text = message.text[:300]
+    if text == EXPECTED_CONFLICT_CONSOLE_MESSAGE and PENDING_EXPECTED_CONFLICT_CONSOLES:
+        exact_response = PENDING_EXPECTED_CONFLICT_CONSOLES.pop(0)
+        REPORT["expected_conflict_console_errors"].append({
+            **exact_response,
+            "message": text,
+        })
+        return
+    REPORT["console_errors"].append(text)
 
 
 def delay_fetches(page, request_keys: list[str]) -> None:
@@ -1101,8 +1130,7 @@ def run():
         context.route("**/*", bridge)
         page = context.new_page()
         page.on("pageerror", lambda error: REPORT["javascript_errors"].append(str(error)[:300]))
-        page.on("console", lambda message: REPORT["console_errors"].append(message.text[:300])
-                if message.type == "error" else None)
+        page.on("console", record_console_message)
 
         # Both seller catalog entry points preserve exact IDs and enforce the
         # same 50-item cap before reaching the editor.
@@ -1416,9 +1444,71 @@ def run():
         page.get_by_role("button", name="Перечитать выбранные").click()
         page.get_by_text("Данные выбранных товаров перечитаны", exact=False).wait_for()
 
-        # Verify the common editor is not a raw provider payload screen.
-        assert page.locator("pre").count() == 0
-        assert page.locator("#common-content-fields").get_by_text("общий товар", exact=False).count() > 0
+        # Check the actual seller-facing labels and common-only scope copy.
+        # This selected product has no photos, so the fields need not repeat
+        # the page-level common-content wording.
+        fields = page.locator("#common-content-fields")
+        expected_field_headings = {
+            "title": "Название",
+            "description": "Описание",
+            "photos": "Фотографии",
+            "characteristics": "Характеристики",
+        }
+        actual_field_headings = {}
+        for field in expected_field_headings:
+            heading = fields.locator(
+                'section[data-field-section="' + field + '"] h3'
+            )
+            actual_field_headings[field] = (
+                heading.inner_text().strip() if heading.count() == 1 else None
+            )
+        title_control = fields.get_by_role(
+            "textbox", name="Общее название товара", exact=True,
+        )
+        description_control = fields.get_by_role(
+            "textbox", name="Общее описание товара", exact=True,
+        )
+        recipient_heading = fields.get_by_role(
+            "heading", name="Контексты каналов для сравнения", exact=True,
+        )
+        scope_note = page.locator(".cpc-effect-note")
+        scope_note_text = scope_note.inner_text().strip() if scope_note.count() == 1 else ""
+        required_scope_copy = (
+            "Сохранится только общий товар в Seller Hub.",
+            "Черновики и опубликованные карточки на площадках останутся без изменений.",
+            "Чтобы применить новые данные к каналу, отдельно проверьте его карточку и подтвердите действие там.",
+        )
+        label_evidence = {
+            "field_headings": actual_field_headings,
+            "expected_field_headings": expected_field_headings,
+            "title_control_count": title_control.count(),
+            "title_control_visible": title_control.is_visible() if title_control.count() == 1 else False,
+            "description_control_count": description_control.count(),
+            "description_control_visible": description_control.is_visible() if description_control.count() == 1 else False,
+            "recipient_heading_count": recipient_heading.count(),
+            "scope_note_count": scope_note.count(),
+            "scope_note_visible": scope_note.is_visible() if scope_note.count() == 1 else False,
+            "scope_copy_present": {
+                phrase: phrase in scope_note_text for phrase in required_scope_copy
+            },
+            "raw_pre_count": page.locator("pre").count(),
+            "scope_note_excerpt": scope_note_text[:400],
+        }
+        REPORT["seller_facing_label_evidence"] = label_evidence
+        labels_are_readable = (
+            fields.is_visible()
+            and actual_field_headings == expected_field_headings
+            and title_control.count() == 1
+            and title_control.is_visible()
+            and description_control.count() == 1
+            and description_control.is_visible()
+            and recipient_heading.count() == 1
+            and scope_note.count() == 1
+            and scope_note.is_visible()
+            and all(label_evidence["scope_copy_present"].values())
+            and label_evidence["raw_pre_count"] == 0
+        )
+        assert labels_are_readable, label_evidence
         REPORT["checks"].append("seller_facing_labels_replace_raw_json")
 
         assert REPORT["synthetic_actions"]["preview_requests"] == 4
@@ -1430,7 +1520,32 @@ def run():
         assert REPORT["unexpected_http_requests"] == []
         assert REPORT["unexpected_external_requests"] == []
         assert REPORT["javascript_errors"] == []
+        expected_console_error_counts = Counter({
+            ("POST", path, 409): count
+            for path, count in EXPECTED_CONFLICT_CONSOLE_COUNTS.items()
+        })
+        observed_console_error_counts = Counter(
+            (row.get("method"), row.get("path"), row.get("status"))
+            for row in REPORT["expected_conflict_console_errors"]
+        )
+        console_evidence = {
+            "expected_by_endpoint": {
+                path: count for path, count in EXPECTED_CONFLICT_CONSOLE_COUNTS.items()
+            },
+            "observed_by_endpoint": {
+                path: sum(
+                    1 for row in REPORT["expected_conflict_console_errors"]
+                    if row.get("path") == path
+                )
+                for path in EXPECTED_CONFLICT_CONSOLE_COUNTS
+            },
+            "pending_exact_conflict_responses": PENDING_EXPECTED_CONFLICT_CONSOLES,
+            "unexpected_console_errors": REPORT["console_errors"],
+        }
+        assert observed_console_error_counts == expected_console_error_counts, console_evidence
+        assert PENDING_EXPECTED_CONFLICT_CONSOLES == [], console_evidence
         assert REPORT["console_errors"] == []
+        REPORT["checks"].append("expected_conflict_console_errors_scoped_by_endpoint_and_count")
         assert len(REPORT["layouts"]) == 28
         assert len(REPORT["checks"]) >= 8
         REPORT["status"] = "passed"
