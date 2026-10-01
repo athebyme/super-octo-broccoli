@@ -4575,6 +4575,19 @@ class MarketplaceDraftService:
         """
         if not OzonReferenceService.reference_is_fresh(product_type):
             return [], {"applied": [], "unresolved": [], "evidence": {}, "defaults": {}}
+        from services.ozon_compliance_defaults import (
+            MARKING_ATTRIBUTE_ID,
+            TNVED_ATTRIBUTE_ID,
+            apply_to_attributes,
+        )
+
+        # Exact source labels and even a current type-scoped dictionary are
+        # not authority for regulatory facts. These IDs are populated only by
+        # the signed admin decision / active registry layer below.
+        compliance_attribute_ids = {
+            TNVED_ATTRIBUTE_ID,
+            MARKING_ATTRIBUTE_ID,
+        }
         definitions = MarketplaceAttributeDefinition.query.filter_by(
             product_type_id=product_type.id,
             is_available=True,
@@ -4619,6 +4632,8 @@ class MarketplaceDraftService:
         )
         matched: List[Tuple[MarketplaceAttributeDefinition, list]] = []
         for attribute in definitions:
+            if str(attribute.external_attribute_id) in compliance_attribute_ids:
+                continue
             if attribute.attribute_complex_id:
                 continue
             if (
@@ -4806,7 +4821,6 @@ class MarketplaceDraftService:
         # решение по ТН ВЭД и выведенный из него по нормативному перечню
         # признак маркировки.  Слой заполняет только пустые поля и никогда не
         # трогает уже заданное значение.
-        from services.ozon_compliance_defaults import apply_to_attributes
         result, compliance_report = apply_to_attributes(
             result, product_type.id,
         )

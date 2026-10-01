@@ -16,8 +16,12 @@ from models import (
     MarketplaceAttributeValue,
     MarketplaceCategoryMapping,
     MarketplaceListing,
+    MarketplaceProductDraft,
     MarketplaceProductType,
     MarketplaceTaxonomyCategory,
+    OzonComplianceDefault,
+    OzonMarkingRegistryVersion,
+    OzonMarkingRule,
     Product,
     Seller,
     SellerMarketplaceAccount,
@@ -4774,6 +4778,180 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         }
         self.assertNotIn('22232', rebased_ids)
         self.assertNotIn('23536', rebased_ids)
+
+    def test_compliance_attributes_are_never_generic_source_auto_mapped(self):
+        """Only the signed default and active registry may populate 22232/23536.
+
+        Exact source labels and a fresh type-scoped TNVED dictionary are not
+        authority for either regulatory field. Ordinary content fields still
+        map, and the dedicated admin layer remains able to add both values
+        with their existing provenance.
+        """
+        tnved_attribute = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id="22232",
+            name="ТН ВЭД коды ЕАЭС",
+            data_type="String",
+            dictionary_id="tnved-current",
+            max_value_count=1,
+            is_available=True,
+            is_enabled=True,
+            values_synced_at=self.now,
+            values_sync_status="success",
+            values_snapshot_hash="fresh-tnved-values",
+            values_version=1,
+            values_count=1,
+        )
+        marking_attribute = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            external_attribute_id="23536",
+            name="Нужен код маркировки",
+            data_type="Boolean",
+            max_value_count=1,
+            is_available=True,
+            is_enabled=True,
+        )
+        db.session.add_all([tnved_attribute, marking_attribute])
+        db.session.flush()
+        db.session.add(MarketplaceAttributeValue(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            attribute_id=tnved_attribute.id,
+            external_value_id="tnved-synthetic-3307900008",
+            value="3307900008 - Synthetic test entry",
+            value_normalized=OzonReferenceService.normalize_value(
+                "3307900008 - Synthetic test entry"
+            ),
+            is_available=True,
+            last_seen_at=self.now,
+        ))
+        db.session.flush()
+
+        facts_document = {
+            "facts": {
+                "identity": {"brand": "Наблюдаемый бренд"},
+                "attributes": {
+                    "country": "Россия",
+                    "characteristics": [
+                        {
+                            "name": "ТН ВЭД коды ЕАЭС",
+                            "value": "3307900008 - Synthetic test entry",
+                        },
+                        {
+                            "name": "Нужен код маркировки",
+                            "value": True,
+                        },
+                        {
+                            "name": "Аннотация",
+                            "value": "Наблюдаемое описание",
+                        },
+                    ],
+                },
+            },
+        }
+
+        automatic, no_authority_report = (
+            MarketplaceDraftService._auto_map_attributes(
+                product_type=self.product_type,
+                facts_document=facts_document,
+            )
+        )
+        automatic_by_id = {
+            item["attribute_id"]: item for item in automatic
+        }
+        self.assertNotIn("22232", automatic_by_id)
+        self.assertNotIn("23536", automatic_by_id)
+        self.assertEqual(no_authority_report["applied"], [])
+        self.assertCountEqual(
+            no_authority_report["unresolved"], ["22232", "23536"],
+        )
+        self.assertTrue({"31", "32", "4191"}.issubset(automatic_by_id))
+        self.assertEqual(
+            automatic_by_id["32"]["values"],
+            [{"dictionary_value_id": "9001", "value": "Россия"}],
+        )
+
+        seller = db.session.get(Seller, self.seller1_id)
+        default = OzonComplianceDefault(
+            marketplace_id=self.marketplace.id,
+            product_type_id=self.product_type.id,
+            tnved_code="3307900008",
+            tnved_display="3307900008 - Synthetic test entry",
+            status="active",
+            decided_by_user_id=seller.user_id,
+            rationale="Synthetic fixture decision for regression coverage",
+            dictionary_version=1,
+            dictionary_hash="fresh-tnved-values",
+        )
+        registry = OzonMarkingRegistryVersion(
+            label="Synthetic complete registry",
+            is_complete=True,
+            declared_by_user_id=seller.user_id,
+            rule_count=1,
+            status="active",
+        )
+        db.session.add_all([default, registry])
+        db.session.flush()
+        db.session.add(OzonMarkingRule(
+            registry_version_id=registry.id,
+            code_prefix="3307",
+            normative_ref="synthetic-fixture-only",
+        ))
+        db.session.flush()
+
+        authorized, compliance_report = (
+            MarketplaceDraftService._auto_map_attributes(
+                product_type=self.product_type,
+                facts_document=facts_document,
+            )
+        )
+        authorized_by_id = {
+            item["attribute_id"]: item for item in authorized
+        }
+        self.assertTrue({"31", "32", "4191"}.issubset(authorized_by_id))
+        self.assertEqual(
+            authorized_by_id["22232"]["values"],
+            [{
+                "dictionary_value_id": "tnved-synthetic-3307900008",
+                "value": "3307900008 - Synthetic test entry",
+            }],
+        )
+        self.assertEqual(
+            authorized_by_id["23536"]["values"],
+            [{"value": "true"}],
+        )
+        self.assertEqual(set(compliance_report["applied"]), {"22232", "23536"})
+        self.assertEqual(compliance_report["unresolved"], [])
+
+        draft = MarketplaceProductDraft(provenance_json=json.dumps({
+            "fact.title": {"source": "supplier_fixture"},
+        }))
+        MarketplaceDraftService._merge_compliance_provenance(
+            draft, compliance_report,
+        )
+        provenance = json.loads(draft.provenance_json)
+        self.assertEqual(
+            provenance["compliance.22232"]["source"],
+            "admin_compliance_default",
+        )
+        self.assertEqual(
+            provenance["compliance.22232"]["external_value_id"],
+            "tnved-synthetic-3307900008",
+        )
+        self.assertEqual(
+            provenance["compliance.23536"]["source"],
+            "admin_marking_registry",
+        )
+        self.assertEqual(
+            provenance["compliance.23536"]["registry_version_id"],
+            registry.id,
+        )
+        self.assertEqual(provenance["compliance.23536"]["value"], "true")
+        self.assertEqual(
+            provenance["fact.title"], {"source": "supplier_fixture"},
+        )
 
     def test_create_draft_records_compliance_provenance(self):
         """Task 8b: type-bind time is when the compliance layer writes a
