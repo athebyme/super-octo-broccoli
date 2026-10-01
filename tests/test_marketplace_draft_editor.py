@@ -241,6 +241,17 @@ page.draft.status='archived';assert.equal(page.statusLabel,'Архив');
 ''')
 
 
+def test_validation_date_used_by_template_is_a_callable_method():
+    run_node(r'''
+assert.equal(typeof definition.methods.validationDate,'function');
+assert.equal('validationDate' in definition.computed,false);
+assert.equal(page.validationDate('2026-07-25T12:00:00'),'25.07.2026');
+assert.equal(page.validationDate('2026-07-25'),'25.07.2026');
+assert.equal(page.validationDate('not-a-date'),'');
+assert.equal(page.validationDate(null),'');
+''')
+
+
 def test_conflict_and_unknown_write_result_preserve_edits_and_disable_repeat():
     run_node(r'''
 (async()=>{

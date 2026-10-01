@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import requests
 from cryptography.fernet import Fernet
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 from werkzeug.serving import make_server
 
 OUT = Path(os.environ.get("OZON_BROWSER_ARTIFACTS", "/artifacts"))
@@ -480,37 +480,78 @@ def stale_ready_layout(page):
         for theme in ("light", "dark"):
             page.set_viewport_size({"width": width, "height": 980})
             page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
-            scaled = page.locator("#ozon-draft-editor").evaluate("""async root => {
+            scale_state = page.locator("#ozon-draft-editor").evaluate("""root => {
                 const nodes = Array.from(root.querySelectorAll('*')).filter(element =>
                     Array.from(element.childNodes).some(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim())
                 );
                 const saved = nodes.map(element => ({element, value:element.style.getPropertyValue('font-size'),
                     priority:element.style.getPropertyPriority('font-size'), size:parseFloat(getComputedStyle(element).fontSize)}));
                 const status = root.querySelector('.ode-status'), before = parseFloat(getComputedStyle(status).fontSize);
-                const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-                let result;
-                try {
-                    saved.forEach(({element, size}) => element.style.setProperty('font-size', `${size * 2}px`, 'important'));
-                    await settle();
-                    result = {count:nodes.length, before, after:parseFloat(getComputedStyle(status).fontSize),
-                        page:document.documentElement.scrollWidth};
-                } finally {
+                window.__staleReadyTextScale = saved;
+                saved.forEach(({element, size}) => element.style.setProperty('font-size', `${size * 2}px`, 'important'));
+                return {count:nodes.length, before};
+            }""")
+            scaled = dict(scale_state)
+            try:
+                page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+                scaled.update(page.evaluate("""() => {
+                    const nodes = Array.from(document.querySelectorAll('#ozon-draft-editor *')).map(element => {
+                        const rect = element.getBoundingClientRect();
+                        const style = getComputedStyle(element);
+                        const parent = element.parentElement?.getBoundingClientRect();
+                        return {
+                            tag:element.tagName, id:element.id || null,
+                            className:typeof element.className === 'string' ? element.className.slice(0, 100) : null,
+                            left:Math.round(rect.left), right:Math.round(rect.right), width:Math.round(rect.width),
+                            scrollWidth:element.scrollWidth, clientWidth:element.clientWidth,
+                            fontSize:style.fontSize, display:style.display, whiteSpace:style.whiteSpace,
+                            overflowWrap:style.overflowWrap, overflowX:style.overflowX,
+                            minWidth:style.minWidth, maxWidth:style.maxWidth,
+                            parentLeft:parent ? Math.round(parent.left) : null,
+                            parentRight:parent ? Math.round(parent.right) : null,
+                            text:(element.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 100),
+                        };
+                    });
+                    return {
+                        after:parseFloat(getComputedStyle(document.querySelector('.ode-status')).fontSize),
+                        page:document.documentElement.scrollWidth,
+                        overflowing:nodes.filter(row => row.left < -1 || row.right > innerWidth + 1)
+                            .sort((a, b) => b.right - a.right).slice(0, 24),
+                        innerOverflowing:nodes.filter(row => row.scrollWidth > row.clientWidth + 1 &&
+                            !['auto','scroll','hidden','clip'].includes(row.overflowX))
+                            .sort((a, b) => b.scrollWidth - a.scrollWidth).slice(0, 24),
+                    };
+                }"""))
+                if scaled["page"] > width + 1:
+                    screenshot_name = f"stale-ready-text-200-overflow-{theme}-{width}.png"
+                    page.screenshot(path=str(OUT / screenshot_name), animations="disabled")
+                    scaled["overflow_screenshot"] = screenshot_name
+                else:
+                    screenshot_name = f"stale-ready-text-200-ok-{theme}-{width}.png"
+                    page.screenshot(path=str(OUT / screenshot_name), animations="disabled")
+                    scaled["layout_screenshot"] = screenshot_name
+            finally:
+                scaled["restored"] = page.evaluate("""() => {
+                    const saved = window.__staleReadyTextScale || [];
                     saved.forEach(({element, value, priority}) => value
                         ? element.style.setProperty('font-size', value, priority)
                         : element.style.removeProperty('font-size'));
-                    await settle();
-                }
-                result.restored = saved.every(({element, value, priority}) =>
-                    element.style.getPropertyValue('font-size') === value && element.style.getPropertyPriority('font-size') === priority);
-                return result;
-            }""")
+                    delete window.__staleReadyTextScale;
+                    return saved.every(({element, value, priority}) =>
+                        element.style.getPropertyValue('font-size') === value &&
+                        element.style.getPropertyPriority('font-size') === priority);
+                }""")
+                page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
             ratio = scaled["after"] / scaled["before"] if scaled["before"] else 0
             assert scaled["count"] and 1.99 <= ratio <= 2.01 and scaled["restored"], (width, theme, scaled)
             assert scaled["page"] <= width + 1, ("stale_ready_text_200_overflow", width, theme, scaled)
             assert send_button.is_disabled(), ("stale_ready_text_200_send_enabled", width, theme)
-            report["layouts"].append({
+            layout_result = {
                 "name": "stale-ready-editor-text-200", "width": width, "theme": theme, "text_scale": 200,
-            })
+            }
+            if scaled.get("layout_screenshot"):
+                layout_result["screenshot"] = scaled["layout_screenshot"]
+            report["layouts"].append(layout_result)
     page.set_viewport_size({"width": 1440, "height": 980})
     page.evaluate("document.documentElement.dataset.theme = 'light'")
 
@@ -533,12 +574,25 @@ def api_call_from_page(page, path, method="GET", body=None, csrf=None):
 
 def stale_ready_editor_check(page):
     assert provider.physical_writes == 0 and not provider.full_read_calls
+    console_messages = []
+
+    def capture_editor_console(message):
+        if message.type in {"error", "warning"} and len(console_messages) < 12:
+            safe_text = re.sub(r"\?[^\s]*", "?[redacted]", message.text)
+            console_messages.append({"type": message.type, "text": safe_text[:400]})
+
+    page.on("console", capture_editor_console)
     page.goto(base + f"/marketplaces/drafts/{stale_ready_draft_id}")
     page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
-    page.locator(".ode-status").wait_for()
     config = bootstrap(page, "#ode-bootstrap")
     editor_response = api_call_from_page(page, config["urls"]["editor"])
-    assert editor_response["status"] == 200, editor_response
+    if editor_response["status"] != 200:
+        body = editor_response.get("document")
+        raise AssertionError(("stale_ready_editor_api", {
+            "status": editor_response["status"],
+            "code": body.get("code") if isinstance(body, dict) else None,
+            "error": str(body.get("error", ""))[:300] if isinstance(body, dict) else None,
+        }))
     document = editor_response["document"]
     assert document["draft"]["status"] == "ready", document["draft"]
     assert document["draft"]["validation_status"] == "valid", document["draft"]
@@ -555,6 +609,56 @@ def stale_ready_editor_check(page):
         "dimensions.width", "dimensions.height", "dimensions.depth",
         "dimensions.weight", "dimensions.dimension_unit", "dimensions.weight_unit",
     } <= current_fields, current
+
+    render_failure = None
+    try:
+        page.wait_for_function(
+            "() => !!document.querySelector('.ode-status') || "
+            "!!document.querySelector('#ozon-draft-editor .ode-message--error')"
+        )
+    except PlaywrightTimeoutError as error:
+        render_failure = f"{type(error).__name__}: {error}"[:400]
+    if render_failure or not page.locator(".ode-status").is_visible():
+        diagnostic = page.evaluate("""() => {
+            const root = document.querySelector('#ozon-draft-editor');
+            const error = root?.querySelector('.ode-message--error');
+            return {
+                editor_present:!!root,
+                editor_visible:root ? getComputedStyle(root).display !== 'none' : false,
+                editor_cloaked:root?.hasAttribute('v-cloak') ?? null,
+                workspace_present:!!root?.querySelector('.ode-workspace'),
+                loading_present:!!root?.querySelector('.ode-loading'),
+                status_present:!!root?.querySelector('.ode-status'),
+                error_present:!!error,
+                error_text:error?.innerText?.slice(0, 300) || null,
+                root_text_length:root?.innerText?.length || 0,
+                visible_text:root?.innerText?.slice(0, 800) || null,
+                child_count:root?.children?.length || 0,
+                top_children:Array.from(root?.children || []).slice(0, 12).map(node => ({
+                    tag:node.tagName, id:node.id || null,
+                    className:typeof node.className === 'string' ? node.className.slice(0, 100) : null,
+                    display:getComputedStyle(node).display,
+                })),
+            };
+        }""")
+        screenshot = OUT / "stale-ready-editor-render-diagnostic.png"
+        page.screenshot(path=str(screenshot), animations="disabled")
+        report["stale_ready_editor_render_diagnostic"] = {
+            "editor_api_status": editor_response["status"],
+            "draft_id_matches": document["draft"].get("id") == stale_ready_draft_id,
+            "bootstrap_draft_id_matches": config.get("draftId") == stale_ready_draft_id,
+            "bootstrap_account_id_matches": config.get("accountId") == document["draft"].get("account_id"),
+            "bootstrap_editor_url_path_matches": urlsplit(config["urls"]["editor"]).path
+                == f"/marketplaces/drafts/{stale_ready_draft_id}/editor",
+            "bootstrap_editor_url_has_query": bool(urlsplit(config["urls"]["editor"]).query),
+            "wait_error": render_failure,
+            "console_messages": console_messages,
+            "dom": diagnostic,
+            "screenshot": screenshot.name,
+        }
+        page.remove_listener("console", capture_editor_console)
+        raise AssertionError(("stale_ready_editor_render", report["stale_ready_editor_render_diagnostic"]))
+    page.remove_listener("console", capture_editor_console)
 
     send_button = page.locator(".ode-savebar button.sh-btn--primary")
     assert send_button.count() == 1 and send_button.is_disabled()

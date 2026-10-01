@@ -1141,13 +1141,22 @@ def run_browser(app, fixture: dict[str, int]) -> None:
 
             page.locator('input[name="operation"][value="update_brand"]').check()
             page.locator("#value_brand").fill("Synthetic mixed action must stop")
-            page.locator('form[action="/products/bulk-edit"]').evaluate("""form => {
-                const hidden = document.createElement('input');
-                hidden.type = 'hidden'; hidden.name = 'ai_operations'; hidden.value = 'ai_keywords';
-                form.appendChild(hidden);
-                form.submit();
-            }""")
-            page.wait_for_load_state("domcontentloaded")
+            with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + "/products/bulk-edit",
+                timeout=10000,
+            ) as mixed_manual_ai_response:
+                with page.expect_navigation(wait_until="domcontentloaded", timeout=10000):
+                    page.locator('form[action="/products/bulk-edit"]').evaluate("""form => {
+                        const hidden = document.createElement('input');
+                        hidden.type = 'hidden'; hidden.name = 'ai_operations'; hidden.value = 'ai_keywords';
+                        form.appendChild(hidden);
+                        form.submit();
+                    }""")
+            response = mixed_manual_ai_response.value
+            assert response.status == 200
+            assert response.request.method == "POST"
+            assert response.url == BASE + "/products/bulk-edit"
             assert "Ручная и AI-операции не объединяются" in page.locator("body").inner_text()
             assert "Ничего не было применено" in page.locator("body").inner_text()
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0

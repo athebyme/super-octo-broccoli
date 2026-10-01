@@ -1,0 +1,69 @@
+{
+  "exit_code": 0,
+  "result": {
+    "completed_endpoints": [
+      "posting_fbs_list",
+      "posting_fbo_list",
+      "returns_list",
+      "finance_accrual_by_day",
+      "review_list",
+      "question_list"
+    ],
+    "domain_persistence_proven": false,
+    "endpoint_results": {
+      "finance_accrual_by_day": {
+        "has_next": false,
+        "http_status": 200,
+        "row_count": 1,
+        "status": "ok"
+      },
+      "posting_fbo_list": {
+        "has_next": false,
+        "http_status": 200,
+        "row_count": 0,
+        "selected_offer_present": false,
+        "status": "ok"
+      },
+      "posting_fbs_list": {
+        "has_next": false,
+        "http_status": 200,
+        "row_count": 0,
+        "selected_offer_present": false,
+        "status": "ok"
+      },
+      "question_list": {
+        "cause": "unknown",
+        "http_status": 403,
+        "retry": false,
+        "status": "denied"
+      },
+      "returns_list": {
+        "has_next": false,
+        "http_status": 200,
+        "row_count": 0,
+        "selected_offer_present": false,
+        "status": "ok"
+      },
+      "review_list": {
+        "cause": "unknown",
+        "http_status": 403,
+        "retry": false,
+        "status": "denied"
+      }
+    },
+    "failure": null,
+    "full_sync_proven": false,
+    "llm_calls": 0,
+    "max_physical_http_attempts": 6,
+    "phase": "ozon_live_domains_phase3",
+    "physical_http_attempts": 6,
+    "provider_writes": 0,
+    "read_retries": 0,
+    "redirects": false,
+    "response_byte_limit": 1048576,
+    "status": "complete_with_restrictions",
+    "trust_env": false,
+    "window_utc_day": "2026-09-30"
+  },
+  "stderr_bytes": 0
+}

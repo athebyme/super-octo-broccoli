@@ -1,0 +1,106 @@
+{
+  "exit_code": 0,
+  "result": {
+    "account_default_vat_supported": true,
+    "current_error_count": 15,
+    "current_publishable": false,
+    "current_warning_count": 2,
+    "dml_guard_attempts": 0,
+    "domain_writes": 0,
+    "draft_updated_age_over_48h": true,
+    "draft_vat_accepted": false,
+    "errors": [
+      {
+        "code": "source_facts_stale",
+        "field": "source_facts"
+      },
+      {
+        "code": "ozon_attribute_removal_snapshot_changed",
+        "field": "published_listing_id"
+      },
+      {
+        "code": "name_required",
+        "field": "content.name"
+      },
+      {
+        "code": "description_required",
+        "field": "content.description"
+      },
+      {
+        "code": "physical_fact_required",
+        "field": "dimensions.width"
+      },
+      {
+        "code": "physical_fact_required",
+        "field": "dimensions.height"
+      },
+      {
+        "code": "physical_fact_required",
+        "field": "dimensions.depth"
+      },
+      {
+        "code": "physical_fact_required",
+        "field": "dimensions.weight"
+      },
+      {
+        "code": "dimension_unit_required",
+        "field": "dimensions.dimension_unit"
+      },
+      {
+        "code": "weight_unit_required",
+        "field": "dimensions.weight_unit"
+      },
+      {
+        "code": "price_required",
+        "field": "commercial.price"
+      },
+      {
+        "code": "vat_required",
+        "field": "commercial.vat"
+      },
+      {
+        "code": "currency_code_required",
+        "field": "commercial.currency_code"
+      },
+      {
+        "code": "required_attribute_missing",
+        "field": "attributes.23536"
+      },
+      {
+        "code": "required_attribute_missing",
+        "field": "attributes.9048"
+      }
+    ],
+    "linked_listing_present": true,
+    "linked_listing_valid_for_current_draft": false,
+    "llm_calls": 0,
+    "package_facts": {
+      "all_six_accepted": false,
+      "depth_accepted": false,
+      "dimension_unit_accepted": false,
+      "height_accepted": false,
+      "weight_accepted": false,
+      "weight_unit_accepted": false,
+      "width_accepted": false
+    },
+    "provider_calls": 0,
+    "regulatory": {
+      "active_marking_registry_complete": false,
+      "active_marking_registry_has_rules": false,
+      "active_marking_registry_present": false,
+      "active_tnved_default_present": false,
+      "tnved_dictionary_fresh": true
+    },
+    "schema_fresh": true,
+    "status": "ok",
+    "stored_error_count": 0,
+    "stored_publishable": true,
+    "stored_ready": true,
+    "stored_validation_age_over_48h": true,
+    "stored_validation_status": "valid",
+    "stored_warning_count": 2
+  },
+  "stderr_bytes": 0,
+  "database_scope": "snapshot_2026-10-01T18:28:04UTC",
+  "network": "none"
+}

@@ -1,0 +1,37 @@
+{
+  "backup": {
+    "format_version": 1,
+    "status": "complete",
+    "snapshot_utc": "2026-10-01T18:28:04.711248+00:00",
+    "completed_at_utc": "2026-10-01T18:37:21.963186+00:00",
+    "uncompressed_bytes": 14005719040,
+    "compressed_bytes": 1833150878,
+    "sha256": "ab6be57f6a5db62f955f71d165e68d0c39ab8b2818237928adebdd94a1aeb490",
+    "archive_sha256": "9fe7c35f68f7575c0ffcf0cef8afee7d4d45923ba4719eced5f46b9e9821dbc1",
+    "quick_check": "ok",
+    "quick_check_scope": "restored_snapshot",
+    "restored_quick_check": "ok",
+    "round_trip_verified": true,
+    "restore_file_verified": true,
+    "archive_cap_bytes": 2147483648,
+    "disk_reserve_bytes": 2147483648,
+    "seconds": 557.254
+  },
+  "staged_restore": {
+    "format_version": 1,
+    "status": "complete",
+    "mode": "staged_restore",
+    "snapshot_utc": "2026-10-01T18:28:04.711248+00:00",
+    "completed_at_utc": "2026-10-01T18:48:25.653552+00:00",
+    "legacy_manifest": false,
+    "uncompressed_bytes": 14005719040,
+    "sha256": "ab6be57f6a5db62f955f71d165e68d0c39ab8b2818237928adebdd94a1aeb490",
+    "restored_quick_check": "ok",
+    "production_cutover": false,
+    "provider_replay_authorized": false,
+    "encryption_key_restored": false,
+    "provider_rate_ledger_restored": false,
+    "seconds": 311.37
+  },
+  "same_snapshot_verified": true
+}

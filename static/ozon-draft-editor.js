@@ -208,15 +208,15 @@
                     if (this.draft.status !== 'ready' || this.draft.validation_status !== 'valid') return 'Сохраните результат текущей проверки';
                     return {needs_category:'Нужна категория', draft:'На подготовке', ready:'Текущая проверка пройдена', published:'Опубликован', blocked:'Нужны исправления', archived:'Архив'}[this.draft?.status] || 'Черновик';
                 },
+                categoryLabel() { return [this.draft?.category_path, this.draft?.product_type_name].filter(Boolean).join(' / ') || 'Выберите категорию Ozon'; },
+                linkedCategory() { return this.data?.linked_category || {mode:this.draft?.published_listing_id ? 'unavailable' : 'new'}; },
+            },
+            methods: {
                 validationDate(value) {
                     if (typeof value !== 'string') return '';
                     const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
                     return match ? match[3] + '.' + match[2] + '.' + match[1] : '';
                 },
-                categoryLabel() { return [this.draft?.category_path, this.draft?.product_type_name].filter(Boolean).join(' / ') || 'Выберите категорию Ozon'; },
-                linkedCategory() { return this.data?.linked_category || {mode:this.draft?.published_listing_id ? 'unavailable' : 'new'}; },
-            },
-            methods: {
                 safeImage,
                 adoptAiCsrf(value) { if (typeof value === 'string' && value.length >= 20 && value.length <= 512) config.csrf = value; },
                 receiveAiSuggestions(rows) { this.aiRows = Array.isArray(rows) ? rows : []; },
