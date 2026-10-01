@@ -33,6 +33,7 @@ EXTRA_TESTS = (
     'test_product_selection_dom.py',
     'test_image_lab_service.py', 'test_image_lab_routes.py',
     'test_internal_agent_security.py',
+    'test_wb_batch_update.py',
 )
 
 
