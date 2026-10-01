@@ -385,7 +385,25 @@ class FakeWBClient:
         return {"sent": sent, "missing": [], "invalid": {}, "failed": {}, "snapshots": snapshots}
 
 
-def bridge(route, *, assets: dict[str, dict[str, object]], origin: str) -> None:
+def local_post_allowlist(fixture: dict[str, int]) -> frozenset[str]:
+    unmapped_product_id = fixture.get("unmapped_product_id")
+    if type(unmapped_product_id) is not int or unmapped_product_id <= 0:
+        raise ValueError("browser fixture needs one exact positive unmapped product ID")
+    return frozenset({
+        "/login",
+        "/products/selection/resolve",
+        "/products/bulk-edit",
+        f"/products/{unmapped_product_id}/edit",
+    })
+
+
+def bridge(
+    route,
+    *,
+    assets: dict[str, dict[str, object]],
+    origin: str,
+    allowed_local_posts: frozenset[str],
+) -> None:
     request = route.request
     parsed = urlsplit(request.url)
     if request.url.startswith(origin + "/"):
@@ -397,11 +415,7 @@ def bridge(route, *, assets: dict[str, dict[str, object]], origin: str) -> None:
             })
             route.abort()
             return
-        if request.method == "POST" and parsed.path not in {
-            "/login",
-            "/products/selection/resolve",
-            "/products/bulk-edit",
-        }:
+        if request.method == "POST" and parsed.path not in allowed_local_posts:
             REPORT["unexpected_external_requests"].append({
                 "method": request.method,
                 "path": parsed.path,
@@ -540,7 +554,16 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             viewport={"width": 1280, "height": 900},
             service_workers="block",
         )
-        context.route("**/*", lambda route: bridge(route, assets=assets, origin=origin))
+        allowed_local_posts = local_post_allowlist(fixture)
+        context.route(
+            "**/*",
+            lambda route: bridge(
+                route,
+                assets=assets,
+                origin=origin,
+                allowed_local_posts=allowed_local_posts,
+            ),
+        )
         page = context.new_page()
         page.set_default_timeout(15000)
         page.on("pageerror", lambda error: REPORT["javascript_errors"].append(str(error)))

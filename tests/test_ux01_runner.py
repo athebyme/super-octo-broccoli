@@ -7,6 +7,8 @@ import tempfile
 import unittest
 import base64
 import os
+import subprocess
+import sys
 
 from scripts.check_ux01 import (
     BROWSER_INTERACTION_FIELDS,
@@ -327,6 +329,54 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertFalse(rejected["valid"])
             self.assertIn("layout_rows_below_30", rejected["missing_evidence"])
             self.assertIn("interaction_rows_below_24", rejected["missing_evidence"])
+
+    def test_wb_browser_bridge_allows_only_the_seeded_unmapped_edit_post(self):
+        root = Path(__file__).resolve().parents[1]
+        code = r'''
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
+
+source = Path("tests/ux01/wb_edit_browser.py").resolve()
+spec = importlib.util.spec_from_file_location("wb_edit_browser_fixture", source)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+origin = "http://sellerhub.synthetic"
+allowed_paths = module.local_post_allowlist({"unmapped_product_id": 10002})
+
+class FakeRoute:
+    def __init__(self, path):
+        self.request = SimpleNamespace(url=origin + path, method="POST")
+        self.continued = False
+        self.aborted = False
+    def continue_(self): self.continued = True
+    def abort(self): self.aborted = True
+    def fulfill(self, **_kwargs): raise AssertionError("unexpected asset fulfillment")
+
+allowed = FakeRoute("/products/10002/edit")
+module.bridge(allowed, assets={}, origin=origin, allowed_local_posts=allowed_paths)
+assert allowed.continued and not allowed.aborted
+assert not module.REPORT["unexpected_external_requests"]
+
+denied = FakeRoute("/products/9741/edit")
+module.bridge(denied, assets={}, origin=origin, allowed_local_posts=allowed_paths)
+assert denied.aborted and not denied.continued
+assert module.REPORT["unexpected_external_requests"] == [{
+    "method": "POST", "path": "/products/9741/edit",
+    "reason": "unapproved_local_mutation",
+}]
+print("bridge exact fixture POST allow/deny passed")
+'''
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("bridge exact fixture POST allow/deny passed", result.stdout)
 
     def test_listing_report_allows_only_bounded_synthetic_login_posts(self):
         with tempfile.TemporaryDirectory() as temp_name:
