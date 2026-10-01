@@ -28,6 +28,7 @@ from services.marketplace_drafts import (
     MarketplaceDraftValidationError,
 )
 from services.ozon_reference_service import OzonReferenceService
+from services.ozon_brand_policy import match_forbidden_ozon_brand
 
 
 SOURCE_KEYS = frozenset({
@@ -175,7 +176,7 @@ def _characteristics(value: Any) -> list:
         if not isinstance(item, dict):
             continue
         name = _source_scalar(item.get('name') or item.get('key'), 120)
-        if not name or HIGH_RISK.search(name):
+        if not name or (HIGH_RISK.search(name) and _source_field_name(name) != 'sizes'):
             continue
         raw = item.get('value')
         if isinstance(raw, list):
@@ -275,8 +276,11 @@ def _eligible(field: MarketplaceAttributeDefinition) -> bool:
     # manual even if a model quotes a number from the feed.
     if (not field.is_enabled or not field.is_available
             or field.external_attribute_id in ENGINE_OWNED_ATTRIBUTE_IDS
-            or field.attribute_complex_id
-            or HIGH_RISK.search(field.name)):
+            or field.attribute_complex_id):
+        return False
+    # An explicitly observed apparel/product size is in the first-lane source
+    # contract. Keep package dimensions and other measurement fields manual.
+    if HIGH_RISK.search(field.name) and _source_field_name(field.name) != 'sizes':
         return False
     if MarketplaceDraftService._normalized_text(field.data_type) != 'string':
         return False
@@ -298,6 +302,16 @@ def _source_field_name(value: str) -> str:
         if normalized in aliases:
             return canonical
     return normalized
+
+
+def _effective_max_value_count(field: MarketplaceAttributeDefinition) -> int:
+    """Expose the same bounded cardinality enforced by validate_result."""
+    if not field.is_collection:
+        return 1
+    configured = field.max_value_count
+    if type(configured) is int and configured > 0:
+        return min(configured, MarketplaceDraftService.MAX_ATTRIBUTE_VALUES)
+    return MarketplaceDraftService.MAX_ATTRIBUTE_VALUES
 
 
 def _evidence_field_binding(path: str, target_name: str, facts: dict) -> bool | None:
@@ -434,7 +448,7 @@ class OzonDraftAIValidation:
                 'name': field.name[:200],
                 'data_type': 'string',
                 'required': bool(field.is_required),
-                'max_value_count': int(field.max_value_count or 0),
+                'max_value_count': _effective_max_value_count(field),
                 'collection': bool(field.is_collection),
                 'complex_collection': bool(field.complex_is_collection),
                 'dictionary_id': field.dictionary_id,
@@ -602,6 +616,10 @@ class OzonDraftAIValidation:
                     rejections.append('invalid_attribute_value')
                     break
                 display = value['value']
+                if (_source_field_name(definition['name']) == 'brand'
+                        and match_forbidden_ozon_brand(display)):
+                    rejections.append('forbidden_brand')
+                    break
                 if definition['dictionary_id']:
                     external_id = value.get('dictionary_value_id')
                     if not isinstance(external_id, str) or allowed.get(external_id) != display:

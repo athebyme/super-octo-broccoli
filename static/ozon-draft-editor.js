@@ -313,14 +313,16 @@
                 goToIssue(issue) {
                     const field = issue.field || '';
                     this.section = /media|image/.test(field) ? 'media' : /commercial|price|dimension|weight|barcode|vat/.test(field) ? 'delivery' : /attribute/.test(field) ? 'attributes' : 'content';
-                    const attribute = field.match(/^attributes\.(\d+)/)?.[1];
+                    const indexedField = field.match(/^attributes\[(\d+)\](?:\.|$)/);
+                    const indexedRow = indexedField ? this.form?.attributes?.[Number(indexedField[1])] : null;
+                    const attribute = String(issue.attribute_id || field.match(/^attributes\.(\d+)/)?.[1] || indexedRow?.attribute_id || '');
                     if (attribute === '4191') this.section = 'content';
                     else if (attribute) this.attrQuery = attribute;
                     const ids = {'content.name':'ode-name', 'content.description':'ode-description', 'offer_id':'ode-offer', 'commercial.price':'ode-price', 'commercial.old_price':'ode-old-price', 'commercial.vat':'ode-vat', 'commercial.currency_code':'ode-currency', 'dimensions.width':'ode-width', 'dimensions.height':'ode-height', 'dimensions.depth':'ode-depth', 'dimensions.weight':'ode-weight', 'dimensions.dimension_unit':'ode-dimension-unit', 'dimensions.weight_unit':'ode-weight-unit', 'attributes.4191':'ode-description'};
                     this.$nextTick(() => {
                         const fieldElement = attribute && attribute !== '4191' ? [...document.querySelectorAll('.ode-attribute')].find(element => element.dataset.attribute === attribute) : null;
                         if (fieldElement?.closest('details')) fieldElement.closest('details').open = true;
-                        const target = fieldElement || document.getElementById(ids[field] || (/type|category/.test(field) ? 'ode-category' : 'ode-section'));
+                        const target = fieldElement || document.getElementById(ids[field] || (attribute ? ids['attributes.' + attribute] : '') || (/type|category/.test(field) ? 'ode-category' : 'ode-section'));
                         target?.scrollIntoView({behavior:'auto', block:'center'}); (fieldElement?.querySelector('input:not(:disabled), button:not(:disabled)') || target)?.focus();
                     });
                 },

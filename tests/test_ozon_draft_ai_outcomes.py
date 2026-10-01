@@ -1,4 +1,4 @@
-"""UI copy keeps distinct seller AI completion outcomes actionable and safe."""
+"""Seller AI completion outcomes stay distinct and actionable in the Vue UI."""
 from pathlib import Path
 import shutil
 import subprocess

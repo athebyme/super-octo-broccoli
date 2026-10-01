@@ -1387,6 +1387,72 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertNotIn("4561", by_id)
         self.assertNotIn("4552", by_id)
 
+    def test_auto_mapping_preserves_values_over_schema_limit_for_preflight(self):
+        product = self._product(
+            external_id="material-over-limit",
+            dimensions=False,
+        )
+        original = json.loads(product.original_data)
+        original["materials"] = [
+            "Силикон",
+            "Термопластичная резина (TPR)",
+        ]
+        product.original_data = json.dumps(original, ensure_ascii=False)
+        product.supplier_product.original_data_json = product.original_data
+        self._dictionary_attribute(
+            "4541",
+            "Материал",
+            ["Силикон", "Термопластичная резина (TPR)"],
+            is_collection=True,
+            max_value_count=1,
+        )
+        db.session.commit()
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            product_type_id=self.product_type.id,
+        )
+        attributes = json.loads(draft.attributes_json)
+        material_index = next(
+            index for index, item in enumerate(attributes)
+            if item["attribute_id"] == "4541"
+        )
+        self.assertEqual(
+            attributes[material_index]["values"],
+            [
+                {"dictionary_value_id": "4541-1", "value": "Силикон"},
+                {
+                    "dictionary_value_id": "4541-2",
+                    "value": "Термопластичная резина (TPR)",
+                },
+            ],
+        )
+
+        validated = MarketplaceDraftService.validate_draft(
+            seller_id=self.seller1_id,
+            draft_id=draft.id,
+            expected_version=draft.version,
+        )
+        errors = validated.to_public_dict(detail=True)["validation"]["errors"]
+        limit_error = next(
+            item for item in errors
+            if item.get("code") == "attribute_max_value_count"
+            and item.get("attribute_id") == "4541"
+        )
+        self.assertEqual(
+            limit_error["field"],
+            f"attributes[{material_index}].values",
+        )
+        self.assertEqual(limit_error["attribute_name"], "Материал")
+        self.assertEqual(limit_error["actual_count"], 2)
+        self.assertEqual(limit_error["max_value_count"], 1)
+        self.assertEqual(limit_error["schema_max_value_count"], 1)
+        self.assertIn("ID 4541", limit_error["message"])
+        self.assertIn("передано значений 2", limit_error["message"])
+        self.assertIn("допустимо не более 1", limit_error["message"])
+
     def test_category_recipes_use_only_literal_taxonomy_and_title_phrases(self):
         def candidates(title, category):
             return MarketplaceDraftService._attribute_candidate_values({

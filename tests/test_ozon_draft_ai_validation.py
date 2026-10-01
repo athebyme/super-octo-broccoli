@@ -294,6 +294,92 @@ class DraftAIValidationTest(unittest.TestCase):
             OzonDraftAIValidation.capture(self.draft)
         self.assertEqual(raised.exception.code, 'source_facts_missing')
 
+    def test_explicit_size_facts_can_fill_only_exact_size_fields(self):
+        size = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id, product_type_id=self.product_type.id,
+            external_attribute_id='800', name='Размер товара', data_type='String',
+            max_value_count=1, is_available=True, is_enabled=True,
+        )
+        package_size = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id, product_type_id=self.product_type.id,
+            external_attribute_id='801', name='Размер упаковки', data_type='String',
+            max_value_count=1, is_available=True, is_enabled=True,
+        )
+        snapshot = json.loads(self.imported.original_data)
+        snapshot['sizes'] = ['42', '43']
+        self.imported.original_data = json.dumps(snapshot, ensure_ascii=False)
+        db.session.add_all([size, package_size])
+        db.session.commit()
+
+        context = OzonDraftAIValidation.capture(self.draft)
+        by_id = {field['attribute_id']: field for field in context['schema']['attributes']}
+        self.assertIn('800', by_id)
+        self.assertNotIn('801', by_id)
+        result = {'draft_id': self.draft.id, 'suggestions': [{
+            'attribute_id': '800', 'complex_id': '0', 'group_ordinal': 0,
+            'values': [{'value': '42'}],
+            'evidence': [{'path': '/sizes/0', 'quote': '42'}],
+            'provenance_code': 'literal_source',
+        }]}
+        validated = OzonDraftAIValidation.validate_result(context, result)
+        self.assertEqual(validated['rejections'], [])
+        self.assertEqual(validated['suggestions'][0]['values'], [{'value': '42'}])
+
+    def test_required_fields_and_native_max_cardinality_are_sealed(self):
+        season = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id, product_type_id=self.product_type.id,
+            external_attribute_id='900', name='Сезон', data_type='String',
+            is_required=True, is_collection=True, max_value_count=2,
+            is_available=True, is_enabled=True,
+        )
+        snapshot = json.loads(self.imported.original_data)
+        snapshot['characteristics']['Сезон'] = ['летний', 'демисезонный', 'зимний']
+        self.imported.original_data = json.dumps(snapshot, ensure_ascii=False)
+        db.session.add(season)
+        db.session.commit()
+
+        context = OzonDraftAIValidation.capture(self.draft)
+        season_schema = next(field for field in context['schema']['attributes']
+                             if field['attribute_id'] == '900')
+        self.assertTrue(season_schema['required'])
+        self.assertEqual(season_schema['max_value_count'], 2)
+        excessive = {'draft_id': self.draft.id, 'suggestions': [{
+            'attribute_id': '900', 'complex_id': '0', 'group_ordinal': 0,
+            'values': [{'value': value} for value in ('летний', 'демисезонный', 'зимний')],
+            'evidence': [
+                {'path': '/characteristics/2/value/0', 'quote': 'летний'},
+                {'path': '/characteristics/2/value/1', 'quote': 'демисезонный'},
+                {'path': '/characteristics/2/value/2', 'quote': 'зимний'},
+            ],
+            'provenance_code': 'literal_source',
+        }]}
+        self.assertEqual(OzonDraftAIValidation.validate_result(context, excessive), {
+            'suggestions': [], 'rejections': ['attribute_values_limit'],
+        })
+
+    def test_forbidden_brand_cannot_become_a_suggestion(self):
+        brand = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id, product_type_id=self.product_type.id,
+            external_attribute_id='902', name='Бренд', data_type='String',
+            max_value_count=1, is_available=True, is_enabled=True,
+        )
+        snapshot = json.loads(self.imported.original_data)
+        snapshot['brand'] = 'HOT'
+        self.imported.original_data = json.dumps(snapshot, ensure_ascii=False)
+        db.session.add(brand)
+        db.session.commit()
+
+        context = OzonDraftAIValidation.capture(self.draft)
+        result = {'draft_id': self.draft.id, 'suggestions': [{
+            'attribute_id': '902', 'complex_id': '0', 'group_ordinal': 0,
+            'values': [{'value': 'HOT'}],
+            'evidence': [{'path': '/brand', 'quote': 'HOT'}],
+            'provenance_code': 'literal_source',
+        }]}
+        self.assertEqual(OzonDraftAIValidation.validate_result(context, result), {
+            'suggestions': [], 'rejections': ['forbidden_brand'],
+        })
+
     def test_model_cannot_propose_ungrounded_or_foreign_attribute(self):
         context = OzonDraftAIValidation.capture(self.draft)
         invalid = self._color_result(self.draft.id)

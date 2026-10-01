@@ -26,7 +26,7 @@ from services.marketplace_drafts import MarketplaceDraftService, MarketplaceDraf
 from services.ozon_draft_ai_validation import OzonDraftAIValidation as Validator, OzonDraftAIValidationError
 from services.ai_parsing_budget import seller_run_call_limit
 
-PROFILE_VERSION = 'ozon_source_flash_v1'
+PROFILE_VERSION = 'ozon_source_flash_v2'
 ACTIVE = ('pending', 'running', 'cancelling')
 KEY = re.compile(r'[A-Za-z0-9_-]{24,128}\Z')
 MAX_ITEMS = 200
@@ -43,7 +43,7 @@ VALIDATOR_REJECTION_CODES = frozenset({
     'invalid_evidence_index', 'evidence_must_point_to_scalar', 'nonfinite_evidence',
     'quote_not_in_source', 'source_field_mismatch', 'invalid_attribute_value',
     'dictionary_value_not_exact', 'unexpected_dictionary_value_id',
-    'value_not_grounded',
+    'value_not_grounded', 'forbidden_brand',
 })
 
 

@@ -150,6 +150,59 @@ class OzonDraftAICompletionTest(OzonPublicationFixture, unittest.TestCase):
         self.assertIn("Copy that exact display/ID pair from this item's allowed_dictionary_values for the same attribute_id and complex_id", prompt)
         self.assertIn('Never return a bare string, omit a dictionary ID, mix a display with another ID, or add keys to a value object', prompt)
 
+    def test_prompt_prioritizes_required_fields_and_states_value_limits(self):
+        prompt = ' '.join(worker._SYSTEM.split())
+        self.assertIn('prioritize its required_missing_slots before optional missing slots', prompt)
+        self.assertIn('Respect each field\'s max_value_count', prompt)
+        self.assertIn('a non-collection field accepts at most one value', prompt)
+        self.assertIn('a collection must never exceed its declared maximum', prompt)
+        required = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id, product_type_id=self.product_type.id,
+            external_attribute_id='999999', name='Назначение', data_type='String',
+            is_required=True, max_value_count=1, is_available=True, is_enabled=True,
+        )
+        db.session.add(required)
+        db.session.commit()
+        from services.ozon_draft_ai_validation import OzonDraftAIValidation
+        context = OzonDraftAIValidation.capture(self.draft)
+        messages = worker._messages([context])
+        schema_payload = json.loads(messages[0]['content'].split(
+            'Field definitions (data):\n', 1)[1])
+        self.assertTrue(schema_payload['attributes'][0]['required'])
+        item = json.loads(messages[1]['content'])['items'][0]
+        self.assertEqual(item['required_missing_slots'], [
+            {'attribute_id': '999999', 'complex_id': '0'},
+        ])
+
+    def test_forbidden_brand_rejection_is_aggregate_only(self):
+        brand = MarketplaceAttributeDefinition(
+            marketplace_id=self.marketplace.id, product_type_id=self.product_type.id,
+            external_attribute_id='909009', name='Бренд', data_type='String',
+            is_available=True, is_enabled=True, max_value_count=1,
+        )
+        source_facts = json.loads(self.source.original_data)
+        source_facts['brand'] = 'HOT'
+        self.source.original_data = json.dumps(source_facts, ensure_ascii=False)
+        db.session.add(brand)
+        db.session.commit()
+        outcome = FlashOutcome('success', content={'items': [{
+            'draft_id': self.draft.id,
+            'suggestions': [{
+                'attribute_id': '909009', 'complex_id': '0', 'group_ordinal': 0,
+                'values': [{'value': 'HOT'}],
+                'evidence': [{'path': '/brand', 'quote': 'HOT'}],
+                'provenance_code': 'literal_source',
+            }],
+        }]}, http_status=200, usage=FlashUsage(prompt_tokens=100, completion_tokens=20))
+        run = self.generate(outcome)
+        self.assertEqual(Suggestion.query.count(), 0)
+        item = Item.query.one()
+        self.assertEqual(item.status, 'no_evidence')
+        self.assertEqual(item.safe_code, 'ai_rejection:forbidden_brand')
+        summary = Service.document(run)['summary']['rejection_reasons']
+        self.assertEqual(summary, {'forbidden_brand': 1})
+        self.assertNotIn('HOT', json.dumps({'safe_code': item.safe_code, 'summary': summary}))
+
     def test_missing_source_is_explicit_without_model_call(self):
         self.source.original_data = None
         db.session.commit()

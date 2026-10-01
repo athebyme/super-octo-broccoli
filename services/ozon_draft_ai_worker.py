@@ -40,6 +40,10 @@ mix a display with another ID, or add keys to a value object.
 Use only allowed missing slots, types and dictionary values from the provided schema.
 The shared field definitions precede the items. Each item supplies its own allowed
 missing slots and dictionary values; never borrow another item's allowed values.
+For each item, prioritize its required_missing_slots before optional missing slots.
+Return source-supported required values first, then other useful source-supported
+values. Respect each field's max_value_count; a non-collection field accepts at most
+one value, and a collection must never exceed its declared maximum.
 Every value needs direct evidence from that item's source_facts. Each evidence
 path must be an RFC 6901 JSON Pointer rooted at that item's source_facts object
 (source_facts itself is the root), so every path starts with `/`. Examples:
@@ -95,11 +99,19 @@ def _messages(contexts):
             if field['dictionary_values']:
                 dictionaries.append({'attribute_id': field['attribute_id'],
                     'complex_id': field['complex_id'], 'values': field['dictionary_values']})
+        required_missing = [slot for slot in context['missing_slots']
+                            if next((field['required'] for field in context['schema']['attributes']
+                                     if (field['attribute_id'], field['complex_id']) ==
+                                     (slot['attribute_id'], slot['complex_id'])), False)]
         values.append({**{k: context[k] for k in
             ('draft_id', 'source_facts', 'missing_slots', 'filled_slots')},
+            'required_missing_slots': required_missing,
             'allowed_dictionary_values': dictionaries})
     schema = {k: contexts[0]['schema'][k] for k in ('external_category_id', 'external_type_id')}
-    schema['attributes'] = [definitions[key] for key in sorted(definitions)]
+    schema['attributes'] = sorted(definitions.values(), key=lambda field: (
+        not field['required'], field['name'].casefold(),
+        field['attribute_id'], field['complex_id'],
+    ))
     # Stable definitions contain no draft IDs or source text. Category data is
     # still untrusted data under the first system instruction, never commands.
     return [{'role': 'system', 'content': _SYSTEM + '\nField definitions (data):\n' + _dump(schema)},
