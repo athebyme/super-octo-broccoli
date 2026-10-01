@@ -1222,11 +1222,14 @@ class AutoImportManager:
                 external_id=external_id,
                 source_type=self.settings.csv_source_type
             ).first()
+            expected_common_state = None
 
             # Запоминаем, был ли товар уже импортирован ранее
             # ВАЖНО: 'completed' тоже считается импортированным (привязка к существующей карточке WB)
             was_already_imported = False
             if imported_product:
+                from services.common_product_content import content_writer_guard_snapshot
+                expected_common_state = content_writer_guard_snapshot(imported_product)
                 was_already_imported = (imported_product.import_status in ('imported', 'completed'))
                 if was_already_imported:
                     logger.info(f"Товар {external_id} уже был импортирован на WB ранее, обновляем данные")
@@ -1238,8 +1241,10 @@ class AutoImportManager:
                 )
 
             # Заполняем данные (обновляем всегда, даже если товар уже импортирован)
+            if expected_common_state is not None:
+                from services.common_product_content import guard_content_writer
+                guard_content_writer(imported_product, expected=expected_common_state)
             imported_product.external_vendor_code = product_data['external_vendor_code']
-            imported_product.title = product_data['title']
             imported_product.category = product_data['category']
             imported_product.all_categories = json.dumps(product_data.get('all_categories', []), ensure_ascii=False)
             imported_product.mapped_wb_category = subject_name
@@ -1251,7 +1256,6 @@ class AutoImportManager:
             imported_product.colors = json.dumps(product_data['colors'], ensure_ascii=False)
             imported_product.sizes = json.dumps(product_data['sizes'], ensure_ascii=False)
             imported_product.materials = json.dumps(product_data['materials'], ensure_ascii=False)
-            imported_product.photo_urls = json.dumps(product_data['photo_urls'], ensure_ascii=False)
             imported_product.barcodes = json.dumps(product_data['barcodes'], ensure_ascii=False)
 
             # Сохраняем цену поставщика, кол-во и рассчитываем розничные цены
@@ -1278,6 +1282,7 @@ class AutoImportManager:
                 'description': product_data.get('description', ''),
                 'category': product_data.get('category', ''),
                 'brand': product_data.get('brand', ''),
+                'photo_urls': product_data.get('photo_urls', []),
                 'colors': product_data.get('colors', []),
                 'sizes': product_data.get('sizes', {}),
                 'materials': product_data.get('materials', []),
@@ -1287,8 +1292,27 @@ class AutoImportManager:
             }
             imported_product.original_data = json.dumps(original_data, ensure_ascii=False)
 
-            # Используем уже сгенерированное описание
-            imported_product.description = description
+            from services.common_product_content import (
+                active_override_fields,
+                refresh_from_source,
+            )
+            source_values = {
+                'title': product_data.get('title', ''),
+                'description': product_data.get('description', ''),
+                'photos': product_data.get('photo_urls', []),
+            }
+            if 'characteristics' in product_data:
+                source_values['characteristics'] = product_data['characteristics']
+            refresh_from_source(
+                imported_product,
+                source_values,
+                provenance={field: 'source' for field in source_values},
+            )
+
+            # Keep the existing generated-description behavior without
+            # replacing a seller's reviewed common-content override.
+            if 'description' not in active_override_fields(imported_product):
+                imported_product.description = description
 
             # === Проверка дублей по баркоду ===
             # Если товар с таким же баркодом уже импортирован (под другим артикулом),
@@ -1339,6 +1363,10 @@ class AutoImportManager:
                 return 'failed'
 
         except Exception as e:
+            # _process_product owns its commit boundary. A failed guarded
+            # refresh must release any SQLite writer lock and discard dirty
+            # values before the next CSV row is processed.
+            db.session.rollback()
             logger.error(f"Ошибка обработки товара {product_data.get('external_id')}: {e}", exc_info=True)
             return 'failed'
 

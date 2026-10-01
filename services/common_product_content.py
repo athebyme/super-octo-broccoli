@@ -40,6 +40,7 @@ MAX_DESCRIPTION = 100_000
 MAX_PHOTOS = 30
 MAX_CHARACTERISTICS = 100
 MAX_MANUAL_NUMBER_ABS = 10**15
+MAX_DB_ID = (1 << 63) - 1
 _PROVIDER_ID_KEYS = {
     "id", "attributeid", "charcid", "valueid", "wbsubjectid",
     "subjectid", "nmid", "imtid", "marketplaceid",
@@ -374,6 +375,106 @@ def _raw_column_value(product: ImportedProduct, field: str) -> Any:
     return getattr(product, FIELD_COLUMNS[field], None)
 
 
+def content_writer_guard_snapshot(product: ImportedProduct) -> dict:
+    """Capture the exact local content state a non-editor writer observed."""
+    supplier = getattr(product, "supplier_product", None)
+    supplier_context = None
+    if supplier is not None and supplier.id == product.supplier_product_id:
+        supplier_context = {
+            key: getattr(supplier, key, None)
+            for key in (
+                "id", "supplier_id", "content_revision", "updated_at", "title",
+                "description", "ai_description", "description_source",
+                "characteristics_json", "ai_marketplace_json", "photo_urls_json",
+                "original_data_json",
+            )
+        }
+    return {
+        "id": product.id,
+        "seller_id": product.seller_id,
+        "content_edit_version": product.content_edit_version,
+        "content_overrides_json": product.content_overrides_json,
+        "source_type": product.source_type,
+        "external_id": product.external_id,
+        "supplier_id": product.supplier_id,
+        "supplier_product_id": product.supplier_product_id,
+        "supplier_content_revision": product.supplier_content_revision,
+        "original_data": product.original_data,
+        "supplier_context": supplier_context,
+        "columns": {
+            column: getattr(product, column, None)
+            for column in FIELD_COLUMNS.values()
+        },
+    }
+
+
+def guard_content_writer(
+    product: ImportedProduct,
+    *,
+    expected: dict | None = None,
+) -> None:
+    """Acquire a short SQLite writer lock only if observed common state is current.
+
+    Call after external I/O/reference validation and before the first write to
+    common content. The no-op conditional UPDATE both detects late manual
+    overrides and prevents one from racing the caller until its transaction
+    commits.
+    """
+    state = expected or content_writer_guard_snapshot(product)
+    if (
+        isinstance(state.get("id"), bool)
+        or not isinstance(state.get("id"), int)
+        or state.get("id") <= 0
+        or isinstance(state.get("seller_id"), bool)
+        or not isinstance(state.get("seller_id"), int)
+        or state.get("seller_id") <= 0
+        or not isinstance(state.get("columns"), dict)
+        or set(state["columns"]) != set(FIELD_COLUMNS.values())
+    ):
+        raise CommonProductContentConflict("Общий товар изменился; обновите его и повторите проверку")
+    filters = [
+        ImportedProduct.id == state["id"],
+        ImportedProduct.seller_id == state["seller_id"],
+    ]
+    exact_columns = {
+        "content_edit_version": ImportedProduct.content_edit_version,
+        "content_overrides_json": ImportedProduct.content_overrides_json,
+        "source_type": ImportedProduct.source_type,
+        "external_id": ImportedProduct.external_id,
+        "supplier_id": ImportedProduct.supplier_id,
+        "supplier_product_id": ImportedProduct.supplier_product_id,
+        "supplier_content_revision": ImportedProduct.supplier_content_revision,
+        "original_data": ImportedProduct.original_data,
+        **{
+            column_name: getattr(ImportedProduct, column_name)
+            for column_name in FIELD_COLUMNS.values()
+        },
+    }
+    for key, column in exact_columns.items():
+        value = state.get("columns", {}).get(key) if key in FIELD_COLUMNS.values() else state.get(key)
+        filters.append(column.is_(None) if value is None else column == value)
+    supplier = state.get("supplier_context")
+    if isinstance(supplier, dict):
+        filters.append(ImportedProduct.supplier_product.has(and_(
+            *[
+                getattr(SupplierProduct, key).is_(None)
+                if supplier.get(key) is None
+                else getattr(SupplierProduct, key) == supplier.get(key)
+                for key in supplier
+            ]
+        )))
+    with db.session.no_autoflush:
+        rowcount = db.session.execute(
+            update(ImportedProduct)
+            .where(*filters)
+            .values(content_edit_version=ImportedProduct.content_edit_version)
+        ).rowcount
+    if rowcount != 1:
+        raise CommonProductContentConflict(
+            "Общий товар изменился после чтения; обновите его и повторите проверку"
+        )
+
+
 def _read_column(product: ImportedProduct, field: str) -> Any:
     raw = _raw_column_value(product, field)
     if field in {"title", "description"}:
@@ -477,15 +578,54 @@ def _source_documents(product: ImportedProduct) -> tuple[dict, SupplierProduct |
 
 def _source_raw_values(product: ImportedProduct, overrides: dict | None = None) -> dict:
     original, supplier = _source_documents(product)
+    override_fields = (overrides or {}).get("fields", {})
+
+    def inherited_fallback(field: str):
+        entry = override_fields.get(field)
+        if isinstance(entry, dict) and "inherited_value" in entry:
+            return entry["inherited_value"]
+        return _raw_column_value(product, field)
+
     if supplier is not None:
-        title = supplier.title if supplier.title is not None else original.get("title", product.title)
-        description = supplier.description or supplier.ai_description or original.get("description", product.description) or ""
-        photo_raw = supplier.photo_urls_json or original.get("photo_urls", product.photo_urls)
+        if supplier.title is not None:
+            title = supplier.title
+        elif "title" in original:
+            title = original.get("title")
+        else:
+            title = inherited_fallback("title")
+
+        if supplier.description not in (None, ""):
+            description = supplier.description
+        elif supplier.ai_description not in (None, ""):
+            description = supplier.ai_description
+        elif "description" in original:
+            description = original.get("description")
+        else:
+            description = inherited_fallback("description")
+
+        if supplier.photo_urls_json not in (None, ""):
+            photo_raw = supplier.photo_urls_json
+        elif "photo_urls" in original:
+            photo_raw = original.get("photo_urls")
+        else:
+            photo_raw = inherited_fallback("photos")
         try:
             from services.supplier_service import _supplier_characteristics_payload
             characteristics_raw = _supplier_characteristics_payload(supplier)
+            if characteristics_raw in (None, ""):
+                if supplier.characteristics_json not in (None, ""):
+                    characteristics_raw = supplier.characteristics_json
+                elif "characteristics" in original:
+                    characteristics_raw = original.get("characteristics")
+                else:
+                    characteristics_raw = inherited_fallback("characteristics")
         except Exception:
-            characteristics_raw = supplier.characteristics_json or original.get("characteristics", product.characteristics)
+            if supplier.characteristics_json not in (None, ""):
+                characteristics_raw = supplier.characteristics_json
+            elif "characteristics" in original:
+                characteristics_raw = original.get("characteristics")
+            else:
+                characteristics_raw = inherited_fallback("characteristics")
         return {
             "title": title,
             "description": description,
@@ -493,7 +633,6 @@ def _source_raw_values(product: ImportedProduct, overrides: dict | None = None) 
             "characteristics": characteristics_raw,
         }
 
-    override_fields = (overrides or {}).get("fields", {})
     result = {}
     for field, raw_key in (
         ("title", "title"),
@@ -514,10 +653,21 @@ def _source_origins(product: ImportedProduct, overrides: dict | None = None) -> 
     """Return provenance labels without treating copied/effective data as source evidence."""
     original, supplier = _source_documents(product)
     override_fields = (overrides or {}).get("fields", {})
+
+    def saved_origin(field: str) -> str:
+        entry = override_fields.get(field)
+        origin = entry.get("inherited_origin") if isinstance(entry, dict) else None
+        return origin if origin in {
+            "source", "ai_suggestion", "supplier_enrichment", "unknown",
+        } else "unknown"
+
     if supplier is not None:
         origins = {}
         title_from_supplier = supplier.title is not None
-        origins["title"] = "source" if title_from_supplier or original.get("title") not in (None, "") else "unknown"
+        origins["title"] = (
+            "source" if title_from_supplier or "title" in original
+            else saved_origin("title") if "title" in override_fields else "unknown"
+        )
         if supplier.description not in (None, ""):
             if supplier.description_source == "ai":
                 origins["description"] = "ai_suggestion"
@@ -527,13 +677,17 @@ def _source_origins(product: ImportedProduct, overrides: dict | None = None) -> 
                 origins["description"] = "source"
         elif supplier.ai_description not in (None, ""):
             origins["description"] = "ai_suggestion"
-        elif original.get("description") not in (None, ""):
+        elif "description" in original:
             origins["description"] = "source"
+        elif "description" in override_fields:
+            origins["description"] = saved_origin("description")
         else:
             origins["description"] = "unknown"
 
-        if supplier.photo_urls_json not in (None, "") or original.get("photo_urls") not in (None, ""):
+        if supplier.photo_urls_json not in (None, "") or "photo_urls" in original:
             origins["photos"] = "source"
+        elif "photos" in override_fields:
+            origins["photos"] = saved_origin("photos")
         else:
             origins["photos"] = "unknown"
 
@@ -556,8 +710,10 @@ def _source_origins(product: ImportedProduct, overrides: dict | None = None) -> 
             except (TypeError, ValueError, RecursionError):
                 pass
             origins["characteristics"] = "supplier_enrichment" if has_marketplace_enrichment else "source"
-        elif original.get("characteristics") not in (None, ""):
+        elif "characteristics" in original:
             origins["characteristics"] = "source"
+        elif "characteristics" in override_fields:
+            origins["characteristics"] = saved_origin("characteristics")
         else:
             origins["characteristics"] = "unknown"
         return origins
@@ -637,7 +793,6 @@ def _source_state(product: ImportedProduct, overrides: dict) -> dict:
                 "external_id": product.external_id,
             },
             "field_origins": origins,
-            "inherited_raw_values": raw_values,
             "inherited_values": {
                 field: _inherited_normalize(field, raw_values.get(field))
                 for field in FIELD_COLUMNS
@@ -658,7 +813,6 @@ def _source_state(product: ImportedProduct, overrides: dict) -> dict:
             },
             "original_data_raw": product.original_data,
             "field_origins": origins,
-            "inherited_raw_values": raw_values,
             "values": {
                 field: _inherited_normalize(field, raw_values.get(field))
                 for field in FIELD_COLUMNS
@@ -955,7 +1109,7 @@ def _parse_reference(value: Any) -> dict:
         not isinstance(value, dict) or set(value) != {"kind", "id"}
         or value.get("kind") not in {"marketplace_draft", "marketplace_listing", "wb_product"}
         or isinstance(value.get("id"), bool) or not isinstance(value.get("id"), int)
-        or value["id"] <= 0
+        or value["id"] <= 0 or value["id"] > MAX_DB_ID
     ):
         raise CommonProductContentError("Контекст канала имеет неверный формат")
     return {"kind": value["kind"], "id": value["id"]}
@@ -1000,7 +1154,10 @@ def _parse_items(raw_items: Any) -> list[dict]:
             raise CommonProductContentError(f"Строка {index + 1}: неверные поля")
         product_id = item["product_id"]
         version = item["expected_content_edit_version"]
-        if isinstance(product_id, bool) or not isinstance(product_id, int) or product_id <= 0:
+        if (
+            isinstance(product_id, bool) or not isinstance(product_id, int)
+            or product_id <= 0 or product_id > MAX_DB_ID
+        ):
             raise CommonProductContentError(f"Строка {index + 1}: неверный ID товара")
         if isinstance(version, bool) or not isinstance(version, int) or version < 1:
             raise CommonProductContentError(f"Товар #{product_id}: версия должна быть положительным целым числом")
@@ -1052,7 +1209,11 @@ class CommonProductContentService:
             or not product_ids
             or len(product_ids) > MAX_ITEMS
             or len(set(product_ids)) != len(product_ids)
-            or any(isinstance(product_id, bool) or not isinstance(product_id, int) or product_id <= 0 for product_id in product_ids)
+            or any(
+                isinstance(product_id, bool) or not isinstance(product_id, int)
+                or product_id <= 0 or product_id > MAX_DB_ID
+                for product_id in product_ids
+            )
         ):
             raise CommonProductContentError("Нужно передать от 1 до 50 уникальных товаров")
         products = cls._owned_products(seller_id=seller_id, product_ids=product_ids)
@@ -1194,7 +1355,11 @@ class CommonProductContentService:
         ids = [item.get("product_id") for item in token_items if isinstance(item, dict)]
         if (
             len(ids) != len(token_items)
-            or any(isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 for pid in ids)
+            or any(
+                isinstance(pid, bool) or not isinstance(pid, int)
+                or pid <= 0 or pid > MAX_DB_ID
+                for pid in ids
+            )
             or len(ids) != len(set(ids))
         ):
             raise CommonProductContentError("Предпросмотр имеет неверный набор товаров")
@@ -1396,8 +1561,13 @@ def refresh_from_source(
     source_values: dict,
     *,
     provenance: dict[str, str] | None = None,
+    observed_fields: set[str] | None = None,
 ) -> None:
-    """Update inherited common columns while preserving active seller values."""
+    """Update inherited common columns while preserving active seller values.
+
+    ``observed_fields`` can narrow which source values refresh the immutable
+    source snapshot; it never narrows the inherited/current common update.
+    """
     if not isinstance(product, ImportedProduct) or not isinstance(source_values, dict):
         raise TypeError("source refresh requires an ImportedProduct and field map")
     if set(source_values) - set(FIELD_COLUMNS):
@@ -1422,7 +1592,7 @@ def refresh_from_source(
     for field, incoming in source_values.items():
         normalized = _inherited_normalize(field, incoming)
         origin = provenance.get(field, "unknown")
-        if origin == "source":
+        if origin == "source" and (observed_fields is None or field in observed_fields):
             observed = incoming
             if field in {"photos", "characteristics"} and isinstance(incoming, str):
                 observed = _load_json(incoming, None)
@@ -1436,7 +1606,11 @@ def refresh_from_source(
             overrides["fields"][field]["inherited_origin"] = origin
             continue
         if field in {"photos", "characteristics"}:
-            raw_for_column = incoming if isinstance(incoming, str) else _stable_json(incoming)
+            raw_for_column = (
+                None if incoming is None
+                else incoming if isinstance(incoming, str)
+                else _stable_json(incoming)
+            )
         else:
             raw_for_column = incoming if isinstance(incoming, str) else ""
         setattr(product, FIELD_COLUMNS[field], raw_for_column)

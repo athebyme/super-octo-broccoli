@@ -2052,20 +2052,31 @@ class SupplierService:
         result.total_requested = len(imported_products)
 
         for imp in imported_products:
+            savepoint = db.session.begin_nested()
             try:
                 sp = imp.supplier_product
                 if not sp:
                     result.skipped += 1
+                    savepoint.commit()
                     continue
 
                 _update_imported_from_supplier(imp, sp)
+                savepoint.commit()
                 result.imported += 1
 
             except Exception as e:
+                if savepoint.is_active:
+                    savepoint.rollback()
                 result.errors += 1
                 result.error_messages.append(f"ImportedProduct {imp.id}: {str(e)[:100]}")
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception:
+            # This method owns the batch commit boundary. A failed commit must
+            # release any writer lock and discard its uncommitted row updates.
+            db.session.rollback()
+            raise
         logger.info(f"Обновление продавца {seller_id}: ~{result.imported} / err={result.errors}")
         return result
 
@@ -4861,9 +4872,16 @@ def _copy_to_imported_product(seller_id: int, sp: SupplierProduct) -> ImportedPr
 
 def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) -> None:
     """Обновить ImportedProduct из SupplierProduct (sync)"""
+    from services.common_product_content import (
+        content_writer_guard_snapshot,
+        guard_content_writer,
+        refresh_from_source,
+    )
+    expected_common_state = None
+    if imp.id is not None:
+        expected_common_state = content_writer_guard_snapshot(imp)
+        guard_content_writer(imp, expected=expected_common_state)
     category_changed = imp.wb_subject_id != sp.wb_subject_id
-    imp.title = sp.title or imp.title
-    imp.description = sp.description or sp.ai_description or imp.description
     imp.brand = sp.brand or imp.brand
     if sp.resolved_brand_id and not imp.resolved_brand_id:
         imp.resolved_brand_id = sp.resolved_brand_id
@@ -4879,9 +4897,6 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
     imp.sizes = sp.sizes_json or imp.sizes
     imp.materials = sp.materials_json or imp.materials
     shared_characteristics = _supplier_characteristics_payload(sp)
-    # Explicit seller sync mirrors the current shared characteristic fact pack,
-    # including removals caused by a reviewed category rollback.
-    imp.characteristics = shared_characteristics
     if category_changed:
         imp.ai_attributes = None
     imp.supplier_price = sp.supplier_price if sp.supplier_price is not None else imp.supplier_price
@@ -4896,9 +4911,71 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
     if observed_snapshot:
         imp.original_data = observed_snapshot
 
-    # Обновляем фото (общие для всех продавцов)
-    if sp.photo_urls_json:
-        imp.photo_urls = sp.photo_urls_json
+    # Common-content manual values stay seller-owned while the supplier's
+    # observed snapshot and inherited baseline continue to refresh.
+    try:
+        source_snapshot = json.loads(observed_snapshot or imp.original_data or "{}")
+    except (TypeError, ValueError, RecursionError):
+        source_snapshot = {}
+    if not isinstance(source_snapshot, dict):
+        source_snapshot = {}
+    source_values = {}
+    provenance = {}
+    if sp.title is not None:
+        source_values["title"] = sp.title
+        provenance["title"] = "source"
+    elif source_snapshot.get("title") not in (None, "") or "title" in source_snapshot:
+        source_values["title"] = source_snapshot.get("title")
+        provenance["title"] = "source"
+    if sp.description not in (None, ""):
+        source_values["description"] = sp.description
+        description_source = str(sp.description_source or "").casefold()
+        if description_source in {"ai", "ai_generated", "generated"}:
+            provenance["description"] = "ai_suggestion"
+        elif description_source in {"manual", "csv"}:
+            provenance["description"] = "supplier_enrichment"
+        else:
+            provenance["description"] = "source"
+    elif sp.ai_description not in (None, ""):
+        source_values["description"] = sp.ai_description
+        provenance["description"] = "ai_suggestion"
+    elif source_snapshot.get("description") not in (None, ""):
+        source_values["description"] = source_snapshot["description"]
+        provenance["description"] = "source"
+
+    if sp.photo_urls_json not in (None, ""):
+        source_values["photos"] = sp.photo_urls_json
+        provenance["photos"] = "source"
+    elif source_snapshot.get("photo_urls") not in (None, "", [], {}):
+        source_values["photos"] = source_snapshot["photo_urls"]
+        provenance["photos"] = "source"
+
+    # The previous supplier sync intentionally cleared characteristics when
+    # the shared payload disappeared (for example, after a reviewed category
+    # rollback). Keep that behavior while recording a null source baseline;
+    # never fall back to ImportedProduct's possibly manual effective value.
+    source_values["characteristics"] = shared_characteristics
+    characteristics_origin = "source"
+    if shared_characteristics not in (None, ""):
+        try:
+            marketplace_data = json.loads(sp.ai_marketplace_json or "{}")
+        except (TypeError, ValueError, RecursionError):
+            marketplace_data = {}
+        meta = marketplace_data.get("_meta") if isinstance(marketplace_data, dict) else None
+        characteristics_origin = (
+            "supplier_enrichment"
+            if isinstance(meta, dict)
+            and meta.get("source") == "supplier_catalog_enrichment"
+            else "source"
+        )
+    provenance["characteristics"] = characteristics_origin
+    refresh_from_source(
+        imp,
+        source_values,
+        provenance=provenance,
+        observed_fields={"photos", "characteristics"},
+    )
+
     if sp.processed_photos_json:
         imp.processed_photos = sp.processed_photos_json
 

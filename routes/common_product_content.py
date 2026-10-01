@@ -11,6 +11,7 @@ from models import db
 from services.common_product_content import (
     CommonProductContentError,
     CommonProductContentService,
+    MAX_DB_ID,
     MAX_BODY_BYTES,
 )
 
@@ -171,9 +172,15 @@ def register_common_product_content_routes(app) -> None:
             return jsonify(success=False, error="Можно открыть не больше 50 товаров", code="too_many_items"), 413
         product_ids = []
         for raw_id in raw_ids:
-            if not raw_id.isascii() or not raw_id.isdigit() or int(raw_id) <= 0:
+            if (
+                not raw_id.isascii() or not raw_id.isdigit()
+                or len(raw_id) > 19
+            ):
                 return jsonify(success=False, error="Выбор содержит неверный ID товара", code="invalid_selection"), 400
-            product_ids.append(int(raw_id))
+            product_id = int(raw_id)
+            if product_id <= 0 or product_id > MAX_DB_ID:
+                return jsonify(success=False, error="Выбор содержит неверный ID товара", code="invalid_selection"), 400
+            product_ids.append(product_id)
         if len(product_ids) != len(set(product_ids)):
             return jsonify(success=False, error="Выбор содержит повтор товара", code="duplicate_selection"), 400
         try:

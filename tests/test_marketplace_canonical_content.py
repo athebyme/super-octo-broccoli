@@ -6,6 +6,7 @@ from unittest.mock import patch
 import unittest
 
 from flask import Flask
+from sqlalchemy import update
 
 from models import (
     AgentChangeSnapshot,
@@ -234,6 +235,82 @@ class MarketplaceCanonicalContentServiceTest(unittest.TestCase):
         self.assertEqual(self.product.title, "Canonical title")
         self.assertEqual(self.product.description, "Canonical description")
         self.assertTrue(snapshot.is_rolled_back)
+
+    def _insert_same_value_manual_override(self, value, version):
+        import json
+        db.session.execute(
+            update(ImportedProduct)
+            .where(ImportedProduct.id == self.product.id)
+            .values(
+                title=value,
+                content_edit_version=version,
+                content_overrides_json=json.dumps({
+                    "schema_version": 1,
+                    "fields": {
+                        "title": {
+                            "value": value,
+                            "inherited_value": value,
+                            "inherited_origin": "source",
+                            "edited_by_user_id": self.user.id,
+                            "edited_at": "2026-10-01T00:00:00",
+                            "edit_version": version,
+                        },
+                    },
+                }, ensure_ascii=False, separators=(",", ":")),
+            )
+        )
+        db.session.commit()
+
+    def test_apply_rechecks_override_metadata_after_review_preflight(self):
+        proposal = self._create(fields=["title"])
+        from services.common_product_content import active_override_fields as original_check
+
+        def race_after_preflight(product):
+            result = original_check(product)
+            self._insert_same_value_manual_override("Canonical title", 2)
+            return result
+
+        with patch("services.common_product_content.active_override_fields", side_effect=race_after_preflight):
+            with self.assertRaises(MarketplaceCanonicalContentConflict) as raised:
+                MarketplaceCanonicalContentService.apply_proposal(
+                    seller_id=self.seller.id,
+                    proposal_id=proposal.id,
+                    expected_version=proposal.version,
+                    reviewed_by_user_id=self.user.id,
+                )
+
+        db.session.refresh(self.product)
+        self.assertEqual(self.product.title, "Canonical title")
+        self.assertEqual(self.product.content_edit_version, 2)
+        self.assertEqual(raised.exception.code, "canonical_apply_race")
+
+    def test_rollback_rechecks_override_metadata_after_review_preflight(self):
+        applied = MarketplaceCanonicalContentService.apply_proposal(
+            seller_id=self.seller.id,
+            proposal_id=self._create(fields=["title"]).id,
+            expected_version=1,
+            reviewed_by_user_id=self.user.id,
+        )
+        from services.common_product_content import active_override_fields as original_check
+
+        def race_after_preflight(product):
+            result = original_check(product)
+            self._insert_same_value_manual_override("Ozon observed title", 2)
+            return result
+
+        with patch("services.common_product_content.active_override_fields", side_effect=race_after_preflight):
+            with self.assertRaises(MarketplaceCanonicalContentConflict) as raised:
+                MarketplaceCanonicalContentService.rollback_proposal(
+                    seller_id=self.seller.id,
+                    proposal_id=applied.id,
+                    expected_version=applied.version,
+                    rolled_back_by_user_id=self.user.id,
+                )
+
+        db.session.refresh(self.product)
+        self.assertEqual(self.product.title, "Ozon observed title")
+        self.assertEqual(self.product.content_edit_version, 2)
+        self.assertEqual(raised.exception.code, "canonical_rollback_race")
 
     def test_canonical_or_ozon_drift_turns_pending_proposal_into_conflict(self):
         canonical_proposal = self._create(fields=["title"])

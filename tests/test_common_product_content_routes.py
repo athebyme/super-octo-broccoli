@@ -168,6 +168,10 @@ def test_page_selection_parser_rejects_duplicate_and_foreign_ids_before_renderin
         duplicate = client.get(f"/my-products/common-content?product_id={own_id}&product_id={own_id}")
         foreign = client.get(f"/my-products/common-content?product_id={foreign_id}")
         invalid = client.get("/my-products/common-content?product_id=1&seller_id=2")
+        overflow = client.get("/my-products/common-content?product_id=9223372036854775808")
+        overlong = client.get("/my-products/common-content?product_id=" + ("9" * 5000))
     assert duplicate.status_code == 400
     assert foreign.status_code == 404
     assert invalid.status_code == 400
+    assert overflow.status_code == 400
+    assert overlong.status_code == 400

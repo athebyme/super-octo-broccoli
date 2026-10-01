@@ -1538,6 +1538,40 @@ def _validate_and_apply_imported_product_update(
     if 'wb_category_name' in data:
         data['mapped_wb_category'] = data.pop('wb_category_name')
 
+    content_field_aliases = {
+        'title': 'title',
+        'description': 'description',
+        'photo_urls': 'photos',
+        'characteristics': 'characteristics',
+    }
+    attempted_common_fields = {
+        common_field for write_field, common_field in content_field_aliases.items()
+        if write_field in data
+    }
+    expected_common_state = None
+    if attempted_common_fields:
+        from services.common_product_content import (
+            CommonProductContentError,
+            active_override_fields,
+            content_writer_guard_snapshot,
+        )
+        expected_common_state = content_writer_guard_snapshot(product)
+        try:
+            protected_common_fields = active_override_fields(product)
+        except CommonProductContentError:
+            return False, (
+                'Ручные переопределения общего товара повреждены; '
+                'обновление общих полей заблокировано для ручной проверки.'
+            )
+        conflicts = attempted_common_fields & protected_common_fields
+        if conflicts:
+            field_name = sorted(conflicts)[0]
+            return False, (
+                f'Поле «{field_name}» сохранено вручную в общем товаре. '
+                'Сначала снимите переопределение в редакторе общего товара, '
+                'затем повторите AI-обновление.'
+            )
+
     # ── Валидация категории ──
     if 'wb_subject_id' in data or 'mapped_wb_category' in data:
         raw_subject_id = data.get('wb_subject_id', product.wb_subject_id)
@@ -1609,6 +1643,19 @@ def _validate_and_apply_imported_product_update(
             return False, reference_error
         data['characteristics'] = merged
 
+    if attempted_common_fields:
+        from services.common_product_content import (
+            CommonProductContentConflict,
+            guard_content_writer,
+        )
+        try:
+            guard_content_writer(product, expected=expected_common_state)
+        except CommonProductContentConflict:
+            return False, (
+                'Общий товар изменился после чтения; обновите карточку общего товара '
+                'и повторите проверку изменений.'
+            )
+
     # ── Снимок предыдущих значений для отката ──
     previous_values = {}
     new_values = {}
@@ -1662,6 +1709,15 @@ def _is_reference_data_write_error(error):
     ))
 
 
+def _is_common_content_override_error(error):
+    text = str(error or '').lower()
+    return (
+        'сохранено вручную в общем товаре' in text
+        or 'переопределения общего товара повреждены' in text
+        or 'общий товар изменился после чтения' in text
+    )
+
+
 @internal_api_bp.route('/imported-products/<int:product_id>', methods=['PATCH'])
 @_authenticate_agent
 def internal_update_imported_product(product_id):
@@ -1683,10 +1739,12 @@ def internal_update_imported_product(product_id):
     ok, error = _validate_and_apply_imported_product_update(p, data, task_id, agent_id)
     if not ok:
         reference_blocked = _is_reference_data_write_error(error)
+        common_content_blocked = _is_common_content_override_error(error)
         return jsonify({
             'error': error,
             **({'reference_data_blocked': True} if reference_blocked else {}),
-        }), 409 if reference_blocked else 400
+            **({'common_content_review_required': True} if common_content_blocked else {}),
+        }), 409 if reference_blocked or common_content_blocked else 400
 
     db.session.commit()
     return jsonify({
@@ -1818,6 +1876,7 @@ def internal_batch_update_imported_products():
             else:
                 savepoint.rollback()
                 reference_blocked = _is_reference_data_write_error(error)
+                common_content_blocked = _is_common_content_override_error(error)
                 results.append({
                     'product_id': pid,
                     'status': 'error',
@@ -1825,6 +1884,10 @@ def internal_batch_update_imported_products():
                     **(
                         {'reference_data_blocked': True}
                         if reference_blocked else {}
+                    ),
+                    **(
+                        {'common_content_review_required': True, 'conflict': True}
+                        if common_content_blocked else {}
                     ),
                 })
                 failed_count += 1

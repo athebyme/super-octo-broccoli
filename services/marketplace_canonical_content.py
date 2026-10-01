@@ -479,6 +479,8 @@ class MarketplaceCanonicalContentService:
         seller_id: int,
         expected: Dict[str, Any],
         replacement: Dict[str, Any],
+        expected_content_edit_version: Optional[int],
+        expected_content_overrides_json: Optional[str],
         now: datetime,
     ) -> bool:
         """Atomically replace only the exact reviewed common-content state."""
@@ -487,6 +489,12 @@ class MarketplaceCanonicalContentService:
         filters = [
             ImportedProduct.id == product_id,
             ImportedProduct.seller_id == seller_id,
+            ImportedProduct.content_edit_version.is_(None)
+            if expected_content_edit_version is None
+            else ImportedProduct.content_edit_version == expected_content_edit_version,
+            ImportedProduct.content_overrides_json.is_(None)
+            if expected_content_overrides_json is None
+            else ImportedProduct.content_overrides_json == expected_content_overrides_json,
         ]
         values = {ImportedProduct.updated_at: now}
         for field_name, expected_value in expected.items():
@@ -791,6 +799,8 @@ class MarketplaceCanonicalContentService:
                 message="Ozon-листинг теперь связан с другой внутренней карточкой",
                 now=now,
             )
+        expected_content_edit_version = listing.imported_product.content_edit_version
+        expected_content_overrides_json = listing.imported_product.content_overrides_json
         comparison, source_observed_at = cls._comparison(listing, now=now)
         if not comparison["source_fresh"] or source_observed_at is None:
             cls._persist_conflict(
@@ -817,6 +827,21 @@ class MarketplaceCanonicalContentService:
                 code=exc.code,
                 message=str(exc),
                 now=now,
+            )
+        try:
+            from services.common_product_content import active_override_fields
+            common_overrides = active_override_fields(listing.imported_product)
+        except ValueError:
+            common_overrides = set(fields)
+        conflicts = common_overrides & set(fields)
+        if conflicts:
+            field_name = sorted(conflicts)[0]
+            raise MarketplaceCanonicalContentConflict(
+                f"Сначала снимите ручное переопределение «{field_name}» в общем товаре, "
+                "затем обновите diff и создайте новое Ozon-предложение",
+                code="common_override_reset_required",
+                listing_id=listing.id,
+                proposal_id=proposal.id,
             )
         current_baseline, current_proposed = cls._states(comparison, fields)
         current_baseline_fingerprint = cls._state_fingerprint(
@@ -862,6 +887,8 @@ class MarketplaceCanonicalContentService:
             seller_id=proposal.seller_id,
             expected=baseline,
             replacement=proposed,
+            expected_content_edit_version=expected_content_edit_version,
+            expected_content_overrides_json=expected_content_overrides_json,
             now=now,
         ):
             db.session.delete(snapshot)
@@ -1032,6 +1059,23 @@ class MarketplaceCanonicalContentService:
                 listing_id=proposal.listing_id,
                 proposal_id=proposal.id,
             )
+        expected_content_edit_version = product.content_edit_version
+        expected_content_overrides_json = product.content_overrides_json
+        try:
+            from services.common_product_content import active_override_fields
+            common_overrides = active_override_fields(product)
+        except ValueError:
+            common_overrides = set(fields)
+        conflicts = common_overrides & set(fields)
+        if conflicts:
+            field_name = sorted(conflicts)[0]
+            raise MarketplaceCanonicalContentConflict(
+                f"Сначала снимите ручное переопределение «{field_name}» в общем товаре, "
+                "затем обновите diff и создайте новое Ozon-предложение",
+                code="common_override_reset_required",
+                listing_id=proposal.listing_id,
+                proposal_id=proposal.id,
+            )
         current = {field: getattr(product, field, None) for field in fields}
         now = now or datetime.utcnow()
         if current not in (baseline, proposed):
@@ -1054,6 +1098,8 @@ class MarketplaceCanonicalContentService:
             seller_id=proposal.seller_id,
             expected=current,
             replacement=baseline,
+            expected_content_edit_version=expected_content_edit_version,
+            expected_content_overrides_json=expected_content_overrides_json,
             now=now,
         ):
             proposal.error_code = "canonical_rollback_race"
