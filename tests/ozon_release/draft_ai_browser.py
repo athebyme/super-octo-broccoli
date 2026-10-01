@@ -46,7 +46,8 @@ requests.sessions.Session.request = no_network
 socket.create_connection = no_network
 
 from seller_platform import app
-from models import db, MarketplaceProductDraft, MarketplaceOperation
+from models import (db, MarketplaceProductDraft, MarketplaceOperation,
+                    MarketplaceAttributeDefinition)
 from services.ozon_draft_ai_completion import OzonDraftAICompletionService as Service
 from services.ozon_draft_ai_completion import DraftAIError
 from tests.ozon_release.seed import seed, USERNAME, PASSWORD
@@ -55,7 +56,53 @@ app.config.update(TESTING=True, WTF_CSRF_ENABLED=True, SESSION_COOKIE_SECURE=Fal
 fixture = seed(app)
 account_id, draft_id = fixture['account_id'], fixture['draft_id']
 with app.app_context():
-    version = db.session.get(MarketplaceProductDraft,draft_id).version
+    draft = db.session.get(MarketplaceProductDraft,draft_id)
+    version = draft.version
+    schema = [
+        ('909001', 'Цвет', False),
+        ('909002', 'Фактура', False),
+        ('909003', 'Размеры', False),
+        ('22232', 'ТН ВЭД', True),
+        ('23536', 'Маркировка', True),
+    ]
+    db.session.add_all([
+        MarketplaceAttributeDefinition(
+            marketplace_id=draft.marketplace_id,
+            product_type_id=draft.product_type_id,
+            external_attribute_id=attribute_id,
+            name=name,
+            data_type='String',
+            is_required=required,
+            max_value_count=1,
+            attribute_complex_id='0',
+            is_available=True,
+            is_enabled=True,
+        )
+        for attribute_id, name, required in schema
+    ])
+    draft.attributes_json = json.dumps([{
+        'attribute_id':'909003','complex_id':'0',
+        'values':[{'value':'S'},{'value':'M'},{'value':'L'}],
+    }])
+    draft.validation_status = 'invalid'
+    draft.validation_result_json = json.dumps({
+        'publishable':False,
+        'errors':[
+            {'code':'ozon_brand_forbidden','field':'brand',
+             'message':'Бренд запрещён для этой категории.'},
+            {'code':'attribute_max_value_count','field':'attributes[0].values',
+             'attribute_id':'909003','attribute_name':'Размеры',
+             'actual_count':3,'max_value_count':1,
+             'message':'Для характеристики «Размеры» допустимо одно значение.'},
+            {'code':'required_attribute_missing','field':'attributes.22232',
+             'attribute_id':'22232','message':'Требуется подтверждённый код ТН ВЭД.'},
+            {'code':'required_attribute_missing','field':'attributes.23536',
+             'attribute_id':'23536','message':'Нужно проверить признак маркировки.'},
+        ],
+        'warnings':[],
+    })
+    db.session.commit()
+    version = draft.version
 run_uid = 'ozon-ai-'+'a'*32
 run = SimpleNamespace(job=SimpleNamespace(job_uid=run_uid))
 state = {'accepted':False,'accepts':0,'keys':[], 'review_effects':0,'review_keys':{},
@@ -243,6 +290,34 @@ try:
             page.locator('.ode-ai-item details').first.locator('summary').click()
             assert page.locator('.ode-ai-item q').first.is_visible()
             assert page.locator('.ode-ai-item q').first.inner_text() == 'Цвет — Красный. Фактура — Гладкая.'
+
+            scope = page.locator('.ode-ai-scope')
+            scope.get_by_role('heading',name='Может предложить').wait_for()
+            assert 'пустых простых характеристик' in scope.inner_text()
+            assert 'Этот помощник черновика не предлагает название и не меняет бренд' in scope.inner_text()
+            assert 'ТН ВЭД и маркировка требуют подтверждённых данных' in scope.inner_text()
+            assert 'не гарантируют устранение ошибок проверки' in page.locator('.ode-ai-scope-foot').inner_text()
+            assert page.locator('.ode-ai-preflight-note').get_attribute('aria-live') == 'polite'
+            assert page.locator('.ode-issues').get_attribute('aria-live') == 'polite'
+            assert page.locator('.ode-issues li').count() == 4
+            assert 'Удалите лишние значения вручную' in page.locator('.ode-issues').inner_text()
+            assert 'не обходит запрет' in page.locator('.ode-issues').inner_text()
+            assert 'уточните у администратора соответствия' in page.locator('.ode-issues').inner_text()
+            assert f"внутреннюю карточку № {fixture['source_id']}" in page.locator('.ode-issues').inner_text()
+            source_link = page.get_by_role('link',name='К внутренним товарам')
+            assert source_link.get_attribute('href') == '/my-products?account_id='+str(account_id)
+            assert 'search=' not in source_link.get_attribute('href')
+
+            page.get_by_role('link',name='Посмотреть проверку').click()
+            assert page.evaluate('location.hash') == '#ode-validation'
+            cardinality_row = page.locator('.ode-issues li').filter(has_text='Размеры')
+            cardinality_row.get_by_role('button').click()
+            page.wait_for_function("document.activeElement?.closest('.ode-attribute')?.dataset.attribute === '909003'")
+            page.get_by_text('Проверить поле ТН ВЭД',exact=True).click()
+            page.wait_for_function("document.activeElement?.closest('.ode-attribute')?.dataset.attribute === '22232'")
+            page.get_by_text('Проверить поле маркировки',exact=True).click()
+            page.wait_for_function("document.activeElement?.closest('.ode-attribute')?.dataset.attribute === '23536'")
+            page.locator('.ode-ai-scope').scroll_into_view_if_needed()
             layout(page,'literal-evidence')
             passed('exact_item_evidence_and_values_visible_without_auto_apply')
 
@@ -264,10 +339,15 @@ try:
             layout(page,'accepted-review')
             passed('lost_apply_replays_exact_key_once_and_never_auto_publishes')
 
-            page.get_by_role('button',name='Предложить недостающее').click()
+            page.get_by_role('button',name='Найти значения характеристик').click()
             page.locator('.ode-ai-dialog[open]').get_by_role('checkbox').check()
             state['drop_next'] = True
-            page.locator('.ode-ai-dialog[open]').get_by_role('button',name='Запустить предложения').click()
+            dialog = page.locator('.ode-ai-dialog[open]')
+            assert 'пустых простых характеристик' in dialog.inner_text()
+            assert 'В рамках этого действия название, бренд, заполненные поля, ТН ВЭД и маркировка не меняются.' in dialog.inner_text()
+            assert 'только после вашего отдельного принятия' in dialog.inner_text()
+            assert 'отправки в Ozon не будет' in dialog.inner_text()
+            dialog.get_by_role('button',name='Запустить поиск').click()
             page.get_by_text('Результат AI-запуска неизвестен.').wait_for()
             page.get_by_role('button',name='Проверить запуск').click()
             page.get_by_role('button',name='Повторить тот же запрос').wait_for()

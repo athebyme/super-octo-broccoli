@@ -4466,9 +4466,16 @@ class MarketplaceDraftService:
     @classmethod
     def _value_strings(cls, raw_value: Any) -> list:
         values = raw_value if isinstance(raw_value, list) else [raw_value]
+        # Do not map a partial prefix of an over-large source list. A partial
+        # candidate would look authoritative while silently losing the tail.
+        # The hard cap still bounds dictionary queries and the serialized
+        # draft; an oversized candidate is left unmapped for the existing
+        # required-field/preflight checks to surface.
+        if len(values) > cls.MAX_ATTRIBUTE_VALUES:
+            return []
         result = []
         seen = set()
-        for value in values[: cls.MAX_ATTRIBUTE_VALUES]:
+        for value in values:
             if isinstance(value, bool):
                 rendered = "true" if value else "false"
             elif isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
@@ -4629,11 +4636,11 @@ class MarketplaceDraftService:
                 raw_value = candidates.get(
                     cls._normalized_text(attribute.name)
                 )
+            # Preserve every bounded source-backed candidate that resolves to
+            # the exact current dictionary. Cropping here used to hide source
+            # ambiguity and discard meaningful values before draft preflight
+            # could explain the provider's max-count constraint.
             values = cls._value_strings(raw_value) if raw_value is not None else []
-            if not attribute.is_collection:
-                values = values[:1]
-            elif attribute.max_value_count:
-                values = values[: attribute.max_value_count]
             if values:
                 matched.append((attribute, values))
 
@@ -7019,16 +7026,36 @@ class MarketplaceDraftService:
                         "attribute_values_limit", path, "Слишком много значений атрибута"
                     ))
                     continue
-                if definition.max_value_count and len(values) > definition.max_value_count:
-                    errors.append(cls._validation_item(
-                        "attribute_max_value_count", path,
-                        f"Допустимо не более {definition.max_value_count} значений",
-                    ))
-                if not definition.is_collection and len(values) > 1:
-                    errors.append(cls._validation_item(
-                        "attribute_not_collection", path,
-                        f"Атрибут «{definition.name}» принимает одно значение",
-                    ))
+                schema_max = definition.max_value_count or None
+                allowed_count = schema_max
+                if not definition.is_collection:
+                    allowed_count = min(schema_max, 1) if schema_max else 1
+                if allowed_count and len(values) > allowed_count:
+                    non_collection_limit = (
+                        not definition.is_collection
+                        and (schema_max is None or schema_max > 1)
+                    )
+                    code = (
+                        "attribute_not_collection"
+                        if non_collection_limit
+                        else "attribute_max_value_count"
+                    )
+                    error = cls._validation_item(
+                        code,
+                        f"{path}.values",
+                        f"Атрибут «{definition.name}» (ID {external_id}): "
+                        f"передано значений {len(values)}; допустимо не более "
+                        f"{allowed_count}",
+                    )
+                    error.update({
+                        "attribute_id": external_id,
+                        "attribute_name": definition.name,
+                        "actual_count": len(values),
+                        "max_value_count": allowed_count,
+                    })
+                    if schema_max is not None:
+                        error["schema_max_value_count"] = schema_max
+                    errors.append(error)
                 occurrences[external_id] = occurrences.get(external_id, 0) + 1
                 supplied.append((item, definition, path))
 

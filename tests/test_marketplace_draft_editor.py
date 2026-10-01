@@ -227,3 +227,35 @@ page.data.suggestions=[{id:1,score:30},{id:2,score:55},{id:3,score:100},{id:4}];
 assert.deepEqual(page.initialTypeOptions().map(x=>x.id),[2,3]);
 assert.deepEqual(page.data.suggestions.map(x=>x.id),[1,2,3,4]);
 ''')
+
+
+def test_preflight_issue_navigation_uses_attribute_metadata_and_focuses_exact_field():
+    run_node(r'''
+const focused=[];
+const makeField = id => ({
+    dataset:{attribute:id},
+    closest:()=>null,
+    querySelector:()=>({focus:()=>focused.push('input:'+id)}),
+    scrollIntoView:()=>focused.push('scroll:'+id),
+    focus:()=>focused.push('field:'+id),
+});
+const fields=['22232','23536'].map(makeField);
+global.document.querySelectorAll=()=>fields;
+page.form.attributes=[{attribute_id:'31'},{attribute_id:'32'},{attribute_id:'22232'}];
+page.goToIssue({field:'attributes[2].values',code:'attribute_max_value_count',attribute_id:'22232',actual_count:3,max_value_count:1});
+assert.equal(page.section,'attributes');
+assert.equal(page.attrQuery,'22232');
+assert.deepEqual(focused,['scroll:22232','input:22232']);
+focused.length=0;
+page.goToIssue({field:'attributes.23536',code:'required_attribute_missing'});
+assert.equal(page.section,'attributes');
+assert.equal(page.attrQuery,'23536');
+assert.deepEqual(focused,['scroll:23536','input:23536']);
+focused.length=0;
+const title={scrollIntoView:()=>focused.push('scroll:title'),focus:()=>focused.push('title')};
+global.document.querySelectorAll=()=>[];
+global.document.getElementById=id=>id==='ode-name'?title:null;
+page.goToIssue({field:'content.name',code:'name_required'});
+assert.equal(page.section,'content');
+assert.deepEqual(focused,['scroll:title','title']);
+''')
