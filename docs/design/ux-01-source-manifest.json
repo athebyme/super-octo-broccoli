@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-01T10:48:37.850550+00:00",
+  "generated_at": "2026-10-01T11:00:18.197191+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -3381,7 +3381,7 @@
     },
     {
       "path": "templates/products.html",
-      "sha256": "13e719b5e58f0bf5395908368b739bfadf067125f3801b0f7747b08b062c8a3d"
+      "sha256": "d9e39f69a5477d4c3c63d4969dc686182d7868d39077653272d935f9ec8b2845"
     },
     {
       "path": "templates/products_bulk_edit.html",
@@ -4981,7 +4981,7 @@
     },
     {
       "path": "tests/ux01/wb_edit_browser.py",
-      "sha256": "1fbf222aa367cae79fdea7b2c409658808534f1919f046aaf15733fbf71a86c5"
+      "sha256": "8665ba826e060cde4dfa87dd801824dcabca32db93f9f7a2e1c7ae21ea266e93"
     },
     {
       "path": "tests/ux01/wb_product_selection_dom.js",
@@ -4992,5 +4992,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "b6efb28a058e11b5a69ad0374c3ea8ddf5ede7f7cf47d5e9f8f020a1751a56f3"
+  "aggregate_sha256": "05d27de00e4fc78ec00467124bea88fc96e06169c4230b4a0a5e6e0588bb87ae"
 }
