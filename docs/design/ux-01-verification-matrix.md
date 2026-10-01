@@ -1,6 +1,6 @@
 # UX-01.11: контрольная матрица для каждого изменения
 
-Дата: 30.09.2026. Статус: применена к каждому пакету; финальные 6 UX и 12 Ozon стадий прошли на frozen source; результаты точного source и ограничения — в [отчёте реализации](ux-01-implementation.md). Строка считается пройденной только при наличии результата для точного изменения; список критериев сам по себе не является успешным тестом.
+Дата исходной приёмки: 30.09.2026. Тогда 6 UX и 12 Ozon стадий прошли на своём frozen source; результаты и ограничения — в [отчёте реализации](ux-01-implementation.md). Продолжение 01.10 имеет новые исходники и 8 UX/13 Ozon стадий; прежний результат их не удостоверяет. Текущие passed/failed/not-tested/blocked: [отчёт продолжения](../operations/2026-10-01-ozon-ux-acceptance.md). Строка считается пройденной только при наличии результата для точного изменения; список критериев сам по себе не является успешным тестом.
 
 ## Обязательные измерения
 
@@ -46,3 +46,17 @@
 ```
 
 Приёмка выполняется actual Flask/Jinja/Vue browser fixtures и контрактными тестами на synthetic temporary DB. Production UI, текущая БД, Ozon API и реальные публикационные сценарии этой работой не проверяются. Результат прототипа имеет отдельный scope и не закрывает проверки маршрутов приложения. Frozen manifest и команды повторной проверки приведены в отчёте реализации; после объединения с новым Ozon состоянием требуется новый manifest общего source.
+
+## Дополнительные критические сценарии 01.10
+
+| Коды | Сценарий | Обязательное доказательство |
+| --- | --- | --- |
+| UX-01.2 / WB-EDIT-01 | Pipedream → 50 exact ID между страницами → bulk → назад; сортировка/страница, all-filtered с исключениями, смена фильтра/аккаунта | Actual DOM и server selection, разрешённый URL/безопасный fallback, чужие ID и oversized выбор отклонены |
+| WB-EDIT-02/03 | Exact subjects 5880/5070; убрать старые поля при неуспешной схеме; добавить country/weight/multiple | Local fixture schema, dictionary/type/grams validation, права; историческая ошибка провайдера не реконструируется без ответа |
+| WB-EDIT-04 / UX-01.7 | Preview selected50/changed2/skipped48 → confirm → replay; provider before drift и local keyword race | Preview без внешнего I/O; только reviewed changed-set; второй POST не пишет; история различает пропуски и ошибки |
+| CAT-EDIT-01/02 | Override/inherit/intentional empty/cancel/reopen, порядок двух фото, bulk50, supplier/CSV/AI конфликт | Source facts не содержат ручных/AI значений; exact preview/apply seals, whole-batch conflict, выбранный legacy URL не подменяется supplier slot |
+| CAT-EDIT-02 / UX-01.11 | Delayed preview/apply/GET, timeout/409, смена выбранной карточки и уход с dirty вводом | Нет stale token apply или blind retry; перечитывается exact набор; ошибка чтения не маскирует возможную успешную запись |
+| Ozon / UX-01.6 | Новый источник → draft → exact category/type → human packaging/VAT → AI review → upload → полные readbacks | По одному synthetic write, invalid AI не пишет; unknown write не повторяется и проходит quarantine/read-only reconciliation |
+| UX-01.1/.3/.4 | Long data, empty/error, light/dark, 390/1024/1280/1440, keyboard/focus | Нет root clipping; локальный scroll; статические token contrast checks дополняют, но не заменяют actual accessibility/browser matrix |
+
+Каждый synthetic worker/test процесс получает отдельный private `TMPDIR` до запуска Python; production process-shared locks не ослабляются ради тестов. Startup rehearsal выполняется только на task-owned восстановленной копии: шесть ожидаемых изменённых существующих steps, два новых, сохранённые counts, повторный no-op и несовместимый legacy bridge fail-closed. Запреты среды фиксируются как blocked, не как skipped/pass.
