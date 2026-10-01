@@ -51,6 +51,7 @@ REPORT = {
     "checks": [],
     "interactions": [],
     "screenshots": [],
+    "mobile_touch_target_observations": [],
     "browser_api_reads": [],
     "writes": [],
     "synthetic_actions": {
@@ -409,6 +410,148 @@ def layout_case(page, path: str, width: int, theme: str, state: str, catalog_pat
         name = f"common-content-{state}-{theme}-{width}.png"
         page.screenshot(path=str(OUT / name), full_page=True)
         REPORT["screenshots"].append(name)
+    if state == "selected" and width in (320, 360, 390):
+        REPORT["mobile_touch_target_observations"].append(
+            measure_mobile_touch_targets(page, width, theme)
+        )
+
+
+def measure_mobile_touch_targets(page, width: int, theme: str) -> dict:
+    """Capture actual mobile hit areas without sending editor requests."""
+    observation = page.evaluate("""() => {
+        const originalModes = {};
+        for (const field of ['photos', 'characteristics']) {
+            const mode = document.querySelector(
+                '[data-field-section="' + field + '"] .cpc-mode-button'
+            );
+            originalModes[field] = mode?.getAttribute('aria-pressed') === 'true';
+            if (mode && mode.getAttribute('aria-pressed') !== 'true') mode.click();
+        }
+
+        const groups = [
+            {name: 'mode_inherit', selector: '.cpc-mode-button'},
+            {name: 'quiet', selector: '.cpc-quiet-button'},
+            {name: 'characteristic_remove', selector: '.cpc-char-remove'},
+            {name: 'photo_arrows', selector: '.cpc-photo-order-actions button'},
+        ];
+        const targets = groups.map(group => {
+            const candidates = [...document.querySelectorAll(group.selector)];
+            const enabled = candidates.filter(el => !el.matches(':disabled')
+                && el.getAttribute('aria-disabled') !== 'true');
+            const samples = enabled.map(el => {
+                el.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'auto'});
+                const style = getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                const visible = el.getClientRects().length > 0
+                    && style.display !== 'none' && style.visibility !== 'hidden'
+                    && Number(style.opacity || 1) > 0
+                    && rect.width > 0 && rect.height > 0
+                    && rect.right > 0 && rect.bottom > 0
+                    && rect.left < innerWidth && rect.top < innerHeight;
+                const inViewport = rect.left >= -1 && rect.top >= -1
+                    && rect.right <= innerWidth + 1 && rect.bottom <= innerHeight + 1;
+                return {
+                    label: el.getAttribute('aria-label') || el.textContent.trim(),
+                    enabled: true,
+                    visible,
+                    in_viewport: inViewport,
+                    rect: {
+                        x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                        right: rect.right, bottom: rect.bottom,
+                    },
+                    meets_minimum: visible && inViewport
+                        && rect.width >= 44 && rect.height >= 44,
+                };
+            });
+            return {
+                name: group.name,
+                selector: group.selector,
+                candidate_count: candidates.length,
+                enabled_count: enabled.length,
+                samples,
+                passed: samples.length > 0 && samples.every(sample => sample.meets_minimum),
+            };
+        });
+        for (const field of ['photos', 'characteristics']) {
+            const mode = document.querySelector(
+                '[data-field-section="' + field + '"] .cpc-mode-button'
+            );
+            if (mode && (mode.getAttribute('aria-pressed') === 'true') !== originalModes[field]) {
+                mode.click();
+            }
+        }
+        const root = document.documentElement;
+        const pageWidth = Math.max(root.scrollWidth, document.body?.scrollWidth || 0);
+        const pageOverflow = pageWidth > innerWidth + 1;
+        targets.forEach(group => {
+            group.samples.forEach(sample => { sample.meets_minimum = sample.meets_minimum && !pageOverflow; });
+            group.passed = group.samples.length > 0 && group.samples.every(sample => sample.meets_minimum);
+        });
+        return {
+            viewport_width: innerWidth,
+            page_width: pageWidth,
+            page_overflow: pageOverflow,
+            local_modes_restored: ['photos', 'characteristics'].every(field => {
+                const mode = document.querySelector(
+                    '[data-field-section="' + field + '"] .cpc-mode-button'
+                );
+                return !!mode && (mode.getAttribute('aria-pressed') === 'true') === originalModes[field];
+            }),
+            targets,
+        };
+    }""")
+    row = {
+        "state": "selected",
+        "width": width,
+        "theme": theme,
+        "page_overflow": observation["page_overflow"],
+        "viewport_width": observation["viewport_width"],
+        "page_width": observation["page_width"],
+        "local_modes_restored": observation["local_modes_restored"],
+        "targets": observation["targets"],
+    }
+    row["passed"] = (
+        row["viewport_width"] == width
+        and row["page_overflow"] is False
+        and row["local_modes_restored"] is True
+        and len(row["targets"]) == 4
+        and all(target["passed"] for target in row["targets"])
+    )
+    return row
+
+
+def assert_mobile_touch_target_evidence() -> None:
+    rows = REPORT["mobile_touch_target_observations"]
+    expected = {
+        (width, theme)
+        for width in (320, 360, 390)
+        for theme in ("light", "dark")
+    }
+    actual = [(row.get("width"), row.get("theme")) for row in rows]
+    passed = (
+        len(rows) == len(expected)
+        and len(set(actual)) == len(expected)
+        and set(actual) == expected
+        and all(row.get("passed") is True for row in rows)
+    )
+    check = {
+        "name": "common_mobile_touch_targets_44px",
+        "status": "passed" if passed else "failed",
+        "ok": passed,
+        "passed": passed,
+        "layouts": len(rows),
+        "expected_layouts": len(expected),
+        "failed_layouts": [
+            {"width": row.get("width"), "theme": row.get("theme"), "targets": [
+                target.get("name") for target in row.get("targets", [])
+                if target.get("passed") is not True
+            ]}
+            for row in rows if row.get("passed") is not True
+        ],
+    }
+    REPORT["checks"].append(check)
+    if not passed:
+        raise AssertionError({"check": check, "observations": rows})
 
 
 def record_keyboard_focus(page, check: str, selector: str, *, photo_url: str | None = None,
@@ -544,6 +687,7 @@ def run():
                 for theme in ("light", "dark"):
                     layout_case(page, path, width, theme, state, classic_path)
         assert len(REPORT["layouts"]) == 28
+        assert_mobile_touch_target_evidence()
         assert REPORT["synthetic_actions"]["empty_route_api_reads"] == 0
         assert REPORT["synthetic_actions"]["empty_route_mutating_requests"] == 0
         REPORT["checks"].append("common_empty_editor_no_product_api_or_writes")

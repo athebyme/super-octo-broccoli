@@ -173,6 +173,10 @@
     .cpc-char-row .cpc-char-name { grid-column: 1 / 2; }
     .cpc-char-row .cpc-char-value { grid-column: 1 / 2; }
     .cpc-char-remove { grid-column: 2; grid-row: 1 / span 2; }
+    .cpc-mode-button,
+    .cpc-quiet-button { min-height: 44px; }
+    .cpc-char-remove { min-height: 44px; }
+    .cpc-photo-order-actions button { width: 44px; min-height: 44px; }
     .cpc-diff-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
     .cpc-diff-label { grid-column: 1 / -1; }
     .cpc-actions { align-items: stretch; }

@@ -83,7 +83,15 @@ def _common_content_browser_report() -> dict:
         *([{"method": "POST", "path": "/api/my-products/common-content/preview", "kind": "synthetic_preview"}] * 4),
         *([{"method": "POST", "path": "/api/my-products/common-content/apply", "kind": "synthetic_apply"}] * 2),
     ]
-    check_names = sorted(COMMON_CONTENT_REQUIRED_CHECKS) + ["existing-review-safety", "existing-cancel-reopen"]
+    mobile_touch_check = {
+        "name": "common_mobile_touch_targets_44px",
+        "status": "passed",
+        "ok": True,
+        "passed": True,
+    }
+    check_names = sorted(COMMON_CONTENT_REQUIRED_CHECKS - {mobile_touch_check["name"]}) + [
+        "existing-review-safety", "existing-cancel-reopen", mobile_touch_check,
+    ]
     return {
         "status": "passed",
         "source": "worktree",
@@ -347,6 +355,43 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertGreater(rejected_write["error_count"], 0)
 
             invalid_reports = []
+
+            missing_touch_check = copy.deepcopy(report)
+            missing_touch_check["checks"] = [
+                check for check in missing_touch_check["checks"]
+                if not (isinstance(check, dict)
+                        and check.get("name") == "common_mobile_touch_targets_44px")
+            ]
+            invalid_reports.append((
+                "missing mobile target check", missing_touch_check,
+                "common_named_checks_missing_or_duplicate",
+            ))
+
+            failed_touch_check = copy.deepcopy(report)
+            # The prior photo-arrow rule was 2rem square (32px at the
+            # browser's 16px root size), so the same 44x44 threshold used by
+            # the browser fixture must reject this measured geometry.
+            legacy_arrow_rect = {"width": 32, "height": 32}
+            legacy_arrow_meets_minimum = (
+                legacy_arrow_rect["width"] >= 44 and legacy_arrow_rect["height"] >= 44
+            )
+            self.assertFalse(legacy_arrow_meets_minimum)
+            failed_touch_check["checks"] = [
+                check for check in failed_touch_check["checks"]
+                if not (isinstance(check, dict)
+                        and check.get("name") == "common_mobile_touch_targets_44px")
+            ]
+            failed_touch_check["checks"].append({
+                "name": "common_mobile_touch_targets_44px",
+                "status": "passed" if legacy_arrow_meets_minimum else "failed",
+                "ok": legacy_arrow_meets_minimum,
+                "passed": legacy_arrow_meets_minimum,
+                "legacy_geometry": legacy_arrow_rect,
+            })
+            invalid_reports.append((
+                "undersized mobile target check fails", failed_touch_check,
+                "common_named_checks_missing_or_duplicate",
+            ))
 
             missing_check = copy.deepcopy(report)
             missing_check["checks"].remove("common_photo_boundary_focus_first")

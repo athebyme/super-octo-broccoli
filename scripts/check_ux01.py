@@ -87,6 +87,7 @@ COMMON_CONTENT_REQUIRED_CHECKS = frozenset({
     "common_photo_boundary_focus_last",
     "common_preview_cancel_focus_return",
     "common_focus_visible_geometry",
+    "common_mobile_touch_targets_44px",
 })
 COMMON_CONTENT_REQUIRED_FOCUS = frozenset({
     "common_photo_boundary_focus_first",
