@@ -326,7 +326,12 @@ def bridge(route):
         route.fulfill(response=response)
         return
 
-    asset = ASSETS_BY_URL.get(request.url) or ASSETS_BY_URL.get(request.url.split("?", 1)[0])
+    asset_url = request.url.split("?", 1)[0]
+    asset = (
+        ASSETS_BY_URL.get(request.url)
+        or ASSETS_BY_URL.get(asset_url)
+        or ASSETS_BY_URL.get(asset_url.rstrip("/"))
+    )
     if asset:
         route.fulfill(
             status=200,
