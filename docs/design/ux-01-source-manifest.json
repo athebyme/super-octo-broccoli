@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-01T01:07:01.213725+00:00",
+  "generated_at": "2026-10-01T02:15:08.402633+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -29,7 +29,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "5c35797d3fad66663963433626fe0c989a72a5fceb338253829f4436e9e8f9d8"
+      "sha256": "e78224a0cad88c1a4feeaddd115925e78f5b9128993a09b04aa49df196c98d78"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -461,7 +461,7 @@
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
-      "sha256": "16deed66b24d7076dd304966ce1eece311d72ae0bb84167f4909a49a5f0a39de"
+      "sha256": "0a0ce71882b398c889ff8de637b892949782a904936e965b9e7cc55d5a40f3c5"
     },
     {
       "path": "docs/design/ozon-vue-linking-and-category-review.md",
@@ -682,6 +682,14 @@
     {
       "path": "docs/operations/2026-10-01-catalog-ux.md",
       "sha256": "8d3f46fc1b2bf5d3ae59cbaaff6144119a8dabe5a6fbedf805e04dd00709bd4e"
+    },
+    {
+      "path": "docs/operations/2026-10-01-common-content-focus-browser.md",
+      "sha256": "94b08f64e0a048ab3e91b6de06f082520fbbe03e26087513e4a21d37f088bb71"
+    },
+    {
+      "path": "docs/operations/2026-10-01-common-content-focus.md",
+      "sha256": "76f586db613886d48329915ef3fce4f3eabe835afcb3d769ff2e0d73edfdc325"
     },
     {
       "path": "docs/operations/2026-10-01-ozon-audit.md",
@@ -1509,7 +1517,7 @@
     },
     {
       "path": "scripts/check_ux01.py",
-      "sha256": "f34c4693ff98070bf7a366ac4308d14ad06088188356a67a970ede13e77e6614"
+      "sha256": "99041f91fe61dee730eca9bbb34c5b1559484cbdd7cac0fa8b2981c5714caa72"
     },
     {
       "path": "scripts/deploy_safety.py",
@@ -2453,7 +2461,7 @@
     },
     {
       "path": "static/common-product-content.js",
-      "sha256": "4718df6b7762d6bad85e7320c286d5598056f0b6554f4a08c310f3746581789d"
+      "sha256": "238bbfe8abdfc4f50b8181e06bb56bb93229c71a3f477ced38a724fd0751c012"
     },
     {
       "path": "static/competitors-comparison.css",
@@ -3841,7 +3849,7 @@
     },
     {
       "path": "tests/test_common_product_content_ui.py",
-      "sha256": "2d929defa8d5432944d39a51b56cf7638d968d5394c2a38e2d37508f4e6ad436"
+      "sha256": "80915655ce1c463653ef131189c579791c439b515c0229e6f84f971ca2e67495"
     },
     {
       "path": "tests/test_competitor_compaction.py",
@@ -4845,7 +4853,7 @@
     },
     {
       "path": "tests/test_ux01_runner.py",
-      "sha256": "a0aee9e28e4c3a18b5b705a250a2e8fdffaa0b5881bac3c4d89ec0a66c99ad74"
+      "sha256": "2561f425311d9f8dd71c7d78aa564f8b8433a46b1fa5b39c5c5a1a6e09f623a5"
     },
     {
       "path": "tests/test_ux01_settings_quality.py",
@@ -4953,7 +4961,11 @@
     },
     {
       "path": "tests/ux01/common_content_browser.py",
-      "sha256": "c98a8915e71ce74e7e813a5e8406f73f25c9dc8a183852fe0faabfa5f0afc227"
+      "sha256": "0b5836856113fe63cc414bb26696fbbb46e423468ab7e0f05ee1314c0340bc63"
+    },
+    {
+      "path": "tests/ux01/common_product_content_focus_dom.js",
+      "sha256": "985b426f169ca99dfd9a796b222870e1620ae58b3510a35ce117cbf84d0ec47c"
     },
     {
       "path": "tests/ux01/journey_browser.py",
@@ -4980,5 +4992,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "896a431f47d108a9672ceff985534f6a0b691fbaddf07a1151f31c2cc8465f13"
+  "aggregate_sha256": "12ff8a710b76ac96718015f7fd30e0445e8c264d301126292151308ca771ca54"
 }
