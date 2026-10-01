@@ -66,19 +66,30 @@
             --bg-hover: #f3f0ec;
             --text: #1a1a1a;
             --text-secondary: #6b6b6b;
-            --text-muted: #9a9a9a;
+            --text-muted: #6f6a65;
             --text-sidebar: #e8e8e8;
             --text-sidebar-muted: #a3a3a3;
             --text-on-accent: #ffffff;
             --accent: #c45d3e;
             --accent-strong: #a34a2f;
+            --accent-text: #a34a2f;
+            --action-background: #a34a2f;
+            --action-background-hover: #873a27;
+            --action-foreground: #ffffff;
+            --danger-action-background: #b3362b;
+            --danger-action-background-hover: #9d2f25;
+            --danger-action-foreground: #ffffff;
+            --ok-action-background: #286b49;
+            --ok-action-background-hover: #1f573a;
+            --warn-action-background: #805515;
+            --warn-action-background-hover: #68430f;
             --accent-light: #f0e0da;
             --border: #e8e5e1;
             --border-light: #f0eeeb;
             --focus-ring: rgba(196, 93, 62, 0.22);
             /* Семантика статусов (тёплые оттенки в тон палитре) */
-            --ok: #2e7d54;         --ok-bg: #eaf5ee;      --ok-border: #cbe5d4;
-            --warn: #9a6b1f;       --warn-bg: #fbf3e0;    --warn-border: #edd9a8;
+            --ok: #286b49;         --ok-bg: #eaf5ee;      --ok-border: #cbe5d4;
+            --warn: #805515;       --warn-bg: #fbf3e0;    --warn-border: #edd9a8;
             --danger: #b3362b;     --danger-bg: #f9e9e6;  --danger-border: #ecc9c2;
             --info: #3d6b8e;       --info-bg: #e9f1f6;    --info-border: #c8dce9;
             /* Легаси-алиасы (встречаются в шаблонах) */
@@ -119,12 +130,23 @@
             --bg-hover: #242120;
             --text: #ebe7e2;
             --text-secondary: #a39d96;
-            --text-muted: #746e67;
+            --text-muted: #99928a;
             --text-sidebar: #e8e8e8;
             --text-sidebar-muted: #a3a3a3;
             --text-on-accent: #ffffff;
             --accent: #d97757;
             --accent-strong: #e28b6d;
+            --accent-text: #e28b6d;
+            --action-background: #8c402c;
+            --action-background-hover: #743320;
+            --action-foreground: #ffffff;
+            --danger-action-background: #91483f;
+            --danger-action-background-hover: #7b382f;
+            --danger-action-foreground: #ffffff;
+            --ok-action-background: #286b49;
+            --ok-action-background-hover: #1f573a;
+            --warn-action-background: #805515;
+            --warn-action-background-hover: #68430f;
             --accent-light: #33251f;
             --border: #2b2825;
             --border-light: #221f1d;
@@ -203,7 +225,7 @@
         .sidebar-logo-mark {
             width: 32px;
             height: 32px;
-            background: var(--accent);
+            background: var(--action-background);
             border-radius: 8px;
             display: flex;
             align-items: center;
@@ -211,7 +233,7 @@
             flex-shrink: 0;
             font-family: var(--font-display);
             font-size: 18px;
-            color: white;
+            color: var(--action-foreground);
             font-style: italic;
         }
         .sidebar-logo-text {
@@ -641,7 +663,7 @@
         }
         /* Exception: keep sidebar logo mark colored */
         .sidebar-logo-mark {
-            background: var(--accent) !important;
+            background: var(--action-background) !important;
             border: none !important;
         }
 
@@ -663,14 +685,14 @@
         .text-indigo-600, .text-indigo-700,
         .hover\:text-indigo-900:hover,
         .text-indigo-800 {
-            color: var(--accent) !important;
+            color: var(--accent-text) !important;
         }
 
         .bg-indigo-100, .bg-indigo-50 {
             background: var(--accent-light) !important;
         }
         .text-indigo-800, .text-indigo-700, .text-indigo-600 {
-            color: var(--accent) !important;
+            color: var(--accent-text) !important;
         }
 
         /* Ring colors */
@@ -703,7 +725,7 @@
         }
         .rounded-full[class*="bg-purple-"] {
             background: var(--accent-light) !important;
-            color: var(--accent) !important;
+            color: var(--accent-text) !important;
         }
         .rounded-full[class*="bg-orange-"] {
             background: var(--warn-bg) !important;
@@ -850,6 +872,28 @@
         .bg-red-500, .bg-red-600 { background: var(--danger) !important; }
         .hover\:bg-red-700:hover { background: var(--danger) !important; filter: brightness(0.92); }
 
+        /* White-label status actions use darker accessible surfaces in both themes. */
+        [class~="bg-green-500"][class~="text-white"],
+        [class~="bg-green-600"][class~="text-white"],
+        [class~="bg-emerald-500"][class~="text-white"],
+        [class~="bg-emerald-600"][class~="text-white"] {
+            background: var(--ok-action-background) !important;
+            color: #ffffff !important;
+        }
+        [class~="hover:bg-green-700"]:hover,
+        [class~="hover:bg-emerald-700"]:hover {
+            background: var(--ok-action-background-hover) !important;
+        }
+        [class~="bg-red-500"][class~="text-white"],
+        [class~="bg-red-600"][class~="text-white"] {
+            background: var(--danger-action-background) !important;
+            color: var(--danger-action-foreground) !important;
+        }
+        [class~="hover:bg-red-700"]:hover {
+            background: var(--danger-action-background-hover) !important;
+            color: var(--danger-action-foreground) !important;
+        }
+
         /* Предупреждение: yellow/amber/orange → --warn */
         .text-yellow-600, .text-yellow-700, .text-yellow-800,
         .text-amber-600, .text-amber-700, .text-amber-800,
@@ -858,6 +902,17 @@
         .bg-yellow-100, .bg-amber-100, .bg-orange-100 { background: var(--warn-bg) !important; }
         .border-amber-200, .border-yellow-200, .border-yellow-300, .border-orange-200 { border-color: var(--warn-border) !important; }
         .bg-yellow-500, .bg-amber-500, .bg-yellow-600, .bg-amber-600 { background: var(--warn) !important; }
+        [class~="bg-yellow-500"][class~="text-white"],
+        [class~="bg-yellow-600"][class~="text-white"],
+        [class~="bg-amber-500"][class~="text-white"],
+        [class~="bg-amber-600"][class~="text-white"] {
+            background: var(--warn-action-background) !important;
+            color: #ffffff !important;
+        }
+        [class~="hover:bg-yellow-700"]:hover,
+        [class~="hover:bg-amber-700"]:hover {
+            background: var(--warn-action-background-hover) !important;
+        }
 
         /* Информация: blue/sky (не кнопки) → --info */
         .text-blue-600, .text-blue-700, .text-blue-800, .text-sky-700 { color: var(--info) !important; }
@@ -873,7 +928,7 @@
             border-color: var(--text) !important;
             color: var(--bg-card) !important;
         }
-        .text-purple-600, .text-purple-700, .text-violet-600 { color: var(--accent) !important; }
+        .text-purple-600, .text-purple-700, .text-violet-600 { color: var(--accent-text) !important; }
         .bg-purple-100, .bg-purple-50, .bg-violet-100 { background: var(--accent-light) !important; }
 
         /* Инверсные поверхности (тёмные хедеры/оверлеи) */
@@ -1116,7 +1171,7 @@
         .sh-badge--red   { background: var(--danger-bg); color: var(--danger); }
         .sh-badge--yellow { background: var(--warn-bg); color: var(--warn); }
         .sh-badge--blue  { background: var(--info-bg); color: var(--info); }
-        .sh-badge--purple { background: var(--accent-light); color: var(--accent); }
+        .sh-badge--purple { background: var(--accent-light); color: var(--accent-text); }
         .sh-badge--orange { background: var(--warn-bg); color: var(--warn); }
 
         /* ── Button ── */
@@ -1168,17 +1223,17 @@
         }
         .sh-btn--ghost:hover { background: var(--bg); color: var(--text); }
         .sh-btn--accent {
-            background: var(--accent);
-            color: #fff;
-            border-color: var(--accent);
+            background: var(--action-background);
+            color: var(--action-foreground);
+            border-color: var(--action-background);
         }
-        .sh-btn--accent:hover { background: var(--accent-dark, #a34a2f); }
+        .sh-btn--accent:hover { background: var(--action-background-hover); border-color: var(--action-background-hover); }
         .sh-btn--danger {
-            background: var(--danger);
-            color: var(--text-on-accent);
-            border-color: var(--danger);
+            background: var(--danger-action-background);
+            color: var(--danger-action-foreground);
+            border-color: var(--danger-action-background);
         }
-        .sh-btn--danger:hover { filter: brightness(1.08); }
+        .sh-btn--danger:hover { background: var(--danger-action-background-hover); border-color: var(--danger-action-background-hover); }
         /* On dark backgrounds */
         .sh-btn--white {
             background: #fff;
@@ -1359,8 +1414,8 @@
             font-weight: 600;
         }
         .sh-tab--active .sh-tab-count {
-            background: var(--accent);
-            color: var(--text-on-accent);
+            background: var(--action-background);
+            color: var(--action-foreground);
         }
 
         /* ── Filter Bar ── */
@@ -1418,11 +1473,11 @@
         .sh-pagination-btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
         .sh-pagination-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
         .sh-pagination-btn--active {
-            background: var(--accent);
-            color: var(--text-on-accent);
-            border-color: var(--accent);
+            background: var(--action-background);
+            color: var(--action-foreground);
+            border-color: var(--action-background);
         }
-        .sh-pagination-btn--active:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+        .sh-pagination-btn--active:hover { background: var(--action-background-hover); border-color: var(--action-background-hover); }
         .sh-pagination-ellipsis {
             min-width: 32px;
             text-align: center;
@@ -1481,7 +1536,7 @@
         }
         .sh-quick-card-meta {
             font-size: 12px;
-            color: var(--accent);
+            color: var(--accent-text);
             margin-top: 4px;
             font-weight: 500;
         }
@@ -1653,7 +1708,7 @@
         .sh-toast--error   .sh-toast-icon { color: var(--danger); }
         .sh-toast--warning .sh-toast-icon { color: var(--warn); }
         .sh-toast--info    .sh-toast-icon { color: var(--info); }
-        .sh-toast--promo   .sh-toast-icon { color: var(--accent); }
+        .sh-toast--promo   .sh-toast-icon { color: var(--accent-text); }
         .sh-toast-content { flex: 1; min-width: 0; }
         .sh-toast-title {
             font-weight: 600;
@@ -1666,7 +1721,7 @@
             margin-top: 8px;
             font-size: 12px;
             font-weight: 600;
-            color: var(--accent);
+            color: var(--accent-text);
             background: none; border: none; padding: 0;
             cursor: pointer;
             text-decoration: none;
