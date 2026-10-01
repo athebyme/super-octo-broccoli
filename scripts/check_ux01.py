@@ -344,6 +344,31 @@ def _common_content_protocol_issues(data: dict) -> list[str]:
         for width in COMMON_CONTENT_MOBILE_WIDTHS
         for theme in COMMON_CONTENT_MOBILE_THEMES
     }
+
+    def focus_ring_inside_scrollport(value) -> bool:
+        if not isinstance(value, dict):
+            return False
+        ring, scrollport = value.get("focus_ring"), value.get("scrollport")
+        if not isinstance(ring, dict) or not isinstance(scrollport, dict):
+            return False
+        keys = ("left", "top", "right", "bottom")
+        if any(
+            not finite_number(box.get(key))
+            for box in (ring, scrollport)
+            for key in keys
+        ):
+            return False
+        return (
+            ring["right"] > ring["left"]
+            and ring["bottom"] > ring["top"]
+            and scrollport["right"] > scrollport["left"]
+            and scrollport["bottom"] > scrollport["top"]
+            and ring["left"] >= scrollport["left"] - 0.5
+            and ring["right"] <= scrollport["right"] + 0.5
+            and ring["top"] >= scrollport["top"] - 0.5
+            and ring["bottom"] <= scrollport["bottom"] + 0.5
+        )
+
     observed_navigator_rows = []
     if isinstance(navigator_rows, list):
         for row in navigator_rows:
@@ -381,15 +406,22 @@ def _common_content_protocol_issues(data: dict) -> list[str]:
                     "keyboard_returned_first_by_shift_tab",
                     "second_focus_visible",
                     "first_focus_visible",
+                    "second_focus_geometry_wait_completed",
+                    "first_focus_geometry_wait_completed",
+                    "second_focus_outline_within_scrollport",
+                    "first_focus_outline_within_scrollport",
                     "current_product_preserved",
                     "full_second_title_dom",
                     "full_second_sku_dom",
                     "full_second_accessible_name",
                     "full_second_title_tooltip",
+                    "full_second_external_id_within_model_limit",
                     "full_current_heading",
                     "no_product_api_reads",
                     "no_mutating_requests",
                 ))
+                or not focus_ring_inside_scrollport(row.get("second_focus_ring_geometry"))
+                or not focus_ring_inside_scrollport(row.get("first_focus_ring_geometry"))
                 or row.get("product_api_reads_during") != 0
                 or row.get("mutating_requests_during") != 0
                 or row.get("preview_apply_requests_during") != 0

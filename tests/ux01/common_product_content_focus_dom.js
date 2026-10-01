@@ -333,6 +333,24 @@ function dispatchInput(item, value) {
     item.dispatchEvent({ type: 'input', target: item });
 }
 
+function productNavigatorKeyboardFocusScrollsLocally() {
+    const app = makeApp();
+    const second = find(app.listNode, 'choose-product', (item) => item.dataset.productId === '22');
+    let scrollOptions = null;
+    second.scrollIntoView = (options) => { scrollOptions = options; };
+    app.listNode.dispatchEvent({ type: 'focusin', target: second });
+    assert.equal(scrollOptions && scrollOptions.block, 'nearest');
+    assert.equal(scrollOptions && scrollOptions.inline, 'nearest');
+    assert.equal(app.calls.get, 0, 'keyboard focus must not fetch a product');
+    assert.equal(app.calls.preview, 0, 'keyboard focus must not preview');
+    assert.deepEqual(app.calls.apply, [], 'keyboard focus must not save');
+    assert.equal(
+        find(app.listNode, 'choose-product', (item) => item.dataset.productId === '11').getAttribute('aria-current'),
+        'true',
+        'keyboard focus must not change the selected product',
+    );
+}
+
 async function drain() {
     for (let index = 0; index < 8; index += 1) {
         await new Promise((resolve) => setImmediate(resolve));
@@ -467,6 +485,7 @@ async function localReplacementFocusInventory() {
 }
 
 async function run() {
+    productNavigatorKeyboardFocusScrollsLocally();
     await photoBoundaryFocus();
     await previewReturnDoesNotReuseToken();
     await localReplacementFocusInventory();
@@ -476,6 +495,7 @@ async function run() {
             'common_photo_boundary_focus_first',
             'common_photo_boundary_focus_last',
             'common_preview_cancel_focus_return',
+            'common_product_navigator_keyboard_focus_scroll',
             'successful_apply_restores_focus',
             'saved_but_readback_failed_restores_focus_and_keeps_status',
             'apply_completion_does_not_steal_external_focus',

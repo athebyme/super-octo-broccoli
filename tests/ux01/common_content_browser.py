@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import requests
 from flask import url_for
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 from werkzeug.serving import make_server
 
 
@@ -155,9 +155,13 @@ with app.app_context():
             {"name": "Поверхность", "value": "гладкая"},
         ],
     }, ensure_ascii=False)
+    second_external_id = "COMMON-CONTENT-SECOND-" + ("X" * 170)
+    external_id_column = ImportedProduct.__table__.columns["external_id"]
+    if len(second_external_id) > external_id_column.type.length:
+        raise AssertionError("Navigator fixture external ID must fit ImportedProduct.external_id")
     second = ImportedProduct(
         seller_id=FIXTURE["seller_id"],
-        external_id="COMMON-CONTENT-SECOND-" + ("X" * 180),
+        external_id=second_external_id,
         source_type="manual",
         title="Длинное название товара " + ("безразрывного-текста-" * 35),
         description="Второе описание.",
@@ -171,6 +175,7 @@ with app.app_context():
     FIXTURE["second_source_id"] = second.id
     FIXTURE["second_title"] = second.title
     FIXTURE["second_external_id"] = second.external_id
+    FIXTURE["second_external_id_limit"] = external_id_column.type.length
     FIXTURE["user_id"] = db.session.get(Seller, FIXTURE["seller_id"]).user_id
 
     # Seed a prior seller override with the real service so the UI must review
@@ -621,6 +626,38 @@ def measure_mobile_touch_targets(page, width: int, theme: str) -> dict:
     return row
 
 
+def wait_for_navigator_focus_geometry(page, product_id: str) -> bool:
+    try:
+        page.wait_for_function("""productId => {
+            const list = document.querySelector('#common-content-product-list');
+            const active = document.activeElement;
+            const box = active?.getBoundingClientRect();
+            const listBox = list?.getBoundingClientRect();
+            const style = active ? getComputedStyle(active) : null;
+            if (!list || !active || active.dataset.productId !== productId
+                    || !box || !listBox || !style || !active.matches(':focus-visible')) return false;
+            const width = Number.parseFloat(style.outlineWidth || '0') || 0;
+            const offset = Math.max(0, Number.parseFloat(style.outlineOffset || '0') || 0);
+            const extent = width + offset;
+            const left = box.left - extent;
+            const right = box.right + extent;
+            const top = box.top - extent;
+            const bottom = box.bottom + extent;
+            const clipLeft = listBox.left + list.clientLeft;
+            const clipTop = listBox.top + list.clientTop;
+            const clipRight = clipLeft + list.clientWidth;
+            const clipBottom = clipTop + list.clientHeight;
+            return style.outlineStyle !== 'none' && style.outlineStyle !== 'hidden'
+                && width > 0 && style.outlineColor !== 'transparent'
+                && left >= clipLeft - 0.5 && right <= clipRight + 0.5
+                && top >= clipTop - 0.5 && bottom <= clipBottom + 0.5
+                && left >= 0 && top >= 0 && right <= innerWidth && bottom <= innerHeight;
+        }""", product_id, timeout=600)
+        return True
+    except PlaywrightTimeoutError:
+        return False
+
+
 def measure_mobile_product_navigator(page, width: int, theme: str) -> dict:
     """Check the bounded two-card strip and keyboard access without selecting either item."""
     first_id = str(FIXTURE["source_id"])
@@ -689,22 +726,43 @@ def measure_mobile_product_navigator(page, width: int, theme: str) -> dict:
     assert first.count() == 1 and second.count() == 1, before
     first.focus()
     page.keyboard.press("Tab")
+    second_focus_wait_completed = wait_for_navigator_focus_geometry(page, second_id)
     after_tab = page.evaluate("""() => {
         const list = document.querySelector('#common-content-product-list');
         const active = document.activeElement;
         const box = active?.getBoundingClientRect();
         const listBox = list?.getBoundingClientRect();
         const style = active ? getComputedStyle(active) : null;
+        const outlineWidth = Number.parseFloat(style?.outlineWidth || '0') || 0;
+        const outlineOffset = Math.max(0, Number.parseFloat(style?.outlineOffset || '0') || 0);
+        const expansion = outlineWidth + outlineOffset;
+        const focusRing = box ? {
+            left: box.left - expansion, top: box.top - expansion,
+            right: box.right + expansion, bottom: box.bottom + expansion,
+        } : null;
+        const scrollport = list && listBox ? {
+            left: listBox.left + list.clientLeft,
+            top: listBox.top + list.clientTop,
+            right: listBox.left + list.clientLeft + list.clientWidth,
+            bottom: listBox.top + list.clientTop + list.clientHeight,
+        } : null;
+        const outlineVisible = !!style && style.outlineStyle !== 'none'
+            && style.outlineStyle !== 'hidden' && outlineWidth > 0
+            && style.outlineColor !== 'transparent';
+        const outlineWithinScrollport = !!focusRing && !!scrollport && outlineVisible
+            && focusRing.left >= scrollport.left - 0.5
+            && focusRing.right <= scrollport.right + 0.5
+            && focusRing.top >= scrollport.top - 0.5
+            && focusRing.bottom <= scrollport.bottom + 0.5;
         return {
             activeId: active?.dataset.productId || null,
             focusVisible: !!active && active.matches(':focus-visible'),
-            focusVisibleOnScreen: !!box && !!listBox && box.width > 0 && box.height > 0
-                && box.left >= listBox.left - 1 && box.right <= listBox.right + 1
-                && box.top >= 0 && box.bottom <= innerHeight,
-            outlineVisible: !!style && style.outlineStyle !== 'none'
-                && style.outlineStyle !== 'hidden'
-                && Number.parseFloat(style.outlineWidth) > 0
-                && style.outlineColor !== 'transparent',
+            focusVisibleOnScreen: !!focusRing && focusRing.left >= 0 && focusRing.top >= 0
+                && focusRing.right <= innerWidth && focusRing.bottom <= innerHeight,
+            outlineVisible,
+            outlineWithinScrollport,
+            focusRing,
+            scrollport,
             listScrollLeft: list?.scrollLeft || 0,
             pageX: window.scrollX,
             pageY: window.scrollY,
@@ -713,18 +771,44 @@ def measure_mobile_product_navigator(page, width: int, theme: str) -> dict:
     reached_second = after_tab["activeId"] == second_id
     returned_first = False
     after_return = after_tab
+    first_focus_wait_completed = False
     if reached_second:
         page.keyboard.press("Shift+Tab")
+        first_focus_wait_completed = wait_for_navigator_focus_geometry(page, first_id)
         after_return = page.evaluate("""() => {
+            const list = document.querySelector('#common-content-product-list');
             const active = document.activeElement;
+            const box = active?.getBoundingClientRect();
+            const listBox = list?.getBoundingClientRect();
             const style = active ? getComputedStyle(active) : null;
+            const outlineWidth = Number.parseFloat(style?.outlineWidth || '0') || 0;
+            const outlineOffset = Math.max(0, Number.parseFloat(style?.outlineOffset || '0') || 0);
+            const expansion = outlineWidth + outlineOffset;
+            const focusRing = box ? {
+                left: box.left - expansion, top: box.top - expansion,
+                right: box.right + expansion, bottom: box.bottom + expansion,
+            } : null;
+            const scrollport = list && listBox ? {
+                left: listBox.left + list.clientLeft,
+                top: listBox.top + list.clientTop,
+                right: listBox.left + list.clientLeft + list.clientWidth,
+                bottom: listBox.top + list.clientTop + list.clientHeight,
+            } : null;
+            const outlineVisible = !!style && style.outlineStyle !== 'none'
+                && style.outlineStyle !== 'hidden' && outlineWidth > 0
+                && style.outlineColor !== 'transparent';
+            const outlineWithinScrollport = !!focusRing && !!scrollport && outlineVisible
+                && focusRing.left >= scrollport.left - 0.5
+                && focusRing.right <= scrollport.right + 0.5
+                && focusRing.top >= scrollport.top - 0.5
+                && focusRing.bottom <= scrollport.bottom + 0.5;
             return {
                 activeId: active?.dataset.productId || null,
                 focusVisible: !!active && active.matches(':focus-visible'),
-                outlineVisible: !!style && style.outlineStyle !== 'none'
-                    && style.outlineStyle !== 'hidden'
-                    && Number.parseFloat(style.outlineWidth) > 0
-                    && style.outlineColor !== 'transparent',
+                outlineVisible,
+                outlineWithinScrollport,
+                focusRing,
+                scrollport,
                 pageX: window.scrollX,
                 pageY: window.scrollY,
             };
@@ -782,13 +866,27 @@ def measure_mobile_product_navigator(page, width: int, theme: str) -> dict:
         "keyboard_returned_first_by_shift_tab": returned_first,
         "second_focus_visible": after_tab["focusVisible"] and after_tab["outlineVisible"]
             and after_tab["focusVisibleOnScreen"],
-        "first_focus_visible": after_return["focusVisible"] and after_return["outlineVisible"],
+        "first_focus_visible": after_return["focusVisible"] and after_return["outlineVisible"]
+            and after_return["outlineWithinScrollport"],
+        "second_focus_geometry_wait_completed": second_focus_wait_completed,
+        "first_focus_geometry_wait_completed": first_focus_wait_completed,
+        "second_focus_outline_within_scrollport": after_tab["outlineWithinScrollport"],
+        "first_focus_outline_within_scrollport": after_return["outlineWithinScrollport"],
+        "second_focus_ring_geometry": {
+            "focus_ring": after_tab["focusRing"], "scrollport": after_tab["scrollport"],
+        },
+        "first_focus_ring_geometry": {
+            "focus_ring": after_return["focusRing"], "scrollport": after_return["scrollport"],
+        },
         "current_product_preserved": after["firstCurrent"] and not after["secondCurrent"],
         "full_second_title_dom": before["secondNameText"] == FIXTURE["second_title"],
         "full_second_sku_dom": before["secondSkuText"] == "Артикул " + FIXTURE["second_external_id"],
         "full_second_accessible_name": before["secondAccessibleLabel"] == expected_accessible_label
             and accessible_button.count() == 1,
         "full_second_title_tooltip": before["secondTitleTooltip"] == expected_accessible_label,
+        "full_second_external_id_within_model_limit": (
+            len(FIXTURE["second_external_id"]) <= FIXTURE["second_external_id_limit"]
+        ),
         "full_current_heading": before["headingTitle"] == FIXTURE["initial_title"]
             and before["headingTitleVisible"]
             and before["headingMetaVisible"]
@@ -817,11 +915,16 @@ def measure_mobile_product_navigator(page, width: int, theme: str) -> dict:
         and measured["keyboard_returned_first_by_shift_tab"]
         and measured["second_focus_visible"]
         and measured["first_focus_visible"]
+        and measured["second_focus_geometry_wait_completed"]
+        and measured["first_focus_geometry_wait_completed"]
+        and measured["second_focus_outline_within_scrollport"]
+        and measured["first_focus_outline_within_scrollport"]
         and measured["current_product_preserved"]
         and measured["full_second_title_dom"]
         and measured["full_second_sku_dom"]
         and measured["full_second_accessible_name"]
         and measured["full_second_title_tooltip"]
+        and measured["full_second_external_id_within_model_limit"]
         and measured["full_current_heading"]
         and measured["no_product_api_reads"]
         and measured["no_mutating_requests"]

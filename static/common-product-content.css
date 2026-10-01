@@ -163,10 +163,14 @@
     .cpc-header { align-items: flex-start; flex-direction: column; gap: .8rem; }
     .cpc-header > .sh-btn { align-self: flex-start; }
     .cpc-layout { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
-    .cpc-selection { position: static; padding: .75rem; }
-    .cpc-product-list { display: flex; gap: .4rem; max-height: none; overflow-x: auto; overflow-y: hidden; padding: .35rem .1rem .4rem; }
+    .cpc-selection { position: static; padding: .6rem; }
+    .cpc-selection-help { margin: .35rem 0 .5rem; line-height: 1.4; }
+    .cpc-product-list { display: flex; gap: .4rem; max-height: none; overflow-x: auto; overflow-y: hidden; padding: .35rem .3rem .4rem; scroll-behavior: auto; }
     .cpc-product-list li { flex: 0 0 auto; width: min(72vw, 15rem); min-width: 0; }
     .cpc-product-list button { min-height: 3.1rem; }
+    .cpc-product-list button { scroll-margin-inline: .3rem; }
+    .cpc-product-name { line-height: 1.3; }
+    .cpc-product-meta { line-height: 1.25; }
     .cpc-workspace { padding: .85rem .75rem; }
     .cpc-product-heading { flex-direction: column; gap: .35rem; }
     .cpc-source-line { text-align: left; }

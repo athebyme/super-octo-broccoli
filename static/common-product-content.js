@@ -1245,7 +1245,15 @@
         previewNode.addEventListener('click', handleClick);
         previewNode.addEventListener('change', handleChange);
     }
-    if (listNode) listNode.addEventListener('click', handleClick);
+    if (listNode) {
+        listNode.addEventListener('click', handleClick);
+        listNode.addEventListener('focusin', function (event) {
+            var target = event.target && event.target.closest
+                ? event.target.closest('button[data-action="choose-product"]') : null;
+            if (!target || !listNode.contains(target) || typeof target.scrollIntoView !== 'function') return;
+            target.scrollIntoView({block: 'nearest', inline: 'nearest'});
+        });
+    }
     window.addEventListener('beforeunload', function (event) {
         if (!state.busy && !state.records.some(isDirty)) return;
         event.preventDefault();

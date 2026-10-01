@@ -118,11 +118,24 @@ def _common_content_browser_report() -> dict:
             "keyboard_returned_first_by_shift_tab": True,
             "second_focus_visible": True,
             "first_focus_visible": True,
+            "second_focus_geometry_wait_completed": True,
+            "first_focus_geometry_wait_completed": True,
+            "second_focus_outline_within_scrollport": True,
+            "first_focus_outline_within_scrollport": True,
+            "second_focus_ring_geometry": {
+                "focus_ring": {"left": 6, "top": 6, "right": 26, "bottom": 26},
+                "scrollport": {"left": 5, "top": 5, "right": 27, "bottom": 27},
+            },
+            "first_focus_ring_geometry": {
+                "focus_ring": {"left": 6, "top": 6, "right": 26, "bottom": 26},
+                "scrollport": {"left": 5, "top": 5, "right": 27, "bottom": 27},
+            },
             "current_product_preserved": True,
             "full_second_title_dom": True,
             "full_second_sku_dom": True,
             "full_second_accessible_name": True,
             "full_second_title_tooltip": True,
+            "full_second_external_id_within_model_limit": True,
             "full_current_heading": True,
             "product_api_reads_during": 0,
             "mutating_requests_during": 0,
@@ -464,6 +477,14 @@ class Ux01RunnerContractTest(unittest.TestCase):
             zeroheight_navigator["mobile_product_navigator_observations"][0]["selection_height_px"] = 0
             invalid_reports.append((
                 "zero-height navigator geometry fails", zeroheight_navigator,
+                "common_mobile_product_navigator_incomplete_or_unsafe",
+            ))
+
+            clipped_navigator_focus_ring = copy.deepcopy(report)
+            clipped_navigator_focus_ring["mobile_product_navigator_observations"][0][
+                "second_focus_ring_geometry"]["focus_ring"]["right"] = 28
+            invalid_reports.append((
+                "focus ring outside local scrollport fails", clipped_navigator_focus_ring,
                 "common_mobile_product_navigator_incomplete_or_unsafe",
             ))
 
