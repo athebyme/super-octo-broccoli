@@ -1,5 +1,5 @@
 """A bounded, coherent local read of one observed Ozon analytics period."""
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
 from time import monotonic
@@ -103,6 +103,13 @@ def _as_of(value, *, snapshot_id, today):
     return observed
 
 
+def _utc_naive(value):
+    """Normalize instants to the naive-UTC convention used by persisted rows."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def get_workspace(*, seller_id, account_id, period_code='30d', snapshot_id=None, as_of=None,
                   search='', sort_by=REVENUE, sort_dir='desc', page=1, per_page=25,
                   now=None, today=None):
@@ -117,7 +124,14 @@ def get_workspace(*, seller_id, account_id, period_code='30d', snapshot_id=None,
         raise MarketplaceAnalyticsValidationError('Неизвестная сортировка товаров')
     if not isinstance(search, str) or len(search) > 200:
         raise MarketplaceAnalyticsValidationError('Поиск должен содержать не более 200 символов')
-    anchor = _as_of(as_of, snapshot_id=snapshot_id, today=today or date.today())
+    # Sync uses a single UTC instant for both its freshness check and period
+    # date. Keep the read workspace on that same anchor: `date.today()` is the
+    # host's local date and can already be tomorrow while UTC is still today.
+    effective_now = _utc_naive(now or datetime.utcnow())
+    effective_today = today if today is not None else effective_now.date()
+    if not isinstance(effective_today, date) or isinstance(effective_today, datetime):
+        raise MarketplaceAnalyticsValidationError('Дата периода должна быть календарной датой')
+    anchor = _as_of(as_of, snapshot_id=snapshot_id, today=effective_today)
     period_code, requested_start, requested_end = Analytics._period(period_code, today=anchor)
     account = MarketplaceAccountService.get_owned_account(
         seller_id=seller_id, account_id=account_id, marketplace_code='ozon')
@@ -227,7 +241,11 @@ def get_workspace(*, seller_id, account_id, period_code='30d', snapshot_id=None,
             'matched':listing_id is not None, 'metrics':{code:_value(row[code]) for code in DEFINITIONS}})
     completed = snapshot['completed_at']
     exact = start == requested_start and end == requested_end
-    stale = not exact or not completed or completed < (now or datetime.utcnow()) - Analytics.CACHE_TTL
+    stale = (
+        not exact
+        or not completed
+        or _utc_naive(completed) < effective_now - Analytics.CACHE_TTL
+    )
     return {**base, 'status':'stale' if stale else 'ready',
             'snapshot':{'id':snapshot['id'], 'period_start':start.isoformat(), 'period_end':end.isoformat(),
                         'completed_at':completed.isoformat() if completed else None, 'period_matches_request':exact},

@@ -1,7 +1,8 @@
 """Observed analytics: one pinned scope, exact decimals and bounded product pages."""
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
+from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
 import pytest
@@ -51,6 +52,20 @@ def newer(f, **overrides):
     row=Sync(**columns);db.session.add(row);db.session.commit();return row
 
 
+def pin_fixture_period(f, period_end, completed_at):
+    period_start = period_end - timedelta(days=6)
+    f.run.period_start = period_start
+    f.run.period_end = period_end
+    f.run.completed_at = completed_at
+    f.run.request_fingerprint = request_fingerprint(
+        period_start=period_start, period_end=period_end,
+    )
+    for row in Fact.query.filter_by(sync_id=f.run.id, dimension_kind='day'):
+        row.fact_date = period_end
+        row.dimension_id = period_end.isoformat()
+    db.session.commit()
+
+
 def test_exact_money_days_and_current_owned_photo(data):
     result=read(data)
     assert result['scope']['account_id']==data.account.id
@@ -73,6 +88,52 @@ def test_pinned_snapshot_and_day_do_not_change_on_new_completed(data):
     assert fixed['totals']==first['totals'] and fixed['products']==first['products']
     assert fixed['requested_period']==first['requested_period']
     with pytest.raises(MarketplaceAnalyticsNotFound):read(data,snapshot_id=next_sync.id,period_code='30d')
+
+
+def test_default_period_anchor_uses_deterministic_utc_instant_at_local_day_boundary(data):
+    utc_now = datetime(2026, 9, 30, 23, 30)
+    pin_fixture_period(data, utc_now.date(), utc_now - timedelta(minutes=10))
+
+    class FrozenUTCDateTime(datetime):
+        @classmethod
+        def utcnow(cls):
+            return utc_now
+
+    # At this instant Moscow is already on the next calendar date. The default
+    # workspace must still match the period the UTC-based sync requested.
+    assert utc_now.replace(tzinfo=timezone.utc).astimezone(
+        ZoneInfo('Europe/Moscow'),
+    ).date() == date(2026, 10, 1)
+    with patch('services.marketplace_analytics_workspace.datetime', FrozenUTCDateTime):
+        result = read(data)
+    assert result['as_of'] == '2026-09-30'
+    assert result['requested_period']['end'] == '2026-09-30'
+    assert result['snapshot']['period_matches_request']
+    assert result['status'] == 'ready'
+
+
+def test_explicit_aware_now_is_converted_to_utc_date_before_period_lookup(data):
+    local_now = datetime(2026, 10, 1, 2, 30, tzinfo=ZoneInfo('Europe/Moscow'))
+    utc_day = date(2026, 9, 30)
+    pin_fixture_period(data, utc_day, datetime(2026, 9, 30, 23, 20))
+    result = read(data, now=local_now)
+    assert local_now.date() == date(2026, 10, 1)
+    assert local_now.astimezone(timezone.utc).date() == utc_day
+    assert result['as_of'] == utc_day.isoformat()
+    assert result['snapshot']['period_matches_request']
+
+
+def test_explicit_today_overrides_utc_now_and_pin_cannot_be_in_the_future(data):
+    utc_now = datetime(2026, 9, 30, 23, 30, tzinfo=timezone.utc)
+    explicit_day = date(2026, 9, 29)
+    pin_fixture_period(data, explicit_day, datetime(2026, 9, 29, 23, 20))
+    result = read(data, now=utc_now, today=explicit_day)
+    assert result['as_of'] == explicit_day.isoformat()
+    assert result['requested_period']['end'] == explicit_day.isoformat()
+    assert result['snapshot']['period_matches_request']
+
+    with pytest.raises(MarketplaceAnalyticsValidationError):
+        read(data, now=utc_now, snapshot_id=data.run.id, as_of='2026-10-01')
 
 
 def test_missing_zero_and_wrong_definition_are_not_interchangeable(data):
