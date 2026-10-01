@@ -7,11 +7,12 @@ from pathlib import Path
 
 
 BASE_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "base.html"
+ROOT = BASE_TEMPLATE.parents[1]
 CSS = re.sub(r"/\*.*?\*/", "", BASE_TEMPLATE.read_text(encoding="utf-8"), flags=re.S)
 COMMON_CSS = re.sub(
     r"/\*.*?\*/",
     "",
-    (BASE_TEMPLATE.parents[1] / "static" / "common-product-content.css").read_text(encoding="utf-8"),
+    (ROOT / "static" / "common-product-content.css").read_text(encoding="utf-8"),
     flags=re.S,
 )
 
@@ -62,11 +63,13 @@ def _assert_pair(properties: dict[str, str], foreground: str, background: str) -
 
 def test_muted_and_accent_text_have_aa_contrast_on_theme_surfaces() -> None:
     themes = (_properties(r":root"), _properties(r'\[data-theme="dark"\]'))
+    surfaces = ("--bg-card", "--bg", "--bg-hover", "--accent-light")
     for theme in themes:
-        _assert_pair(theme, "--text-muted", "--bg-card")
-        _assert_pair(theme, "--text-muted", "--bg")
-        _assert_pair(theme, "--accent-text", "--accent-light")
-        _assert_pair(theme, "--accent-text", "--bg-card")
+        for surface in ("--bg-card", "--bg", "--bg-hover"):
+            _assert_pair(theme, "--text-muted", surface)
+        for surface in surfaces:
+            _assert_pair(theme, "--accent-text", surface)
+            assert _contrast(_hex(theme, "--accent"), _hex(theme, surface)) >= 3.0
 
     for selector in (
         ".text-indigo-600",
@@ -160,3 +163,28 @@ def test_focus_indicators_use_opaque_high_contrast_tokens() -> None:
         for surface in surfaces:
             assert _contrast(_hex(theme, "--accent"), _hex(theme, surface)) >= 3.0
     assert re.search(r"\.sh-cmdpal-item\.active\s*\{[^}]*outline: 2px solid var\(--accent\)", CSS)
+
+
+def test_templates_and_static_do_not_use_legacy_text_or_focus_tokens() -> None:
+    legacy_focus_outline = re.compile(
+        r"(?<![\w-])outline(?:-color)?\s*:[^;{}<>]*?var\(\s*--focus-ring\s*\)",
+        re.I | re.S,
+    )
+    legacy_accent_text = re.compile(
+        r"(?<![\w-])color\s*:\s*var\(\s*--accent\s*\)(?![\w-])",
+        re.I,
+    )
+    remaining = {"focus outlines": [], "accent text": []}
+    for directory in (ROOT / "templates", ROOT / "static"):
+        for path in directory.rglob("*"):
+            if path.suffix not in {".html", ".css"}:
+                continue
+            source = path.read_text(encoding="utf-8")
+            source = re.sub(r"/\*.*?\*/|<!--.*?-->", "", source, flags=re.S)
+            if legacy_focus_outline.search(source):
+                remaining["focus outlines"].append(str(path.relative_to(ROOT)))
+            if legacy_accent_text.search(source):
+                remaining["accent text"].append(str(path.relative_to(ROOT)))
+
+    assert not remaining["focus outlines"], f"focus outlines still use alpha token: {remaining['focus outlines']}"
+    assert not remaining["accent text"], f"text colors still use raw accent token: {remaining['accent text']}"

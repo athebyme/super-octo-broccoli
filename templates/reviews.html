@@ -101,7 +101,7 @@
                                     <span>&middot;</span>
                                     <span x-text="testSelectedProduct.vendor_code"></span>
                                     <button @click="testSelectedProduct = null; testProductName = ''; testNmId = null"
-                                            class="ml-auto text-xs underline" style="color:var(--accent)">Очистить</button>
+                                            class="ml-auto text-xs underline" style="color:var(--accent-text)">Очистить</button>
                                 </div>
                             </template>
                         </div>
@@ -153,7 +153,7 @@
                         <div>
                             <div class="flex items-center gap-2 mb-2 flex-wrap">
                                 <span class="text-xs px-2 py-0.5 rounded-full"
-                                      :style="testSource === 'ai' ? 'background:var(--info-bg);color:var(--info)' : 'background:var(--accent-light);color:var(--accent)'"
+                                      :style="testSource === 'ai' ? 'background:var(--info-bg);color:var(--info)' : 'background:var(--accent-light);color:var(--accent-text)'"
                                       x-text="testSource === 'ai' ? 'AI' : 'Шаблон'"></span>
                                 <template x-if="testSelectedProduct && testSource === 'ai'">
                                     <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--ok-bg);color:var(--ok)">С данными карточки</span>
@@ -170,7 +170,7 @@
                     </template>
                     <template x-if="testGenerating">
                         <div class="flex items-center gap-2">
-                            <svg class="animate-spin h-4 w-4" style="color:var(--accent)" fill="none" viewBox="0 0 24 24">
+                            <svg class="animate-spin h-4 w-4" style="color:var(--accent-text)" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
                             </svg>
@@ -206,7 +206,7 @@
             <div class="overflow-y-auto" style="max-height:55vh">
                 <template x-if="productsLoading">
                     <div class="flex justify-center py-8">
-                        <svg class="animate-spin h-6 w-6" style="color:var(--accent)" fill="none" viewBox="0 0 24 24">
+                        <svg class="animate-spin h-6 w-6" style="color:var(--accent-text)" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
                         </svg>
@@ -224,7 +224,7 @@
                         <div class="min-w-0 flex-1">
                             <div class="text-sm font-medium truncate" style="color:var(--text)" x-text="p.title"></div>
                             <div class="flex items-center gap-2 mt-0.5 text-xs" style="color:var(--text-muted)">
-                                <span x-text="p.brand" class="font-medium" style="color:var(--accent)"></span>
+                                <span x-text="p.brand" class="font-medium" style="color:var(--accent-text)"></span>
                                 <span>&middot;</span>
                                 <span x-text="p.vendor_code"></span>
                                 <span>&middot;</span>
@@ -303,7 +303,7 @@
         </template>
         <template x-if="bulkGenerating || bulkSending">
             <div class="flex items-center gap-2 mr-2 text-xs" style="color:var(--text-secondary)">
-                <svg class="animate-spin h-4 w-4" style="color:var(--accent)" fill="none" viewBox="0 0 24 24">
+                <svg class="animate-spin h-4 w-4" style="color:var(--accent-text)" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
                 </svg>
@@ -318,7 +318,7 @@
 
     <!-- Loading -->
     <div x-show="loading" class="flex justify-center py-16">
-        <svg class="animate-spin h-8 w-8" style="color:var(--accent)" fill="none" viewBox="0 0 24 24">
+        <svg class="animate-spin h-8 w-8" style="color:var(--accent-text)" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
         </svg>
@@ -333,7 +333,7 @@
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center gap-2 mb-1 flex-wrap">
                             <span class="text-sm font-semibold" style="color:var(--text)" x-text="item.productDetails?.productName || 'Товар'"></span>
-                            <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--accent-light);color:var(--accent)" x-text="item.productDetails?.brandName"></span>
+                            <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--accent-light);color:var(--accent-text)" x-text="item.productDetails?.brandName"></span>
                             <template x-if="tab === 'feedbacks'">
                                 <span class="text-yellow-500 text-sm" x-text="'★'.repeat(item.productValuation || 0) + '☆'.repeat(5 - (item.productValuation || 0))"></span>
                             </template>

@@ -10,7 +10,7 @@
     border-radius: var(--r-sm);
     cursor: pointer;
 }
-.cq-select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.cq-select:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 1px; }
 .cq-view .sh-segmented-item svg { width: 15px; height: 15px; display: block; }
 
 /* ---------- Список работ ---------- */

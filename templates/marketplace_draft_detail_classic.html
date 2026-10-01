@@ -19,11 +19,11 @@
 } %}
 {{ preparation_journey('draft', draft.account.label, 'черновик №' ~ draft.id ~ ' · внутренний товар №' ~ draft.imported_product_id, 'Сохраните изменения локально и проверьте точную версию. Локальная проверка не публикует карточку; отправка подтверждается отдельной формой.', internal_url=url_for('seller_my_products', account_id=draft.account_id), draft_url=url_for('marketplace_drafts.index', account_id=draft.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=draft.account_id, draft_ids=draft.id), result_url=url_for('ozon_bulk_uploads.index', account_id=draft.account_id), listing_url=url_for('marketplace_listings.classic', marketplace='ozon', account_id=draft.account_id), channel='Ozon') }}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-    <a href="{{ url_for('marketplace_drafts.index', account_id=draft.account_id) }}" class="text-sm" style="color:var(--accent)">← Черновики Ozon</a>
+    <a href="{{ url_for('marketplace_drafts.index', account_id=draft.account_id) }}" class="text-sm" style="color:var(--accent-text)">← Черновики Ozon</a>
     <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div class="min-w-0">
             <div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)">
-                <span class="uppercase font-medium" style="color:var(--accent)">Ozon</span>
+                <span class="uppercase font-medium" style="color:var(--accent-text)">Ozon</span>
                 <span>{{ draft.account.label }}</span>
                 <span>{{ status_labels.get(draft.status, draft.status) }}</span>
                 <span>{{ validation_status_labels.get(draft.validation_status, draft.validation_status) }}</span>
@@ -129,7 +129,7 @@
         </div>
 
         {% if not readiness.category.product_type_id %}
-        <p class="mt-3 text-sm" style="color:var(--text-secondary)">Следующий шаг — <a class="underline" style="color:var(--accent)" href="#ozon-category-selection">выбрать категорию и тип Ozon</a>. После выбора станет известен список обязательных полей.</p>
+        <p class="mt-3 text-sm" style="color:var(--text-secondary)">Следующий шаг — <a class="underline" style="color:var(--accent-text)" href="#ozon-category-selection">выбрать категорию и тип Ozon</a>. После выбора станет известен список обязательных полей.</p>
         {% elif not readiness.schema.fresh %}
         <p class="mt-3 text-sm" style="color:var(--text-secondary)">Требования ещё не подтверждены актуальной схемой. {% if ozon_enabled %}Справочник обновляется в фоне для выбранного типа. Если состояние долго не меняется, сообщите оператору сервиса.{% else %}Обновление станет доступно после включения интеграции оператором.{% endif %}</p>
         {% endif %}
@@ -295,7 +295,7 @@
             <div class="mt-3 text-sm" style="color:var(--text-muted)">Контент не заполнен — название и описание подтянутся из фактов при валидации либо задаются здесь.</div>
             {% endif %}
             <details class="mt-3">
-                <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править контент как JSON</summary>
+                <summary class="text-xs cursor-pointer" style="color:var(--accent-text)">Править контент как JSON</summary>
                 <textarea name="content_json" rows="8" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
                           style="border-color:var(--border);color:var(--text)">{{ draft_data.content | tojson(indent=2) }}</textarea>
             </details>
@@ -327,7 +327,7 @@
                 <p class="mt-3 text-sm" style="color:var(--text-muted)">Атрибуты не заполнены. Выберите тип товара и запустите «Проверить» — обязательные поля покажет валидация.</p>
                 {% endif %}
                 <details class="mt-3">
-                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править атрибуты как JSON</summary>
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent-text)">Править атрибуты как JSON</summary>
                     <p class="mt-1 text-xs" style="color:var(--text-muted)">ID значения справочника и его отображаемое значение проверяются как точная пара в рамках выбранного типа.</p>
                     <textarea name="attributes_json" rows="18" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
                               style="border-color:var(--border);color:var(--text)">{{ draft_data.attributes | tojson(indent=2) }}</textarea>
@@ -350,7 +350,7 @@
                 <p class="mt-3 text-sm" style="color:var(--text-muted)">Составных групп нет — для большинства категорий это нормально.</p>
                 {% endif %}
                 <details class="mt-3">
-                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent-text)">Править как JSON</summary>
                     <textarea name="complex_attributes_json" rows="18" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
                               style="border-color:var(--border);color:var(--text)">{{ draft_data.complex_attributes | tojson(indent=2) }}</textarea>
                 </details>
@@ -374,7 +374,7 @@
                 <p class="mt-3 text-sm" style="color:var(--text-muted)">Не заполнено — Ozon требует явные габариты упаковки с единицами.</p>
                 {% endif %}
                 <details class="mt-3">
-                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent-text)">Править как JSON</summary>
                     <textarea name="dimensions_json" rows="8" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
                               style="border-color:var(--border);color:var(--text)">{{ draft_data.dimensions | tojson(indent=2) }}</textarea>
                 </details>
@@ -409,7 +409,7 @@
                 </ul>
                 {% endif %}
                 <details class="mt-3">
-                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent-text)">
                         Проверить или очистить список как JSON
                     </summary>
                     <textarea name="attribute_removals_json" rows="6"
@@ -426,15 +426,15 @@
                 {% if media.get('primary_image') or media_images %}
                 <p class="mt-3 text-sm" style="color:var(--text)">Фотографий: {{ (media_images | length) + (1 if media.get('primary_image') and media.get('primary_image') not in media_images else 0) }} <span class="text-xs" style="color:var(--text-muted)">(лимит Ozon — 30, images360 запрещён)</span></p>
                 <ul class="mt-2 text-xs" style="color:var(--text-muted);max-height:8rem;overflow-y:auto">
-                    {% if media.get('primary_image') %}<li>Главное: <a href="{{ media.get('primary_image') }}" target="_blank" rel="noopener" style="color:var(--accent)">{{ media.get('primary_image') | truncate(70) }}</a></li>{% endif %}
-                    {% for url in media_images[:10] %}<li><a href="{{ url }}" target="_blank" rel="noopener" style="color:var(--accent)">{{ url | truncate(70) }}</a></li>{% endfor %}
+                    {% if media.get('primary_image') %}<li>Главное: <a href="{{ media.get('primary_image') }}" target="_blank" rel="noopener" style="color:var(--accent-text)">{{ media.get('primary_image') | truncate(70) }}</a></li>{% endif %}
+                    {% for url in media_images[:10] %}<li><a href="{{ url }}" target="_blank" rel="noopener" style="color:var(--accent-text)">{{ url | truncate(70) }}</a></li>{% endfor %}
                     {% if media_images | length > 10 %}<li>… и ещё {{ media_images | length - 10 }}</li>{% endif %}
                 </ul>
                 {% else %}
                 <p class="mt-3 text-sm" style="color:var(--text-muted)">Фото не заполнены — подтянутся из канонической карточки при валидации.</p>
                 {% endif %}
                 <details class="mt-3">
-                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent-text)">Править как JSON</summary>
                     <textarea name="media_json" rows="8" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
                               style="border-color:var(--border);color:var(--text)">{{ draft_data.media | tojson(indent=2) }}</textarea>
                 </details>
@@ -450,7 +450,7 @@
                 <p class="mt-3 text-sm" style="color:var(--text-muted)">Штрихкоды не заполнены.</p>
                 {% endif %}
                 <details class="mt-3">
-                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent-text)">Править как JSON</summary>
                     <textarea name="barcodes_json" rows="6" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
                               style="border-color:var(--border);color:var(--text)">{{ draft_data.barcodes | tojson(indent=2) }}</textarea>
                 </details>
@@ -469,7 +469,7 @@
                 <p class="mt-3 text-sm" style="color:var(--text-muted)">Не заполнено — Ozon требует явные цену, валюту RUB и ставку НДС.</p>
                 {% endif %}
                 <details class="mt-3">
-                    <summary class="text-xs cursor-pointer" style="color:var(--accent)">Править как JSON</summary>
+                    <summary class="text-xs cursor-pointer" style="color:var(--accent-text)">Править как JSON</summary>
                     <textarea name="commercial_json" rows="6" class="mt-2 w-full rounded-md border p-3 text-xs font-mono bg-transparent"
                               style="border-color:var(--border);color:var(--text)">{{ draft_data.commercial | tojson(indent=2) }}</textarea>
                 </details>
@@ -539,12 +539,12 @@
                     Для новой карточки проверяется отсутствие такого артикула в Ozon. Для уже связанной карточки на Ozon выполняется точная проверка идентичности, полный снимок текущего состояния и полная замена данных. Неопределённый результат запроса никогда не повторяется автоматически.
                 </p>
             </div>
-            <a class="text-sm shrink-0" style="color:var(--accent)" href="{{ url_for('marketplace_operations.index') }}">Все операции</a>
+            <a class="text-sm shrink-0" style="color:var(--accent-text)" href="{{ url_for('marketplace_operations.index') }}">Все операции</a>
         </div>
 
         {% if write_quarantine %}
         <p class="mt-4" role="status" style="color:var(--text-secondary)">Новые изменения {{ 'магазина' if write_quarantine.scope == 'account' else 'товара' }} остановлены решением №{{ write_quarantine.id }}. Черновик можно подготовить; отправка пока недоступна.
-            {% if write_quarantine.review_url %}<a style="color:var(--accent)" href="{{ write_quarantine.review_url }}">Открыть разбор исходной операции</a>{% endif %}
+            {% if write_quarantine.review_url %}<a style="color:var(--accent-text)" href="{{ write_quarantine.review_url }}">Открыть разбор исходной операции</a>{% endif %}
         </p>
         {% elif publication_enabled and draft.status == 'ready' and draft.validation_status == 'valid' and not active_operation %}
         <form class="mt-4" method="post"
@@ -558,11 +558,11 @@
         </form>
         {% elif active_operation %}
         <p class="mt-3 text-sm" style="color:var(--text-secondary)">
-            Выполняется <a style="color:var(--accent)" href="{{ url_for('marketplace_operations.detail', operation_id=active_operation.id) }}">операция #{{ active_operation.id }}</a>. До её завершения черновик заблокирован от изменений.
+            Выполняется <a style="color:var(--accent-text)" href="{{ url_for('marketplace_operations.detail', operation_id=active_operation.id) }}">операция #{{ active_operation.id }}</a>. До её завершения черновик заблокирован от изменений.
         </p>
         {% elif draft.status == 'published' and draft.published_listing_id %}
         <p class="mt-3 text-sm" style="color:var(--text-secondary)">
-            Публикация подтверждена. <a style="color:var(--accent)" href="{{ url_for('marketplace_listings.detail', listing_id=draft.published_listing_id) }}">Открыть листинг</a>.
+            Публикация подтверждена. <a style="color:var(--accent-text)" href="{{ url_for('marketplace_listings.detail', listing_id=draft.published_listing_id) }}">Открыть листинг</a>.
         </p>
         {% elif not publication_enabled %}
         <p class="mt-3 text-sm" style="color:var(--text-secondary)">Новые операции записи выключены настройкой <code>MARKETPLACE_OZON_PUBLICATION_ENABLED</code>. Уже отправленные операции продолжают сверяться.</p>

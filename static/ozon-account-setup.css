@@ -7,7 +7,7 @@
 #ozon-account-setup .sh-stepper { min-width: 0; }
 #ozon-account-setup .sh-step-label { white-space: normal; }
 #ozon-account-setup details > summary:focus-visible {
-    outline: 2px solid var(--focus-ring);
+    outline: 2px solid var(--focus-outline);
     outline-offset: 4px;
     border-radius: var(--r-xs);
 }
@@ -26,7 +26,7 @@
     line-height: 1.5;
 }
 #ozon-account-setup .sh-input:focus-visible {
-    outline: 2px solid var(--focus-ring);
+    outline: 2px solid var(--focus-outline);
     outline-offset: 2px;
 }
 .ozon-connect-intro { display: flex; align-items: center; gap: 24px; margin-bottom: 24px; }
@@ -60,7 +60,7 @@
 .ozon-settings-feedback > * + * { margin-top:12px; }
 .ozon-settings-conflict { display:grid; justify-items:start; gap:10px; line-height:1.6; }
 .ozon-settings-review { padding:16px; border:1px solid var(--border); border-radius:var(--r-sm); background:var(--bg-hover); overflow-wrap:anywhere; }
-.ozon-settings-review:focus-visible { outline:2px solid var(--focus-ring); outline-offset:3px; }
+.ozon-settings-review:focus-visible { outline:2px solid var(--focus-outline); outline-offset:3px; }
 .ozon-settings-review dl { margin:12px 0; }
 .ozon-settings-review dl > div, .ozon-history-list dl > div { display:grid; grid-template-columns:minmax(120px,1fr) minmax(0,2fr); gap:8px 16px; margin:6px 0; }
 .ozon-settings-review dt, .ozon-history-list dt { color:var(--text-secondary); }

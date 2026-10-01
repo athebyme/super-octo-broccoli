@@ -82,7 +82,7 @@
                         <button @click="activeTab = tab.id"
                             class="pb-3 px-1 border-b-2 text-sm font-medium transition-colors whitespace-nowrap"
                             :style="activeTab === tab.id
-                                ? 'border-color:var(--accent);color:var(--accent)'
+                                ? 'border-color:var(--accent);color:var(--accent-text)'
                                 : 'border-color:transparent;color:var(--text-muted)'"
                             x-text="tab.label"></button>
                     </template>
@@ -211,9 +211,9 @@
                                     </button>
                                 </div>
                                 <p class="text-xs mt-1" style="color:var(--text-muted)" x-show="ai.provider === 'cloudru'">Service Account ключ Cloud.ru</p>
-                                <p class="text-xs mt-1" style="color:var(--text-muted)" x-show="ai.provider === 'mimo'">API ключ с <a href="https://platform.xiaomimimo.com" target="_blank" style="color:var(--accent);text-decoration:underline">platform.xiaomimimo.com</a></p>
-                                <p class="text-xs mt-1" style="color:var(--text-muted)" x-show="ai.provider === 'openrouter'">API ключ с <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--accent);text-decoration:underline">openrouter.ai/keys</a></p>
-                                <p class="text-xs mt-1" style="color:var(--text-muted)" x-show="ai.provider === 'deepseek'">API ключ с <a href="https://platform.deepseek.com/api_keys" target="_blank" style="color:var(--accent);text-decoration:underline">platform.deepseek.com</a></p>
+                                <p class="text-xs mt-1" style="color:var(--text-muted)" x-show="ai.provider === 'mimo'">API ключ с <a href="https://platform.xiaomimimo.com" target="_blank" style="color:var(--accent-text);text-decoration:underline">platform.xiaomimimo.com</a></p>
+                                <p class="text-xs mt-1" style="color:var(--text-muted)" x-show="ai.provider === 'openrouter'">API ключ с <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--accent-text);text-decoration:underline">openrouter.ai/keys</a></p>
+                                <p class="text-xs mt-1" style="color:var(--text-muted)" x-show="ai.provider === 'deepseek'">API ключ с <a href="https://platform.deepseek.com/api_keys" target="_blank" style="color:var(--accent-text);text-decoration:underline">platform.deepseek.com</a></p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium mb-1.5" style="color:var(--text-secondary)">API Base URL</label>
@@ -237,7 +237,7 @@
                         <button @click="testAIConnection()"
                             :disabled="ai.testing"
                             class="px-5 py-2.5 text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
-                            style="color:var(--accent);background:var(--bg);border:1px solid var(--border)">
+                            style="color:var(--accent-text);background:var(--bg);border:1px solid var(--border)">
                             <span x-show="!ai.testing">Тест подключения</span>
                             <span x-show="ai.testing">Проверка...</span>
                         </button>

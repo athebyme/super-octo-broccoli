@@ -17,7 +17,7 @@
 .catalog-account-actions form { margin: 0; }
 .catalog-account-actions .sh-btn { min-height: 36px; }
 .catalog-account-more { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); padding: 8px 4px; }
-.catalog-account-more:hover { color: var(--accent); }
+.catalog-account-more:hover { color: var(--accent-text); }
 .catalog-alert { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
 .catalog-filters { padding: 16px; margin-bottom: 20px; }
 .catalog-filter-fields { display: grid; grid-template-columns: minmax(230px, 2fr) minmax(140px, 1fr) minmax(160px, 1fr) auto; gap: 12px; align-items: end; }
@@ -72,7 +72,7 @@
 .catalog-product-metric--prices .catalog-metric-label { display:block; margin-top:5px; }
 .catalog-product-metric--prices .catalog-metric-value--base { font-size:18px; margin-bottom:8px; }
 .catalog-product-open { color: var(--text-muted); }
-.catalog-product:hover .catalog-product-open { color: var(--accent); }
+.catalog-product:hover .catalog-product-open { color: var(--accent-text); }
 .catalog-products--grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; border: 0; border-radius: 0; background: transparent; overflow: visible; }
 .catalog-products--grid .catalog-product { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 14px 14px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-card); align-items: end; }
 .catalog-products--grid .catalog-product:hover { border-color: var(--text-muted); }
@@ -159,7 +159,7 @@
 .mcat-account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
 .mcat-account-actions .sh-btn { min-height: 36px; }
 .mcat-account-settings { display: inline-flex; gap: 4px; align-items: center; padding: 8px; font-size: 12px; color: var(--text-secondary); }
-.mcat-account-settings:hover { color: var(--accent); }
+.mcat-account-settings:hover { color: var(--accent-text); }
 .mcat-sync-warning { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
 .mcat-strip { position: static; padding: 14px; background: var(--bg-card); backdrop-filter: none; border: 1px solid var(--border); border-radius: var(--r-md); margin-bottom: 18px; }
 .mcat-search { max-width: none; height: 40px; flex-basis: 280px; }
@@ -174,7 +174,7 @@
 .mcat-results-head h2 { display: inline-flex; align-items: baseline; gap: 8px; font-family: var(--font-body); font-size: 14px; font-weight: 600; color: var(--text); }
 .mcat-results-head .mcat-count { font-family: var(--font-body); font-size: 13px; font-weight: 400; color: var(--text-secondary); }
 .mcat-read-note { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 11px; }
-.mcat-reset { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--accent); }
+.mcat-reset { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--accent-text); }
 .mcat-refresh-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
 .mcat-card:hover { transform: none; box-shadow: var(--shadow-1); border-color: var(--text-muted); }
 .mcat-rail { width: 2px; opacity: .6; }

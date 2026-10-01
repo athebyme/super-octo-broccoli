@@ -8,21 +8,21 @@
 <style>
   .cg-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
   .cg-name{color:var(--text);font-weight:600;text-decoration:none}
-  .cg-name:hover{color:var(--accent)}
-  .cg-name:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px;border-radius:var(--r-xs)}
+  .cg-name:hover{color:var(--accent-text)}
+  .cg-name:focus-visible{outline:2px solid var(--focus-outline);outline-offset:2px;border-radius:var(--r-xs)}
   .cg-del:hover{color:var(--danger);background:var(--danger-bg)}
   .cg-field{display:block;margin-bottom:16px}
   .cg-field:last-child{margin-bottom:0}
   .cg-label{display:block;font-size:12px;font-weight:500;color:var(--text-secondary);margin-bottom:6px}
   .cg-input{width:100%;padding:8px 12px;font-size:13px;color:var(--text);background:var(--bg);
     border:1px solid var(--border);border-radius:var(--r-sm)}
-  .cg-input:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px;border-color:var(--accent)}
+  .cg-input:focus-visible{outline:2px solid var(--focus-outline);outline-offset:1px;border-color:var(--accent)}
   .cg-input::placeholder{color:var(--text-muted)}
   .cg-swatch{width:28px;height:28px;border-radius:50%;border:2px solid transparent;cursor:pointer;
     transition:transform var(--dur-1) var(--ease-out)}
   .cg-swatch:hover{transform:scale(1.08)}
   .cg-swatch:active{transform:scale(0.96)}
-  .cg-swatch:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+  .cg-swatch:focus-visible{outline:2px solid var(--focus-outline);outline-offset:2px}
   .cg-swatch--active{border-color:var(--text);box-shadow:inset 0 0 0 2px var(--bg-card)}
   .cg-results{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:var(--z-dropdown);
     max-height:260px;overflow-y:auto;background:var(--bg-card);border:1px solid var(--border);
@@ -31,7 +31,7 @@
     background:transparent;border:none;border-top:1px solid var(--border);cursor:pointer}
   .cg-result:first-child{border-top:none}
   .cg-result:hover{background:var(--bg-hover)}
-  .cg-result:focus-visible{outline:2px solid var(--focus-ring);outline-offset:-2px}
+  .cg-result:focus-visible{outline:2px solid var(--focus-outline);outline-offset:-2px}
   .cg-result:active{background:var(--bg)}
   .cg-result-empty{padding:12px;font-size:12.5px;color:var(--text-muted);text-align:center}
 </style>

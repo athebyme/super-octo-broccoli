@@ -112,7 +112,7 @@
     gap: 3px;
     font-size: 12px;
     font-weight: 500;
-    color: var(--accent);
+    color: var(--accent-text);
 }
 .db-card-action svg {
     width: 13px;
@@ -163,7 +163,7 @@
                 box-shadow var(--dur-2) var(--ease-out);
 }
 .db-link:hover { border-color: var(--accent); box-shadow: var(--shadow-1); }
-.db-link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.db-link:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
 .db-link-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .db-link-text { font-size: 12px; color: var(--text-muted); }
 

@@ -44,12 +44,12 @@
 {% set danger_status = proposal.status in ['failed','conflict'] %}
 
 <div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
-    <a href="{{ url_for('marketplace_commercial.index', account_id=proposal.account_id) }}" class="text-sm" style="color:var(--accent)">← Цены и остатки Ozon</a>
+    <a href="{{ url_for('marketplace_commercial.index', account_id=proposal.account_id) }}" class="text-sm" style="color:var(--accent-text)">← Цены и остатки Ozon</a>
 
     <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0">
             <div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)">
-                <span style="color:var(--accent)">{{ 'Цена' if is_price else 'Остаток' }}</span>
+                <span style="color:var(--accent-text)">{{ 'Цена' if is_price else 'Остаток' }}</span>
                 <span>заявка #{{ proposal.id }}</span>
                 <span>{{ proposal.account.label if proposal.account else 'кабинет удалён' }}</span>
                 {% if proposal.source == 'rollback' %}<span>откат</span>{% endif %}
@@ -87,7 +87,7 @@
         </section>
         <section class="sh-card p-4">
             <div class="pricing-value-caption">{{ 'Предложение продавца' if is_price and proposal.source != 'rollback' else ('Восстановить' if proposal.source == 'rollback' else 'Предлагаемый остаток') }}</div>
-            <div class="mt-3 text-3xl font-semibold" style="color:var(--accent)">{% if is_price %}{{ proposed.get('price') if proposed.get('price') is not none else '—' }} <span class="text-base">{{ proposed.get('currency_code') or 'валюта неизвестна' }}</span>{% else %}{{ proposed.get('stock') if proposed.get('stock') is not none else '—' }} <span class="text-base">шт.</span>{% endif %}</div>
+            <div class="mt-3 text-3xl font-semibold" style="color:var(--accent-text)">{% if is_price %}{{ proposed.get('price') if proposed.get('price') is not none else '—' }} <span class="text-base">{{ proposed.get('currency_code') or 'валюта неизвестна' }}</span>{% else %}{{ proposed.get('stock') if proposed.get('stock') is not none else '—' }} <span class="text-base">шт.</span>{% endif %}</div>
             {% if guardrails.get('direction') %}<p class="mt-2 text-xs" style="color:var(--text-muted)">{{ 'Повышение' if guardrails.direction == 'increase' else 'Снижение' }}{% if guardrails.get('change_pct') %} на {{ guardrails.change_pct }}%{% endif %}</p>{% endif %}
             {% if not is_price and proposed.get('stock') == 0 %}<p class="mt-2 text-xs" style="color:var(--danger)">После применения товар станет недоступен на этом складе.</p>{% endif %}
         </section>

@@ -80,7 +80,7 @@
   <div x-show="verifyJob.status === 'running' || verifyJob.status === 'pending'" x-cloak
        class="mb-4 rounded-xl border p-4 flex items-center gap-3"
        style="background:var(--bg);border-color:var(--border)">
-    <svg class="animate-spin h-4 w-4" style="color:var(--accent)" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+    <svg class="animate-spin h-4 w-4" style="color:var(--accent-text)" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
     <span class="text-sm" style="color:var(--text)">Сверяем карточки с WB: фактические фото и ошибки обработки…</span>
   </div>
 
@@ -89,7 +89,7 @@
       <div class="flex items-center justify-between mb-3">
         <div class="text-sm font-medium" style="color:var(--text)">Проверка обработки на WB</div>
         <div class="flex items-center gap-3">
-          <button @click="window.location.reload()" class="text-sm" style="color:var(--accent)">Обновить страницу</button>
+          <button @click="window.location.reload()" class="text-sm" style="color:var(--accent-text)">Обновить страницу</button>
           <button @click="verify = null" class="text-sm" style="color:var(--text-muted)">Скрыть</button>
         </div>
       </div>
@@ -198,7 +198,7 @@
           </td>
           <td class="px-4 py-3 whitespace-nowrap">
             <button @click="startJob([{{ r.product.id }}])"
-                    class="text-sm font-medium" style="color:var(--accent)"
+                    class="text-sm font-medium" style="color:var(--accent-text)"
                     :disabled="job.status === 'running' || job.status === 'pending'">Дозагрузить фото</button>
             <a href="{{ url_for('product_enrich', product_id=r.product.id) }}"
                class="text-sm ml-3" style="color:var(--text-muted)">Обогатить</a>

@@ -45,7 +45,7 @@
     <template x-if="loading && !hasData">
         <div style="display:flex;align-items:center;justify-content:center;padding:80px 0">
             <div style="text-align:center">
-                <svg class="animate-spin" style="height:40px;width:40px;color:var(--accent);margin:0 auto 16px" fill="none" viewBox="0 0 24 24">
+                <svg class="animate-spin" style="height:40px;width:40px;color:var(--accent-text);margin:0 auto 16px" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                 </svg>
@@ -138,7 +138,7 @@
         <div class="sh-stat-card" style="text-align:center">
             <div class="sh-stat-label" style="margin-bottom:4px">Переходы в карточку</div>
             <div class="sh-stat-value" x-text="kpi.openCardCount.toLocaleString('ru-RU')"></div>
-            <div class="sh-stat-footnote" style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:8px;color:var(--accent)">
+            <div class="sh-stat-footnote" style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:8px;color:var(--accent-text)">
                 <svg style="width:12px;height:12px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                 <span x-text="kpi.conversions.addToCartPercent.toFixed(1) + '% в корзину'"></span>
             </div>
@@ -146,7 +146,7 @@
         <div class="sh-stat-card" style="text-align:center">
             <div class="sh-stat-label" style="margin-bottom:4px">Добавили в корзину</div>
             <div class="sh-stat-value" x-text="kpi.addToCartCount.toLocaleString('ru-RU')"></div>
-            <div class="sh-stat-footnote" style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:8px;color:var(--accent)">
+            <div class="sh-stat-footnote" style="display:flex;align-items:center;justify-content:center;gap:4px;margin-top:8px;color:var(--accent-text)">
                 <svg style="width:12px;height:12px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                 <span x-text="kpi.conversions.cartToOrderPercent.toFixed(1) + '% в заказ'"></span>
             </div>
@@ -188,7 +188,7 @@
             </template>
             <template x-if="loadingDaily">
                 <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.8);border-radius:inherit">
-                    <svg class="animate-spin" style="height:32px;width:32px;color:var(--accent)" fill="none" viewBox="0 0 24 24">
+                    <svg class="animate-spin" style="height:32px;width:32px;color:var(--accent-text)" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                     </svg>
@@ -247,7 +247,7 @@
                     <div>
                         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
                             <div style="display:flex;align-items:center;gap:12px">
-                                <span style="width:24px;height:24px;border-radius:6px;background:var(--bg);color:var(--accent);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center" x-text="idx + 1"></span>
+                                <span style="width:24px;height:24px;border-radius:6px;background:var(--bg);color:var(--accent-text);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center" x-text="idx + 1"></span>
                                 <div>
                                     <span style="font-size:14px;font-weight:500;color:var(--text);display:block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="product.title || product.vendorCode"></span>
                                     <span style="font-size:12px;color:var(--text-muted)" x-text="product.brandName"></span>

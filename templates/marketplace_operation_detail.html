@@ -30,11 +30,11 @@
     {% include 'partials/operations_workspace_history_nav.html' %}
     {% set result_config = {'kind': 'operation', 'initial': operation_data, 'url': url_for('marketplace_operations.detail', operation_id=operation.id)} %}
     {% include 'partials/ozon_result_status.html' %}
-    <a href="{{ url_for('marketplace_operations.index', account_id=operation.account_id) }}" class="text-sm" style="color:var(--accent)">← Операции Ozon</a>
+    <a href="{{ url_for('marketplace_operations.index', account_id=operation.account_id) }}" class="text-sm" style="color:var(--accent-text)">← Операции Ozon</a>
     <div class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0">
             <div class="flex flex-wrap gap-2 text-xs" style="color:var(--text-muted)">
-                <span style="color:var(--accent)">Ozon</span>
+                <span style="color:var(--accent-text)">Ozon</span>
                 <span>{{ operation.account.label if operation.account else 'кабинет удалён' }}</span>
                 <span>#{{ operation.id }}</span>
                 <span>{{ kind_labels.get(operation.operation_kind, operation.operation_kind) }}</span>
@@ -92,9 +92,9 @@
             <h2 class="font-semibold" style="color:var(--text)">Контракт</h2>
             <dl class="mt-3 space-y-2 text-sm">
                 <div><dt class="text-xs" style="color:var(--text-muted)">Версия</dt><dd style="color:var(--text)">{{ operation.contract_version }}</dd></div>
-                {% if is_commercial %}<div><dt class="text-xs" style="color:var(--text-muted)">Заявка</dt><dd style="color:var(--text)">{% if summary.get('proposal_id') %}<a style="color:var(--accent)" href="{{ url_for('marketplace_commercial.detail', proposal_id=summary.proposal_id) }}">#{{ summary.proposal_id }}</a>{% else %}—{% endif %}</dd></div>
+                {% if is_commercial %}<div><dt class="text-xs" style="color:var(--text-muted)">Заявка</dt><dd style="color:var(--text)">{% if summary.get('proposal_id') %}<a style="color:var(--accent-text)" href="{{ url_for('marketplace_commercial.detail', proposal_id=summary.proposal_id) }}">#{{ summary.proposal_id }}</a>{% else %}—{% endif %}</dd></div>
                 <div><dt class="text-xs" style="color:var(--text-muted)">Карточка / точный склад FBS</dt><dd style="color:var(--text)">{{ operation.listing_id or '—' }}{% if operation.operation_kind in ['stock_update', 'stock_rollback'] %} / {{ summary.get('warehouse_id', '—') }}{% endif %}</dd></div>
-                {% else %}<div><dt class="text-xs" style="color:var(--text-muted)">Черновик / версия</dt><dd style="color:var(--text)">{% if operation.draft_id %}<a style="color:var(--accent)" href="{{ url_for('marketplace_drafts.detail', draft_id=operation.draft_id) }}">#{{ operation.draft_id }}</a>{% else %}удалён{% endif %} / {{ operation.draft_version or '—' }}</dd></div>{% endif %}
+                {% else %}<div><dt class="text-xs" style="color:var(--text-muted)">Черновик / версия</dt><dd style="color:var(--text)">{% if operation.draft_id %}<a style="color:var(--accent-text)" href="{{ url_for('marketplace_drafts.detail', draft_id=operation.draft_id) }}">#{{ operation.draft_id }}</a>{% else %}удалён{% endif %} / {{ operation.draft_version or '—' }}</dd></div>{% endif %}
             </dl>
         </section>
         <section class="sh-card p-4">

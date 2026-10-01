@@ -8,7 +8,7 @@
 .orb button, .orb input, .orb select, .orb textarea { font:inherit; touch-action:manipulation; }
 .orb :is(button,a,input,select,textarea,summary):focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .orb a { text-underline-offset:3px; }
-.orb a:hover, .orb-link:hover { color:var(--accent); text-decoration:underline; }
+.orb a:hover, .orb-link:hover { color:var(--accent-text); text-decoration:underline; }
 .orb .sh-input { width:100%; min-width:0; min-height:40px; padding:9px 11px; border:1px solid var(--border); border-radius:7px; box-sizing:border-box; color:var(--text); background:var(--bg-card); font-size:13px; line-height:1.5; }
 .orb select.sh-input { padding-right:28px; }
 .orb textarea { line-height:1.6; resize:vertical; }

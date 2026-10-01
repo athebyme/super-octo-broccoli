@@ -11,7 +11,7 @@
     cursor: pointer;
     max-width: 190px;
 }
-.mp-select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.mp-select:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 1px; }
 
 /* ---------- Вкладки состояний ---------- */
 .mp-tabs {
@@ -33,14 +33,14 @@
     transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 .mp-tab:hover { color: var(--text); background: var(--bg-hover); }
-.mp-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.mp-tab:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 1px; }
 .mp-tab.is-active {
     color: var(--text);
     background: var(--bg-card);
     box-shadow: inset 0 -2px 0 var(--accent);
 }
 .mp-tab-n { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.mp-tab.is-active .mp-tab-n { color: var(--accent); }
+.mp-tab.is-active .mp-tab-n { color: var(--accent-text); }
 
 /* ---------- Заголовок списка ---------- */
 .mp-listhead {
@@ -205,8 +205,8 @@
     transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
 }
 .mp-open svg { width: 15px; height: 15px; }
-.mp-open:hover { color: var(--accent); background: var(--bg-hover); }
-.mp-open:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.mp-open:hover { color: var(--accent-text); background: var(--bg-hover); }
+.mp-open:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 1px; }
 
 /* ---------- Футер ---------- */
 .mp-foot {
@@ -227,7 +227,7 @@
 .mp-ozon-dialog-head { display:flex; justify-content:space-between; align-items:start; gap:12px; }
 .mp-ozon-dialog h2 { margin:0; font-size:24px; line-height:1.2; }
 .mp-ozon-dialog p { margin:15px 0; color:var(--text-secondary); font-size:13px; line-height:1.55; }
-.mp-ozon-eyebrow { margin:0 0 5px !important; color:var(--accent) !important; font-size:11px !important; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
+.mp-ozon-eyebrow { margin:0 0 5px !important; color:var(--accent-text) !important; font-size:11px !important; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
 .mp-ozon-close { width:32px; height:32px; flex:0 0 32px; border:1px solid var(--border); border-radius:5px; background:var(--bg-card); color:var(--text); font-size:21px; }
 .mp-ozon-label { display:block; margin:20px 0 7px; font-size:12px; font-weight:600; }
 .mp-ozon-dialog .sh-input { width:100%; }

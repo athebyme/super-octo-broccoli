@@ -6,21 +6,21 @@
 <style>
     .mpcat-crumbs { color: var(--text-muted); font-size: 12px; margin-bottom: 12px; }
     .mpcat-crumbs a { color: var(--text-secondary); text-decoration: none; }
-    .mpcat-crumbs a:hover { color: var(--accent); }
+    .mpcat-crumbs a:hover { color: var(--accent-text); }
     .mpcat-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; }
     .mpcat-group-toggle {
         display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
         text-align: left; background: none; border: none; padding: 0; cursor: pointer;
         color: var(--text); font: inherit;
     }
-    .mpcat-group-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: var(--r-xs); }
+    .mpcat-group-toggle:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; border-radius: var(--r-xs); }
     .mpcat-group-toggle > svg { color: var(--text-muted); flex-shrink: 0; }
     .mpcat-group-name { font-size: 13px; font-weight: 600; color: var(--text); }
     .mpcat-bulk-btn {
         font-size: 12px; font-weight: 500; padding: 4px 8px;
         border: none; border-radius: 6px; background: none; cursor: pointer; white-space: nowrap;
     }
-    .mpcat-bulk-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+    .mpcat-bulk-btn:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
     .mpcat-bulk-btn:active { transform: translateY(1px); }
     .mpcat-bulk-btn--on { color: var(--ok); }
     .mpcat-bulk-btn--on:hover { background: var(--ok-bg); }
@@ -191,7 +191,7 @@
             <p class="sh-empty-title">Ничего не найдено по запросу "{{ search }}"</p>
             <p class="sh-empty-desc">
                 <a href="{{ url_for('marketplaces.categories', marketplace_id=marketplace.id) }}"
-                    style="color:var(--accent)">Сбросить поиск</a>
+                    style="color:var(--accent-text)">Сбросить поиск</a>
             </p>
             {% else %}
             <p class="sh-empty-title">Нет категорий</p>

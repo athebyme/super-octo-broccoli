@@ -22,7 +22,7 @@
 }
 
 .ozr-input:focus-visible {
-    outline: 2px solid var(--focus-ring);
+    outline: 2px solid var(--focus-outline);
     outline-offset: 2px;
 }
 
@@ -46,7 +46,7 @@
 }
 
 .ozr-check input:focus-visible {
-    outline: 2px solid var(--focus-ring);
+    outline: 2px solid var(--focus-outline);
     outline-offset: 2px;
 }
 
@@ -141,7 +141,7 @@
 }
 
 .ozr-fields > summary:focus-visible {
-    outline: 2px solid var(--focus-ring);
+    outline: 2px solid var(--focus-outline);
     outline-offset: 2px;
 }
 

@@ -38,7 +38,7 @@
 .odl-row-main { min-width:0; }
 .odl-row-main h3 { font-size:13px; font-weight:500; margin:7px 0 3px; overflow-wrap:anywhere; }
 .odl-row-main h3 a { color:var(--text); text-decoration:none; }
-.odl-row-main h3 a:hover { color:var(--accent); }
+.odl-row-main h3 a:hover { color:var(--accent-text); }
 .odl-row-meta { display:flex; flex-wrap:wrap; align-items:center; gap:9px; font-size:10px; color:var(--text-muted); }
 .odl-badge { display:inline-flex; padding:2px 6px; background:var(--bg-hover); border-radius:4px; color:var(--text-secondary); }
 .odl-badge--ok { color:var(--ok); }
@@ -52,7 +52,7 @@
 .odl-modes { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin:4px 0 12px; font-size:11px; color:var(--text-secondary); }
 .odl-modes > span { margin-right:8px; }
 .odl-modes button { min-height:44px; padding:9px 12px; border:1px solid var(--border); border-radius:6px; background:var(--bg-card); color:var(--text); cursor:pointer; touch-action:manipulation; }
-.odl-modes button.is-active { border-color:var(--accent); background:var(--accent-light); color:var(--accent); font-weight:600; }
+.odl-modes button.is-active { border-color:var(--accent); background:var(--accent-light); color:var(--accent-text); font-weight:600; }
 .odl-modes small { margin-left:4px; font-size:10px; }
 .odl-ai-dialog { width:min(94vw,600px); overscroll-behavior:contain; }
 .odl-ai-scope { max-height:210px; overflow-y:auto; overscroll-behavior:contain; margin:15px 0; padding:12px 12px 12px 34px; border:1px solid var(--border); border-radius:6px; font-size:12px; }

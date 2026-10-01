@@ -50,7 +50,7 @@
 
 .cpc-effect-note p { margin: 0; max-width: 84ch; }
 .cpc-effect-note strong { color: var(--text); }
-.cpc-effect-mark { color: var(--accent); font-size: 1.35rem; font-weight: 600; line-height: 1.25; text-align: center; }
+.cpc-effect-mark { color: var(--accent-text); font-size: 1.35rem; font-weight: 600; line-height: 1.25; text-align: center; }
 
 .cpc-layout { display: grid; grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr); gap: 1.25rem; align-items: start; }
 .cpc-selection,

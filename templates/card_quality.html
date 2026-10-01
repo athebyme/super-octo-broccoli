@@ -68,7 +68,7 @@
         <div style="font-size:13px;color:var(--text-secondary)">Средний WB-рейтинг карточек</div>
         <div x-html="wbBadge(summary.avg_wb_rating, 10)" style="font-size:20px"></div>
         <div style="font-size:13px;color:var(--text-secondary);margin-top:6px">Требуют внимания</div>
-        <div style="font-family:var(--font-display);font-style:italic;font-size:28px;color:var(--accent)" x-text="summary.need_attention ?? 0"></div>
+        <div style="font-family:var(--font-display);font-style:italic;font-size:28px;color:var(--accent-text)" x-text="summary.need_attention ?? 0"></div>
       </div>
     </div>
   </div>
@@ -196,7 +196,7 @@
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-weight:600" x-text="'score ' + (it.quality_score ?? '—')"></div>
-          <div style="font-size:12px;color:var(--accent)"
+          <div style="font-size:12px;color:var(--accent-text)"
                x-show="it.quality_impact" x-text="'→ +' + Math.round(it.quality_impact)"></div>
         </div>
         <button class="sh-btn sh-btn--ghost sh-btn--sm" @click="openDetail(it.product_id)">Детали</button>
@@ -393,7 +393,7 @@
                   {# Чипы изменённых полей #}
                   <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px">
                     <template x-for="f in (h.changed_fields||[])" :key="f">
-                      <span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--accent-light);color:var(--accent)"
+                      <span style="font-size:11px;padding:2px 8px;border-radius:12px;background:var(--accent-light);color:var(--accent-text)"
                             x-text="DIM_LABELS[f] || f"></span>
                     </template>
                   </div>

@@ -168,7 +168,7 @@
                 {% endif %}
                 <div class="min-w-0 flex-1">
                     <div class="flex flex-wrap items-center gap-2 text-xs">
-                        <span class="uppercase font-medium" style="color:var(--accent)">Ozon</span>
+                        <span class="uppercase font-medium" style="color:var(--accent-text)">Ozon</span>
                         <span style="color:var(--text-muted)">{{ draft.account.label }}</span>
                         <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ status_labels.get(draft.status, draft.status) }}</span>
                         <span class="rounded border px-2 py-0.5" style="border-color:var(--border);color:var(--text-secondary)">{{ validation_status_labels.get(draft.validation_status, draft.validation_status) }}</span>
@@ -185,9 +185,9 @@
                 <div class="text-xs md:text-right" style="color:var(--text-muted)">
                     <div>Ошибок: {{ summary.error_count }} · предупреждений: {{ summary.warning_count }}</div>
                     <div class="mt-1">Версия {{ draft.version }}</div>
-                    <a class="inline-block mt-2 font-medium" style="color:var(--accent)"
+                    <a class="inline-block mt-2 font-medium" style="color:var(--accent-text)"
                        href="{{ url_for('marketplace_drafts.classic_detail', draft_id=draft.id) }}">Открыть →</a>
-                    {% if can_bulk_publish %}<a class="inline-block mt-2 ml-2 font-medium" style="color:var(--accent)"
+                    {% if can_bulk_publish %}<a class="inline-block mt-2 ml-2 font-medium" style="color:var(--accent-text)"
                        href="/marketplaces/ozon/uploads/review?account_id={{ draft.account_id }}&draft_ids={{ draft.id }}">Проверить перед отправкой →</a>{% endif %}
                 </div>
             </div>

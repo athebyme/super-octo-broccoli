@@ -149,7 +149,7 @@
     <section class="sh-card p-4 mt-4" aria-labelledby="ozon-canonical-content-title">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div class="flex min-w-0 items-start gap-3">
-                <span class="mt-0.5" style="color:var(--accent)">{{ icon('refresh', size=22) }}</span>
+                <span class="mt-0.5" style="color:var(--accent-text)">{{ icon('refresh', size=22) }}</span>
                 <div>
                     <h2 id="ozon-canonical-content-title" class="font-semibold" style="color:var(--text)">Ozon → общая карточка</h2>
                     <p class="mt-1 text-xs" style="color:var(--text-muted)">
@@ -317,7 +317,7 @@
             <p class="mt-3 text-sm" style="color:var(--text-muted)">Нет данных о цене — запустите синхронизацию каталога.</p>
             {% endif %}
             <details class="mt-3">
-                <summary class="cursor-pointer text-xs" style="color:var(--accent)">Полный снимок (JSON)</summary>
+                <summary class="cursor-pointer text-xs" style="color:var(--accent-text)">Полный снимок (JSON)</summary>
                 <pre class="mt-2 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.price_summary | tojson(indent=2) }}</pre>
             </details>
         </section>
@@ -335,7 +335,7 @@
             <p class="mt-3 text-sm" style="color:var(--text-muted)">Нет данных об остатках — запустите синхронизацию каталога.</p>
             {% endif %}
             <details class="mt-3">
-                <summary class="cursor-pointer text-xs" style="color:var(--accent)">Полный снимок (JSON)</summary>
+                <summary class="cursor-pointer text-xs" style="color:var(--accent-text)">Полный снимок (JSON)</summary>
                 <pre class="mt-2 overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.stock_summary | tojson(indent=2) }}</pre>
             </details>
         </section>
@@ -348,7 +348,7 @@
                 <h2 class="font-semibold" style="color:var(--text)">Безопасное изменение цены Ozon</h2>
                 <p class="mt-1 text-xs" style="color:var(--text-muted)">Введите новое значение осознанно: форма ничего не применяет, а только создаёт proposal для отдельной сверки и подтверждения.</p>
             </div>
-            <a class="text-sm" style="color:var(--accent)" href="{{ url_for('marketplace_commercial.index', account_id=listing.account_id) }}">Все proposals</a>
+            <a class="text-sm" style="color:var(--accent-text)" href="{{ url_for('marketplace_commercial.index', account_id=listing.account_id) }}">Все proposals</a>
         </div>
         <form method="post" action="{{ url_for('marketplace_commercial.create_price_proposal', listing_id=listing.id) }}" class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -392,7 +392,7 @@
             <h2 class="font-semibold" style="color:var(--text)">Атрибуты ({{ listing_data.attributes | length }})</h2>
             {% if listing_data.attributes %}
             <details class="mt-3" open>
-                <summary class="cursor-pointer text-xs" style="color:var(--accent)">Снимок атрибутов (JSON)</summary>
+                <summary class="cursor-pointer text-xs" style="color:var(--accent-text)">Снимок атрибутов (JSON)</summary>
                 <pre class="mt-2 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ listing_data.attributes | tojson(indent=2) }}</pre>
             </details>
             {% else %}
@@ -403,7 +403,7 @@
             <h2 class="font-semibold" style="color:var(--text)">Media / dimensions / barcodes</h2>
             {% if listing_data.media.get('primary_image') or listing_data.media.get('images') or listing_data.barcodes or listing_data.dimensions %}
             <details class="mt-3" open>
-                <summary class="cursor-pointer text-xs" style="color:var(--accent)">Снимок media / габаритов / ШК (JSON)</summary>
+                <summary class="cursor-pointer text-xs" style="color:var(--accent-text)">Снимок media / габаритов / ШК (JSON)</summary>
                 <pre class="mt-2 max-h-[32rem] overflow-auto text-xs whitespace-pre-wrap" style="color:var(--text-secondary)">{{ {'media': listing_data.media, 'dimensions': listing_data.dimensions, 'barcodes': listing_data.barcodes} | tojson(indent=2) }}</pre>
             </details>
             {% else %}
