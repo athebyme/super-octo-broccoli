@@ -43,6 +43,7 @@ ARTIFACTS_PATH = Path(
     os.environ.get("UX01_WB_EDIT_ARTIFACTS")
     or REPORT_PATH.parent / "wb-edit-browser-artifacts"
 )
+SOURCE = os.environ.get("UX01_WB_EDIT_SOURCE", "worktree")
 ASSET_DIR = ROOT / "tests/ozon_release/assets"
 USERNAME = "ux01-wb-edit-seller"
 PASSWORD = "synthetic-wb-edit-password"
@@ -52,7 +53,7 @@ SERVER_THREAD = None
 BASE = None
 
 REPORT = {
-    "source": "worktree",
+    "source": SOURCE,
     "status": "running",
     "scope": "synthetic_wb_exact_selection_review_and_edit",
     "database": "disposable_sqlite",
@@ -62,6 +63,7 @@ REPORT = {
     "interactions": [],
     "artifacts": [],
     "artifact_errors": [],
+    "failure_context": None,
     "javascript_errors": [],
     "browser_mutations": [],
     "unexpected_external_requests": [],
@@ -491,7 +493,52 @@ def interaction(name: str, **details) -> None:
     REPORT["interactions"].append({"name": name, **details})
 
 
+def _assert_local_products_href(href: str, expected_query: dict[str, list[str]]):
+    parsed = urlsplit(href)
+    assert (
+        not parsed.scheme and not parsed.netloc
+        and parsed.path == "/products" and not parsed.fragment
+    ), {"href": href[:512], "path": parsed.path}
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    assert query == expected_query, {"href": href[:512], "query": query}
+    return parsed
+
+
+def _assert_local_products_url(url: str, expected_query: dict[str, list[str]]):
+    parsed = urlsplit(url)
+    origin = urlsplit(BASE or "")
+    assert (
+        origin.scheme == "http" and origin.netloc
+        and parsed.scheme == origin.scheme and parsed.netloc == origin.netloc
+        and parsed.path == "/products" and not parsed.fragment
+    ), {"path": parsed.path, "scheme_matches": parsed.scheme == origin.scheme,
+        "origin_matches": parsed.netloc == origin.netloc}
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    assert query == expected_query, {"path": parsed.path, "query": query}
+    return parsed
+
+
+def _bounded_failure_context(page) -> dict:
+    parsed = urlsplit(page.url)
+    raw_query = parse_qs(parsed.query, keep_blank_values=True)
+    query = {
+        str(key)[:80]: [str(value)[:120] for value in values[:4]]
+        for key, values in list(raw_query.items())[:16]
+    }
+    try:
+        title = str(page.title())[:160]
+    except Exception:
+        title = ""
+    return {"path": parsed.path[:256], "query": query, "title": title}
+
+
 def capture_layout(page, label: str) -> None:
+    if label not in {
+        "products_list", "bulk_editor", "bulk_review",
+        "single_product_edit", "unmapped_product_edit",
+    }:
+        raise AssertionError(f"Unexpected WB browser page label: {label!r}")
+    ARTIFACTS_PATH.mkdir(parents=True, exist_ok=True)
     for theme in ("light", "dark"):
         page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
         page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
@@ -509,6 +556,20 @@ def capture_layout(page, label: str) -> None:
                     f"Horizontal overflow on {label} ({theme}, {width}px): {geometry}"
                 )
             REPORT["layouts"].append({"page": label, "theme": theme, **geometry})
+            if width in (390, 1280):
+                filename = f"wb-edit-{label.replace('_', '-')}-{theme}-{width}.png"
+                screenshot = ARTIFACTS_PATH / filename
+                page.screenshot(
+                    path=str(screenshot), full_page=True,
+                    animations="disabled", timeout=10000,
+                )
+                REPORT["artifacts"].append({
+                    "kind": "layout_screenshot",
+                    "path": filename,
+                    "page": label,
+                    "theme": theme,
+                    "width": width,
+                })
         check(
             f"responsive_no_horizontal_overflow_{label}_{theme}",
             widths=[390, 768, 1280],
@@ -551,8 +612,6 @@ def click_next_product_page(page, *, sort: str, expected_page: int = 2) -> None:
     assert links.count() == 1, f"Expected exactly one next-page link, got {links.count()}"
     href = links.get_attribute("href")
     assert href, "Next-page link has no href"
-    target = urlsplit(href)
-    target_query = parse_qs(target.query, keep_blank_values=True)
     expected_query = {
         "search": ["Pipedream"],
         "brand": ["Pipedream"],
@@ -561,17 +620,11 @@ def click_next_product_page(page, *, sort: str, expected_page: int = 2) -> None:
         "page": [str(expected_page)],
         "per_page": ["50"],
     }
-    assert target.path == "/products" and all(
-        target_query.get(key) == value for key, value in expected_query.items()
-    ), {"href": href, "parsed_path": target.path, "query": target_query}
+    _assert_local_products_href(href, expected_query)
 
     with page.expect_navigation(wait_until="domcontentloaded"):
         links.click()
-    current = urlsplit(page.url)
-    current_query = parse_qs(current.query, keep_blank_values=True)
-    assert current.path == "/products" and all(
-        current_query.get(key) == value for key, value in expected_query.items()
-    ), {"url": page.url, "parsed_path": current.path, "query": current_query}
+    _assert_local_products_url(page.url, expected_query)
     check(
         "pagination_anchor_preserves_exact_filter_sort_and_page",
         expected_page=expected_page,
@@ -588,6 +641,8 @@ def run_browser(app, fixture: dict[str, int]) -> None:
     with sync_playwright() as playwright:
         executable = (
             os.environ.get("UX01_CHROMIUM")
+            or os.environ.get("UX01_BROWSER_CHROMIUM")
+            or os.environ.get("OZON_BROWSER_CHROMIUM")
             or os.environ.get("CHROMIUM_BIN")
             or os.environ.get("WB_EDIT_CHROMIUM")
             or shutil.which("chromium")
@@ -626,7 +681,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             page.locator('input[name="password"]').fill(PASSWORD)
             with page.expect_navigation(wait_until="domcontentloaded"):
                 page.locator('form button[type="submit"]').click()
-            assert urlsplit(page.url).path == "/products", page.url
+            _assert_local_products_url(page.url, {})
             assert REPORT["provider_attempts"] == 0
             interaction("authenticated_login_with_csrf_enabled")
 
@@ -635,6 +690,11 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 "&order=asc&page=1&per_page=50"
             )
             page.goto(BASE + list_url, wait_until="domcontentloaded")
+            _assert_local_products_url(page.url, {
+                "search": ["Pipedream"], "brand": ["Pipedream"],
+                "sort": ["vendor_code"], "order": ["asc"],
+                "page": ["1"], "per_page": ["50"],
+            })
             assert page.locator(".product-checkbox").count() == 50
             assert_keyboard_focus(page, "products_list")
             page.locator("#selectAll").check()
@@ -677,15 +737,10 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert filter_form.count() == 1, f"Expected one catalog filter form, got {filter_form.count()}"
             with page.expect_navigation(wait_until="domcontentloaded"):
                 filter_form.locator('button[type="submit"]').click()
-            sorted_url = urlsplit(page.url)
-            sorted_query = parse_qs(sorted_url.query, keep_blank_values=True)
-            assert sorted_url.path == "/products" and all(
-                sorted_query.get(key) == value for key, value in {
-                    "search": ["Pipedream"], "brand": ["Pipedream"],
-                    "sort": ["title"], "order": ["asc"],
-                    "per_page": ["50"],
-                }.items()
-            ), {"url": page.url, "query": sorted_query}
+            _assert_local_products_url(page.url, {
+                "search": ["Pipedream"], "brand": ["Pipedream"],
+                "sort": ["title"], "order": ["asc"], "per_page": ["50"],
+            })
             assert page.locator("#selectedCount").inner_text().strip() == "50"
             click_next_product_page(page, sort="title")
             assert page.locator("#selectedCount").inner_text().strip() == "50"
@@ -740,44 +795,23 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert "50 товаров" in page.locator("body").inner_text()
             assert "Pipedream" in page.locator("body").inner_text()
             assert_keyboard_focus(page, "bulk_editor")
-            editor_return = page.locator('nav a[href^="/products?"]').first.get_attribute("href")
-            assert editor_return
-            returned = urlsplit(editor_return)
-            params = parse_qs(returned.query)
-            assert returned.path == "/products"
-            assert params.get("search") == ["Pipedream"]
-            assert params.get("brand") == ["Pipedream"]
-            assert params.get("sort") == ["title"]
-            assert params.get("order") == ["asc"]
-            assert params.get("page") == ["2"]
-            assert params.get("per_page") == ["50"]
-            assert REPORT["fake_wb_client_instances"] == 0
-            capture_layout(page, "bulk_editor")
-            interaction("bulk_editor_names_wb_account_channel_and_safe_return_context")
-
             return_links = page.locator('nav a[href^="/products?"]')
             assert return_links.count() == 1, f"Expected one safe products return link, got {return_links.count()}"
             return_href = return_links.get_attribute("href")
             assert return_href, "Safe products return link has no href"
-            return_target = urlsplit(return_href)
-            return_query = parse_qs(return_target.query, keep_blank_values=True)
             expected_return_query = {
                 "search": ["Pipedream"], "brand": ["Pipedream"],
                 "sort": ["title"], "order": ["asc"],
                 "page": ["2"], "per_page": ["50"],
             }
-            assert return_target.path == "/products" and all(
-                return_query.get(key) == value
-                for key, value in expected_return_query.items()
-            ), {"href": return_href, "query": return_query}
+            _assert_local_products_href(return_href, expected_return_query)
+            assert REPORT["fake_wb_client_instances"] == 0
+            capture_layout(page, "bulk_editor")
+            interaction("bulk_editor_names_wb_account_channel_and_safe_return_context")
+
             with page.expect_navigation(wait_until="domcontentloaded"):
                 return_links.click()
-            returned = urlsplit(page.url)
-            returned_query = parse_qs(returned.query, keep_blank_values=True)
-            assert returned.path == "/products" and all(
-                returned_query.get(key) == value
-                for key, value in expected_return_query.items()
-            ), {"url": page.url, "query": returned_query}
+            _assert_local_products_url(page.url, expected_return_query)
             assert page.locator("#selectedCount").inner_text().strip() == "50"
             assert page.locator('select[name="sort"]').input_value() == "title"
             interaction("safe_return_link_restores_filter_sort_page_selection")
@@ -963,10 +997,41 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert len(REPORT["layouts"]) == 30 and actual_layouts == expected_layouts, (
                 f"Expected all 30 page/theme/viewport rows, got {len(REPORT['layouts'])}"
             )
+            expected_screenshots = {
+                (page_name, theme, width)
+                for page_name in (
+                    "products_list", "bulk_editor", "bulk_review",
+                    "single_product_edit", "unmapped_product_edit",
+                )
+                for theme in ("light", "dark")
+                for width in (390, 1280)
+            }
+            layout_artifacts = [
+                item for item in REPORT["artifacts"]
+                if item.get("kind") == "layout_screenshot"
+            ]
+            actual_screenshots = {
+                (item.get("page"), item.get("theme"), item.get("width"))
+                for item in layout_artifacts
+            }
+            if (
+                len(layout_artifacts) != 20
+                or actual_screenshots != expected_screenshots
+                or any(
+                    not isinstance(item.get("path"), str)
+                    or "/" in item["path"] or "\\" in item["path"]
+                    for item in layout_artifacts
+                )
+            ):
+                raise AssertionError("Expected 20 bounded layout screenshots across 5 pages, 2 themes, and 390/1280px")
             assert len(REPORT["checks"]) >= 24, f"Expected at least 24 named browser checks, got {len(REPORT['checks'])}"
             assert REPORT["checks"] and REPORT["interactions"] and REPORT["layouts"]
             REPORT["status"] = "complete"
         except Exception:
+            try:
+                REPORT["failure_context"] = _bounded_failure_context(page)
+            except Exception:
+                REPORT["failure_context"] = {"context_error": "unavailable"}
             try:
                 ARTIFACTS_PATH.mkdir(parents=True, exist_ok=True)
                 screenshot = ARTIFACTS_PATH / "wb-edit-browser-failure.png"
