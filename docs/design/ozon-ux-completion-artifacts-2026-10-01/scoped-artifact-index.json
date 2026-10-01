@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "final_candidate_acceptance": false,
+  "ozon_report_source_hashes_present": false,
+  "analytics_report_source_hashes_present": true,
+  "artifacts": [
+    {
+      "file": "scoped-ozon-journey.json",
+      "sha256": "83a81c2a971636514ee8213a6567f062ca0b486a356da9d1c9445d41ba3db1f8",
+      "original_artifact": "/tmp/ozon-audit-journey-r6/ozon-complete-journey-browser.json",
+      "scope": "worker synthetic fixture before final integration; not final candidate acceptance"
+    },
+    {
+      "file": "scoped-analytics.json",
+      "sha256": "b85a31c1d301db7ee46e2fed656da3edbc20d6c61695b529e7dca25c8ac93d17",
+      "original_artifact": "/tmp/ux01-analytics-audit-20261001/analytics-report.json",
+      "scope": "worker synthetic fixture before final integration; not final candidate acceptance"
+    },
+    {
+      "file": "scoped-ozon-ai-light-1440.png",
+      "sha256": "b0936f735b07fa0c43b4f21b0895c3f39d37edd6d9f5c1c1c0f2cd7f332f08aa",
+      "original_artifact": "/tmp/ozon-audit-journey-r6/journey-ai-evidence-light-1440.png",
+      "scope": "worker synthetic fixture before final integration; not final candidate acceptance"
+    },
+    {
+      "file": "scoped-ozon-result-dark-390.png",
+      "sha256": "0f88622eaf3d3f20ee1affbc7adb3f9308b0652c9f1233e5f129afff261a1d8c",
+      "original_artifact": "/tmp/ozon-audit-journey-r6/journey-operation-readback-dark-390.png",
+      "scope": "worker synthetic fixture before final integration; not final candidate acceptance"
+    },
+    {
+      "file": "scoped-analytics-light-1024.png",
+      "sha256": "a16e494be9f57031d1a5a24a0469cb223e5df338ff1cd7d883f0abf7971910ef",
+      "original_artifact": "/tmp/ux01-analytics-audit-20261001/artifacts/analytics-worktree-light-1024.png",
+      "scope": "worker synthetic fixture before final integration; not final candidate acceptance"
+    },
+    {
+      "file": "scoped-analytics-error-dark-390.png",
+      "sha256": "0e53924b3391e2d009ef8fd5bd3974d44fb054d9159d677afdeb902db13be4f0",
+      "original_artifact": "/tmp/ux01-analytics-audit-20261001/artifacts/analytics-summary_error-dark-390.png",
+      "scope": "worker synthetic fixture before final integration; not final candidate acceptance"
+    }
+  ]
+}

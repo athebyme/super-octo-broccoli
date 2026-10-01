@@ -1,0 +1,191 @@
+{
+  "status": "passed",
+  "checks": [
+    "real_login_and_draft_workspace",
+    "csrf_new_source_to_incomplete_draft_durable_prepare_and_readback",
+    "fresh_category_impact_review_and_explicit_type_selection",
+    "foreign_account_draft_denied_without_disclosure",
+    "real_ai_reservation_worker_completion_and_run_readback",
+    "selective_ai_apply_reopen_preserves_unselected_proposal",
+    "seller_fills_clean_new_category_media_packaging_vat_and_fresh_validation",
+    "ready_explicit_vat_draft_is_sendable_without_account_default_vat",
+    "fresh_review_one_provider_write_task_and_exact_full_readback",
+    "upload_run_result_readback_matches_completed_operation",
+    "unknown_write_no_retry_quarantine_and_safe_reconciliation_contract",
+    "invalid_ai_evidence_is_rejected_without_draft_mutation"
+  ],
+  "layouts": [
+    {
+      "name": "category-impact",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "category-impact",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "category-impact",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "category-impact",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "ai-evidence",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "ai-evidence",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "ai-evidence",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "ai-evidence",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "reviewed-draft",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "reviewed-draft",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "reviewed-draft",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "reviewed-draft",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "fresh-review",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "fresh-review",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "fresh-review",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "fresh-review",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "operation-readback",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "operation-readback",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "operation-readback",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "operation-readback",
+      "theme": "dark",
+      "width": 1440
+    }
+  ],
+  "js_errors": [],
+  "unexpected_http": [],
+  "external": [],
+  "provider_attempts": 0,
+  "safe_exception_frames": [],
+  "ai_create_response": {
+    "status": 202,
+    "code": null
+  },
+  "synthetic": {
+    "browser_happy_path": {
+      "ai_calls": 1,
+      "provider_writes": 1,
+      "task_polls": 1,
+      "full_readbacks": 4,
+      "photo_present_in_submit": true
+    },
+    "clean_draft_list_state": {
+      "account_default_vat_configured": false,
+      "rows": [
+        {
+          "title": "Новая карточка янтарного цвета",
+          "status": "ready",
+          "validation_status": "valid",
+          "publishable": true
+        },
+        {
+          "title": "Тестовый товар для подготовки",
+          "status": "draft",
+          "validation_status": "stale",
+          "publishable": false
+        }
+      ],
+      "accounts": [
+        {
+          "can_publish": true,
+          "credential_expired": false
+        }
+      ]
+    },
+    "reviewed_queue_outcome": {
+      "phase": "operation_linked",
+      "error_code": null,
+      "operation_linked": true,
+      "enqueued_count": 1
+    },
+    "invalid_ai": {
+      "ai_calls": 1,
+      "provider_writes": 0
+    },
+    "human_repair": {
+      "ai_calls": 1,
+      "human_repairs": 1,
+      "repreparations": 1
+    },
+    "clean_new_source": {
+      "new_sources": 1,
+      "prepared_drafts": 1,
+      "category_selections": 1,
+      "human_packaging_vat": 1,
+      "fresh_validations": 1,
+      "provider_writes": 1,
+      "full_readbacks": 4
+    },
+    "unknown_write_quarantine_recovery": {
+      "provider_writes": 1,
+      "automatic_retries": 0,
+      "quarantines": 1,
+      "safe_reconciliations": 1
+    }
+  },
+  "scope": "synthetic_full_ozon_draft_to_publication"
+}
