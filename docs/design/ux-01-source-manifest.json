@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-01T21:37:59.922357+00:00",
+  "generated_at": "2026-10-01T22:15:11.274842+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -31,7 +31,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "e9f73ed7dc43356ff4dac84ecd997741c79db672258505e72fab248ab9d1ba48"
+      "sha256": "393b281e1514ec853767c62e7198038b9c7682bd717999c1140379d4530ea7a1"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -1987,7 +1987,7 @@
     },
     {
       "path": "services/marketplace_drafts.py",
-      "sha256": "d09414d5197989f057bc9f971b4db498bf4675074109dafd1f334befd01840f6"
+      "sha256": "76c1ebe3fa03820cb502d5b0331b2804dbbf8af1767e13bbc2bb76362a697c83"
     },
     {
       "path": "services/marketplace_fact_pack.py",
@@ -4139,7 +4139,7 @@
     },
     {
       "path": "tests/test_marketplace_drafts.py",
-      "sha256": "6d95ea6ab5564d17e779ef6b7594c416668fbcb37aaeb714353822d9633320d2"
+      "sha256": "da16a448cd8fa531617e9e8b9140df87c21211679772a56acf096367091fd626"
     },
     {
       "path": "tests/test_marketplace_drafts_migration.py",
@@ -4994,5 +4994,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "b8a5c981343996df07c4c7d0f6c18553defbeaa5d442977dab63f9cc30bb99ee"
+  "aggregate_sha256": "ed67c808b46867e610c453e7300234eaf4352d9ed31daaf40050b5eba1aef6df"
 }
