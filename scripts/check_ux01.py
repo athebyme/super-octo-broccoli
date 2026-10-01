@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import signal
@@ -71,8 +72,27 @@ BROWSER_MINIMUMS = {
     # Five WB editor pages, each measured at 3 widths in 2 themes; checks
     # include overflow and keyboard-focus evidence plus named safety probes.
     "wb_edit_browser": {"layouts": 30, "interactions": 24},
-    "common_content_browser": {"layouts": 4, "interactions": 8},
+    "common_content_browser": {"layouts": 28, "interactions": 8},
 }
+COMMON_CONTENT_LAYOUT_WIDTHS = (320, 360, 390, 768, 1024, 1280, 1440)
+COMMON_CONTENT_LAYOUT_THEMES = ("light", "dark")
+COMMON_CONTENT_LAYOUT_STATES = {
+    "empty": "empty_editor",
+    "selected": "selected_editor",
+}
+COMMON_CONTENT_REQUIRED_CHECKS = frozenset({
+    "common_empty_editor_no_product_api_or_writes",
+    "common_empty_editor_internal_catalog_link",
+    "common_photo_boundary_focus_first",
+    "common_photo_boundary_focus_last",
+    "common_preview_cancel_focus_return",
+    "common_focus_visible_geometry",
+})
+COMMON_CONTENT_REQUIRED_FOCUS = frozenset({
+    "common_photo_boundary_focus_first",
+    "common_photo_boundary_focus_last",
+    "common_preview_cancel_focus_return",
+})
 
 
 @dataclass(frozen=True)
@@ -226,6 +246,187 @@ def parse_junit(path: Path) -> dict:
     }
 
 
+def _common_content_protocol_issues(data: dict) -> list[str]:
+    """Require the common editor's exact responsive/focus evidence contract."""
+    issues: list[str] = []
+
+    layouts = data.get("layouts")
+    expected_layouts = {
+        (state, width, theme)
+        for state in COMMON_CONTENT_LAYOUT_STATES
+        for width in COMMON_CONTENT_LAYOUT_WIDTHS
+        for theme in COMMON_CONTENT_LAYOUT_THEMES
+    }
+    observed_layouts = []
+    if isinstance(layouts, list):
+        for row in layouts:
+            if not isinstance(row, dict):
+                continue
+            state, width, theme = row.get("state"), row.get("width"), row.get("theme")
+            if (
+                not isinstance(state, str)
+                or state not in COMMON_CONTENT_LAYOUT_STATES
+                or row.get("kind") != COMMON_CONTENT_LAYOUT_STATES.get(state)
+                or type(width) is not int
+                or theme not in COMMON_CONTENT_LAYOUT_THEMES
+                or row.get("page_overflow") is not False
+            ):
+                continue
+            observed_layouts.append((state, width, theme))
+    if (
+        not isinstance(layouts, list)
+        or len(layouts) != len(expected_layouts)
+        or len(observed_layouts) != len(expected_layouts)
+        or len(set(observed_layouts)) != len(expected_layouts)
+        or set(observed_layouts) != expected_layouts
+    ):
+        issues.append("common_layout_matrix_incomplete_or_duplicate")
+
+    checks = data.get("checks")
+    check_names = []
+    if isinstance(checks, list):
+        for value in checks:
+            if isinstance(value, str):
+                check_names.append(value)
+            elif isinstance(value, dict):
+                status_value = value.get("status")
+                explicitly_failed = (
+                    value.get("ok") is False or value.get("passed") is False
+                    or (isinstance(status_value, str) and status_value.lower() in {
+                        "failed", "error", "blocked", "not_run", "skipped",
+                    })
+                )
+                passed = not explicitly_failed and (
+                    value.get("ok") is True or value.get("passed") is True
+                    or (isinstance(status_value, str) and status_value in PASS_REPORT_STATUSES)
+                )
+                if passed and isinstance(value.get("name"), str):
+                    check_names.append(value["name"])
+    if any(check_names.count(name) != 1 for name in COMMON_CONTENT_REQUIRED_CHECKS):
+        issues.append("common_named_checks_missing_or_duplicate")
+
+    focus_rows = data.get("focus_observations")
+    if not isinstance(focus_rows, list):
+        focus_rows = []
+
+    def finite_number(value) -> bool:
+        if type(value) not in (int, float):
+            return False
+        try:
+            return math.isfinite(value)
+        except (OverflowError, TypeError):
+            return False
+
+    def valid_focus_geometry(row: dict) -> bool:
+        rect = row.get("rect")
+        viewport = row.get("viewport")
+        if not isinstance(rect, dict) or not isinstance(viewport, dict):
+            return False
+        keys = ("x", "y", "width", "height")
+        if any(not finite_number(rect.get(key)) for key in keys):
+            return False
+        if any(not finite_number(viewport.get(key)) for key in ("width", "height")):
+            return False
+        x, y = rect["x"], rect["y"]
+        width, height = rect["width"], rect["height"]
+        viewport_width, viewport_height = viewport["width"], viewport["height"]
+        return (
+            x >= 0 and y >= 0 and width > 0 and height > 0
+            and viewport_width > 0 and viewport_height > 0
+            and x + width <= viewport_width + 1
+            and y + height <= viewport_height + 1
+        )
+
+    def valid_computed_outline(row: dict) -> bool:
+        outline = row.get("outline")
+        if not isinstance(outline, dict):
+            return False
+        style = outline.get("style")
+        color = outline.get("color")
+        width = outline.get("width")
+        if not isinstance(style, str) or style.lower() in {"none", "hidden"}:
+            return False
+        if not finite_number(width) or width <= 0:
+            return False
+        if not isinstance(color, str) or color.lower().strip() in {"", "transparent"}:
+            return False
+        normalized = color.lower().replace(" ", "")
+        if normalized.startswith("rgba("):
+            try:
+                alpha = float(normalized.rsplit(",", 1)[1].removesuffix(")"))
+            except (IndexError, ValueError):
+                return False
+            if alpha <= 0:
+                return False
+        return True
+
+    by_check: dict[str, list[dict]] = {}
+    for row in focus_rows:
+        if isinstance(row, dict) and isinstance(row.get("check"), str):
+            by_check.setdefault(row["check"], []).append(row)
+
+    for name in COMMON_CONTENT_REQUIRED_FOCUS:
+        rows = by_check.get(name, [])
+        if len(rows) != 1:
+            issues.append("common_focus_observation_missing_or_duplicate:" + name)
+            continue
+        row = rows[0]
+        common_evidence = all(row.get(field) is True for field in (
+            "observed", "target_supported", "enabled", "visible",
+            "focus_visible", "outline_visible",
+        ))
+        if not common_evidence or not valid_focus_geometry(row) or not valid_computed_outline(row):
+            issues.append("common_focus_observation_unconfirmed:" + name)
+            continue
+        if name in {
+            "common_photo_boundary_focus_first",
+            "common_photo_boundary_focus_last",
+        }:
+            expected_direction = "1" if name == "common_photo_boundary_focus_first" else "-1"
+            target = row.get("target")
+            if (
+                row.get("same_photo") is not True
+                or not isinstance(target, dict)
+                or not isinstance(target.get("photo_url"), str)
+                or not target.get("photo_url")
+                or not isinstance(target.get("direction"), str)
+                or target.get("direction") != expected_direction
+                or row.get("focused_photo_url") != target.get("photo_url")
+                or row.get("focused_direction") != expected_direction
+            ):
+                issues.append("common_focus_observation_unconfirmed:" + name)
+        elif (
+            row.get("target_action") != "preview"
+            or row.get("focused_action") != "preview"
+            or row.get("same_trigger") is not True
+        ):
+            issues.append("common_focus_observation_unconfirmed:" + name)
+
+    actions = data.get("synthetic_actions")
+    exact_counters = {
+        "preview_requests": 4,
+        "apply_requests": 2,
+        "expected_preview_conflicts": 1,
+        "expected_apply_conflicts": 1,
+        "empty_description_override_requests": 1,
+        "provider_attempts": 0,
+        "empty_route_api_reads": 0,
+        "empty_route_mutating_requests": 0,
+    }
+    if not isinstance(actions, dict) or any(
+        type(actions.get(key)) is not int or actions.get(key) != value
+        for key, value in exact_counters.items()
+    ):
+        issues.append("common_synthetic_action_counts_unexpected")
+    if not isinstance(actions, dict) or any(actions.get(key) is not True for key in (
+        "empty_state_catalog_link_available",
+        "selected_photo_order_persisted",
+        "channel_record_unchanged",
+    )):
+        issues.append("common_state_assertion_missing")
+    return issues
+
+
 def summarize_browser_report(path: Path, expected_source: str,
                              allow_synthetic_login: bool = False,
                              allow_synthetic_common_content: bool = False,
@@ -347,6 +548,11 @@ def summarize_browser_report(path: Path, expected_source: str,
         missing_evidence.append(f"layout_rows_below_{minimum_layout_count}")
     if interaction_count < minimum_interaction_count:
         missing_evidence.append(f"interaction_rows_below_{minimum_interaction_count}")
+    common_protocol_issues = (
+        _common_content_protocol_issues(data)
+        if allow_synthetic_common_content else []
+    )
+    missing_evidence.extend(common_protocol_issues)
     error_count += len(missing_evidence)
     valid = (status in PASS_REPORT_STATUSES and source == expected_source
              and error_count == 0 and provider_attempts == 0)
@@ -369,6 +575,7 @@ def summarize_browser_report(path: Path, expected_source: str,
         "layout_count": layout_count,
         "interaction_count": interaction_count,
         "missing_evidence": missing_evidence,
+        "common_content_protocol_issues": common_protocol_issues,
     }
 
 

@@ -59,11 +59,15 @@ REPORT = {
         "expected_preview_conflicts": 0,
         "expected_apply_conflicts": 0,
         "empty_description_override_requests": 0,
+        "empty_route_api_reads": 0,
+        "empty_route_mutating_requests": 0,
+        "empty_state_catalog_link_available": False,
         "provider_attempts": 0,
         "selected_photo_order_persisted": False,
         "channel_record_unchanged": False,
         "cancelled_local_edits": False,
     },
+    "focus_observations": [],
     "unexpected_http_requests": [],
     "unexpected_external_requests": [],
     "javascript_errors": [],
@@ -336,9 +340,12 @@ def set_theme(page, theme: str):
     assert actual == theme, {"expected": theme, "actual": actual}
 
 
-def layout_case(page, path: str, width: int, theme: str):
+def layout_case(page, path: str, width: int, theme: str, state: str, catalog_path: str):
+    api_reads_before = len(REPORT["browser_api_reads"])
+    writes_before = len(REPORT["writes"])
     page.set_viewport_size({"width": width, "height": 1050})
-    page.goto(BASE + path, wait_until="domcontentloaded")
+    response = page.goto(BASE + path, wait_until="domcontentloaded")
+    assert response and response.status == 200, {"state": state, "path": path, "response": response.status if response else None}
     page.locator("#common-content-editor").wait_for()
     page.wait_for_load_state("networkidle")
     page.evaluate("theme => localStorage.setItem('sh-theme', theme)", theme)
@@ -353,6 +360,8 @@ def layout_case(page, path: str, width: int, theme: str):
         effectNoticeVisible: !!document.querySelector('.cpc-effect-note')
             && getComputedStyle(document.querySelector('.cpc-effect-note')).display !== 'none',
         selectedProductCount: document.querySelectorAll('#common-content-product-list li').length,
+        emptyHeadingVisible: !!document.querySelector('#cpc-empty-title')
+            && getComputedStyle(document.querySelector('#cpc-empty-title')).display !== 'none',
         longTitleWraps: (() => {
             const el = [...document.querySelectorAll('.cpc-product-name')].find(row => row.textContent.startsWith('Длинное название товара'));
             return !!el && getComputedStyle(el).overflowWrap === 'anywhere' && el.scrollWidth <= el.clientWidth + 1;
@@ -365,13 +374,115 @@ def layout_case(page, path: str, width: int, theme: str):
     assert metrics["width"] == width and metrics["theme"] == theme, metrics
     assert metrics["scrollWidth"] <= width + 1, metrics
     assert metrics["titleVisible"] and metrics["effectNoticeVisible"], metrics
-    assert metrics["selectedProductCount"] == 2, metrics
-    assert metrics["longTitleWraps"] and metrics["longExternalIdWraps"], metrics
-    REPORT["layouts"].append({"width": width, "theme": theme, "page_overflow": False})
+    if state == "selected":
+        assert metrics["selectedProductCount"] == 2, metrics
+        assert metrics["longTitleWraps"] and metrics["longExternalIdWraps"], metrics
+    elif state == "empty":
+        assert metrics["selectedProductCount"] == 0 and metrics["emptyHeadingVisible"], metrics
+        link = page.get_by_role("link", name="Открыть мои товары")
+        assert link.is_visible()
+        href = link.get_attribute("href") or ""
+        parsed_link = urlsplit(href)
+        assert not parsed_link.scheme and not parsed_link.netloc and parsed_link.path == catalog_path, href
+        return_link = page.get_by_role("link", name="Вернуться к товарам", exact=True)
+        return_link.focus()
+        page.keyboard.press("Tab")
+        link_handle = link.element_handle()
+        assert link_handle and page.evaluate("target => document.activeElement === target", link_handle)
+        REPORT["synthetic_actions"]["empty_state_catalog_link_available"] = True
+        REPORT["synthetic_actions"]["empty_route_api_reads"] += (
+            len(REPORT["browser_api_reads"]) - api_reads_before
+        )
+        REPORT["synthetic_actions"]["empty_route_mutating_requests"] += (
+            len(REPORT["writes"]) - writes_before
+        )
+    else:
+        raise AssertionError("Unknown common editor layout state: " + state)
+    REPORT["layouts"].append({
+        "kind": "empty_editor" if state == "empty" else "selected_editor",
+        "state": state,
+        "width": width,
+        "theme": theme,
+        "page_overflow": False,
+    })
     if width in (390, 1440):
-        name = f"common-content-{theme}-{width}.png"
+        name = f"common-content-{state}-{theme}-{width}.png"
         page.screenshot(path=str(OUT / name), full_page=True)
         REPORT["screenshots"].append(name)
+
+
+def record_keyboard_focus(page, check: str, selector: str, *, photo_url: str | None = None,
+                         direction: str | None = None, preview_trigger: bool = False) -> None:
+    observation = page.evaluate("""selector => {
+        const target = document.querySelector(selector);
+        const active = document.activeElement;
+        if (!target || !active) return {observed: false};
+        const style = getComputedStyle(active);
+        const rect = active.getBoundingClientRect();
+        const outlineColor = style.outlineColor;
+        const outlineAlpha = outlineColor.startsWith('rgba(')
+            ? Number(outlineColor.slice(outlineColor.lastIndexOf(',') + 1).replace(')', '').trim())
+            : 1;
+        return {
+            observed: true,
+            target_supported: active === target,
+            enabled: active instanceof HTMLButtonElement ? !active.disabled : !active.matches(':disabled'),
+            visible: active.getClientRects().length > 0
+                && style.display !== 'none' && style.visibility !== 'hidden'
+                && Number(style.opacity || 1) > 0,
+            focus_visible: active.matches(':focus-visible'),
+            outline_visible: style.outlineStyle !== 'none'
+                && style.outlineStyle !== 'hidden'
+                && Number.parseFloat(style.outlineWidth) > 0
+                && outlineColor !== 'transparent' && outlineAlpha > 0,
+            outline: {
+                style: style.outlineStyle,
+                width: Number.parseFloat(style.outlineWidth),
+                color: style.outlineColor,
+            },
+            rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+            viewport: {width: innerWidth, height: innerHeight},
+            photo_url: active.dataset.photoUrl || null,
+            direction: active.dataset.direction || null,
+            action: active.dataset.action || null,
+        };
+    }""", selector)
+    assert observation.get("observed"), {"check": check, "observation": observation}
+    row = {
+        "check": check,
+        "observed": observation["observed"],
+        "target_supported": observation["target_supported"],
+        "enabled": observation["enabled"],
+        "visible": observation["visible"],
+        "focus_visible": observation["focus_visible"],
+        "outline_visible": observation["outline_visible"],
+        "outline": observation["outline"],
+        "rect": observation["rect"],
+        "viewport": observation["viewport"],
+        "focused_photo_url": observation["photo_url"],
+        "focused_direction": observation["direction"],
+        "focused_action": observation["action"],
+    }
+    if photo_url is not None:
+        row.update({
+            "same_photo": observation["photo_url"] == photo_url,
+            "target": {"photo_url": photo_url, "direction": direction},
+        })
+    if preview_trigger:
+        row.update({
+            "target_action": observation["action"],
+            "same_trigger": observation["action"] == "preview",
+        })
+    assert row["target_supported"] and row["enabled"] and row["visible"], {"check": check, "row": row}
+    assert row["focus_visible"] and row["outline_visible"], {"check": check, "row": row}
+    rect = row["rect"]
+    viewport = row["viewport"]
+    assert (
+        rect["x"] >= 0 and rect["y"] >= 0 and rect["width"] > 0 and rect["height"] > 0
+        and rect["x"] + rect["width"] <= viewport["width"] + 1
+        and rect["y"] + rect["height"] <= viewport["height"] + 1
+    ), {"check": check, "row": row}
+    REPORT["focus_observations"].append(row)
 
 
 def run():
@@ -426,11 +537,18 @@ def run():
         REPORT["checks"].append("beta_bulk_selection_preserves_exact_product_ids")
         REPORT["pages"].append({"kind": "beta_catalog", "status": 200})
 
-        # Exercise responsive and theme states on the real server-rendered page.
-        for width in (390, 768, 1024, 1440):
-            for theme in ("light", "dark"):
-                layout_case(page, editor_path, width, theme)
-        REPORT["checks"].append("four_widths_two_themes_without_page_overflow")
+        # Cover every requested empty/selected route at every width/theme pair.
+        empty_path = "/my-products/common-content"
+        for state, path in (("empty", empty_path), ("selected", editor_path)):
+            for width in (320, 360, 390, 768, 1024, 1280, 1440):
+                for theme in ("light", "dark"):
+                    layout_case(page, path, width, theme, state, classic_path)
+        assert len(REPORT["layouts"]) == 28
+        assert REPORT["synthetic_actions"]["empty_route_api_reads"] == 0
+        assert REPORT["synthetic_actions"]["empty_route_mutating_requests"] == 0
+        REPORT["checks"].append("common_empty_editor_no_product_api_or_writes")
+        REPORT["checks"].append("common_empty_editor_internal_catalog_link")
+        REPORT["checks"].append("empty_and_selected_layout_matrix_28_exact_combinations")
 
         # Return to a comfortable viewport for the actual review interaction.
         page.set_viewport_size({"width": 1440, "height": 1050})
@@ -465,10 +583,46 @@ def run():
 
         photos_section = page.locator('section[data-field-section="photos"]')
         photos_section.get_by_role("button", name="Изменить значение").click()
-        move_up = photos_section.get_by_role("button", name="Переместить Фото 2 вверх")
-        move_up.focus()
-        move_up.press("Enter")
-        REPORT["interactions"].append("keyboard_reorder_selected_source_photos")
+        second_photo_up = photos_section.locator(
+            'button[data-action="move-photo"][data-photo-url="' + SECOND_PHOTO + '"][data-direction="-1"]'
+        )
+        second_photo_up.focus()
+        second_photo_up.press("Enter")
+        first_boundary_selector = (
+            'button[data-action="move-photo"][data-photo-url="' + SECOND_PHOTO + '"][data-direction="1"]'
+        )
+        page.locator(first_boundary_selector).wait_for()
+        record_keyboard_focus(
+            page,
+            "common_photo_boundary_focus_first",
+            first_boundary_selector,
+            photo_url=SECOND_PHOTO,
+            direction="1",
+        )
+
+        second_photo_down = photos_section.locator(first_boundary_selector)
+        second_photo_down.focus()
+        second_photo_down.press("Enter")
+        last_boundary_selector = (
+            'button[data-action="move-photo"][data-photo-url="' + SECOND_PHOTO + '"][data-direction="-1"]'
+        )
+        page.locator(last_boundary_selector).wait_for()
+        record_keyboard_focus(
+            page,
+            "common_photo_boundary_focus_last",
+            last_boundary_selector,
+            photo_url=SECOND_PHOTO,
+            direction="-1",
+        )
+
+        # Restore the reviewed order required by the save/readback assertions.
+        second_photo_up = photos_section.locator(last_boundary_selector)
+        second_photo_up.focus()
+        second_photo_up.press("Enter")
+        REPORT["interactions"].append("keyboard_reorder_selected_source_photos_at_both_boundaries")
+        REPORT["checks"].append("common_photo_boundary_focus_first")
+        REPORT["checks"].append("common_photo_boundary_focus_last")
+        REPORT["checks"].append("common_focus_visible_geometry")
 
         characteristics_section = page.locator('section[data-field-section="characteristics"]')
         characteristics_section.get_by_role("button", name="Изменить значение").click()
@@ -485,10 +639,20 @@ def run():
         assert not page.get_by_role("button", name="Сохранить общий товар").is_enabled()
         REPORT["checks"].append("review_diff_is_explicit_and_apply_requires_acknowledgement")
 
-        page.get_by_role("button", name="Вернуться к полям").click()
+        cancel_preview = page.get_by_role("button", name="Вернуться к полям")
+        cancel_preview.focus()
+        cancel_preview.press("Enter")
         assert page.locator("#common-content-preview").is_hidden()
         assert not page.locator("#common-content-fields").is_hidden()
         assert page.get_by_role("button", name="Проверить изменения").is_enabled()
+        preview_selector = '#common-content-fields [data-action="preview"]'
+        record_keyboard_focus(
+            page,
+            "common_preview_cancel_focus_return",
+            preview_selector,
+            preview_trigger=True,
+        )
+        REPORT["checks"].append("common_preview_cancel_focus_return")
         REPORT["checks"].append("preview_cancel_keeps_local_edits_without_writing")
 
         preview_key = "POST /api/my-products/common-content/preview"
@@ -653,7 +817,7 @@ def run():
         assert REPORT["unexpected_external_requests"] == []
         assert REPORT["javascript_errors"] == []
         assert REPORT["console_errors"] == []
-        assert len(REPORT["layouts"]) == 8
+        assert len(REPORT["layouts"]) == 28
         assert len(REPORT["checks"]) >= 8
         REPORT["status"] = "passed"
         browser.close()

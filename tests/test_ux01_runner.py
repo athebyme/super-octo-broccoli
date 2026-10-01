@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +14,11 @@ import sys
 from scripts.check_ux01 import (
     BROWSER_INTERACTION_FIELDS,
     BROWSER_MINIMUMS,
+    COMMON_CONTENT_LAYOUT_STATES,
+    COMMON_CONTENT_LAYOUT_THEMES,
+    COMMON_CONTENT_LAYOUT_WIDTHS,
+    COMMON_CONTENT_REQUIRED_CHECKS,
+    COMMON_CONTENT_REQUIRED_FOCUS,
     REQUIRED_TESTS,
     _canonical_json,
     _clean_environment,
@@ -24,6 +30,86 @@ from scripts.check_ux01 import (
     verify_snapshot,
 )
 from scripts.check_ozon_release import EXTRA_TESTS as OZON_EXTRA_TESTS
+
+
+def _common_content_browser_report() -> dict:
+    layouts = [
+        {
+            "kind": kind,
+            "state": state,
+            "width": width,
+            "theme": theme,
+            "page_overflow": False,
+        }
+        for state, kind in COMMON_CONTENT_LAYOUT_STATES.items()
+        for width in COMMON_CONTENT_LAYOUT_WIDTHS
+        for theme in COMMON_CONTENT_LAYOUT_THEMES
+    ]
+    focus_observations = []
+    for name in COMMON_CONTENT_REQUIRED_FOCUS:
+        row = {
+            "check": name,
+            "observed": True,
+            "target_supported": True,
+            "enabled": True,
+            "visible": True,
+            "focus_visible": True,
+            "outline_visible": True,
+            "outline": {"style": "solid", "width": 2, "color": "rgb(20, 80, 180)"},
+            "rect": {"x": 20, "y": 30, "width": 80, "height": 28},
+            "viewport": {"width": 1440, "height": 1050},
+        }
+        if name in {
+            "common_photo_boundary_focus_first",
+            "common_photo_boundary_focus_last",
+        }:
+            row.update({
+                "same_photo": True,
+                "focused_photo_url": "https://fixture.test/photo.svg",
+                "focused_direction": "1" if name == "common_photo_boundary_focus_first" else "-1",
+                "target": {
+                    "photo_url": "https://fixture.test/photo.svg",
+                    "direction": "1" if name == "common_photo_boundary_focus_first" else "-1",
+                },
+            })
+        else:
+            row.update({
+                "target_action": "preview",
+                "focused_action": "preview",
+                "same_trigger": True,
+            })
+        focus_observations.append(row)
+    writes = [
+        *([{"method": "POST", "path": "/api/my-products/common-content/preview", "kind": "synthetic_preview"}] * 4),
+        *([{"method": "POST", "path": "/api/my-products/common-content/apply", "kind": "synthetic_apply"}] * 2),
+    ]
+    check_names = sorted(COMMON_CONTENT_REQUIRED_CHECKS) + ["existing-review-safety", "existing-cancel-reopen"]
+    return {
+        "status": "passed",
+        "source": "worktree",
+        "provider_attempts": 0,
+        "unexpected_external_requests": [],
+        "unexpected_http_requests": [],
+        "javascript_errors": [],
+        "console_errors": [],
+        "layouts": layouts,
+        "checks": check_names,
+        "focus_observations": focus_observations,
+        "writes": writes,
+        "synthetic_actions": {
+            "preview_requests": 4,
+            "apply_requests": 2,
+            "expected_preview_conflicts": 1,
+            "expected_apply_conflicts": 1,
+            "empty_description_override_requests": 1,
+            "provider_attempts": 0,
+            "empty_route_api_reads": 0,
+            "empty_route_mutating_requests": 0,
+            "empty_state_catalog_link_available": True,
+            "selected_photo_order_persisted": True,
+            "channel_record_unchanged": True,
+        },
+    }
 
 
 class Ux01RunnerContractTest(unittest.TestCase):
@@ -236,57 +322,127 @@ class Ux01RunnerContractTest(unittest.TestCase):
     def test_common_content_stage_requires_review_depth_and_exact_synthetic_write_counts(self):
         with tempfile.TemporaryDirectory() as temp_name:
             path = Path(temp_name) / "common-content.json"
-            writes = [
-                {"method": "POST", "path": "/api/my-products/common-content/preview", "kind": "synthetic_preview"},
-                {"method": "POST", "path": "/api/my-products/common-content/apply", "kind": "synthetic_apply"},
-            ]
-            report = {
-                "status": "passed", "source": "worktree", "provider_attempts": 0,
-                "unexpected_external_requests": [], "unexpected_http_requests": [],
-                "javascript_errors": [], "console_errors": [],
-                "layouts": [{"width": index} for index in range(4)],
-                "checks": ["check-" + str(index) for index in range(8)],
-                "writes": writes,
-                "synthetic_actions": {"preview_requests": 1, "apply_requests": 1, "provider_attempts": 0},
-            }
+            report = _common_content_browser_report()
             path.write_text(json.dumps(report), encoding="utf-8")
             accepted = summarize_browser_report(
                 path, "worktree", allow_synthetic_common_content=True,
-                minimum_layout_count=4, minimum_interaction_count=8,
+                minimum_layout_count=28, minimum_interaction_count=8,
                 required_interaction_fields=("checks",),
             )
             self.assertTrue(accepted["valid"])
-            self.assertEqual(accepted["synthetic_common_content_writes"], 2)
+            self.assertEqual(accepted["layout_count"], 28)
+            self.assertEqual(accepted["synthetic_common_content_writes"], 6)
 
-            report["writes"].append({"method": "POST", "path": "/api/unexpected", "kind": "synthetic_apply"})
-            path.write_text(json.dumps(report), encoding="utf-8")
+            unexpected_write = copy.deepcopy(report)
+            unexpected_write["writes"].append({
+                "method": "POST", "path": "/api/unexpected", "kind": "synthetic_apply",
+            })
+            path.write_text(json.dumps(unexpected_write), encoding="utf-8")
             rejected_write = summarize_browser_report(
                 path, "worktree", allow_synthetic_common_content=True,
-                minimum_layout_count=4, minimum_interaction_count=8,
+                minimum_layout_count=28, minimum_interaction_count=8,
                 required_interaction_fields=("checks",),
             )
             self.assertFalse(rejected_write["valid"])
+            self.assertGreater(rejected_write["error_count"], 0)
 
-            report["writes"] = writes
-            report["checks"] = ["too-few"]
-            path.write_text(json.dumps(report), encoding="utf-8")
+            invalid_reports = []
+
+            missing_check = copy.deepcopy(report)
+            missing_check["checks"].remove("common_photo_boundary_focus_first")
+            invalid_reports.append(("missing named check", missing_check, "common_named_checks_missing_or_duplicate"))
+
+            missing_combo = copy.deepcopy(report)
+            missing_combo["layouts"].pop()
+            invalid_reports.append(("missing layout combination", missing_combo, "common_layout_matrix_incomplete_or_duplicate"))
+
+            duplicate_combo = copy.deepcopy(report)
+            duplicate_combo["layouts"][-1] = copy.deepcopy(duplicate_combo["layouts"][0])
+            invalid_reports.append(("duplicate layout combination", duplicate_combo, "common_layout_matrix_incomplete_or_duplicate"))
+
+            unmeasured_layout = copy.deepcopy(report)
+            unmeasured_layout["layouts"][0].pop("page_overflow")
+            invalid_reports.append(("layout without overflow measurement", unmeasured_layout, "common_layout_matrix_incomplete_or_duplicate"))
+
+            failed_named_check = copy.deepcopy(report)
+            failed_named_check["checks"].remove("common_photo_boundary_focus_first")
+            failed_named_check["checks"].append({"name": "common_photo_boundary_focus_first", "status": "failed"})
+            invalid_reports.append(("failed named check object", failed_named_check, "common_named_checks_missing_or_duplicate"))
+
+            contradictory_check = copy.deepcopy(report)
+            contradictory_check["checks"].remove("common_photo_boundary_focus_first")
+            contradictory_check["checks"].append({
+                "name": "common_photo_boundary_focus_first", "status": "failed", "ok": True,
+            })
+            invalid_reports.append(("contradictory failed check object", contradictory_check, "common_named_checks_missing_or_duplicate"))
+
+            no_focus = copy.deepcopy(report)
+            no_focus.pop("focus_observations")
+            invalid_reports.append(("missing focus telemetry", no_focus, "common_focus_observation_missing_or_duplicate"))
+
+            unsupported_focus = copy.deepcopy(report)
+            unsupported_focus["focus_observations"][0]["target_supported"] = False
+            invalid_reports.append(("unsupported focus target", unsupported_focus, "common_focus_observation_unconfirmed"))
+
+            wrong_boundary_direction = copy.deepcopy(report)
+            first_focus = next(row for row in wrong_boundary_direction["focus_observations"]
+                              if row["check"] == "common_photo_boundary_focus_first")
+            first_focus["target"]["direction"] = "-1"
+            invalid_reports.append(("wrong focus direction for first boundary", wrong_boundary_direction, "common_focus_observation_unconfirmed"))
+
+            invisible_focus = copy.deepcopy(report)
+            invisible_focus["focus_observations"][0]["focus_visible"] = False
+            invalid_reports.append(("focus without visible ring", invisible_focus, "common_focus_observation_unconfirmed"))
+
+            outside_focus = copy.deepcopy(report)
+            outside_focus["focus_observations"][0]["rect"]["x"] = 2000
+            invalid_reports.append(("focus outside viewport", outside_focus, "common_focus_observation_unconfirmed"))
+
+            for label, invalid, expected_issue in invalid_reports:
+                with self.subTest(case=label):
+                    path.write_text(json.dumps(invalid), encoding="utf-8")
+                    rejected = summarize_browser_report(
+                        path, "worktree", allow_synthetic_common_content=True,
+                        minimum_layout_count=28, minimum_interaction_count=8,
+                        required_interaction_fields=("checks",),
+                    )
+                    self.assertFalse(rejected["valid"])
+                    self.assertTrue(any(
+                        issue == expected_issue or issue.startswith(expected_issue + ":")
+                        for issue in rejected["common_content_protocol_issues"]
+                    ), rejected["common_content_protocol_issues"])
+
+            shallow = copy.deepcopy(report)
+            shallow["checks"] = ["too-few"]
+            path.write_text(json.dumps(shallow), encoding="utf-8")
             rejected_depth = summarize_browser_report(
                 path, "worktree", allow_synthetic_common_content=True,
-                minimum_layout_count=4, minimum_interaction_count=8,
+                minimum_layout_count=28, minimum_interaction_count=8,
                 required_interaction_fields=("checks",),
             )
             self.assertFalse(rejected_depth["valid"])
             self.assertIn("interaction_rows_below_8", rejected_depth["missing_evidence"])
 
-            report["checks"] = ["check-" + str(index) for index in range(8)]
-            report["writes"] = []
-            path.write_text(json.dumps(report), encoding="utf-8")
+            missing_write = copy.deepcopy(report)
+            missing_write["writes"] = []
+            path.write_text(json.dumps(missing_write), encoding="utf-8")
             rejected_missing_write = summarize_browser_report(
                 path, "worktree", allow_synthetic_common_content=True,
-                minimum_layout_count=4, minimum_interaction_count=8,
+                minimum_layout_count=28, minimum_interaction_count=8,
                 required_interaction_fields=("checks",),
             )
             self.assertFalse(rejected_missing_write["valid"])
+
+            wrong_counters = copy.deepcopy(report)
+            wrong_counters["synthetic_actions"]["empty_route_api_reads"] = 1
+            path.write_text(json.dumps(wrong_counters), encoding="utf-8")
+            rejected_empty_api = summarize_browser_report(
+                path, "worktree", allow_synthetic_common_content=True,
+                minimum_layout_count=28, minimum_interaction_count=8,
+                required_interaction_fields=("checks",),
+            )
+            self.assertFalse(rejected_empty_api["valid"])
+            self.assertIn("common_synthetic_action_counts_unexpected", rejected_empty_api["common_content_protocol_issues"])
 
     def test_wb_edit_stage_requires_all_theme_viewports_and_named_checks(self):
         with tempfile.TemporaryDirectory() as temp_name:
