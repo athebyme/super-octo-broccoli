@@ -147,6 +147,14 @@
                                 : 'обновит названия, характеристики, фото',
                         },
                         {
+                            key: 'common_content',
+                            label: 'Изменить общий контент',
+                            hint: chosen.length > 50
+                                ? 'за один раз можно открыть не больше 50 товаров'
+                                : 'сохранит только общий товар в Seller Hub; карточки каналов не изменятся',
+                            disabled: !chosen.length || chosen.length > 50,
+                        },
+                        {
                             key: 'enrich',
                             label: 'Дополнить карточки на WB',
                             hint: published
@@ -371,6 +379,21 @@
                         this.$refs.ozonDialog.showModal();
                         this.$refs.ozonAccount.focus();
                     });
+                    return;
+                }
+                if (action.key === 'common_content') {
+                    var productIds = [...new Set(chosen.map(function (item) { return Number(item.id); }))]
+                        .filter(function (id) { return Number.isSafeInteger(id) && id > 0; });
+                    if (!productIds.length) return;
+                    if (productIds.length > 50) {
+                        this.error = 'За один раз можно открыть не больше 50 товаров. Снимите часть отметок.';
+                        return;
+                    }
+                    try {
+                        window.location.href = window.SellerHubCommonContent.selectionUrl(this.urls.commonContent, productIds);
+                    } catch (_) {
+                        this.error = 'Не удалось открыть выбор товаров. Обновите страницу и повторите действие.';
+                    }
                     return;
                 }
                 var plan = plans[action.key];

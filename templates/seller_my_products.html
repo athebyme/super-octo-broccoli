@@ -365,6 +365,12 @@
             <span class="text-sm myp-tm" x-text="selected.length + ' выбрано'"></span>
         </div>
         <div class="flex gap-2 flex-shrink-0">
+            <button type="button" @click="openCommonContent()"
+                    :disabled="selected.length === 0 || selected.length > 50"
+                    class="sh-btn sh-btn--secondary sh-btn--md"
+                    title="Изменить общие данные выбранных товаров в Seller Hub; карточки каналов останутся без изменений">
+                Общий контент<span x-show="selected.length" x-text="' (' + selected.length + ')'"></span>
+            </button>
             {% if not updates_filter %}
             <button @click="openInfographicCampaign()" :disabled="selected.length === 0"
                     class="sh-btn sh-btn--accent sh-btn--md"
@@ -844,6 +850,10 @@
                             {{ p.title or 'Без названия' }}
                         </a>
                         <p class="text-xs myp-tm">{{ p.external_id }}
+                            <span aria-hidden="true"> · </span>
+                            <a href="{{ url_for('common_product_content_editor_page') }}?product_id={{ p.id }}"
+                               class="myp-link-muted underline underline-offset-2"
+                               aria-label="Изменить общий контент товара {{ p.title or p.external_id }}">Общий контент</a>
                             {% if updates_map.get(p.id) %}
                             <span class="sh-badge sh-badge--yellow sh-badge--sm" title="Общая карточка поставщика обновилась — заберите изменения кнопкой «Обновить из каталога»">Обновление</span>
                             {% endif %}
@@ -1192,11 +1202,13 @@
     {% endif %}
 </div>
 
+<script src="{{ url_for('static', filename='common-product-content.js') }}"></script>
 <script>
 function myProductsPage() {
     return {
         selectedAll: false,
         selected: [],
+        commonContentBase: {{ url_for('common_product_content_editor_page') | tojson }},
         wbProductMap: {
             {% for p in pagination.items %}
             {{ p.id }}: {{ p.product_id if p.import_status == 'imported' and p.product_id else 'null' }}{% if not loop.last %},{% endif %}
@@ -1218,6 +1230,22 @@ function myProductsPage() {
             return [...new Set(this.selected
                 .map(id => this.wbProductMap[id])
                 .filter(id => Number.isInteger(id) && id > 0))];
+        },
+
+        commonContentHref(ids) {
+            const unique = [...new Set((ids || []).map(Number).filter(id => Number.isSafeInteger(id) && id > 0))];
+            return window.SellerHubCommonContent.selectionUrl(this.commonContentBase, unique);
+        },
+
+        openCommonContent() {
+            const ids = [...new Set(this.selected.map(Number).filter(id => Number.isInteger(id) && id > 0))];
+            if (!ids.length) return;
+            if (ids.length > 50) {
+                this.notification = {type: 'error', msg: 'За один раз можно открыть не больше 50 товаров. Снимите часть отметок.'};
+                return;
+            }
+            try { window.location.href = this.commonContentHref(ids); }
+            catch (_) { this.notification = {type: 'error', msg: 'Выберите от 1 до 50 товаров.'}; }
         },
 
         init() {

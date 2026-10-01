@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Общий контент товаров · Seller Hub{% endblock %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='common-product-content.css') }}">
+
+<script type="application/json" id="common-content-bootstrap">{{ {
+    'products': products,
+    'selectedProductIds': selected_product_ids,
+    'csrfToken': csrf_token,
+    'previewUrl': url_for('common_product_content.preview_common_product_content'),
+    'applyUrl': url_for('common_product_content.apply_common_product_content'),
+    'readUrlBase': '/api/my-products/',
+    'catalogUrl': url_for('seller_my_products'),
+} | tojson }}</script>
+
+<div id="common-content-editor" class="cpc-page">
+    <header class="cpc-header">
+        <div>
+            <p class="cpc-crumb"><a href="{{ url_for('seller_my_products') }}">Мои товары</a><span aria-hidden="true">/</span>Общий контент</p>
+            <h1>Общий контент товара</h1>
+            <p class="cpc-intro">Исправляйте сведения в Seller Hub и сохраняйте источник каждого поля.</p>
+        </div>
+        <a class="sh-btn sh-btn--secondary" href="{{ url_for('seller_my_products') }}">Вернуться к товарам</a>
+    </header>
+
+    <aside class="cpc-effect-note" role="note" aria-label="Что изменится при сохранении">
+        <span class="cpc-effect-mark" aria-hidden="true">≡</span>
+        <p><strong>Сохранится только общий товар в Seller Hub.</strong> Черновики и опубликованные карточки на площадках останутся без изменений. Чтобы применить новые данные к каналу, отдельно проверьте его карточку и подтвердите действие там.</p>
+    </aside>
+
+    {% if not products %}
+    <section class="cpc-empty" aria-labelledby="cpc-empty-title">
+        <h2 id="cpc-empty-title">Сначала выберите товары</h2>
+        <p>Откройте «Мои товары», отметьте до 50 карточек и выберите «Общий контент». Здесь ничего не загружается и не сохраняется автоматически.</p>
+        <a class="sh-btn sh-btn--primary" href="{{ url_for('seller_my_products') }}">Открыть мои товары</a>
+    </section>
+    {% else %}
+    <div class="cpc-layout" data-product-count="{{ products|length }}">
+        <aside class="cpc-selection" aria-labelledby="cpc-selection-title">
+            <div class="cpc-selection-head">
+                <h2 id="cpc-selection-title">Выбранные товары</h2>
+                <span>{{ products|length }} / 50</span>
+            </div>
+            <p class="cpc-selection-help">Изменения ведутся отдельно для каждой карточки.</p>
+            <nav aria-label="Перейти к выбранному товару">
+                <ul id="common-content-product-list" class="cpc-product-list"></ul>
+            </nav>
+        </aside>
+
+        <section class="cpc-workspace" aria-label="Редактирование общего товара">
+            <div id="common-content-error" class="cpc-message cpc-message--error" role="alert" tabindex="-1" hidden></div>
+            <div id="common-content-status" class="cpc-message cpc-message--status" role="status" aria-live="polite" hidden></div>
+            <div id="common-content-fields"></div>
+            <div id="common-content-preview" hidden></div>
+        </section>
+    </div>
+    {% endif %}
+</div>
+
+<script src="{{ url_for('static', filename='common-product-content.js') }}" defer></script>
+{% endblock %}

@@ -20,6 +20,10 @@
 
 Дополнительно расширен analytics browser fixture: прежний success matrix сохранён, добавлены состояния пустого списка товаров и ошибки сводки на 390/1024/1280/1440 px, light/dark. Проверены понятные empty/error labels, доступность/отсутствие stale KPI, локальная таблица и отсутствие горизонтального переполнения. 16 новых state cases прошли; общий fixture сообщил 48 layouts, 0 page overflow, 0 unexpected API/external calls, 0 blocked writes и 0 JS errors. Артефакт: `/tmp/ux01-analytics-audit-20261001/analytics-report.json`.
 
+Для common-content редактора добавлены отдельные seller catalog entry points и обязательный browser stage. Fixture проверяет bulk selection, подтверждённый `common_only` effect, ручной пустой override описания, фото reorder, stale preview/apply conflicts, delayed preview/apply/readback и tenant-safe readback. Runner принимает только exact local preview/apply POST paths с отдельными счетчиками и требует не менее 8 checks и 4 layouts. focused Python/UI/route/service/runner suites: `41 passed, 7 subtests passed`; `node --check`, `py_compile` и `git diff --check` прошли.
+
+Обновлённый common-content browser fixture в текущем restricted окружении **не прошёл**: synthetic app/setup закончился до browser launch, когда Werkzeug `make_server` попытался открыть `127.0.0.1:0` и получил `PermissionError: [Errno 1] Operation not permitted` на `socket.socket`. Artifact/report от этого запуска не создан, поэтому stage имеет статус blocked/not-tested, а не passed. Socket/network policy не обходилась.
+
 Фокусированные тесты кода runner и Ozon lifecycle: `17 passed, 7 subtests passed`; `py_compile` и `git diff --check` прошли. Полный Ozon release runner, полный UX-01 runner и merged candidate gate не запускались. В новом restricted environment local Flask bind запрещён (`PermissionError: [Errno 1]`), Docker socket также недоступен; эти ограничения не заменялись статическими проверками или ослаблением порогов. Ранее проведённый journey browser run указан как отдельное synthetic evidence, а не как проверка финального объединённого дерева.
 
 ## Области Ozon и внешние ограничения

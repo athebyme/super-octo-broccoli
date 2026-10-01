@@ -44,6 +44,7 @@ REQUIRED_TESTS = (
     "tests/test_wb_bulk_review_key_migration.py",
     "tests/test_common_product_content_service.py",
     "tests/test_common_product_content_routes.py",
+    "tests/test_common_product_content_ui.py",
 )
 REQUIRED_BROWSERS = (
     "tests/ux01/analytics_browser.py",
@@ -64,6 +65,9 @@ BROWSER_INTERACTION_FIELDS = {
     "operations_pricing_browser": ("interactions", "checks"),
     "wb_edit_browser": ("checks",),
     "common_content_browser": ("checks",),
+}
+BROWSER_MINIMUMS = {
+    "common_content_browser": {"layouts": 4, "interactions": 8},
 }
 
 
@@ -220,6 +224,9 @@ def parse_junit(path: Path) -> dict:
 
 def summarize_browser_report(path: Path, expected_source: str,
                              allow_synthetic_login: bool = False,
+                             allow_synthetic_common_content: bool = False,
+                             minimum_layout_count: int = 0,
+                             minimum_interaction_count: int = 0,
                              required_interaction_fields: tuple[str, ...] = (
                                  "interactions", "checks",
                              )) -> dict:
@@ -265,16 +272,52 @@ def summarize_browser_report(path: Path, expected_source: str,
     )
     writes = data.get("writes", [])
     synthetic_auth_writes = 0
+    synthetic_common_content_writes = 0
     if not isinstance(writes, list):
         error_count += 1
+    elif allow_synthetic_common_content:
+        synthetic_actions = data.get("synthetic_actions")
+        counters_valid = (
+            isinstance(synthetic_actions, dict)
+            and type(synthetic_actions.get("preview_requests")) is int
+            and synthetic_actions["preview_requests"] >= 0
+            and type(synthetic_actions.get("apply_requests")) is int
+            and synthetic_actions["apply_requests"] >= 0
+            and synthetic_actions.get("provider_attempts") == 0
+        )
+        rows_valid = all(
+            isinstance(row, dict) and row.get("method") == "POST"
+            and row.get("path") in {
+                "/api/my-products/common-content/preview",
+                "/api/my-products/common-content/apply",
+            }
+            and row.get("kind") in {"synthetic_preview", "synthetic_apply"}
+            and ((row.get("kind") == "synthetic_preview"
+                  and row.get("path") == "/api/my-products/common-content/preview")
+                 or (row.get("kind") == "synthetic_apply"
+                     and row.get("path") == "/api/my-products/common-content/apply"))
+            for row in writes
+        )
+        observed = {
+            "preview_requests": sum(row.get("kind") == "synthetic_preview" for row in writes if isinstance(row, dict)),
+            "apply_requests": sum(row.get("kind") == "synthetic_apply" for row in writes if isinstance(row, dict)),
+        }
+        expected = {
+            "preview_requests": synthetic_actions["preview_requests"] if counters_valid else -1,
+            "apply_requests": synthetic_actions["apply_requests"] if counters_valid else -1,
+        }
+        if counters_valid and rows_valid and observed == expected and len(writes) == sum(expected.values()):
+            synthetic_common_content_writes = len(writes)
+        else:
+            error_count += max(1, len(writes))
     elif writes:
-        allowed = (
+        allowed_auth = (
             allow_synthetic_login and len(writes) <= 2
             and all(isinstance(row, dict)
                     and row.get("method") == "POST"
                     and row.get("path") == "/login" for row in writes)
         )
-        if allowed:
+        if allowed_auth:
             synthetic_auth_writes = len(writes)
         else:
             error_count += len(writes)
@@ -296,6 +339,10 @@ def summarize_browser_report(path: Path, expected_source: str,
         missing_evidence.append("layout_rows")
     if interaction_count == 0:
         missing_evidence.append("interaction_rows")
+    if layout_count < minimum_layout_count:
+        missing_evidence.append(f"layout_rows_below_{minimum_layout_count}")
+    if interaction_count < minimum_interaction_count:
+        missing_evidence.append(f"interaction_rows_below_{minimum_interaction_count}")
     error_count += len(missing_evidence)
     valid = (status in PASS_REPORT_STATUSES and source == expected_source
              and error_count == 0 and provider_attempts == 0)
@@ -312,6 +359,7 @@ def summarize_browser_report(path: Path, expected_source: str,
         "error_count": error_count,
         "blocked_count": blocked_count,
         "synthetic_auth_writes": synthetic_auth_writes,
+        "synthetic_common_content_writes": synthetic_common_content_writes,
         "provider_attempts": provider_attempts,
         "page_count": len(data.get("pages", [])) if isinstance(data.get("pages"), list) else 0,
         "layout_count": layout_count,
@@ -549,6 +597,9 @@ def execute_stage(stage: Stage, root: Path, output: Path, chromium: str) -> dict
         stage.report_path or Path(),
         stage.expected_source or "",
         allow_synthetic_login=(stage.name == "listing_browser"),
+        allow_synthetic_common_content=(stage.name == "common_content_browser"),
+        minimum_layout_count=BROWSER_MINIMUMS.get(stage.name, {}).get("layouts", 0),
+        minimum_interaction_count=BROWSER_MINIMUMS.get(stage.name, {}).get("interactions", 0),
         required_interaction_fields=BROWSER_INTERACTION_FIELDS.get(
             stage.name, ("interactions", "checks"),
         ),

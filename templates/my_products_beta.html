@@ -24,6 +24,7 @@
         'supplierCatalog': url_for('supplier_catalog'),
         'apiSettings': url_for('api_settings'),
         'classic': url_for('seller_my_products'),
+        'commonContent': url_for('common_product_content_editor_page'),
         'ozonUploads': ozon_uploads_url,
         'ozonByRequest': url_for('ozon_bulk_uploads.find_by_request'),
     },
@@ -146,6 +147,8 @@
                     <span v-if="item.brand">{{ item.brand }}</span>
                     <span v-if="item.category" class="mp-cat">{{ item.category }}</span>
                 </div>
+                <a class="sh-quiet-link" :href="urls.commonContent + '?product_id=' + encodeURIComponent(item.id)"
+                   :aria-label="'Изменить общий контент товара ' + (item.title || item.vendor_code)">Общий контент</a>
                 <div class="mp-flags">
                     <sh-badge v-if="item.has_supplier_update" label="Есть обновление у поставщика" tone="info"></sh-badge>
                     <sh-badge v-if="!item.photo_count" label="Нет фото" tone="warn"></sh-badge>
@@ -230,5 +233,6 @@
 
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js') }}"></script>
+<script src="{{ url_for('static', filename='common-product-content.js') }}"></script>
 <script src="{{ url_for('static', filename='my-products-beta.js') }}"></script>
 {% endblock %}

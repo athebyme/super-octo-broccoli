@@ -228,6 +228,61 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertEqual(summary["layout_count"], 118)
             self.assertEqual(summary["interaction_count"], 22)
 
+    def test_common_content_stage_requires_review_depth_and_exact_synthetic_write_counts(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            path = Path(temp_name) / "common-content.json"
+            writes = [
+                {"method": "POST", "path": "/api/my-products/common-content/preview", "kind": "synthetic_preview"},
+                {"method": "POST", "path": "/api/my-products/common-content/apply", "kind": "synthetic_apply"},
+            ]
+            report = {
+                "status": "passed", "source": "worktree", "provider_attempts": 0,
+                "unexpected_external_requests": [], "unexpected_http_requests": [],
+                "javascript_errors": [], "console_errors": [],
+                "layouts": [{"width": index} for index in range(4)],
+                "checks": ["check-" + str(index) for index in range(8)],
+                "writes": writes,
+                "synthetic_actions": {"preview_requests": 1, "apply_requests": 1, "provider_attempts": 0},
+            }
+            path.write_text(json.dumps(report), encoding="utf-8")
+            accepted = summarize_browser_report(
+                path, "worktree", allow_synthetic_common_content=True,
+                minimum_layout_count=4, minimum_interaction_count=8,
+                required_interaction_fields=("checks",),
+            )
+            self.assertTrue(accepted["valid"])
+            self.assertEqual(accepted["synthetic_common_content_writes"], 2)
+
+            report["writes"].append({"method": "POST", "path": "/api/unexpected", "kind": "synthetic_apply"})
+            path.write_text(json.dumps(report), encoding="utf-8")
+            rejected_write = summarize_browser_report(
+                path, "worktree", allow_synthetic_common_content=True,
+                minimum_layout_count=4, minimum_interaction_count=8,
+                required_interaction_fields=("checks",),
+            )
+            self.assertFalse(rejected_write["valid"])
+
+            report["writes"] = writes
+            report["checks"] = ["too-few"]
+            path.write_text(json.dumps(report), encoding="utf-8")
+            rejected_depth = summarize_browser_report(
+                path, "worktree", allow_synthetic_common_content=True,
+                minimum_layout_count=4, minimum_interaction_count=8,
+                required_interaction_fields=("checks",),
+            )
+            self.assertFalse(rejected_depth["valid"])
+            self.assertIn("interaction_rows_below_8", rejected_depth["missing_evidence"])
+
+            report["checks"] = ["check-" + str(index) for index in range(8)]
+            report["writes"] = []
+            path.write_text(json.dumps(report), encoding="utf-8")
+            rejected_missing_write = summarize_browser_report(
+                path, "worktree", allow_synthetic_common_content=True,
+                minimum_layout_count=4, minimum_interaction_count=8,
+                required_interaction_fields=("checks",),
+            )
+            self.assertFalse(rejected_missing_write["valid"])
+
     def test_listing_report_allows_only_bounded_synthetic_login_posts(self):
         with tempfile.TemporaryDirectory() as temp_name:
             path = Path(temp_name) / "browser.json"
@@ -331,6 +386,7 @@ REQUIRED_TESTS_FOR_TEST = (
     "tests/test_wb_bulk_review_key_migration.py",
     "tests/test_common_product_content_service.py",
     "tests/test_common_product_content_routes.py",
+    "tests/test_common_product_content_ui.py",
 )
 REQUIRED_BROWSER_FILES_FOR_TEST = (
     "tests/ux01/analytics_browser.py",
