@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime
 import hashlib
+from html.parser import HTMLParser
 import json
 import logging
 import os
@@ -210,9 +211,37 @@ ASSETS_BY_URL = load_assets()
 
 def authenticated_cookie() -> dict:
     client = app.test_client()
+    login_page = client.get("/login", follow_redirects=False)
+    if login_page.status_code != 200:
+        raise AssertionError(("synthetic login form failed", login_page.status_code))
+
+    class CsrfInputParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.tokens = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag.lower() != "input":
+                return
+            fields = dict(attrs)
+            if (
+                fields.get("type", "").lower() == "hidden"
+                and fields.get("name") == "csrf_token"
+            ):
+                self.tokens.append(fields.get("value", ""))
+
+    parser = CsrfInputParser()
+    parser.feed(login_page.get_data(as_text=True))
+    if len(parser.tokens) != 1 or not parser.tokens[0].strip():
+        raise AssertionError("Synthetic login form must provide exactly one nonempty CSRF input")
+
     response = client.post(
         "/login",
-        data={"username": USERNAME, "password": PASSWORD},
+        data={
+            "username": USERNAME,
+            "password": PASSWORD,
+            "csrf_token": parser.tokens[0],
+        },
         follow_redirects=False,
     )
     if response.status_code not in (302, 303):
