@@ -79,7 +79,7 @@ def test_selection_url_helper_enforces_repeated_product_ids_and_fifty_item_cap()
     assert node, "Node is required to verify the shared list-link helper"
     script = r"""
 const assert = require('node:assert/strict');
-const { selectionUrl, serializeFieldChange, readablePhotoOrder } = require('./static/common-product-content.js');
+const { selectionUrl, serializeFieldChange, readablePhotoOrder, photoPreviewFallbackLabel } = require('./static/common-product-content.js');
 const url = selectionUrl('/my-products/common-content', [14, 7, 14]);
 const parsed = new URL(url, 'http://seller.test');
 assert.equal(parsed.pathname, '/my-products/common-content');
@@ -102,6 +102,10 @@ assert.notEqual(
     readablePhotoOrder(['photo-b', 'photo-a'], pool),
     'same photo count in a changed order must produce a visible diff',
 );
+assert.equal(photoPreviewFallbackLabel(true, false), 'Предпросмотр сохранённого фото недоступен');
+assert.equal(photoPreviewFallbackLabel(true, true), 'Предпросмотр сохранённого фото недоступен');
+assert.equal(photoPreviewFallbackLabel(false, false), 'Нет предпросмотра');
+assert.equal(photoPreviewFallbackLabel(false, true), 'Предпросмотр недоступен');
 """
     result = subprocess.run(
         [node, "-e", script],

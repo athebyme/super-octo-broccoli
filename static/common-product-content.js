@@ -49,11 +49,17 @@
         }).join(' → ');
     }
 
+    function photoPreviewFallbackLabel(selected, hasPreviewUrl) {
+        if (selected) return 'Предпросмотр сохранённого фото недоступен';
+        return hasPreviewUrl ? 'Предпросмотр недоступен' : 'Нет предпросмотра';
+    }
+
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
             selectionUrl: selectionUrl,
             serializeFieldChange: serializeFieldChange,
             readablePhotoOrder: readablePhotoOrder,
+            photoPreviewFallbackLabel: photoPreviewFallbackLabel,
         };
     }
     if (global) {
@@ -61,6 +67,7 @@
         global.SellerHubCommonContent.selectionUrl = selectionUrl;
         global.SellerHubCommonContent.serializeFieldChange = serializeFieldChange;
         global.SellerHubCommonContent.readablePhotoOrder = readablePhotoOrder;
+        global.SellerHubCommonContent.photoPreviewFallbackLabel = photoPreviewFallbackLabel;
     }
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null));
 
@@ -409,11 +416,11 @@
                 img.loading = 'lazy';
                 img.decoding = 'async';
                 img.addEventListener('error', function () {
-                    image.replaceChildren(node('span', '', 'Предпросмотр недоступен'));
+                    image.replaceChildren(node('span', '', helpers.photoPreviewFallbackLabel(selected, true)));
                 }, { once: true });
                 image.appendChild(img);
             } else {
-                image.appendChild(node('span', '', selected ? 'В текущем выборе' : 'Нет предпросмотра'));
+                image.appendChild(node('span', '', helpers.photoPreviewFallbackLabel(selected, false)));
             }
             item.appendChild(image);
             item.appendChild(node('span', 'cpc-photo-name', photoName(option.url, record)));

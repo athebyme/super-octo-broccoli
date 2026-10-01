@@ -88,13 +88,13 @@
 .cpc-photo-option:focus-visible,
 .cpc-product-list button:focus-visible,
 .cpc-page button:focus-visible,
-.cpc-recipient input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cpc-recipient input:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
 .cpc-value-input[disabled] { background: var(--bg-hover); color: var(--text-secondary); opacity: 1; }
 .cpc-field-hint { margin: .4rem 0 0; color: var(--text-muted); font-size: .77rem; line-height: 1.45; }
 .cpc-description-disclosure { margin-top: .35rem; color: var(--text-secondary); }
 .cpc-description-disclosure summary { width: fit-content; cursor: pointer; color: var(--accent-strong); text-underline-offset: .15em; }
 .cpc-description-full { max-height: 12rem; margin-top: .35rem; padding: .45rem .55rem; overflow: auto; border: 1px solid var(--border); border-radius: .25rem; background: var(--bg-card); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
-.cpc-description-full:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.cpc-description-full:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
 .cpc-char-list { display: grid; gap: .55rem; }
 .cpc-char-row { display: grid; grid-template-columns: minmax(9rem, .75fr) minmax(0, 1.5fr) auto; gap: .5rem; align-items: start; }
 .cpc-char-row .cpc-value-input { min-height: 2.5rem; }

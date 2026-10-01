@@ -8,6 +8,12 @@ from pathlib import Path
 
 BASE_TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "base.html"
 CSS = re.sub(r"/\*.*?\*/", "", BASE_TEMPLATE.read_text(encoding="utf-8"), flags=re.S)
+COMMON_CSS = re.sub(
+    r"/\*.*?\*/",
+    "",
+    (BASE_TEMPLATE.parents[1] / "static" / "common-product-content.css").read_text(encoding="utf-8"),
+    flags=re.S,
+)
 
 
 def _properties(scope: str) -> dict[str, str]:
@@ -22,6 +28,14 @@ def _rule(selector: str) -> str:
         if selector in selectors:
             return match.group(2)
     raise AssertionError(f"missing CSS selector: {selector}")
+
+
+def _common_rule(selector: str) -> str:
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", COMMON_CSS):
+        selectors = [part.strip() for part in match.group(1).split(",")]
+        if selector in selectors:
+            return match.group(2)
+    raise AssertionError(f"missing common-content CSS selector: {selector}")
 
 
 def _hex(properties: dict[str, str], name: str) -> str:
@@ -114,3 +128,35 @@ def test_status_chip_foregrounds_have_aa_contrast_in_both_themes() -> None:
         ('.rounded-full[class*="bg-blue-"]', "--info"),
     ):
         assert f"color: var({token})" in _rule(selector)
+
+
+def test_focus_indicators_use_opaque_high_contrast_tokens() -> None:
+    themes = (_properties(r":root"), _properties(r'\[data-theme="dark"\]'))
+    surfaces = ("--bg", "--bg-card", "--bg-hover", "--accent-light")
+    for theme in themes:
+        for surface in surfaces:
+            ratio = _contrast(_hex(theme, "--focus-outline"), _hex(theme, surface))
+            assert ratio >= 3.0, f"focus outline on {surface} has contrast {ratio:.2f}:1"
+
+    for selector in (
+        ".sh-dropdown-item:focus-visible",
+        ".sh-modal-close:focus-visible",
+        ".sh-stat-card--link:focus-visible",
+        ".sh-card--interactive:focus-visible",
+        ".sh-btn:focus-visible",
+        ".sh-tab:focus-visible",
+        ".sh-pagination-btn:focus-visible",
+        ".sh-quick-card:focus-visible",
+        "input:focus",
+    ):
+        assert "outline: 2px solid var(--focus-outline)" in _rule(selector)
+
+    assert "--tw-ring-color: var(--focus-outline)" in _rule('[class*="ring-indigo"]')
+    assert "outline: 2px solid var(--focus-outline)" in _common_rule(".cpc-value-input:focus-visible")
+    assert "outline: 2px solid var(--focus-outline)" in _common_rule(".cpc-description-full:focus-visible")
+
+    # The command-palette active marker keeps its separate accent because it already clears 3:1.
+    for theme in themes:
+        for surface in surfaces:
+            assert _contrast(_hex(theme, "--accent"), _hex(theme, surface)) >= 3.0
+    assert re.search(r"\.sh-cmdpal-item\.active\s*\{[^}]*outline: 2px solid var\(--accent\)", CSS)

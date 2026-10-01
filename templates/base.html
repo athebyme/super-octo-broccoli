@@ -87,6 +87,7 @@
             --border: #e8e5e1;
             --border-light: #f0eeeb;
             --focus-ring: rgba(196, 93, 62, 0.22);
+            --focus-outline: #a34a2f;
             /* Семантика статусов (тёплые оттенки в тон палитре) */
             --ok: #286b49;         --ok-bg: #eaf5ee;      --ok-border: #cbe5d4;
             --warn: #805515;       --warn-bg: #fbf3e0;    --warn-border: #edd9a8;
@@ -151,6 +152,7 @@
             --border: #2b2825;
             --border-light: #221f1d;
             --focus-ring: rgba(217, 119, 87, 0.35);
+            --focus-outline: #e28b6d;
             --ok: #6cbf90;         --ok-bg: #182b1f;      --ok-border: #2c4a37;
             --warn: #d9a94e;       --warn-bg: #2b2312;    --warn-border: #4a3d1f;
             --danger: #e0796c;     --danger-bg: #321b17;  --danger-border: #55302a;
@@ -183,7 +185,7 @@
         .sh-toast-close:focus-visible,
         .sh-alert-close:focus-visible,
         a.sh-badge:focus-visible {
-            outline: 2px solid var(--focus-ring);
+            outline: 2px solid var(--focus-outline);
             outline-offset: -2px;
             border-radius: var(--r-xs);
         }
@@ -697,10 +699,10 @@
 
         /* Ring colors */
         .ring-indigo-500\/20, [class*="ring-indigo"] {
-            --tw-ring-color: var(--focus-ring) !important;
+            --tw-ring-color: var(--focus-outline) !important;
         }
         .focus\:ring-indigo-500:focus {
-            --tw-ring-color: var(--focus-ring) !important;
+            --tw-ring-color: var(--focus-outline) !important;
         }
         .focus\:border-indigo-500:focus {
             border-color: var(--accent) !important;
@@ -783,7 +785,7 @@
         input:focus, textarea:focus, select:focus {
             border-color: var(--accent) !important;
             box-shadow: none !important;
-            outline: 2px solid var(--focus-ring) !important;
+            outline: 2px solid var(--focus-outline) !important;
             outline-offset: 1px !important;
         }
 
@@ -1037,7 +1039,7 @@
             box-shadow: var(--shadow-2);
             transform: translateY(-1px);
         }
-        .sh-stat-card--link:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+        .sh-stat-card--link:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
         .sh-stat-header {
             display: flex;
             align-items: center;
@@ -1104,7 +1106,7 @@
             box-shadow: var(--shadow-2);
             transform: translateY(-1px);
         }
-        .sh-card--interactive:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+        .sh-card--interactive:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
         .sh-card-header {
             display: flex;
             align-items: center;
@@ -1196,7 +1198,7 @@
                         transform var(--dur-1) var(--ease-out);
             white-space: nowrap;
         }
-        .sh-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+        .sh-btn:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
         .sh-btn:active { transform: translateY(1px); }
         .sh-btn--sm { font-size: 13px; padding: 6px 12px; }
         .sh-btn--md { font-size: 13px; padding: 8px 16px; }
@@ -1401,7 +1403,7 @@
             gap: 6px;
         }
         .sh-tab:hover { color: var(--text); }
-        .sh-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -3px; border-radius: var(--r-xs); }
+        .sh-tab:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: -3px; border-radius: var(--r-xs); }
         .sh-tab--active {
             color: var(--text);
             border-bottom-color: var(--accent);
@@ -1471,7 +1473,7 @@
             transition: all 0.15s;
         }
         .sh-pagination-btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
-        .sh-pagination-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+        .sh-pagination-btn:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
         .sh-pagination-btn--active {
             background: var(--action-background);
             color: var(--action-foreground);
@@ -1512,7 +1514,7 @@
             box-shadow: var(--shadow-2);
             transform: translateY(-1px);
         }
-        .sh-quick-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+        .sh-quick-card:focus-visible { outline: 2px solid var(--focus-outline); outline-offset: 2px; }
         .sh-quick-card-icon {
             width: 40px; height: 40px;
             border-radius: 8px;
