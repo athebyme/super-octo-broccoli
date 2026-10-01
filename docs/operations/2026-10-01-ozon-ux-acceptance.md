@@ -8,6 +8,7 @@
 - UX-01.7: история WB показывает названия полей и значения до/после, сохраняет полные структурированные сведения в раскрываемой части. Переходы к карточке разрешены только для подтверждённого товара продавца. При ошибочной связи с чужой карточкой её сведения скрыты. Принятые root commits: `18a587a`, `0e22e83`; focused проверка первого пакета — 13 passed. Общая браузерная приёмка ещё не выполнена.
 - CAT-EDIT-01/02: приняты общий service/API и additive migration (`7c6341d`), append-only регистрация двух миграций (`a7b4d1c`) и полные raw/source/recipient seals (`658d685`). На объединённом коде — 57 focused startup/migration/service/route проверок; после seals — 112 passed и 69 subtests для common service, draft preparation и actual native Flash capture. Просмотренные связанные каналы не изменяются при общем сохранении. Отдельная ручная projection используется только при явной новой подготовке черновика; без overrides legacy fact hash сохранён. UI и writer guards ещё в работе.
 - Ozon/UX-01.6: принят сквозной synthetic journey и исправление per-draft VAT UI gate (`2ba2c73`). На объединённом коде — 17 passed и 7 subtests для journey/runner. Browser evidence ниже относится к scoped worker source до ограничения среды.
+- WB-EDIT-01..04/UX-01.2: приняты exact selection, typed single/bulk schema, local preview и durable reviewed apply (`0270d52`, `d7980a1`); common routes зарегистрированы (`c51b110`). Root focused проверка на объединённом коде: 114 passed, 66 subtests, включая selection DOM, no-op/exact changed-set, свежий provider drift, replay, local keyword CAS/rollback и весь quarantine service. Browser fixture ещё готовится; live WB write не выполнялась. Ручные и AI операции проверяются отдельно, без скрытого follow-up.
 
 ## Новые доказательства и review
 
@@ -18,6 +19,8 @@
 Analytics scoped worker evidence: 48 long-data layouts (320..1440 px, обе темы, оба положения sidebar и text scale) и 16 отдельных empty/error state cases (390/1024/1280/1440 px, обе темы), без root overflow, JS/API/external errors и provider calls. Квитанция: `/tmp/ux01-analytics-audit-20261001/analytics-report.json`. Эти результаты не являются повторной приёмкой final merged source. Review theme tokens выявил недостаточный контраст muted text и нескольких accent/warning пар; точечное исправление в работе.
 
 Review выявил пробелы WB selection JS (clear/page/all-filtered сначала меняли Set, затем восстанавливали старые DOM-отметки) и покрытия preview остальных ручных WB операций. При расширении preview также выявлены необходимость exact changed-set при записи, сравнения reviewed before со свежей full-card и локального CAS для keywords. Worker исправляет эти конкретные случаи; первоначальные focused результаты не являются доказательством исправления найденных пробелов. Полнота source/channel fingerprints общего редактора исправлена и проверена отдельным принятым пакетом.
+
+Широкая unit-проверка 166 доступных release-contract файлов на source `0de582e`: 2004 passed, 482 subtests, 2 failed, ноль skips. Она не является полным release gate (новый WB selection файл ещё не был интегрирован, browser/container стадии отсутствуют). Выявлено расхождение UTC day синхронизации с local `date.today()` default экранного workspace; исправление и детерминированные clock regressions в работе. Второй случай получил честный `QuarantineBusy` при общем host temporary namespace; повтор всего quarantine service вместе с новым WB/common пакетом в отдельном `TMPDIR` прошёл, runtime flock не менялся. Предположение о межпроцессном столкновении fixtures не выдаётся за доказанный provider сбой. JUnit: `/tmp/seller-hub-root-contracts-20261001-r2/contracts.xml`, новый focused JUnit: `/tmp/seller-hub-wb-root-check-20261001-r1/contracts.xml`.
 
 После смены окружения работа продолжается в изолированных локальных клонах `/tmp`. Проверенные ограничения: `docker info` — отказ доступа к `/var/run/docker.sock`; создание loopback fixture socket — `PermissionError: Operation not permitted`; основной `.git` и исходные worktrees доступны только для чтения. Unit/Node проверки возможны. Полные browser/container gates, merge исходного main, startup rehearsal на private volume и deployment пока blocked доступом, а не объявлены выполненными.
 
@@ -37,7 +40,7 @@ WB-EDIT-02, ограниченное read-only наблюдение: для пр
 | --- | --- | --- | --- |
 | UX-01 | Сохранены прежняя карта и визуальная система | Общая приёмка дочерних задач | Пока не завершена |
 | UX-01.1 | Существующие композиции и правила сохранены | Новые формы, keyboard, contrast, narrow screen | Финальный browser gate впереди |
-| UX-01.2 | Прежний safe return Ozon | WB выбор, сортировка, страница | Зависит от WB-EDIT-01 |
+| UX-01.2 | Safe return Ozon; принят WB exact selection/safe return | Final Pipedream browser scenario, sort/page | Selection/DOM/URL/account boundaries unit passed |
 | UX-01.3 | Прежняя responsive аналитика; добавлены empty/error scenarios | Повторная приёмка final merged source | Scoped browser: 48 layouts + 16 state cases passed |
 | UX-01.4 | Прежнее меню и legacy входы | Приёмка текущего merged source | Keyboard/contrast browser matrix впереди |
 | UX-01.5 | Читаемые причины, status, photo semantics | Браузерная проверка | Focused пакет принят |
@@ -48,10 +51,10 @@ WB-EDIT-02, ограниченное read-only наблюдение: для пр
 | UX-01.10 | Прежние секрет-free settings/health | Повторная synthetic приёмка | Inbox access denied; method grant не доказывает доступ |
 | UX-01.11 | Существующая route/action/rights matrix | Добавить новые редакторы и итоговые evidence | Все write сценарии только на фикстурах |
 | UX-01.12 | Прежнее разделение saved/effective cap | Повторная проверка 1..1000 и legacy100000 | Не обрезать сохранённое значение молча |
-| WB-EDIT-01 | Реализация exact selection в работе | Межстраничный выбор/исключения/safe return | Не считать внутренний cap лимитом WB |
-| WB-EDIT-02 | Exact category/source установлены | Typed local-schema форма и regression | Исторический provider response отсутствует |
-| WB-EDIT-03 | Existing validator/dictionaries сохранены | Добавление недостающих полей | Sizes/SKU должны оставаться read-only |
-| WB-EDIT-04 | Existing safeguards сохранены | Отдельный preview/diff/confirm/drift | До приёмки реальная запись не выполняется |
+| WB-EDIT-01 | Exact межстраничный Set, page/all-filtered/exclusions, подписанная выборка и safe return приняты | Final browser, old links | DOM/tenant/filter/URL/signed64 bounds passed; cap200 — внутренний, не лимит WB |
+| WB-EDIT-02 | Exact subjectID и typed local-schema путь приняты | Browser problem/working category | Unit5880/5070/schema drift passed; исторический provider response отсутствует |
+| WB-EDIT-03 | Single edit с missing fields, dictionaries/types/grams принят | Browser fixture save/rights | Sizes/SKU read-only; local validation/fresh subject guards passed |
+| WB-EDIT-04 | Manual preview/diff/counts/confirm, exact changed-set, live drift guards, single-use claim приняты | Browser, final history summary | Unit114+66subtests в общем пакете; preview без provider I/O, write только synthetic |
 | CAT-EDIT-01 | Контракт, service/API, migrations, raw/source/recipient seals и manual projection приняты | Writer guards и photo delivery | Focused57; sealing/draft/Flash112+69subtests; source facts сохранены |
 | CAT-EDIT-02 | Backend single/bulk preview/apply принят; UI в реализации | UI cancel/reopen/photos, final browser | Только общий товар; применение в канал отдельно; preview/apply rights/drift покрыты unit |
 
