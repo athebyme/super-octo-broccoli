@@ -800,7 +800,7 @@ def run():
         assert "needs_category" not in page.locator(".cpc-recipient-section").inner_text()
         REPORT["checks"].append("known_source_and_draft_statuses_are_localized")
         title_section = page.locator('section[data-field-section="title"]')
-        page.get_by_role("button", name="Изменить значение").first.click()
+        title_section.get_by_role("button", name="Изменить значение", exact=True).click()
         title_input = page.get_by_role("textbox", name="Общее название товара")
         title_input.fill("Товар после проверки общего редактора")
         REPORT["interactions"].append("override_title_with_explicit_source_label")
@@ -871,7 +871,11 @@ def run():
         page.get_by_role("button", name="Проверить изменения").click()
         page.get_by_role("heading", name="Проверьте изменения общего товара").wait_for()
         page.get_by_text("Карточки каналов останутся как сейчас", exact=False).wait_for()
-        page.get_by_text("Открыть карточку отдельно", exact=True).wait_for()
+        preview_card_link = page.locator("#common-content-preview .cpc-preview").get_by_role(
+            "link", name="Открыть карточку отдельно", exact=True,
+        )
+        assert preview_card_link.count() == 1
+        preview_card_link.wait_for()
         assert not page.get_by_role("button", name="Сохранить общий товар").is_enabled()
         REPORT["checks"].append("review_diff_is_explicit_and_apply_requires_acknowledgement")
 
@@ -956,9 +960,11 @@ def run():
 
         # Keep another product's unsaved text local, then cancel it and reopen
         # the page to prove it was not accidentally applied in the batch.
-        second_button = page.locator("#common-content-product-list button").nth(1)
+        second_button = page.locator(
+            '#common-content-product-list button[data-product-id="{}"]'.format(product_ids[1])
+        )
         second_button.click()
-        page.get_by_role("button", name="Изменить значение").first.click()
+        title_section.get_by_role("button", name="Изменить значение", exact=True).click()
         second_title = page.get_by_role("textbox", name="Общее название товара")
         second_title.fill("Несохранённое название")
         page.once("dialog", lambda dialog: dialog.accept())
@@ -967,14 +973,16 @@ def run():
         REPORT["synthetic_actions"]["cancelled_local_edits"] = True
         page.reload(wait_until="domcontentloaded")
         page.wait_for_load_state("networkidle")
-        second_button = page.locator("#common-content-product-list button").nth(1)
+        second_button = page.locator(
+            '#common-content-product-list button[data-product-id="{}"]'.format(product_ids[1])
+        )
         second_button.click()
         second_title = page.get_by_role("textbox", name="Общее название товара")
         assert second_title.is_disabled()
         assert await_text(second_title) == FIXTURE["second_title"]
         REPORT["checks"].append("cancel_reopen_discards_unapplied_edits_and_preserves_other_product")
 
-        page.get_by_role("button", name="Изменить значение").first.click()
+        title_section.get_by_role("button", name="Изменить значение", exact=True).click()
         second_title = page.get_by_role("textbox", name="Общее название товара")
         second_title.fill(FIXTURE["second_title"] + " — ручная правка")
         second_description = page.locator('section[data-field-section="description"]')
@@ -1012,7 +1020,7 @@ def run():
         page.once("dialog", lambda dialog: dialog.accept())
         page.get_by_role("button", name="Перечитать выбранные").click()
         page.get_by_text("Данные выбранных товаров перечитаны", exact=False).wait_for()
-        page.get_by_role("button", name="Изменить значение").first.click()
+        title_section.get_by_role("button", name="Изменить значение", exact=True).click()
         second_title = page.get_by_role("textbox", name="Общее название товара")
         second_title.fill(FIXTURE["second_title"] + " — проверка конфликта сохранения")
         page.get_by_role("button", name="Проверить изменения").click()
