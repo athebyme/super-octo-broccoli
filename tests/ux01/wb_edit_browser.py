@@ -1304,8 +1304,11 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 ).order_by(CardEditHistory.id.asc()).all()
                 assert [int(row.product_id) for row in saved_rows] == expected_product_ids
 
-            history_nav_links = page.locator('a[href="/bulk-history"]')
+            history_nav_links = page.locator(
+                '.sh-page-actions a[href="/bulk-history"]',
+            )
             assert history_nav_links.count() == 1
+            assert history_nav_links.is_visible()
             with page.expect_navigation(wait_until="domcontentloaded"):
                 history_nav_links.first.click()
             history_url = urlsplit(page.url)
