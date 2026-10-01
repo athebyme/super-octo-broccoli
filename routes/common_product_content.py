@@ -194,5 +194,5 @@ def register_common_product_content_routes(app) -> None:
             "common_product_content.html",
             products=products,
             selected_product_ids=product_ids,
-            csrf_token=generate_csrf(),
+            common_content_csrf_token=generate_csrf(),
         )

@@ -20,9 +20,12 @@ class BootstrapParser(HTMLParser):
         super().__init__()
         self.capture = False
         self.parts = []
+        self.csrf_meta_token = None
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
+        if tag == "meta" and values.get("name") == "csrf-token":
+            self.csrf_meta_token = values.get("content")
         self.capture = tag == "script" and values.get("id") == "common-content-bootstrap"
 
     def handle_endtag(self, tag):
@@ -36,8 +39,13 @@ class BootstrapParser(HTMLParser):
 
 def _wire_page_template(app):
     app.add_url_rule("/my-products", endpoint="seller_my_products", view_func=lambda: "catalog")
+    # Load the real editor page template; keep the inherited base contract
+    # that calls Flask-WTF's csrf_token() callable in the document metadata.
     app.jinja_loader = ChoiceLoader([
-        DictLoader({"base.html": "<!doctype html><title>{% block title %}{% endblock %}</title>{% block content %}{% endblock %}"}),
+        DictLoader({"base.html": """<!doctype html><html><head>
+            <meta name="csrf-token" content="{{ csrf_token() }}">
+            <title>{% block title %}{% endblock %}</title>
+            </head><body>{% block content %}{% endblock %}</body></html>"""}),
         FileSystemLoader(str(ROOT / "templates")),
     ])
     app.jinja_env.cache.clear()
@@ -46,9 +54,14 @@ def _wire_page_template(app):
 def test_page_renders_empty_and_selected_states_with_safe_bootstrap(api):
     app, client, (seller_id, user_id, own_id, _) = api
     _wire_page_template(app)
+    app.config["WTF_CSRF_ENABLED"] = True
     user_patch, login_patch = _auth(seller_id, user_id)
     with user_patch, login_patch:
         empty = client.get("/my-products/common-content")
+        missing_csrf = client.post(
+            "/api/my-products/common-content/preview",
+            json={"items": []},
+        )
         with app.app_context():
             product = db.session.get(ImportedProduct, own_id)
             product.title = "</script><script>window.injected=true</script>"
@@ -56,6 +69,8 @@ def test_page_renders_empty_and_selected_states_with_safe_bootstrap(api):
         selected = client.get(f"/my-products/common-content?product_id={own_id}")
 
     assert empty.status_code == 200
+    assert missing_csrf.status_code == 400
+    assert "The CSRF token is missing." in missing_csrf.get_data(as_text=True)
     assert "Сначала выберите товары" in empty.get_data(as_text=True)
     assert selected.status_code == 200
     html = selected.get_data(as_text=True)
@@ -66,9 +81,17 @@ def test_page_renders_empty_and_selected_states_with_safe_bootstrap(api):
     assert "<pre" not in html
     assert "</script><script>window.injected" not in html
 
+    empty_parser = BootstrapParser()
+    empty_parser.feed(empty.get_data(as_text=True))
+    empty_bootstrap = json.loads("".join(empty_parser.parts))
+    assert empty_parser.csrf_meta_token
+    assert empty_bootstrap["csrfToken"] == empty_parser.csrf_meta_token
+
     parser = BootstrapParser()
     parser.feed(html)
     bootstrap = json.loads("".join(parser.parts))
+    assert parser.csrf_meta_token
+    assert bootstrap["csrfToken"] == parser.csrf_meta_token
     assert bootstrap["selectedProductIds"] == [own_id]
     assert len(bootstrap["products"]) == 1
     assert bootstrap["products"][0]["product_id"] == own_id
