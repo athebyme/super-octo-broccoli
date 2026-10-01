@@ -76,6 +76,9 @@ BROWSER_MINIMUMS = {
 }
 COMMON_CONTENT_LAYOUT_WIDTHS = (320, 360, 390, 768, 1024, 1280, 1440)
 COMMON_CONTENT_LAYOUT_THEMES = ("light", "dark")
+COMMON_CONTENT_MOBILE_WIDTHS = (320, 360, 390)
+COMMON_CONTENT_MOBILE_THEMES = ("light", "dark")
+COMMON_CONTENT_NAVIGATOR_CHECK = "common_mobile_product_navigator_bounded_accessible_keyboard"
 COMMON_CONTENT_LAYOUT_STATES = {
     "empty": "empty_editor",
     "selected": "selected_editor",
@@ -88,6 +91,7 @@ COMMON_CONTENT_REQUIRED_CHECKS = frozenset({
     "common_preview_cancel_focus_return",
     "common_focus_visible_geometry",
     "common_mobile_touch_targets_44px",
+    COMMON_CONTENT_NAVIGATOR_CHECK,
 })
 COMMON_CONTENT_REQUIRED_FOCUS = frozenset({
     "common_photo_boundary_focus_first",
@@ -318,6 +322,87 @@ def _common_content_protocol_issues(data: dict) -> list[str]:
             return math.isfinite(value)
         except (OverflowError, TypeError):
             return False
+
+    navigator_check_rows = [
+        value for value in checks
+        if isinstance(value, dict)
+        and value.get("name") == COMMON_CONTENT_NAVIGATOR_CHECK
+    ] if isinstance(checks, list) else []
+    if not (
+        len(navigator_check_rows) == 1
+        and navigator_check_rows[0].get("status") == "passed"
+        and navigator_check_rows[0].get("ok") is True
+        and navigator_check_rows[0].get("passed") is True
+        and navigator_check_rows[0].get("layouts") == 6
+        and navigator_check_rows[0].get("expected_layouts") == 6
+    ):
+        issues.append("common_mobile_product_navigator_check_missing_or_failed")
+
+    navigator_rows = data.get("mobile_product_navigator_observations")
+    expected_navigator_rows = {
+        (width, theme)
+        for width in COMMON_CONTENT_MOBILE_WIDTHS
+        for theme in COMMON_CONTENT_MOBILE_THEMES
+    }
+    observed_navigator_rows = []
+    if isinstance(navigator_rows, list):
+        for row in navigator_rows:
+            if not isinstance(row, dict):
+                continue
+            width, theme = row.get("width"), row.get("theme")
+            if type(width) is not int or theme not in COMMON_CONTENT_MOBILE_THEMES:
+                continue
+            observed_navigator_rows.append((width, theme))
+            widths = row.get("card_widths_px")
+            heights = row.get("card_button_heights_px")
+            local_scroll = row.get("local_scroll_after_tab_px")
+            if (
+                row.get("state") != "selected"
+                or row.get("passed") is not True
+                or type(row.get("card_count")) is not int
+                or row.get("card_count") != 2
+                or not finite_number(row.get("selection_height_px"))
+                or row.get("selection_height_px") <= 0
+                or row.get("selection_height_px") > 220
+                or not isinstance(widths, list)
+                or len(widths) != 2
+                or any(not finite_number(value) or value <= 0 for value in widths)
+                or abs(widths[0] - widths[1]) > 1
+                or not isinstance(heights, list)
+                or len(heights) != 2
+                or any(not finite_number(value) or value < 44 for value in heights)
+                or row.get("local_horizontal_scroll") is not True
+                or not finite_number(local_scroll)
+                or local_scroll <= 0
+                or row.get("page_overflow") is not False
+                or any(row.get(key) is not True for key in (
+                    "page_scroll_stable",
+                    "keyboard_reached_second_by_tab",
+                    "keyboard_returned_first_by_shift_tab",
+                    "second_focus_visible",
+                    "first_focus_visible",
+                    "current_product_preserved",
+                    "full_second_title_dom",
+                    "full_second_sku_dom",
+                    "full_second_accessible_name",
+                    "full_second_title_tooltip",
+                    "full_current_heading",
+                    "no_product_api_reads",
+                    "no_mutating_requests",
+                ))
+                or row.get("product_api_reads_during") != 0
+                or row.get("mutating_requests_during") != 0
+                or row.get("preview_apply_requests_during") != 0
+            ):
+                issues.append("common_mobile_product_navigator_incomplete_or_unsafe")
+    if (
+        not isinstance(navigator_rows, list)
+        or len(navigator_rows) != len(expected_navigator_rows)
+        or len(observed_navigator_rows) != len(expected_navigator_rows)
+        or len(set(observed_navigator_rows)) != len(expected_navigator_rows)
+        or set(observed_navigator_rows) != expected_navigator_rows
+    ):
+        issues.append("common_mobile_product_navigator_incomplete_or_unsafe")
 
     def valid_focus_geometry(row: dict) -> bool:
         rect = row.get("rect")

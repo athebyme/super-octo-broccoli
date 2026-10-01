@@ -64,8 +64,10 @@
 .cpc-product-list button { width: 100%; min-width: 0; padding: .65rem .7rem; border: 0; border-left: 2px solid transparent; border-radius: .25rem; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
 .cpc-product-list button:hover { background: var(--bg-hover); color: var(--text); }
 .cpc-product-list button[aria-current="true"] { border-left-color: var(--accent); background: var(--accent-light); color: var(--text); }
-.cpc-product-name { display: block; min-width: 0; overflow-wrap: anywhere; word-break: break-word; font-size: .88rem; font-weight: 550; line-height: 1.35; }
-.cpc-product-meta { display: block; min-width: 0; margin-top: .2rem; color: var(--text-muted); font-size: .75rem; overflow-wrap: anywhere; word-break: break-word; }
+.cpc-product-name,
+.cpc-product-meta { display: -webkit-box; min-width: 0; overflow: hidden; -webkit-box-orient: vertical; overflow-wrap: anywhere; word-break: break-word; }
+.cpc-product-name { max-height: 4.05em; -webkit-line-clamp: 3; line-clamp: 3; font-size: .88rem; font-weight: 550; line-height: 1.35; }
+.cpc-product-meta { max-height: 2.6em; margin-top: .2rem; color: var(--text-muted); font-size: .75rem; line-height: 1.3; -webkit-line-clamp: 2; line-clamp: 2; }
 .cpc-product-dirty { display: inline-block; margin-top: .35rem; color: var(--accent-strong); font-size: .72rem; }
 
 .cpc-workspace { padding: 1.15rem clamp(.9rem, 2.4vw, 1.75rem); border: 1px solid var(--border); border-radius: .5rem; background: var(--bg-card); }
@@ -162,8 +164,8 @@
     .cpc-header > .sh-btn { align-self: flex-start; }
     .cpc-layout { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
     .cpc-selection { position: static; padding: .75rem; }
-    .cpc-product-list { display: flex; gap: .4rem; max-height: none; overflow-x: auto; padding: .1rem .1rem .3rem; }
-    .cpc-product-list li { flex: 0 0 min(72vw, 15rem); }
+    .cpc-product-list { display: flex; gap: .4rem; max-height: none; overflow-x: auto; overflow-y: hidden; padding: .35rem .1rem .4rem; }
+    .cpc-product-list li { flex: 0 0 auto; width: min(72vw, 15rem); min-width: 0; }
     .cpc-product-list button { min-height: 3.1rem; }
     .cpc-workspace { padding: .85rem .75rem; }
     .cpc-product-heading { flex-direction: column; gap: .35rem; }

@@ -40,6 +40,9 @@ CHROMIUM = os.environ.get("CHROMIUM_BIN", "/usr/bin/google-chrome")
 TEMP = tempfile.TemporaryDirectory(prefix="ux01-common-content-")
 TEMP_PATH = Path(TEMP.name)
 ASSETS = ROOT / "tests/ozon_release/assets"
+COMMON_CONTENT_MOBILE_WIDTHS = (320, 360, 390)
+COMMON_CONTENT_MOBILE_THEMES = ("light", "dark")
+COMMON_CONTENT_NAVIGATOR_CHECK = "common_mobile_product_navigator_bounded_accessible_keyboard"
 
 REPORT = {
     "source": SOURCE,
@@ -53,6 +56,7 @@ REPORT = {
     "interactions": [],
     "screenshots": [],
     "mobile_touch_target_observations": [],
+    "mobile_product_navigator_observations": [],
     "browser_api_reads": [],
     "writes": [],
     "synthetic_actions": {
@@ -166,6 +170,7 @@ with app.app_context():
     db.session.commit()
     FIXTURE["second_source_id"] = second.id
     FIXTURE["second_title"] = second.title
+    FIXTURE["second_external_id"] = second.external_id
     FIXTURE["user_id"] = db.session.get(Seller, FIXTURE["seller_id"]).user_id
 
     # Seed a prior seller override with the real service so the UI must review
@@ -195,6 +200,7 @@ with app.app_context():
         "version": recipient.version,
     }
     FIXTURE["initial_title"] = primary.title
+    FIXTURE["initial_external_id"] = primary.external_id
     FIXTURE["initial_description"] = long_source_description
 
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -487,9 +493,12 @@ def layout_case(page, path: str, width: int, theme: str, state: str, catalog_pat
         name = f"common-content-{state}-{theme}-{width}.png"
         page.screenshot(path=str(OUT / name), full_page=True)
         REPORT["screenshots"].append(name)
-    if state == "selected" and width in (320, 360, 390):
+    if state == "selected" and width in COMMON_CONTENT_MOBILE_WIDTHS:
         REPORT["mobile_touch_target_observations"].append(
             measure_mobile_touch_targets(page, width, theme)
+        )
+        REPORT["mobile_product_navigator_observations"].append(
+            measure_mobile_product_navigator(page, width, theme)
         )
 
 
@@ -612,12 +621,220 @@ def measure_mobile_touch_targets(page, width: int, theme: str) -> dict:
     return row
 
 
+def measure_mobile_product_navigator(page, width: int, theme: str) -> dict:
+    """Check the bounded two-card strip and keyboard access without selecting either item."""
+    first_id = str(FIXTURE["source_id"])
+    second_id = str(FIXTURE["second_source_id"])
+    api_reads_before = len(REPORT["browser_api_reads"])
+    writes_before = len(REPORT["writes"])
+    preview_requests_before = REPORT["synthetic_actions"]["preview_requests"]
+    apply_requests_before = REPORT["synthetic_actions"]["apply_requests"]
+    page.evaluate("""() => {
+        window.scrollTo(0, 0);
+        const list = document.querySelector('#common-content-product-list');
+        if (list) list.scrollLeft = 0;
+    }""")
+    before = page.evaluate("""({firstId, secondId}) => {
+        const root = document.documentElement;
+        const list = document.querySelector('#common-content-product-list');
+        const selection = document.querySelector('.cpc-selection');
+        const buttons = [...(list?.querySelectorAll('button[data-action="choose-product"]') || [])];
+        const first = buttons.find(button => button.dataset.productId === firstId);
+        const second = buttons.find(button => button.dataset.productId === secondId);
+        const rect = element => {
+            if (!element) return null;
+            const box = element.getBoundingClientRect();
+            return {left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+                width: box.width, height: box.height};
+        };
+        const selectedHeading = document.querySelector('.cpc-product-heading h2');
+        const selectedMeta = document.querySelector('.cpc-product-heading p:not(.cpc-source-line)');
+        const titleInput = document.querySelector('[data-field-input="title"]');
+        const listStyle = list ? getComputedStyle(list) : null;
+        return {
+            cardCount: buttons.length,
+            firstId: first?.dataset.productId || null,
+            secondId: second?.dataset.productId || null,
+            selectionHeight: rect(selection)?.height || 0,
+            cardWidths: buttons.map(button => rect(button)?.width || 0),
+            cardHeights: buttons.map(button => rect(button)?.height || 0),
+            listClientWidth: list?.clientWidth || 0,
+            listScrollWidth: list?.scrollWidth || 0,
+            listScrollLeft: list?.scrollLeft || 0,
+            listOverflowX: listStyle?.overflowX || '',
+            secondNameText: second?.querySelector('.cpc-product-name')?.textContent || null,
+            secondSkuText: second?.querySelector('.cpc-product-meta')?.textContent || null,
+            secondAccessibleLabel: second?.getAttribute('aria-label') || null,
+            secondTitleTooltip: second?.getAttribute('title') || null,
+            firstCurrent: first?.getAttribute('aria-current') === 'true',
+            secondCurrent: second?.getAttribute('aria-current') === 'true',
+            headingTitle: selectedHeading?.textContent || null,
+            headingTitleVisible: !!selectedHeading && selectedHeading.getClientRects().length > 0,
+            headingMeta: selectedMeta?.textContent || null,
+            headingMetaVisible: !!selectedMeta && selectedMeta.getClientRects().length > 0,
+            titleInputValue: titleInput?.value || null,
+            titleInputVisible: !!titleInput && titleInput.getClientRects().length > 0,
+            pageWidth: Math.max(root.scrollWidth, document.body?.scrollWidth || 0),
+            pageX: window.scrollX,
+            pageY: window.scrollY,
+        };
+    }""", {"firstId": first_id, "secondId": second_id})
+
+    first = page.locator(
+        '#common-content-product-list button[data-product-id="{}"]'.format(first_id)
+    )
+    second = page.locator(
+        '#common-content-product-list button[data-product-id="{}"]'.format(second_id)
+    )
+    assert first.count() == 1 and second.count() == 1, before
+    first.focus()
+    page.keyboard.press("Tab")
+    after_tab = page.evaluate("""() => {
+        const list = document.querySelector('#common-content-product-list');
+        const active = document.activeElement;
+        const box = active?.getBoundingClientRect();
+        const listBox = list?.getBoundingClientRect();
+        const style = active ? getComputedStyle(active) : null;
+        return {
+            activeId: active?.dataset.productId || null,
+            focusVisible: !!active && active.matches(':focus-visible'),
+            focusVisibleOnScreen: !!box && !!listBox && box.width > 0 && box.height > 0
+                && box.left >= listBox.left - 1 && box.right <= listBox.right + 1
+                && box.top >= 0 && box.bottom <= innerHeight,
+            outlineVisible: !!style && style.outlineStyle !== 'none'
+                && style.outlineStyle !== 'hidden'
+                && Number.parseFloat(style.outlineWidth) > 0
+                && style.outlineColor !== 'transparent',
+            listScrollLeft: list?.scrollLeft || 0,
+            pageX: window.scrollX,
+            pageY: window.scrollY,
+        };
+    }""")
+    reached_second = after_tab["activeId"] == second_id
+    returned_first = False
+    after_return = after_tab
+    if reached_second:
+        page.keyboard.press("Shift+Tab")
+        after_return = page.evaluate("""() => {
+            const active = document.activeElement;
+            const style = active ? getComputedStyle(active) : null;
+            return {
+                activeId: active?.dataset.productId || null,
+                focusVisible: !!active && active.matches(':focus-visible'),
+                outlineVisible: !!style && style.outlineStyle !== 'none'
+                    && style.outlineStyle !== 'hidden'
+                    && Number.parseFloat(style.outlineWidth) > 0
+                    && style.outlineColor !== 'transparent',
+                pageX: window.scrollX,
+                pageY: window.scrollY,
+            };
+        }""")
+        returned_first = after_return["activeId"] == first_id
+    if not returned_first:
+        first.focus()
+
+    after = page.evaluate("""({firstId, secondId}) => {
+        const root = document.documentElement;
+        const list = document.querySelector('#common-content-product-list');
+        const buttons = [...(list?.querySelectorAll('button[data-action="choose-product"]') || [])];
+        const first = buttons.find(button => button.dataset.productId === firstId);
+        const second = buttons.find(button => button.dataset.productId === secondId);
+        return {
+            pageWidth: Math.max(root.scrollWidth, document.body?.scrollWidth || 0),
+            pageX: window.scrollX,
+            pageY: window.scrollY,
+            firstCurrent: first?.getAttribute('aria-current') === 'true',
+            secondCurrent: second?.getAttribute('aria-current') === 'true',
+        };
+    }""", {"firstId": first_id, "secondId": second_id})
+    expected_accessible_label = (
+        FIXTURE["second_title"] + " · Артикул " + FIXTURE["second_external_id"]
+    )
+    accessible_button = page.get_by_role("button", name=expected_accessible_label, exact=True)
+    product_reads_during = sum(
+        row.get("kind") == "product_read"
+        for row in REPORT["browser_api_reads"][api_reads_before:]
+    )
+    writes_during = len(REPORT["writes"]) - writes_before
+    synthetic_writes_during = (
+        REPORT["synthetic_actions"]["preview_requests"] - preview_requests_before
+        + REPORT["synthetic_actions"]["apply_requests"] - apply_requests_before
+    )
+    measured = {
+        "state": "selected",
+        "width": width,
+        "theme": theme,
+        "card_count": before["cardCount"],
+        "selection_height_px": before["selectionHeight"],
+        "card_widths_px": before["cardWidths"],
+        "card_button_heights_px": before["cardHeights"],
+        "local_horizontal_scroll": (
+            before["listScrollWidth"] > before["listClientWidth"]
+            and before["listOverflowX"] in ("auto", "scroll")
+        ),
+        "local_scroll_after_tab_px": after_tab["listScrollLeft"],
+        "page_overflow": after["pageWidth"] > width + 1,
+        "page_scroll_stable": all(
+            row["pageX"] == before["pageX"] and row["pageY"] == before["pageY"]
+            for row in (after_tab, after_return, after)
+        ),
+        "keyboard_reached_second_by_tab": reached_second,
+        "keyboard_returned_first_by_shift_tab": returned_first,
+        "second_focus_visible": after_tab["focusVisible"] and after_tab["outlineVisible"]
+            and after_tab["focusVisibleOnScreen"],
+        "first_focus_visible": after_return["focusVisible"] and after_return["outlineVisible"],
+        "current_product_preserved": after["firstCurrent"] and not after["secondCurrent"],
+        "full_second_title_dom": before["secondNameText"] == FIXTURE["second_title"],
+        "full_second_sku_dom": before["secondSkuText"] == "Артикул " + FIXTURE["second_external_id"],
+        "full_second_accessible_name": before["secondAccessibleLabel"] == expected_accessible_label
+            and accessible_button.count() == 1,
+        "full_second_title_tooltip": before["secondTitleTooltip"] == expected_accessible_label,
+        "full_current_heading": before["headingTitle"] == FIXTURE["initial_title"]
+            and before["headingTitleVisible"]
+            and before["headingMetaVisible"]
+            and FIXTURE["initial_external_id"] in (before["headingMeta"] or "")
+            and before["titleInputValue"] == FIXTURE["initial_title"]
+            and before["titleInputVisible"],
+        "product_api_reads_during": product_reads_during,
+        "mutating_requests_during": writes_during,
+        "preview_apply_requests_during": synthetic_writes_during,
+        "no_product_api_reads": product_reads_during == 0,
+        "no_mutating_requests": writes_during == 0 and synthetic_writes_during == 0,
+    }
+    measured["passed"] = (
+        measured["state"] == "selected"
+        and measured["card_count"] == 2
+        and measured["selection_height_px"] <= 220
+        and len(measured["card_widths_px"]) == 2
+        and abs(measured["card_widths_px"][0] - measured["card_widths_px"][1]) <= 1
+        and len(measured["card_button_heights_px"]) == 2
+        and all(height >= 44 for height in measured["card_button_heights_px"])
+        and measured["local_horizontal_scroll"]
+        and measured["local_scroll_after_tab_px"] > before["listScrollLeft"]
+        and not measured["page_overflow"]
+        and measured["page_scroll_stable"]
+        and measured["keyboard_reached_second_by_tab"]
+        and measured["keyboard_returned_first_by_shift_tab"]
+        and measured["second_focus_visible"]
+        and measured["first_focus_visible"]
+        and measured["current_product_preserved"]
+        and measured["full_second_title_dom"]
+        and measured["full_second_sku_dom"]
+        and measured["full_second_accessible_name"]
+        and measured["full_second_title_tooltip"]
+        and measured["full_current_heading"]
+        and measured["no_product_api_reads"]
+        and measured["no_mutating_requests"]
+    )
+    return measured
+
+
 def assert_mobile_touch_target_evidence() -> None:
     rows = REPORT["mobile_touch_target_observations"]
     expected = {
         (width, theme)
-        for width in (320, 360, 390)
-        for theme in ("light", "dark")
+        for width in COMMON_CONTENT_MOBILE_WIDTHS
+        for theme in COMMON_CONTENT_MOBILE_THEMES
     }
     actual = [(row.get("width"), row.get("theme")) for row in rows]
     passed = (
@@ -638,6 +855,37 @@ def assert_mobile_touch_target_evidence() -> None:
                 target.get("name") for target in row.get("targets", [])
                 if target.get("passed") is not True
             ]}
+            for row in rows if row.get("passed") is not True
+        ],
+    }
+    REPORT["checks"].append(check)
+    if not passed:
+        raise AssertionError({"check": check, "observations": rows})
+
+
+def assert_mobile_product_navigator_evidence() -> None:
+    rows = REPORT["mobile_product_navigator_observations"]
+    expected = {
+        (width, theme)
+        for width in COMMON_CONTENT_MOBILE_WIDTHS
+        for theme in COMMON_CONTENT_MOBILE_THEMES
+    }
+    actual = [(row.get("width"), row.get("theme")) for row in rows]
+    passed = (
+        len(rows) == len(expected)
+        and len(set(actual)) == len(expected)
+        and set(actual) == expected
+        and all(row.get("passed") is True for row in rows)
+    )
+    check = {
+        "name": COMMON_CONTENT_NAVIGATOR_CHECK,
+        "status": "passed" if passed else "failed",
+        "ok": passed,
+        "passed": passed,
+        "layouts": len(rows),
+        "expected_layouts": len(expected),
+        "failed_layouts": [
+            {"width": row.get("width"), "theme": row.get("theme")}
             for row in rows if row.get("passed") is not True
         ],
     }
@@ -780,6 +1028,7 @@ def run():
                     layout_case(page, path, width, theme, state, classic_path)
         assert len(REPORT["layouts"]) == 28
         assert_mobile_touch_target_evidence()
+        assert_mobile_product_navigator_evidence()
         assert REPORT["synthetic_actions"]["empty_route_api_reads"] == 0
         assert REPORT["synthetic_actions"]["empty_route_mutating_requests"] == 0
         REPORT["checks"].append("common_empty_editor_no_product_api_or_writes")

@@ -651,12 +651,18 @@
         state.records.forEach(function (record) {
             var item = node('li');
             var choose = node('button');
+            var productTitle = record.state.title || 'Без названия';
+            var externalId = record.state.external_id || 'не указан';
+            var accessibleLabel = productTitle + ' · Артикул ' + externalId;
+            if (isDirty(record)) accessibleLabel += ' · Есть несохранённые правки';
             choose.type = 'button';
             choose.dataset.action = 'choose-product';
             choose.dataset.productId = String(record.state.product_id);
             choose.setAttribute('aria-current', record.state.product_id === state.currentId ? 'true' : 'false');
-            choose.appendChild(node('span', 'cpc-product-name', record.state.title || 'Без названия'));
-            choose.appendChild(node('span', 'cpc-product-meta', 'Артикул ' + (record.state.external_id || 'не указан')));
+            choose.setAttribute('aria-label', accessibleLabel);
+            choose.title = productTitle + ' · Артикул ' + externalId;
+            choose.appendChild(node('span', 'cpc-product-name', productTitle));
+            choose.appendChild(node('span', 'cpc-product-meta', 'Артикул ' + externalId));
             if (isDirty(record)) choose.appendChild(node('span', 'cpc-product-dirty', 'Есть несохранённые правки'));
             item.appendChild(choose);
             listNode.appendChild(item);

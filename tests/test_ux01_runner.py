@@ -17,6 +17,9 @@ from scripts.check_ux01 import (
     COMMON_CONTENT_LAYOUT_STATES,
     COMMON_CONTENT_LAYOUT_THEMES,
     COMMON_CONTENT_LAYOUT_WIDTHS,
+    COMMON_CONTENT_MOBILE_THEMES,
+    COMMON_CONTENT_MOBILE_WIDTHS,
+    COMMON_CONTENT_NAVIGATOR_CHECK,
     COMMON_CONTENT_REQUIRED_CHECKS,
     COMMON_CONTENT_REQUIRED_FOCUS,
     REQUIRED_TESTS,
@@ -89,8 +92,53 @@ def _common_content_browser_report() -> dict:
         "ok": True,
         "passed": True,
     }
-    check_names = sorted(COMMON_CONTENT_REQUIRED_CHECKS - {mobile_touch_check["name"]}) + [
+    mobile_navigator_check = {
+        "name": COMMON_CONTENT_NAVIGATOR_CHECK,
+        "status": "passed",
+        "ok": True,
+        "passed": True,
+        "layouts": 6,
+        "expected_layouts": 6,
+        "failed_layouts": [],
+    }
+    mobile_navigator_observations = [
+        {
+            "state": "selected",
+            "width": width,
+            "theme": theme,
+            "card_count": 2,
+            "selection_height_px": 190,
+            "card_widths_px": [230, 230],
+            "card_button_heights_px": [108, 108],
+            "local_horizontal_scroll": True,
+            "local_scroll_after_tab_px": 230,
+            "page_overflow": False,
+            "page_scroll_stable": True,
+            "keyboard_reached_second_by_tab": True,
+            "keyboard_returned_first_by_shift_tab": True,
+            "second_focus_visible": True,
+            "first_focus_visible": True,
+            "current_product_preserved": True,
+            "full_second_title_dom": True,
+            "full_second_sku_dom": True,
+            "full_second_accessible_name": True,
+            "full_second_title_tooltip": True,
+            "full_current_heading": True,
+            "product_api_reads_during": 0,
+            "mutating_requests_during": 0,
+            "preview_apply_requests_during": 0,
+            "no_product_api_reads": True,
+            "no_mutating_requests": True,
+            "passed": True,
+        }
+        for width in COMMON_CONTENT_MOBILE_WIDTHS
+        for theme in COMMON_CONTENT_MOBILE_THEMES
+    ]
+    check_names = sorted(COMMON_CONTENT_REQUIRED_CHECKS - {
+        mobile_touch_check["name"], COMMON_CONTENT_NAVIGATOR_CHECK,
+    }) + [
         "existing-review-safety", "existing-cancel-reopen", mobile_touch_check,
+        mobile_navigator_check,
     ]
     return {
         "status": "passed",
@@ -103,6 +151,7 @@ def _common_content_browser_report() -> dict:
         "layouts": layouts,
         "checks": check_names,
         "focus_observations": focus_observations,
+        "mobile_product_navigator_observations": mobile_navigator_observations,
         "writes": writes,
         "synthetic_actions": {
             "preview_requests": 4,
@@ -391,6 +440,38 @@ class Ux01RunnerContractTest(unittest.TestCase):
             invalid_reports.append((
                 "undersized mobile target check fails", failed_touch_check,
                 "common_named_checks_missing_or_duplicate",
+            ))
+
+            missing_navigator_check = copy.deepcopy(report)
+            missing_navigator_check["checks"] = [
+                check for check in missing_navigator_check["checks"]
+                if not (isinstance(check, dict)
+                        and check.get("name") == COMMON_CONTENT_NAVIGATOR_CHECK)
+            ]
+            invalid_reports.append((
+                "missing bounded navigator check", missing_navigator_check,
+                "common_named_checks_missing_or_duplicate",
+            ))
+
+            failed_navigator_geometry = copy.deepcopy(report)
+            failed_navigator_geometry["mobile_product_navigator_observations"][0]["selection_height_px"] = 221
+            invalid_reports.append((
+                "overheight navigator evidence fails", failed_navigator_geometry,
+                "common_mobile_product_navigator_incomplete_or_unsafe",
+            ))
+
+            zeroheight_navigator = copy.deepcopy(report)
+            zeroheight_navigator["mobile_product_navigator_observations"][0]["selection_height_px"] = 0
+            invalid_reports.append((
+                "zero-height navigator geometry fails", zeroheight_navigator,
+                "common_mobile_product_navigator_incomplete_or_unsafe",
+            ))
+
+            missing_navigator_layout = copy.deepcopy(report)
+            missing_navigator_layout["mobile_product_navigator_observations"].pop()
+            invalid_reports.append((
+                "missing navigator viewport-theme row", missing_navigator_layout,
+                "common_mobile_product_navigator_incomplete_or_unsafe",
             ))
 
             missing_check = copy.deepcopy(report)
