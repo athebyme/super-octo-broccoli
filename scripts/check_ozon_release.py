@@ -30,6 +30,7 @@ EXTRA_TESTS = (
     'test_supplier_catalog_enrichment.py', 'test_supplier_catalog_enrichment_routes.py',
     'test_supplier_enrichment_parallel.py', 'test_enrichment_inference.py',
     'test_admin_flash_handoff.py',
+    'test_product_selection_dom.py',
 )
 
 

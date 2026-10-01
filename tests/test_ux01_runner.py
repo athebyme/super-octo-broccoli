@@ -10,6 +10,7 @@ import os
 
 from scripts.check_ux01 import (
     BROWSER_INTERACTION_FIELDS,
+    REQUIRED_TESTS,
     _canonical_json,
     _clean_environment,
     _safe_repo_file,
@@ -19,6 +20,7 @@ from scripts.check_ux01 import (
     summarize_browser_report,
     verify_snapshot,
 )
+from scripts.check_ozon_release import EXTRA_TESTS as OZON_EXTRA_TESTS
 
 
 class Ux01RunnerContractTest(unittest.TestCase):
@@ -332,7 +334,7 @@ class Ux01RunnerContractTest(unittest.TestCase):
             (root / "tests").mkdir()
             for relative in (
                 "tests/test_ux01_runner.py", "tests/test_ux01_navigation.py",
-                *REQUIRED_TESTS_FOR_TEST,
+                *REQUIRED_TESTS,
                 *REQUIRED_BROWSER_FILES_FOR_TEST,
             ):
                 path = root / relative
@@ -347,7 +349,7 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertEqual([stage.timeout_seconds for stage in stages], [600] * 8)
             pytest_command = stages[0].command
             self.assertIn("tests/test_ux01_runner.py", pytest_command)
-            for path in REQUIRED_TESTS_FOR_TEST:
+            for path in REQUIRED_TESTS:
                 self.assertIn(path, pytest_command)
             self.assertEqual(stages[1].expected_source, "worktree")
             self.assertEqual(stages[2].expected_source, "after")
@@ -377,17 +379,6 @@ class Ux01RunnerContractTest(unittest.TestCase):
                                  str(stage.report_path))
 
 
-REQUIRED_TESTS_FOR_TEST = (
-    "tests/test_competitor_routes.py",
-    "tests/test_marketplace_readiness.py",
-    "tests/test_marketplace_listing_routes.py",
-    "tests/test_product_selection.py",
-    "tests/test_wb_edit_review_replay.py",
-    "tests/test_wb_bulk_review_key_migration.py",
-    "tests/test_common_product_content_service.py",
-    "tests/test_common_product_content_routes.py",
-    "tests/test_common_product_content_ui.py",
-)
 REQUIRED_BROWSER_FILES_FOR_TEST = (
     "tests/ux01/analytics_browser.py",
     "tests/ux01/listing_browser.py",
@@ -397,6 +388,11 @@ REQUIRED_BROWSER_FILES_FOR_TEST = (
     "tests/ux01/wb_edit_browser.py",
     "tests/ux01/common_content_browser.py",
 )
+
+
+def test_product_selection_dom_is_required_by_both_release_gates():
+    assert "tests/test_product_selection_dom.py" in REQUIRED_TESTS
+    assert "test_product_selection_dom.py" in OZON_EXTRA_TESTS
 
 
 if __name__ == "__main__":

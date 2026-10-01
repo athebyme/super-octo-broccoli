@@ -40,6 +40,7 @@ REQUIRED_TESTS = (
     "tests/test_marketplace_readiness.py",
     "tests/test_marketplace_listing_routes.py",
     "tests/test_product_selection.py",
+    "tests/test_product_selection_dom.py",
     "tests/test_wb_edit_review_replay.py",
     "tests/test_wb_bulk_review_key_migration.py",
     "tests/test_common_product_content_service.py",
