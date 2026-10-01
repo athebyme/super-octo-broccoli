@@ -249,6 +249,7 @@ def photo_status_text200(page, state, theme, width, expected_photo_width):
             counterContainsText:counterTextRects.length > 0 && counterTextRects.every(line => inside(line, counterRect)),
             statusCounterOverlap:intersects(stateRect, counterRect),
             buttonCounterOverlap:intersects(buttonRect, counterRect),
+            focusRingCounterOverlap:intersects(ring, counterRect),
             statusCounterTextOverlap,
             clippedStatusText:clipped(state, statusTextRects),
             clippedCounterText:clipped(counter, counterTextRects),
@@ -274,6 +275,7 @@ def photo_status_text200(page, state, theme, width, expected_photo_width):
     else:
         assert not metrics['statusCounterTextOverlap'], (state, theme, width, metrics)
     assert not metrics['buttonCounterOverlap'], (state, theme, width, metrics)
+    assert not metrics['focusRingCounterOverlap'], (state, theme, width, metrics)
     assert not metrics['clippedStatusText'] and not metrics['clippedCounterText'], (state, theme, width, metrics)
     assert metrics['pageWidth'] <= metrics['viewportWidth'] + 1, (state, theme, width, metrics)
     if state in ('loading', 'pending'):
@@ -303,6 +305,7 @@ def photo_status_text200(page, state, theme, width, expected_photo_width):
         'text_scale':200, 'photo_height':round(metrics['photo']['height'], 2),
         'status_height':round(metrics['status']['height'], 2),
         'counter_overlap':metrics['statusCounterTextOverlap'],
+        'focus_ring_counter_overlap':metrics['focusRingCounterOverlap'],
         'control_focus':metrics['focus']['active'], 'screenshot':screenshot.name,
     })
     page.evaluate('''() => {
