@@ -68,6 +68,9 @@ BROWSER_INTERACTION_FIELDS = {
     "common_content_browser": ("checks",),
 }
 BROWSER_MINIMUMS = {
+    # Five WB editor pages, each measured at 3 widths in 2 themes; checks
+    # include overflow and keyboard-focus evidence plus named safety probes.
+    "wb_edit_browser": {"layouts": 30, "interactions": 24},
     "common_content_browser": {"layouts": 4, "interactions": 8},
 }
 

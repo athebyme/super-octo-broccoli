@@ -55,14 +55,27 @@ REPORT = {
     "checks": [],
     "interactions": [],
     "javascript_errors": [],
+    "browser_mutations": [],
     "unexpected_external_requests": [],
     "unexpected_http": [],
+    "expected_negative_http": [],
     "provider_attempts": 0,
     "fake_wb_write_calls": 0,
     "fake_wb_written_products": [],
     "fake_wb_client_instances": 0,
     "blocked_reason": None,
 }
+EXPECTED_NEGATIVE_HTTP = {
+    ("POST", "/products/selection/resolve"): {
+        "status": 403,
+        "name": "foreign_product_selection_rejected",
+    },
+    ("GET", "/api/characteristics/Unmapped%20synthetic%20category"): {
+        "status": 409,
+        "name": "unmapped_category_rejected",
+    },
+}
+OBSERVED_EXPECTED_NEGATIVE_HTTP = set()
 
 os.environ.update({
     "DATABASE_URL": "sqlite:///" + str(TEMP_PATH / "wb-edit.sqlite"),
@@ -124,6 +137,9 @@ def seed_synthetic_wb(app) -> dict[str, int]:
     )
 
     with app.app_context():
+        # Use one observed UTC instant for every cached reference row. This
+        # keeps the fixture fresh at seed time without a hard-coded expiry.
+        fixture_now = datetime.utcnow()
         db.create_all()
         owner = User(
             username=USERNAME,
@@ -160,7 +176,7 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             adapter_code="wb",
             is_active=True,
             categories_sync_status="success",
-            categories_synced_at=datetime(2026, 9, 30, 18, 0),
+            categories_synced_at=fixture_now,
         )
         db.session.add(marketplace)
         db.session.flush()
@@ -171,13 +187,29 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             is_enabled=True,
             is_leaf=True,
             is_available=True,
-            characteristics_synced_at=datetime(2026, 9, 30, 18, 0),
+            characteristics_synced_at=fixture_now,
             characteristics_sync_status="success",
             characteristics_schema_hash="a" * 64,
             characteristics_version=1,
             characteristics_count=32,
         )
         db.session.add(category)
+        db.session.flush()
+
+        male_category = MarketplaceCategory(
+            marketplace_id=marketplace.id,
+            subject_id=5070,
+            subject_name="Мастурбаторы мужские",
+            is_enabled=True,
+            is_leaf=True,
+            is_available=True,
+            characteristics_synced_at=fixture_now,
+            characteristics_sync_status="success",
+            characteristics_schema_hash="b" * 64,
+            characteristics_version=1,
+            characteristics_count=31,
+        )
+        db.session.add(male_category)
         db.session.flush()
 
         definitions = [
@@ -207,11 +239,28 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             )
             for char_id, name, char_type, max_count, unit, dictionary in definitions
         ])
+        db.session.add_all([
+            MarketplaceCategoryCharacteristic(
+                category_id=male_category.id,
+                marketplace_id=marketplace.id,
+                charc_id=800 + index,
+                name=f"Synthetic male subject field {index + 1}",
+                charc_type=1,
+                required=False,
+                unit_name=None,
+                max_count=1,
+                dictionary_json="[]",
+                dictionary_source="none",
+                is_enabled=True,
+                is_available=True,
+            )
+            for index in range(31)
+        ])
         db.session.add(MarketplaceDirectory(
             marketplace_id=marketplace.id,
             directory_type="countries",
             data_json='["Россия", "Китай"]',
-            synced_at=datetime(2026, 9, 30, 18, 0),
+            synced_at=fixture_now,
             sync_status="success",
             items_count=2,
             version=1,
@@ -265,18 +314,37 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             brand="Other fixture brand",
             object_name="Unmapped synthetic category",
             subject_id=None,
+            characteristics_json=(
+                '[{"id":101,"name":"Stale prior-subject field",'
+                '"value":["Preserve read-only historical value"]}]'
+            ),
+            sizes_json="[]",
+            photos_json="[]",
+            is_active=True,
+        )
+        male_subject_product = Product(
+            id=10003,
+            seller_id=seller.id,
+            nm_id=990003,
+            vendor_code="MALE-SUBJECT-FIXTURE",
+            title="Synthetic male subject card",
+            brand="Other fixture brand",
+            object_name="Мастурбаторы мужские",
+            subject_id=5070,
             characteristics_json="[]",
             sizes_json="[]",
             photos_json="[]",
             is_active=True,
         )
-        db.session.add_all([*products, foreign, unmapped])
+        db.session.add_all([*products, foreign, unmapped, male_subject_product])
         db.session.commit()
         return {
             "seller_id": int(seller.id),
             "foreign_product_id": int(foreign.id),
             "product_id": int(products[0].id),
             "product_count": len(products),
+            "male_subject_product_id": int(male_subject_product.id),
+            "unmapped_product_id": int(unmapped.id),
         }
 
 
@@ -366,15 +434,26 @@ def record_http_response(response) -> None:
         return
     if response.status < 400:
         return
-    expected_security = (
-        parsed.path == "/products/selection/resolve"
-        and response.status in {400, 403, 409}
-    )
-    expected_unmapped = (
-        parsed.path.endswith("/Unmapped%20synthetic%20category")
-        or parsed.path.endswith("/Unmapped synthetic category")
-    ) and response.status == 409
-    if not expected_security and not expected_unmapped:
+    request_key = (response.request.method, parsed.path)
+    expected = EXPECTED_NEGATIVE_HTTP.get(request_key)
+    if expected and response.status == expected["status"]:
+        if request_key in OBSERVED_EXPECTED_NEGATIVE_HTTP:
+            REPORT["unexpected_http"].append({
+                "status": response.status,
+                "method": request_key[0],
+                "path": request_key[1],
+                "reason": "duplicate_expected_negative_probe",
+            })
+        else:
+            OBSERVED_EXPECTED_NEGATIVE_HTTP.add(request_key)
+            REPORT["expected_negative_http"].append({
+                "name": expected["name"],
+                "method": request_key[0],
+                "path": request_key[1],
+                "status": response.status,
+            })
+            check(expected["name"], method=request_key[0], status=response.status)
+    else:
         REPORT["unexpected_http"].append({
             "status": response.status,
             "method": response.request.method,
@@ -391,17 +470,48 @@ def interaction(name: str, **details) -> None:
 
 
 def capture_layout(page, label: str) -> None:
-    for width in (390, 768, 1280):
-        page.set_viewport_size({"width": width, "height": 900})
+    for theme in ("light", "dark"):
+        page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
         page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
-        geometry = page.evaluate("""() => ({
-            viewport_width: window.innerWidth,
-            document_width: document.documentElement.scrollWidth,
-            body_width: document.body.scrollWidth,
-            main_width: document.querySelector('main')?.getBoundingClientRect().width ?? null,
-        })""")
-        REPORT["layouts"].append({"page": label, **geometry})
+        for width in (390, 768, 1280):
+            page.set_viewport_size({"width": width, "height": 900})
+            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            geometry = page.evaluate("""() => ({
+                viewport_width: window.innerWidth,
+                document_width: document.documentElement.scrollWidth,
+                body_width: document.body.scrollWidth,
+                main_width: document.querySelector('main')?.getBoundingClientRect().width ?? null,
+            })""")
+            if geometry["document_width"] > width or geometry["body_width"] > width:
+                raise AssertionError(
+                    f"Horizontal overflow on {label} ({theme}, {width}px): {geometry}"
+                )
+            REPORT["layouts"].append({"page": label, "theme": theme, **geometry})
+        check(
+            f"responsive_no_horizontal_overflow_{label}_{theme}",
+            widths=[390, 768, 1280],
+        )
+    page.evaluate("document.documentElement.setAttribute('data-theme', 'light')")
     page.set_viewport_size({"width": 1280, "height": 900})
+
+
+def assert_keyboard_focus(page, label: str) -> None:
+    page.evaluate("document.activeElement?.blur()")
+    page.keyboard.press("Tab")
+    focus = page.evaluate("""() => {
+        const element = document.activeElement;
+        const rect = element?.getBoundingClientRect();
+        return {
+            tag: element?.tagName || null,
+            id: element?.id || null,
+            role: element?.getAttribute('role') || null,
+            text: (element?.innerText || element?.getAttribute('aria-label') || '').trim().slice(0, 80),
+            keyboard_visible: !!element && element.matches(':focus-visible'),
+            rendered: !!rect && rect.width > 0 && rect.height > 0,
+        };
+    }""")
+    assert focus["tag"] not in (None, "BODY") and focus["keyboard_visible"] and focus["rendered"], focus
+    check(f"keyboard_focus_visible_{label}", **focus)
 
 
 def assert_review_summary(page, *, changed: str, skipped: str = "0") -> None:
@@ -450,6 +560,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             )
             page.goto(BASE + list_url, wait_until="domcontentloaded")
             assert page.locator(".product-checkbox").count() == 50
+            assert_keyboard_focus(page, "products_list")
             page.locator("#selectAll").check()
             assert page.locator("#selectedCount").inner_text().strip() == "50"
             interaction("select_exact_first_page_50")
@@ -501,21 +612,41 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 for (const name of names) {
                     const response = await fetch('/api/characteristics/' + encodeURIComponent(name), {credentials: 'same-origin'});
                     const body = await response.json();
-                    values[name] = {status: response.status, subject_id: body.subject_id, provider_io: body.provider_io};
+                    values[name] = {
+                        status: response.status,
+                        subject_id: body.subject_id,
+                        count: body.count,
+                        characteristic_count: body.characteristics?.length ?? 0,
+                        schema_source: body.schema_source,
+                        provider_io: body.provider_io,
+                    };
                 }
                 return values;
-            }""", ["Свечи эротик", "Unmapped synthetic category"])
+            }""", ["Свечи эротик", "Мастурбаторы мужские", "Unmapped synthetic category"])
             assert category_probe["Свечи эротик"] == {
-                "status": 200, "subject_id": 5880, "provider_io": False,
+                "status": 200,
+                "subject_id": 5880,
+                "count": 32,
+                "characteristic_count": 32,
+                "schema_source": "local_authoritative_cache",
+                "provider_io": False,
+            }, category_probe
+            assert category_probe["Мастурбаторы мужские"] == {
+                "status": 200,
+                "subject_id": 5070,
+                "count": 31,
+                "characteristic_count": 31,
+                "schema_source": "local_authoritative_cache",
+                "provider_io": False,
             }, category_probe
             assert category_probe["Unmapped synthetic category"]["status"] == 409
             assert category_probe["Unmapped synthetic category"]["provider_io"] is False
-            REPORT["checks"].append({
-                "name": "exact_subject_cache_and_unmapped_category_fail_closed",
-                "status": "passed",
-                "subject_id": 5880,
-                "unmapped_status": category_probe["Unmapped synthetic category"]["status"],
-            })
+            check(
+                "exact_subject_cache_and_unmapped_category_fail_closed",
+                subject_id=5880,
+                working_subject_id=5070,
+                unmapped_status=category_probe["Unmapped synthetic category"]["status"],
+            )
 
             page.get_by_role("button", name="Редактировать", exact=True).click()
             page.wait_for_url("**/products/bulk-edit")
@@ -523,6 +654,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert "wb-edit-account-synthetic" in page.locator("body").inner_text()
             assert "50 товаров" in page.locator("body").inner_text()
             assert "Pipedream" in page.locator("body").inner_text()
+            assert_keyboard_focus(page, "bulk_editor")
             editor_return = page.locator('nav a[href^="/products?"]').first.get_attribute("href")
             assert editor_return
             returned = urlsplit(editor_return)
@@ -558,6 +690,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert "Ручная и AI-операции не объединяются" in page.locator("body").inner_text()
             assert "Ничего не было применено" in page.locator("body").inner_text()
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
+            check("mixed_manual_and_ai_operations_blocked_before_write")
             interaction("mixed_manual_ai_post_gets_actionable_no_write_notice")
 
             page.locator('input[name="operation"][value="update_brand"]').check()
@@ -568,6 +701,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert page.locator('input[name="preview_token"]').input_value() == ""
             assert page.get_by_role("button", name="Подтвердить и применить 0 карточек").is_disabled()
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
+            check("no_op_bulk_preview_has_no_apply_token_or_provider_client")
             interaction("no_op_preview_has_no_apply_token_or_provider_client")
 
             page.locator("nav button").filter(has_text="Массовое редактирование").click()
@@ -579,6 +713,14 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert_review_summary(page, changed="50")
             assert "Pipedream" in page.content() and "Synthetic reviewed brand" in page.content()
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
+            assert_keyboard_focus(page, "bulk_review")
+            check(
+                "manual_preview_reports_exact_selection_diff_before_fake_apply",
+                selected=50,
+                changed=50,
+                skipped=0,
+                fake_wb_client_instances=0,
+            )
             interaction("manual_bulk_preview_shows_exact_50_row_diff_without_provider_io")
             capture_layout(page, "bulk_review")
 
@@ -593,11 +735,10 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             page.wait_for_url("**/products/bulk-edit")
             assert "измен" in page.locator("body").inner_text().casefold()
             assert REPORT["fake_wb_client_instances"] == REPORT["fake_wb_write_calls"] == 0
-            REPORT["checks"].append({
-                "name": "local_review_drift_rejected_before_provider",
-                "status": "passed",
-                "fake_wb_client_instances": REPORT["fake_wb_client_instances"],
-            })
+            check(
+                "local_review_drift_rejected_before_provider",
+                fake_wb_client_instances=REPORT["fake_wb_client_instances"],
+            )
 
             with seller_app.app_context():
                 first_product = db.session.get(Product, fixture["product_id"])
@@ -614,9 +755,15 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert len(REPORT["fake_wb_written_products"]) == 50
             assert len(set(REPORT["fake_wb_written_products"])) == 50
             assert REPORT["provider_attempts"] == 0
+            check(
+                "reviewed_apply_reaches_only_fake_provider_with_exact_50_products",
+                fake_wb_write_calls=REPORT["fake_wb_write_calls"],
+                exact_product_count=len(REPORT["fake_wb_written_products"]),
+            )
             interaction("single_review_confirm_reaches_only_fake_provider_boundary")
 
             page.goto(BASE + f"/products/{fixture['product_id']}/edit", wait_until="domcontentloaded")
+            assert_keyboard_focus(page, "single_product_edit")
             characteristics_panel = page.locator("section[aria-labelledby='wb-characteristics-title']")
             assert "subjectID 5880" in characteristics_panel.inner_text()
             assert "1 заполнено · 32 в схеме" in characteristics_panel.inner_text()
@@ -639,6 +786,41 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 "fake_wb_write_calls": REPORT["fake_wb_write_calls"],
             })
 
+            unmapped_url = BASE + f"/products/{fixture['unmapped_product_id']}/edit"
+            page.goto(unmapped_url, wait_until="domcontentloaded")
+            assert_keyboard_focus(page, "unmapped_product_edit")
+            unmapped_panel = page.locator("section[aria-labelledby='wb-characteristics-title']")
+            assert "subjectID отсутствует" in unmapped_panel.inner_text()
+            assert "Редактирование характеристик недоступно" in unmapped_panel.inner_text()
+            assert page.locator('input[name^="char_"], select[name^="char_"], textarea[name^="char_"]').count() == 0
+            unmapped_panel.locator("summary").click()
+            assert "Stale prior-subject field" in unmapped_panel.inner_text()
+            assert "Preserve read-only historical value" in unmapped_panel.inner_text()
+            capture_layout(page, "unmapped_product_edit")
+
+            prior_fake_client_count = REPORT["fake_wb_client_instances"]
+            stale_post = page.evaluate("""async ({path, value}) => {
+                const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                const body = new URLSearchParams({csrf_token: csrf, char_101: value}).toString();
+                const response = await fetch(path, {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': csrf},
+                    body,
+                });
+                return {status: response.status, html: await response.text()};
+            }""", {
+                "path": f"/products/{fixture['unmapped_product_id']}/edit",
+                "value": "",
+            })
+            assert stale_post["status"] == 200
+            assert "Точная локальная WB-схема устарела или недоступна" in stale_post["html"]
+            assert REPORT["fake_wb_client_instances"] == prior_fake_client_count
+            check(
+                "unmapped_subject_keeps_old_characteristics_read_only_and_rejects_clear_post",
+                status=stale_post["status"],
+                fake_wb_client_instances=REPORT["fake_wb_client_instances"],
+            )
+
             # Filter change resets the stored exact set rather than expanding
             # it silently. Then all-filtered is a separate explicit action;
             # unchecking one row records an exact exclusion.
@@ -657,6 +839,25 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert REPORT["javascript_errors"] == []
             assert REPORT["unexpected_external_requests"] == []
             assert REPORT["unexpected_http"] == []
+            missing_negative = set(EXPECTED_NEGATIVE_HTTP).difference(OBSERVED_EXPECTED_NEGATIVE_HTTP)
+            assert not missing_negative, f"Expected negative probes were not observed: {sorted(missing_negative)}"
+            expected_layouts = {
+                (page_name, theme, width)
+                for page_name in (
+                    "products_list", "bulk_editor", "bulk_review",
+                    "single_product_edit", "unmapped_product_edit",
+                )
+                for theme in ("light", "dark")
+                for width in (390, 768, 1280)
+            }
+            actual_layouts = {
+                (row.get("page"), row.get("theme"), row.get("viewport_width"))
+                for row in REPORT["layouts"]
+            }
+            assert len(REPORT["layouts"]) == 30 and actual_layouts == expected_layouts, (
+                f"Expected all 30 page/theme/viewport rows, got {len(REPORT['layouts'])}"
+            )
+            assert len(REPORT["checks"]) >= 24, f"Expected at least 24 named browser checks, got {len(REPORT['checks'])}"
             assert REPORT["checks"] and REPORT["interactions"] and REPORT["layouts"]
             REPORT["status"] = "complete"
         finally:

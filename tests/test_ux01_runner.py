@@ -10,6 +10,7 @@ import os
 
 from scripts.check_ux01 import (
     BROWSER_INTERACTION_FIELDS,
+    BROWSER_MINIMUMS,
     REQUIRED_TESTS,
     _canonical_json,
     _clean_environment,
@@ -284,6 +285,48 @@ class Ux01RunnerContractTest(unittest.TestCase):
                 required_interaction_fields=("checks",),
             )
             self.assertFalse(rejected_missing_write["valid"])
+
+    def test_wb_edit_stage_requires_all_theme_viewports_and_named_checks(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            path = Path(temp_name) / "wb-edit.json"
+            minimums = BROWSER_MINIMUMS["wb_edit_browser"]
+            self.assertEqual(minimums, {"layouts": 30, "interactions": 24})
+            report = {
+                "status": "complete",
+                "source": "worktree",
+                "provider_attempts": 0,
+                "unexpected_external_requests": [],
+                "unexpected_http": [],
+                "javascript_errors": [],
+                "browser_mutations": [],
+                "layouts": [{"width": index} for index in range(minimums["layouts"])],
+                "checks": [{"name": str(index)} for index in range(minimums["interactions"])],
+            }
+            path.write_text(json.dumps(report), encoding="utf-8")
+            accepted = summarize_browser_report(
+                path,
+                "worktree",
+                minimum_layout_count=minimums["layouts"],
+                minimum_interaction_count=minimums["interactions"],
+                required_interaction_fields=("checks",),
+            )
+            self.assertTrue(accepted["valid"])
+            self.assertEqual(accepted["layout_count"], 30)
+            self.assertEqual(accepted["interaction_count"], 24)
+
+            report["layouts"].pop()
+            report["checks"].pop()
+            path.write_text(json.dumps(report), encoding="utf-8")
+            rejected = summarize_browser_report(
+                path,
+                "worktree",
+                minimum_layout_count=minimums["layouts"],
+                minimum_interaction_count=minimums["interactions"],
+                required_interaction_fields=("checks",),
+            )
+            self.assertFalse(rejected["valid"])
+            self.assertIn("layout_rows_below_30", rejected["missing_evidence"])
+            self.assertIn("interaction_rows_below_24", rejected["missing_evidence"])
 
     def test_listing_report_allows_only_bounded_synthetic_login_posts(self):
         with tempfile.TemporaryDirectory() as temp_name:
