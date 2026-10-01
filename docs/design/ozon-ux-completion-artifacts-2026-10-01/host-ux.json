@@ -1,0 +1,75 @@
+{
+  "stage": "ux",
+  "status": "passed",
+  "started_at": "2026-10-01T01:17:49.415406+00:00",
+  "source_commit": "65c9ced139389d011ac22b8b782a9b7830db1a8f",
+  "source_file_count": 1240,
+  "source_aggregate_sha256": "896a431f47d108a9672ceff985534f6a0b691fbaddf07a1151f31c2cc8465f13",
+  "source_verified_before": {
+    "verified": true,
+    "issues": []
+  },
+  "test_files": [
+    "tests/test_common_product_content_routes.py",
+    "tests/test_common_product_content_service.py",
+    "tests/test_common_product_content_ui.py",
+    "tests/test_competitor_routes.py",
+    "tests/test_marketplace_listing_routes.py",
+    "tests/test_marketplace_readiness.py",
+    "tests/test_product_selection.py",
+    "tests/test_product_selection_dom.py",
+    "tests/test_ux01_analytics.py",
+    "tests/test_ux01_competitor_settings.py",
+    "tests/test_ux01_listing_moderation.py",
+    "tests/test_ux01_listing_navigation.py",
+    "tests/test_ux01_listing_workspace.py",
+    "tests/test_ux01_navigation.py",
+    "tests/test_ux01_operations.py",
+    "tests/test_ux01_preparation.py",
+    "tests/test_ux01_pricing.py",
+    "tests/test_ux01_runner.py",
+    "tests/test_ux01_settings_quality.py",
+    "tests/test_ux01_theme_contrast.py",
+    "tests/test_wb_bulk_review_key_migration.py",
+    "tests/test_wb_edit_review_replay.py"
+  ],
+  "synthetic_only": true,
+  "host_unit_stage_only": true,
+  "full_release_gate": false,
+  "docker_stage_run": false,
+  "browser_stages_run": false,
+  "production_deployment_verified": false,
+  "provider_transport": "synthetic test fixtures",
+  "environment": {
+    "private_tmpdir": true,
+    "scheduler": "off",
+    "publication": "off",
+    "commercial_writes": "off",
+    "auto_publish": "off",
+    "inline_image_worker": "off"
+  },
+  "exit_code": 0,
+  "source_verified_after": {
+    "verified": true,
+    "issues": []
+  },
+  "junit": {
+    "valid": true,
+    "reason": null,
+    "tests": 219,
+    "passed": 219,
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0
+  },
+  "seconds": 55.02,
+  "finished_at": "2026-10-01T01:18:44.433861+00:00",
+  "pytest_summary": "219 passed, 42 warnings, 42 subtests passed in 53.23s",
+  "host_harness_sha256": "a154f9a82caf70d2bfdee9f8cdb99044649a5d4f1b103306a82331cde97857de",
+  "executed_host_harness": [
+    "/home/athebyme/super-octo-broccoli/venv/bin/python",
+    "/tmp/seller-hub-completion-host-units.py",
+    "ux"
+  ],
+  "harness_scope": "Temporary host orchestration; unchanged pytest files selected from official runner. Not a container/browser gate."
+}

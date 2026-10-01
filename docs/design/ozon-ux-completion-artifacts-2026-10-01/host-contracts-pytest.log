@@ -1,0 +1,206 @@
+........................................................................ [  3%]
+............................................................... [  6%]
+........................................................................................................... [ 11%]
+............................................................ [ 13%]
+................................................................................................................................ [ 19%]
+............................................................................... [ 23%]
+....................................................................................................... [ 28%]
+..................................................................... [ 31%]
+............................................................ [ 34%]
+................................................................ [ 37%]
+........................................................................ [ 40%]
+........................................ [ 42%]
+............................................................. [ 45%]
+........................................................................ [ 48%]
+..................................................................................................................... [ 53%]
+........................................................................ [ 57%]
+........................................................................ [ 60%]
+.............................................................. [ 63%]
+...................................................................... [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 73%]
+................................................................... [ 76%]
+........................................................................ [ 79%]
+........................................................................ [ 82%]
+................................................................. [ 85%]
+............................................................ [ 88%]
+.................................................................................. [ 92%]
+............................................................................................................................................ [ 98%]
+...........................                                          [100%]
+=============================== warnings summary ===============================
+tests/test_admin_flash_handoff.py::AdminFlashHandoffTest::test_old_start_endpoints_return_actionable_conflict_without_job
+tests/test_admin_flash_handoff.py::AdminFlashHandoffTest::test_old_start_endpoints_return_actionable_conflict_without_job
+  /tmp/seller-hub-completion-20261001/services/supplier_service.py:911: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    return Supplier.query.get(supplier_id)
+
+tests/test_enrichment_inference.py::InferenceModeTest::test_apply_selection_writes_canonical_value_with_snapshot
+tests/test_supplier_catalog_enrichment.py::SupplierCatalogEnrichmentTest::test_characteristic_rejects_each_value_missing_from_evidence
+tests/test_supplier_catalog_enrichment.py::SupplierCatalogEnrichmentTest::test_characteristics_require_grounded_value_and_exact_dictionary
+tests/test_supplier_enrichment_parallel.py::ParallelCharacteristicsTest::test_two_subject_chunks_processed_in_parallel
+tests/test_supplier_enrichment_parallel.py::ParallelCharacteristicsTest::test_two_subject_chunks_processed_in_parallel
+  /tmp/seller-hub-completion-20261001/services/marketplace_validator.py:1410: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    marketplace = Marketplace.query.get(marketplace_id)
+
+tests/test_image_lab_routes.py::ImageLabRouteTests::test_target_is_revalidated_before_any_provider_work
+  /tmp/seller-hub-completion-20261001/services/image_lab_service.py:1154: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    experiment = ImageGenerationExperiment.query.get(experiment_id)
+
+tests/test_image_lab_routes.py::ImageLabRouteTests::test_target_is_revalidated_before_any_provider_work
+  /tmp/seller-hub-completion-20261001/services/image_lab_service.py:1166: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    experiment = ImageGenerationExperiment.query.get(experiment_id)
+
+tests/test_marketplace_accounts.py::MarketplaceAccountsTest::test_onboarding_is_strict_tenant_scoped_and_status_get_is_read_only
+  /tmp/seller-hub-completion-20261001/tests/test_marketplace_accounts.py:705: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    self.assertIsNone(SellerMarketplaceAccount.query.get(account_id).connection_checked_at)
+
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_admin_cannot_disable_required_characteristic
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_admin_route_rejects_malformed_and_invalid_allowlist_payloads
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_admin_route_rejects_malformed_and_invalid_allowlist_payloads
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_admin_route_saves_characteristic_allowlist
+  /home/athebyme/super-octo-broccoli/venv/lib/python3.11/site-packages/flask_sqlalchemy/query.py:30: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    rv = self.get(ident)
+
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_admin_route_rejects_malformed_and_invalid_allowlist_payloads
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_admin_route_saves_characteristic_allowlist
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_save_characteristic_allowlist_cannot_override_global_gender_values
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_save_characteristic_allowlist_normalizes_and_preserves_custom_instruction
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_save_characteristic_allowlist_normalizes_and_preserves_custom_instruction
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_save_characteristic_allowlist_rejects_unsafe_payload_without_mutation
+  /tmp/seller-hub-completion-20261001/services/marketplace_service.py:952: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    charc = MarketplaceCategoryCharacteristic.query.get(characteristic_id)
+
+tests/test_marketplace_reference_sync.py: 15 warnings
+  /tmp/seller-hub-completion-20261001/services/marketplace_service.py:412: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    marketplace = Marketplace.query.get(marketplace_id)
+
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_batch_reference_preflight_refreshes_each_scope_once
+  /tmp/seller-hub-completion-20261001/services/marketplace_service.py:1236: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    marketplace = Marketplace.query.get(marketplace.id)
+
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_batch_reference_preflight_refreshes_each_scope_once
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_directory_error_and_anomalous_shrink_preserve_last_good
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_directory_error_and_anomalous_shrink_preserve_last_good
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_directory_sync_preserves_failed_cache_and_is_idempotent
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_directory_sync_preserves_failed_cache_and_is_idempotent
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_directory_sync_preserves_failed_cache_and_is_idempotent
+  /tmp/seller-hub-completion-20261001/services/marketplace_service.py:1488: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    marketplace = Marketplace.query.get(marketplace_id)
+
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_batch_reference_preflight_refreshes_each_scope_once
+  /tmp/seller-hub-completion-20261001/services/marketplace_service.py:1261: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    marketplace = Marketplace.query.get(marketplace.id)
+
+tests/test_marketplace_reference_sync.py: 38 warnings
+  /tmp/seller-hub-completion-20261001/services/marketplace_service.py:605: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    category = MarketplaceCategory.query.get(category_id)
+
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_brand_merge_rejects_conflicting_category_identities
+  /tmp/seller-hub-completion-20261001/services/brand_engine.py:1765: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    source = Brand.query.get(source_brand_id)
+
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_brand_merge_rejects_conflicting_category_identities
+  /tmp/seller-hub-completion-20261001/services/brand_engine.py:1766: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    target = Brand.query.get(target_brand_id)
+
+tests/test_marketplace_reference_sync.py: 19 warnings
+  /tmp/seller-hub-completion-20261001/services/brand_engine.py:835: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    marketplace = Marketplace.query.get(marketplace_id)
+
+tests/test_marketplace_reference_sync.py: 11 warnings
+  /tmp/seller-hub-completion-20261001/services/marketplace_service.py:584: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    marketplace = Marketplace.query.get(marketplace_id)
+
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_category_validation_is_fail_closed_without_live_evidence
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_category_validation_is_fail_closed_without_live_evidence
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_category_validation_persists_exact_identity_and_rejects_drift
+tests/test_marketplace_reference_sync.py::MarketplaceReferenceSyncTestCase::test_category_validation_persists_exact_identity_and_rejects_drift
+  /tmp/seller-hub-completion-20261001/services/brand_engine.py:1665: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    mp_brand = MarketplaceBrand.query.get(marketplace_brand_id)
+
+tests/test_marketplace_reference_sync.py: 22 warnings
+  /tmp/seller-hub-completion-20261001/services/marketplace_service.py:937: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    category = MarketplaceCategory.query.get(category_id)
+
+tests/test_my_products_filters.py: 14 warnings
+tests/test_wb_edit_review_replay.py: 42 warnings
+  /tmp/seller-hub-completion-20261001/seller_platform.py:340: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    return User.query.get(int(user_id))
+
+tests/test_ozon_compliance_admin.py::ActivateRegistryVersionTestCase::test_reactivating_an_older_lower_id_version_succeeds
+tests/test_ozon_compliance_admin.py::ActivateRegistryVersionTestCase::test_reactivating_an_older_lower_id_version_succeeds
+tests/test_ozon_compliance_admin.py::ActivateRegistryVersionTestCase::test_reactivating_an_older_lower_id_version_succeeds
+tests/test_ozon_compliance_admin.py::ActivateRegistryVersionTestCase::test_unknown_version_id_is_rejected
+  /tmp/seller-hub-completion-20261001/services/ozon_compliance_admin.py:477: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    candidate = OzonMarkingRegistryVersion.query.get(version_key)
+
+tests/test_ozon_compliance_admin.py: 35 warnings
+  /tmp/seller-hub-completion-20261001/services/ozon_compliance_admin.py:143: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    product_type = MarketplaceProductType.query.get(cleaned["product_type_id"])
+
+tests/test_ozon_compliance_admin.py::SaveDecisionPersistenceTestCase::test_replacing_active_decision_retires_old_and_activates_new
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:349: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed_first = OzonComplianceDefault.query.get(first.id)
+
+tests/test_ozon_compliance_admin.py::PreviewRegistrySwitchTestCase::test_preview_counts_changes_without_persisting_anything
+tests/test_ozon_compliance_admin.py::PreviewRegistrySwitchTestCase::test_unknown_version_id_is_rejected
+  /tmp/seller-hub-completion-20261001/services/ozon_compliance_admin.py:518: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    candidate = OzonMarkingRegistryVersion.query.get(version_key)
+
+tests/test_ozon_compliance_admin.py::PreviewRegistrySwitchTestCase::test_preview_counts_changes_without_persisting_anything
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:887: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed_candidate = OzonMarkingRegistryVersion.query.get(
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_active_operation_blocks_update
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1088: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed = MarketplaceProductDraft.query.get(draft.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_already_filled_attribute_is_not_touched
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1154: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed = MarketplaceProductDraft.query.get(draft.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_archived_draft_is_skipped_in_full_run
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1121: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed = MarketplaceProductDraft.query.get(draft.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_error_in_one_draft_does_not_prevent_other_updates_from_persisting
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1239: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed_ok = MarketplaceProductDraft.query.get(draft_ok.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_error_in_one_draft_does_not_prevent_other_updates_from_persisting
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1245: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed_broken = MarketplaceProductDraft.query.get(draft_broken.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_limit_bounds_number_of_processed_drafts
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1262: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed_first = MarketplaceProductDraft.query.get(draft_first.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_limit_bounds_number_of_processed_drafts
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1263: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed_second = MarketplaceProductDraft.query.get(draft_second.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_partial_resolution_still_updates_resolved_attribute
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1208: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed = MarketplaceProductDraft.query.get(draft.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_unresolved_type_short_circuits_without_touching_any_draft
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1184: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed = MarketplaceProductDraft.query.get(draft.id)
+
+tests/test_ozon_compliance_admin.py::ApplyToExistingDraftsIntegrationTestCase::test_updates_empty_attribute_and_marks_validation_stale
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1066: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed = MarketplaceProductDraft.query.get(draft.id)
+
+tests/test_ozon_compliance_admin.py::RefreshExistingDraftsIntegrationTestCase::test_refresh_leaves_seller_edited_value_untouched
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1407: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    stored = MarketplaceProductDraft.query.get(draft.id)
+
+tests/test_ozon_compliance_admin.py::RefreshExistingDraftsIntegrationTestCase::test_refresh_leaves_seller_edited_value_untouched
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1431: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    final = MarketplaceProductDraft.query.get(draft.id)
+
+tests/test_ozon_compliance_admin.py::RefreshExistingDraftsIntegrationTestCase::test_refresh_replaces_stale_value_we_wrote_and_updates_provenance
+  /tmp/seller-hub-completion-20261001/tests/test_ozon_compliance_admin.py:1373: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    refreshed = MarketplaceProductDraft.query.get(draft.id)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2172 passed, 251 warnings, 523 subtests passed in 556.32s (0:09:16)

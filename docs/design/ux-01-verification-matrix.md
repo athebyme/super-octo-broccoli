@@ -56,6 +56,7 @@
 | WB-EDIT-04 / UX-01.7 | Preview selected50/changed2/skipped48 → confirm → replay; provider before drift и local keyword race | Preview без внешнего I/O; только reviewed changed-set; второй POST не пишет; история различает пропуски и ошибки |
 | CAT-EDIT-01/02 | Override/inherit/intentional empty/cancel/reopen, порядок двух фото, bulk50, supplier/CSV/AI конфликт | Source facts не содержат ручных/AI значений; exact preview/apply seals, whole-batch conflict, выбранный legacy URL не подменяется supplier slot |
 | CAT-EDIT-02 / UX-01.11 | Delayed preview/apply/GET, timeout/409, смена выбранной карточки и уход с dirty вводом | Нет stale token apply или blind retry; перечитывается exact набор; ошибка чтения не маскирует возможную успешную запись |
+| CAT-EDIT-01/02 / UX-01.8 | Image Lab manual-empty/manual-photo, exact WB fallback, invalid experiment и late common/link/gallery race | Нет backfill/experiment/checkpoint/launch при конфликте; fallback сохраняется только после request/budget validation и writer lock; read count/fetch не возвращают очищенные фото |
 | Ozon / UX-01.6 | Новый источник → draft → exact category/type → human packaging/VAT → AI review → upload → полные readbacks | По одному synthetic write, invalid AI не пишет; unknown write не повторяется и проходит quarantine/read-only reconciliation |
 | UX-01.1/.3/.4 | Long data, empty/error, light/dark, 390/1024/1280/1440, keyboard/focus | Нет root clipping; локальный scroll; статические token contrast checks дополняют, но не заменяют actual accessibility/browser matrix |
 

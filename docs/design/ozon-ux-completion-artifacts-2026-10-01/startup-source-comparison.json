@@ -1,0 +1,27 @@
+{
+  "generated_at": "2026-10-01T01:10:42.192620+00:00",
+  "source_commit": "65c9ced139389d011ac22b8b782a9b7830db1a8f",
+  "source_aggregate_sha256": "896a431f47d108a9672ceff985534f6a0b691fbaddf07a1151f31c2cc8465f13",
+  "scope": "source fingerprint comparison with previously captured restored-copy startup journal",
+  "status": "passed",
+  "old_step_count": 79,
+  "candidate_step_count": 81,
+  "changed_existing_steps": [
+    "bootstrap-database",
+    "migrate-add-admin-features",
+    "migrate-add-blocked-cards",
+    "migrate-add-marketplace-tables",
+    "migrate-add-price-monitoring",
+    "migrate-add-product-sync-settings"
+  ],
+  "new_steps": [
+    "migrate-add-imported-content-overrides",
+    "migrate-add-wb-bulk-review-key"
+  ],
+  "removed_steps": [],
+  "actual_database_startup_executed": false,
+  "table_counts_revalidated": false,
+  "repeated_startup_noop_verified": false,
+  "production_cutover_executed": false,
+  "remaining": "Run candidate startup and repeat/noop on the task-owned restored copy in network-none environment; compare saved counts."
+}

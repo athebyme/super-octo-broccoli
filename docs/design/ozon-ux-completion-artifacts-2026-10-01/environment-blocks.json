@@ -1,0 +1,37 @@
+{
+  "status": "blocked",
+  "scope": "restricted continuation environment; not product failure evidence",
+  "docker_gate": {
+    "status": "blocked",
+    "observed": "access denied to /var/run/docker.sock"
+  },
+  "loopback_browser_fixture": {
+    "status": "blocked",
+    "observed": "PermissionError: Operation not permitted"
+  },
+  "chromium_offline_dom_probe": {
+    "status": "blocked",
+    "observed": "TargetClosedError; crashpad setsockopt: Operation not permitted (1)",
+    "transport": "Playwright remote-debugging pipe, sandbox enabled, no external URL",
+    "page_created": false,
+    "dom_or_layout_read": false,
+    "permission_workaround_attempted": false
+  },
+  "original_main_merge": {
+    "status": "blocked",
+    "observed": "original Git metadata is read-only by environment policy"
+  },
+  "restored_copy_startup": {
+    "status": "blocked",
+    "observed": "private Docker volume unavailable"
+  },
+  "deployment": {
+    "status": "blocked",
+    "executed": false,
+    "required_helper": "scripts/deploy_safety.py --up-all"
+  },
+  "host_unit_stages": {
+    "status": "available",
+    "full_release_gate": false
+  }
+}
