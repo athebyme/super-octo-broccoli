@@ -367,6 +367,8 @@ async function photoBoundaryFocus() {
 async function previewReturnDoesNotReuseToken() {
     const app = makeApp();
     dispatchInput(app.fieldsNode.querySelector('[data-field-input="title"]'), 'Changed title');
+    dispatchClick(find(app.listNode, 'choose-product', (item) => item.dataset.productId === '22'));
+    assert.equal(app.document.activeElement.dataset.productId, '22');
     dispatchClick(find(app.fieldsNode, 'preview'));
     await drain();
     assert.equal(app.calls.preview, 1);
@@ -387,6 +389,11 @@ async function previewReturnDoesNotReuseToken() {
     await drain();
     assert.deepEqual(app.calls.apply, ['synthetic-preview-2'], 'apply must use the fresh post-return preview token');
     assertFocused(app, find(app.fieldsNode, 'toggle-mode'), 'successful apply');
+    assert.equal(
+        find(app.listNode, 'choose-product', (item) => item.dataset.productId === '11').getAttribute('aria-current'),
+        'true',
+        'apply should focus the product selected by the existing changedIds[0] transition',
+    );
 
     const readbackFailureApp = makeApp({ readbackFailure: true });
     dispatchInput(readbackFailureApp.fieldsNode.querySelector('[data-field-input="title"]'), 'Saved before readback issue');
