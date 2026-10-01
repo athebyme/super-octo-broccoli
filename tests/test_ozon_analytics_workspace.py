@@ -16,12 +16,16 @@ from tests import test_marketplace_analytics as service_fixture
 from tests import test_marketplace_insight_routes as route_fixture
 from tests.test_marketplace_analytics import SyntheticAnalyticsAdapter, SYNTHETIC_CREDENTIALS
 
+FIXTURE_NOW = datetime(2026, 7, 15, 12, 0)
+FIXTURE_TODAY = FIXTURE_NOW.date()
+
 
 @pytest.fixture
 def data():
     fixture = service_fixture.MarketplaceAnalyticsServiceTest();fixture.setUp()
     fixture.run = Analytics.sync_account(seller_id=fixture.seller.id, account_id=fixture.account.id,
-        period_code='7d', force=True, max_pages=2, adapter=SyntheticAnalyticsAdapter(), credentials=SYNTHETIC_CREDENTIALS)
+        period_code='7d', force=True, max_pages=2, adapter=SyntheticAnalyticsAdapter(), credentials=SYNTHETIC_CREDENTIALS,
+        now=FIXTURE_NOW, today=FIXTURE_TODAY)
     fixture.listing.media_json=json.dumps({'primary_image':'https://example.test/own.jpg'})
     db.session.commit()
     yield fixture
@@ -29,6 +33,11 @@ def data():
 
 
 def read(f, **kwargs):
+    has_explicit_now = 'now' in kwargs
+    if not has_explicit_now:
+        kwargs['now'] = FIXTURE_NOW
+    if 'today' not in kwargs and not has_explicit_now:
+        kwargs['today'] = FIXTURE_TODAY
     return get_workspace(seller_id=f.seller.id,account_id=f.account.id,period_code=kwargs.pop('period_code','7d'),**kwargs)
 
 
@@ -39,7 +48,7 @@ def metric(f, sku, values=('0.0001','1.0000'), **kw):
             listing_id=f.listing.id,dimension_kind='listing',dimension_id=str(sku),dimension_name='Наблюдённый товар',
             metric_code=definition.metric_code,provider_metric=definition.provider_metric,metric_value=Decimal(value),
             unit=definition.unit,definition_code=definition.definition_code,cross_marketplace_comparable=False,
-            source_endpoint='/v1/analytics/data',observed_at=datetime.utcnow())
+            source_endpoint='/v1/analytics/data',observed_at=FIXTURE_NOW)
         for key,value in kw.items():setattr(row,key,value)
         db.session.add(row);rows.append(row)
     return rows
@@ -47,7 +56,7 @@ def metric(f, sku, values=('0.0001','1.0000'), **kw):
 
 def newer(f, **overrides):
     columns={c.name:getattr(f.run,c.name) for c in Sync.__table__.columns if c.name not in ['id','created_at','updated_at']}
-    columns.update(completed_at=datetime.utcnow()+timedelta(seconds=1),totals_json=json.dumps(Analytics._stored_totals({REVENUE:Decimal('7'),UNITS:Decimal('2')})))
+    columns.update(completed_at=FIXTURE_NOW+timedelta(seconds=1),totals_json=json.dumps(Analytics._stored_totals({REVENUE:Decimal('7'),UNITS:Decimal('2')})))
     columns.update(overrides)
     row=Sync(**columns);db.session.add(row);db.session.commit();return row
 
@@ -84,7 +93,7 @@ def test_pinned_snapshot_and_day_do_not_change_on_new_completed(data):
     first=read(data);pin={'snapshot_id':first['snapshot']['id'],'as_of':first['as_of']}
     next_sync=newer(data)
     assert read(data)['snapshot']['id']==next_sync.id
-    fixed=read(data,**pin,today=date.today()+timedelta(days=1))
+    fixed=read(data,**pin,today=FIXTURE_TODAY+timedelta(days=1))
     assert fixed['totals']==first['totals'] and fixed['products']==first['products']
     assert fixed['requested_period']==first['requested_period']
     with pytest.raises(MarketplaceAnalyticsNotFound):read(data,snapshot_id=next_sync.id,period_code='30d')
@@ -105,7 +114,11 @@ def test_default_period_anchor_uses_deterministic_utc_instant_at_local_day_bound
         ZoneInfo('Europe/Moscow'),
     ).date() == date(2026, 10, 1)
     with patch('services.marketplace_analytics_workspace.datetime', FrozenUTCDateTime):
-        result = read(data)
+        result = get_workspace(
+            seller_id=data.seller.id,
+            account_id=data.account.id,
+            period_code='7d',
+        )
     assert result['as_of'] == '2026-09-30'
     assert result['requested_period']['end'] == '2026-09-30'
     assert result['snapshot']['period_matches_request']
@@ -195,9 +208,11 @@ def test_sql_pagination_is_stable_and_bounded(data):
         if args[2].lstrip().upper().startswith('SELECT'):calls.append(args[2])
     event.listen(db.engine,'before_cursor_execute',query)
     try:
-        a=get_workspace(seller_id=seller_id,account_id=account_id,period_code='7d',per_page=1)
+        a=get_workspace(seller_id=seller_id,account_id=account_id,period_code='7d',per_page=1,
+                        now=FIXTURE_NOW,today=FIXTURE_TODAY)
         first_count=len(calls);calls.clear()
-        b=get_workspace(seller_id=seller_id,account_id=account_id,period_code='7d',per_page=100)
+        b=get_workspace(seller_id=seller_id,account_id=account_id,period_code='7d',per_page=100,
+                        now=FIXTURE_NOW,today=FIXTURE_TODAY)
         assert len(b['products'])==57 and len(a['products'])==1
         assert len(calls)<=first_count+1 and len(calls)<=8
     finally:event.remove(db.engine,'before_cursor_execute',query)
@@ -209,15 +224,15 @@ def test_explicit_invalid_or_missing_snapshot_never_falls_back(data):
     with pytest.raises(MarketplaceAnalyticsNotFound):read(data,snapshot_id=99999)
     bad.status='completed';bad.seller_id=data.other_seller.id;bad.account_id=data.other_account.id;db.session.commit()
     with pytest.raises(MarketplaceAnalyticsNotFound):read(data,snapshot_id=bad.id)
-    with pytest.raises(MarketplaceAnalyticsValidationError):read(data,as_of=date.today().isoformat())
-    with pytest.raises(MarketplaceAnalyticsValidationError):read(data,snapshot_id=data.run.id,as_of=(date.today()+timedelta(days=1)).isoformat())
+    with pytest.raises(MarketplaceAnalyticsValidationError):read(data,as_of=FIXTURE_TODAY.isoformat())
+    with pytest.raises(MarketplaceAnalyticsValidationError):read(data,snapshot_id=data.run.id,as_of=(FIXTURE_TODAY+timedelta(days=1)).isoformat())
     data.run.request_fingerprint='x'*64;db.session.commit()
     with pytest.raises(MarketplaceAnalyticsValidationError):read(data,snapshot_id=data.run.id)
 
 
 def test_old_period_is_shown_as_observed_not_intersection(data):
     # SKU aggregate belongs to the whole old period, not the overlap with today.
-    result=read(data,today=date.today()+timedelta(days=3))
+    result=read(data,today=FIXTURE_TODAY+timedelta(days=3))
     assert result['status']=='stale' and not result['snapshot']['period_matches_request']
     assert result['totals'][REVENUE]=='1200.0000'
     assert result['snapshot']['period_end']!=result['requested_period']['end']
@@ -252,7 +267,8 @@ def test_read_transaction_keeps_facts_during_concurrent_retention(data,tmp_path)
             deleted.append(True)
     event.listen(engine,'after_cursor_execute',prune)
     try:
-        result=get_workspace(seller_id=seller_id,account_id=account_id,period_code='7d',snapshot_id=snapshot_id)
+        result=get_workspace(seller_id=seller_id,account_id=account_id,period_code='7d',snapshot_id=snapshot_id,
+                             now=FIXTURE_NOW,today=FIXTURE_TODAY)
         assert deleted and result['totals']==expected['totals']
         assert result['daily']==expected['daily'] and result['products']==expected['products']
         with sqlite3.connect(path) as reader:
@@ -263,7 +279,8 @@ def test_read_transaction_keeps_facts_during_concurrent_retention(data,tmp_path)
 
 
 def test_no_snapshot_returns_unknown_totals_and_empty_rows(data):
-    result=get_workspace(seller_id=data.seller.id,account_id=data.account.id,period_code='30d')
+    result=get_workspace(seller_id=data.seller.id,account_id=data.account.id,period_code='30d',
+                         now=FIXTURE_NOW,today=FIXTURE_TODAY)
     assert result['status']=='no_data' and result['snapshot'] is None
     assert all(v is None for v in result['totals'].values())
     assert result['products']==result['daily']==[]
