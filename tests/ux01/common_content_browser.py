@@ -84,6 +84,7 @@ REPORT = {
     "unexpected_external_requests": [],
     "javascript_errors": [],
     "console_errors": [],
+    "console_error_locations": [],
     "expected_conflict_console_errors": [],
     "provider_attempts": 0,
 }
@@ -390,18 +391,72 @@ def query_ids(url: str) -> list[int]:
     return [int(value) for value in values]
 
 
+def _console_location_metadata(url) -> dict:
+    metadata = {
+        "origin": "",
+        "path": "",
+        "has_query": False,
+        "has_fragment": False,
+        "url_present": isinstance(url, str) and bool(url),
+        "url_too_long": isinstance(url, str) and len(url) > 2048,
+    }
+    if not isinstance(url, str) or not url or len(url) > 2048:
+        return metadata
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return metadata
+    if parsed.scheme and parsed.netloc:
+        metadata["origin"] = (parsed.scheme + "://" + parsed.netloc)[:256]
+    metadata["path"] = parsed.path[:256]
+    metadata["has_query"] = bool(parsed.query)
+    metadata["has_fragment"] = bool(parsed.fragment)
+    return metadata
+
+
 def record_console_message(message) -> None:
     if message.type != "error":
         return
     text = message.text[:300]
-    if text == EXPECTED_CONFLICT_CONSOLE_MESSAGE and PENDING_EXPECTED_CONFLICT_CONSOLES:
-        exact_response = PENDING_EXPECTED_CONFLICT_CONSOLES.pop(0)
+    message_location = message.location
+    location_url = message_location.get("url") if isinstance(message_location, dict) else None
+    location = _console_location_metadata(location_url)
+    base = urlsplit(BASE)
+    expected_origin = base.scheme + "://" + base.netloc
+    exact_local_endpoint = (
+        not location["url_too_long"]
+        and location["origin"] == expected_origin
+        and location["path"] in EXPECTED_CONFLICT_CONSOLE_COUNTS
+        and not location["has_query"]
+        and not location["has_fragment"]
+    )
+    pending_index = None
+    if exact_local_endpoint:
+        pending_index = next((
+            index for index, response in enumerate(PENDING_EXPECTED_CONFLICT_CONSOLES)
+            if response.get("method") == "POST"
+            and response.get("path") == location["path"]
+            and response.get("status") == 409
+        ), None)
+    if (
+        text == EXPECTED_CONFLICT_CONSOLE_MESSAGE
+        and pending_index is not None
+    ):
+        exact_response = PENDING_EXPECTED_CONFLICT_CONSOLES.pop(pending_index)
         REPORT["expected_conflict_console_errors"].append({
             **exact_response,
             "message": text,
+            "location": location,
         })
         return
     REPORT["console_errors"].append(text)
+    REPORT["console_error_locations"].append({
+        "message": text,
+        "location": location,
+        "pending_conflict_endpoints": [
+            response.get("path") for response in PENDING_EXPECTED_CONFLICT_CONSOLES
+        ][:4],
+    })
 
 
 def delay_fetches(page, request_keys: list[str]) -> None:
@@ -1541,6 +1596,7 @@ def run():
             },
             "pending_exact_conflict_responses": PENDING_EXPECTED_CONFLICT_CONSOLES,
             "unexpected_console_errors": REPORT["console_errors"],
+            "unexpected_console_locations": REPORT["console_error_locations"],
         }
         assert observed_console_error_counts == expected_console_error_counts, console_evidence
         assert PENDING_EXPECTED_CONFLICT_CONSOLES == [], console_evidence
