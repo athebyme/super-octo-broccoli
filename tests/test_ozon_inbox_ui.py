@@ -36,6 +36,16 @@ function editor(page){page.filters.itemId=2;page.selected=item();page.editor=pag
     assert result.returncode==0,result.stderr
 
 
+def test_access_copy_does_not_assume_paid_plan_or_explain_provider_denial():
+    template = (ROOT/'templates/marketplace_inbox.html').read_text()
+    assert 'Проверьте доступ к методу в кабинете Ozon или уточните его у поддержки.' in template
+    assert 'Причина доступа пока не подтверждена' in template
+    assert 'Доступ можно перепроверить вручную; права и условия метода уточните в кабинете Ozon или у поддержки.' in template
+    assert 'После изменения прав или тарифа' not in template
+    assert 'Premium Plus' not in template
+    assert 'может требоваться Premium' not in template
+
+
 def test_late_and_foreign_response_never_replace_current_rows():
     run(r'''
 const {page,options}=make(),requests=[];global.fetch=(url,opts)=>new Promise(resolve=>requests.push({url,opts,resolve}));

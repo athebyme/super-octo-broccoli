@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Draft HTTP APIs preserve tenant, strict JSON, flag and CSRF boundaries."""
 
+from datetime import datetime
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
@@ -12,6 +14,7 @@ from flask_wtf.csrf import CSRFProtect
 from models import (
     ImportedProduct,
     Marketplace,
+    MarketplaceOperation,
     MarketplaceProductDraft,
     Seller,
     SellerMarketplaceAccount,
@@ -189,6 +192,61 @@ class MarketplaceDraftRoutesTest(unittest.TestCase):
         self.assertEqual(duplicate.status_code, 400)
         self.assertEqual(html.status_code, 200)
         self.assertEqual(render.call_args.args[0], 'marketplace_draft_detail.html')
+
+    def test_editor_get_recomputes_legacy_ready_without_persisting_or_network(self):
+        with self.app.app_context():
+            draft = db.session.get(MarketplaceProductDraft, self.own_id)
+            draft.status = 'ready'
+            draft.validation_status = 'valid'
+            draft.validated_at = datetime(2026, 7, 25, 12, 0, 0)
+            draft.validation_result_json = json.dumps({
+                'version': 1, 'marketplace': 'ozon', 'publishable': True,
+                'errors': [], 'warnings': [], 'validated_at': '2026-07-25T12:00:00',
+            })
+            draft.dimensions_json = json.dumps({})
+            draft.commercial_json = json.dumps({
+                'price': '1000', 'currency_code': 'RUB',
+            })
+            db.session.commit()
+            saved = {
+                'status': draft.status,
+                'validation_status': draft.validation_status,
+                'validation_result_json': draft.validation_result_json,
+                'validated_at': draft.validated_at,
+                'dimensions_json': draft.dimensions_json,
+                'commercial_json': draft.commercial_json,
+                'version': draft.version,
+            }
+
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with patch('requests.sessions.Session.request', side_effect=AssertionError('No network')):
+            with user_patch, login_patch:
+                response = self.client.get(f'/marketplaces/drafts/{self.own_id}/editor')
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        document = response.get_json()
+        current = document['current_validation']
+        codes = {issue['code'] for issue in current['errors']}
+        self.assertFalse(current['publishable'])
+        self.assertIn('physical_fact_required', codes)
+        self.assertIn('vat_required', codes)
+        self.assertEqual(document['draft']['status'], 'ready')
+        self.assertEqual(document['draft']['validation_status'], 'valid')
+        self.assertTrue(document['draft']['validation']['publishable'])
+        self.assertEqual(document['operations'], [])
+
+        with self.app.app_context():
+            persisted = db.session.get(MarketplaceProductDraft, self.own_id)
+            self.assertEqual(persisted.status, saved['status'])
+            self.assertEqual(persisted.validation_status, saved['validation_status'])
+            self.assertEqual(persisted.validation_result_json, saved['validation_result_json'])
+            self.assertEqual(persisted.validated_at, saved['validated_at'])
+            self.assertEqual(persisted.dimensions_json, saved['dimensions_json'])
+            self.assertEqual(persisted.commercial_json, saved['commercial_json'])
+            self.assertEqual(persisted.version, saved['version'])
+            self.assertEqual(MarketplaceOperation.query.filter_by(
+                seller_id=self.seller1_id,
+            ).count(), 0)
 
     def test_classic_form_returns_to_classic_editor_after_saving(self):
         with self.app.app_context():

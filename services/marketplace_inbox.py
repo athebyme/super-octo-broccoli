@@ -227,8 +227,8 @@ class MarketplaceInboxService:
         if required_capability not in account.capabilities:
             label = "отзывам" if source_kind == "review" else "вопросам"
             raise MarketplaceInboxConfigurationError(
-                f"API key не подтвердил доступ к {label} Ozon. "
-                "Перепроверьте кабинет; для этих методов может требоваться Premium Plus"
+                f"В правах API key нет подтверждения доступа к {label} Ozon. "
+                "Проверьте доступ к этому методу в кабинете Ozon или уточните его у поддержки."
             )
         return account
 
@@ -652,9 +652,8 @@ class MarketplaceInboxService:
     def _safe_error(cls, exc: Exception) -> Tuple[str, str]:
         if cls._is_provider_access_denied(exc):
             return cls.ACCESS_DENIED_ERROR_CODE, (
-                "Ozon не подтвердил доступ к этому разделу для текущей "
-                "подписки. Автоматические попытки приостановлены на 24 часа; "
-                "после изменения подписки доступ можно перепроверить вручную."
+                "Ozon отклонил запрос к этому разделу. Причина отказа пока не подтверждена. "
+                "Автоматические попытки приостановлены на 24 часа; доступ можно проверить вручную."
             )
         if isinstance(exc, OzonAPIError):
             return str(exc.code or "ozon_inbox_error")[:100], str(exc)[:1000]

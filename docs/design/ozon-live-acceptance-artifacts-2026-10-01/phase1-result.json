@@ -1,0 +1,97 @@
+{
+  "exit_code": 2,
+  "summary": {
+    "completed_endpoints": [
+      "roles",
+      "product_list",
+      "product_info_list",
+      "product_attributes",
+      "product_prices",
+      "product_stocks",
+      "warehouses"
+    ],
+    "endpoint_results": {
+      "product_attributes": {
+        "complete": true,
+        "exact_match": true,
+        "http_status": 200,
+        "offer_echo_present": true,
+        "row_count": 1,
+        "sku_echo_present": true,
+        "status": "ok"
+      },
+      "product_info_list": {
+        "complete": true,
+        "exact_match": true,
+        "http_status": 200,
+        "offer_echo_present": true,
+        "row_count": 1,
+        "sku_echo_present": true,
+        "status": "ok"
+      },
+      "product_list": {
+        "complete": true,
+        "exact_match": true,
+        "http_status": 200,
+        "offer_echo_present": true,
+        "row_count": 1,
+        "sku_echo_present": true,
+        "status": "ok"
+      },
+      "product_prices": {
+        "complete": true,
+        "exact_match": true,
+        "http_status": 200,
+        "offer_echo_present": true,
+        "row_count": 1,
+        "sku_echo_present": false,
+        "status": "ok"
+      },
+      "product_stocks": {
+        "complete": true,
+        "exact_match": true,
+        "http_status": 200,
+        "offer_echo_present": true,
+        "row_count": 1,
+        "sku_echo_present": false,
+        "status": "ok"
+      },
+      "roles": {
+        "grants": {
+          "product_attributes": true,
+          "product_info_list": true,
+          "product_list": true,
+          "product_prices": true,
+          "product_stocks": true,
+          "warehouses": true
+        },
+        "http_status": 200,
+        "role_count": 42,
+        "status": "ok"
+      },
+      "warehouses": {
+        "complete": true,
+        "has_next": false,
+        "http_status": 200,
+        "row_count": 2,
+        "status": "ok"
+      }
+    },
+    "failure": null,
+    "max_phase_start_seconds": 45.0,
+    "max_physical_http_attempts": 7,
+    "normalizer_contracts_used": [
+      "MarketplaceListingService response normalizers",
+      "OzonWarehouseContract.normalize_page"
+    ],
+    "phase": "ozon_read_phase1",
+    "physical_http_attempts": 7,
+    "production_domain_parser_acceptance_proven": false,
+    "read_retries": 0,
+    "redirects": false,
+    "request_invocations": 7,
+    "response_byte_limit": 1048576,
+    "status": "complete_with_restrictions",
+    "trust_env": false
+  }
+}

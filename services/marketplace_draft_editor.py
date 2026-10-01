@@ -86,6 +86,13 @@ class MarketplaceDraftEditor:
         operations = MarketplacePublicationService.list_for_draft(
             seller_id=seller_id, draft_id=draft.id, limit=20,
         )
+        # Keep the persisted validation as history on ``draft``. The editor
+        # also needs a current, read-only result so an old ready snapshot cannot
+        # make newly missing local fields look publishable. This validator is
+        # local-only: it performs no provider, AI, or persistence work.
+        current_validation = MarketplaceDraftService._build_validation_result(
+            draft
+        )
         active = next((op.id for op in operations
                        if op.status in MarketplacePublicationService.ACTIVE_STATUSES), None)
         suggestions = []
@@ -109,6 +116,7 @@ class MarketplaceDraftEditor:
             'readiness': MarketplaceDraftService.mapping_readiness(
                 seller_id=seller_id, draft_id=draft.id,
             ),
+            'current_validation': current_validation,
             'operations': [op.to_public_dict(detail=False) for op in operations],
             'active_operation_id': active,
             'write_quarantine': hold_document(draft_hold(draft)),

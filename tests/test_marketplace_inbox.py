@@ -404,9 +404,13 @@ class MarketplaceInboxServiceTest(unittest.TestCase):
         db.session.commit()
         adapter = SyntheticInboxAdapter()
 
-        with self.assertRaises(MarketplaceInboxConfigurationError):
+        with self.assertRaises(MarketplaceInboxConfigurationError) as raised:
             self._sync(adapter)
 
+        self.assertIn("отзывам Ozon", str(raised.exception))
+        self.assertIn("Проверьте доступ к этому методу", str(raised.exception))
+        self.assertNotIn("Premium", str(raised.exception))
+        self.assertNotIn("подписк", str(raised.exception).casefold())
         self.assertEqual(adapter.calls, [])
         self.assertEqual(MarketplaceInboxSync.query.count(), 0)
 
@@ -427,12 +431,17 @@ class MarketplaceInboxServiceTest(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 403)
         self.assertEqual(raised.exception.code, "ozon_inbox_access_denied")
         self.assertNotIn("synthetic subscription denial", str(raised.exception))
+        self.assertIn("Причина отказа пока не подтверждена", str(raised.exception))
+        self.assertIn("вручную", str(raised.exception))
+        self.assertNotIn("подписк", str(raised.exception).casefold())
         run = MarketplaceInboxSync.query.one()
         self.assertEqual(run.status, "failed")
         self.assertEqual(
             run.error_code,
             MarketplaceInboxService.ACCESS_DENIED_ERROR_CODE,
         )
+        self.assertIn("Причина отказа пока не подтверждена", run.error_message)
+        self.assertNotIn("подписк", run.error_message.casefold())
         self.assertNotIn("synthetic subscription denial", run.error_message)
         self.assertEqual(
             MarketplaceInboxService.access_denied_retry_after(
@@ -451,6 +460,44 @@ class MarketplaceInboxServiceTest(unittest.TestCase):
                 now=now + MarketplaceInboxService.ACCESS_DENIED_COOLDOWN,
             )
         )
+
+    def test_generic_http_auth_errors_are_not_mapped_to_code7_access_denial(self):
+        class AuthErrorInboxAdapter(SyntheticInboxAdapter):
+            def __init__(self, status_code):
+                super().__init__()
+                self.status_code = status_code
+
+            def read_reviews(self, credentials, payload):
+                self.calls.append(("review", payload))
+                raise OzonAPIError(
+                    "synthetic authentication failure",
+                    code="ozon_auth_error",
+                    status_code=self.status_code,
+                    retriable=False,
+                )
+
+        now = datetime(2026, 7, 15, 12, 0, 0)
+        for status_code in (401, 403):
+            with self.subTest(status_code=status_code):
+                with self.assertRaises(MarketplaceInboxProtocolError):
+                    self._sync(AuthErrorInboxAdapter(status_code), now=now)
+
+                run = MarketplaceInboxSync.query.order_by(
+                    MarketplaceInboxSync.id.desc()
+                ).first()
+                self.assertEqual(run.error_code, "ozon_auth_error")
+                self.assertNotEqual(
+                    run.error_code,
+                    MarketplaceInboxService.ACCESS_DENIED_ERROR_CODE,
+                )
+                self.assertIsNone(
+                    MarketplaceInboxService.access_denied_retry_after(
+                        seller_id=self.seller.id,
+                        account_id=self.account.id,
+                        source_kind="review",
+                        now=now,
+                    )
+                )
 
     def test_completed_sweep_removes_customer_text_older_than_retention_window(self):
         expired = MarketplaceInboxItem(

@@ -11,7 +11,7 @@ global.document={getElementById:()=>null};vm.runInThisContext(fs.readFileSync('.
 const saved=new Map();global.sessionStorage={getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)};
 require('./static/ozon-drafts-vue.js');
 const account=id=>({id,label:'Магазин '+id,can_publish:true});
-const row=(id,account_id=1)=>({id,account_id,version:3,status:'ready',title:'Товар '+id,validation_summary:{publishable:true}});
+const row=(id,account_id=1)=>({id,account_id,version:3,status:'ready',validation_status:'valid',validated_at:'2026-07-25T12:00:00',title:'Товар '+id,validation_summary:{publishable:true}});
 const config={enabled:true,publicationEnabled:true,accounts:[account(1),account(2)],rows:[row(1),{...row(2),published_listing_id:42},row(3,2)],filters:{account_id:2},sourceSearch:{items:[]},urls:{sources:'/sources',create:'/create',review:'/review',editorBase:'/editor/',runBase:'/runs/'},csrf:'synthetic'};
 const definition=ozonDraftsVue.createOptions(config);const page=definition.data();
 for(const [key,value]of Object.entries(definition.methods))page[key]=value.bind(page);
@@ -39,6 +39,21 @@ page.clearSelection();assert.equal(page.selectedAccountId,null);page.toggleRow(p
 assert.equal(page.imageUrl({id:7,primary_image:'javascript:alert(1)'}),'');assert.equal(page.imageUrl({id:7,primary_image:'//evil.test/image'}),'');
 assert.equal(page.imageUrl({id:7,primary_image:'/api/photos/imported-product/13/0'}),'/api/photos/imported-product/13/0');
 ''')
+
+
+def test_ready_list_rows_are_labeled_as_saved_history_with_a_fresh_review_step():
+    run_node(r'''
+const savedReady={...row(12),validation_summary:{publishable:true,error_count:0}};
+assert.equal(page.stateLabel(savedReady),'Готово по сохранённым данным');
+assert.equal(page.stateTone(savedReady),'muted');
+assert.equal(page.validationLabel(savedReady),'Проверка сохранена 25.07.2026');
+assert.equal(page.eligible(savedReady),true,'selection remains preliminary and review owns current validation');
+const missingDate={...savedReady,validated_at:null};assert.equal(page.validationLabel(missingDate),'Проверка сохранена');
+''')
+    template = (ROOT/'templates/marketplace_drafts.html').read_text()
+    assert "('ready','Сохранённый статус готовности')" in template
+    assert 'Проверьте текущие поля перед отправкой.' in template
+    assert "'Открыть карточку для проверки →'" in template
 
 
 def test_bulk_selection_crosses_pages_and_navigates_to_read_only_review():

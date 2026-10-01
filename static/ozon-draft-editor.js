@@ -133,10 +133,15 @@
                 dirty() { return !!this.form && !equal(serialize(this.form), this.original); },
                 locked() { return !config.enabled || !!this.busy || this.conflict || this.uncertain || !this.draft || this.draft.status === 'archived' || !!this.data.active_operation_id; },
                 schemaFresh() { return !!this.data?.readiness?.schema?.fresh; },
-                canPublish() { return !this.locked && !this.dirty && !this.data?.write_quarantine && config.publicationEnabled && this.draft.status === 'ready' && this.draft.validation_status === 'valid' && this.draft.validation?.publishable && this.data.readiness.overall === 'ready' && !this.data.baseline_error; },
+                currentValidationAvailable() {
+                    const result = this.data?.current_validation;
+                    return !!result && typeof result === 'object' &&
+                        typeof result.publishable === 'boolean' && Array.isArray(result.errors);
+                },
+                canPublish() { return !this.locked && !this.dirty && !this.data?.write_quarantine && config.publicationEnabled && this.currentValidationAvailable && this.data.current_validation.publishable && this.draft.status === 'ready' && this.draft.validation_status === 'valid' && this.data.readiness.overall === 'ready' && !this.data.baseline_error; },
                 quarantineUrl() { const url = this.data?.write_quarantine?.review_url; return typeof url === 'string' && /^\/marketplaces\/operations\/[1-9]\d*\/review$/.test(url) ? url : null; },
-                errors() { return this.draft?.validation?.errors || []; },
-                warnings() { return this.draft?.validation?.warnings || []; },
+                errors() { return !this.dirty && this.currentValidationAvailable && Array.isArray(this.data.current_validation.errors) ? this.data.current_validation.errors : []; },
+                warnings() { return !this.dirty && this.currentValidationAvailable && Array.isArray(this.data.current_validation.warnings) ? this.data.current_validation.warnings : []; },
                 photos() { return this.form ? [this.form.media.primary_image, ...(this.form.media.images || [])].filter((url, i, all) => safeImage(url) && all.indexOf(url) === i) : []; },
                 preservedPhotos() { const media = this.data?.preserved_media || {}; return [media.primary_image, ...(media.images || [])].filter(Boolean); },
                 hero() { const photo = this.photos[this.photoIndex] || this.photos[0]; return this.failedImages.includes(photo) ? '' : photo; },
@@ -183,9 +188,30 @@
                 statusLabel() {
                     if (this.dirty) return 'Есть несохранённые изменения';
                     if (this.activeOperationNotice) return this.activeOperationNotice.label;
+                    if (this.draft?.status === 'published') return 'Опубликован';
+                    if (this.draft?.status === 'archived') return 'Архив';
+                    if (!this.currentValidationAvailable) return 'Текущая проверка не подтверждена';
+                    if (!this.data.current_validation.publishable) {
+                        const errors = this.errors;
+                        const packageMissing = errors.some(issue =>
+                            ['physical_fact_required', 'dimension_unit_required', 'weight_unit_required'].includes(issue.code) &&
+                            String(issue.field || '').startsWith('dimensions.')
+                        );
+                        const vatMissing = errors.some(issue => issue.code === 'vat_required');
+                        if (packageMissing && vatMissing) return 'Заполните упаковку и выберите ставку НДС';
+                        if (packageMissing) return 'Укажите габариты и вес упаковки';
+                        if (vatMissing) return 'Выберите ставку НДС';
+                    }
                     const readinessLabel = {source_stale:'Обновите исходные сведения',references_stale:'Требования Ozon обновляются',needs_attributes:'Заполните обязательные поля',account_blocked:'Проверьте подключение магазина'}[this.data?.readiness?.overall];
                     if (readinessLabel && this.draft?.status !== 'archived') return readinessLabel;
-                    return {needs_category:'Нужна категория', draft:'На подготовке', ready:'Готов к отправке', published:'Опубликован', blocked:'Нужны исправления', archived:'Архив'}[this.draft?.status] || 'Черновик';
+                    if (!this.data.current_validation.publishable) return 'Исправьте замечания текущей проверки';
+                    if (this.draft.status !== 'ready' || this.draft.validation_status !== 'valid') return 'Сохраните результат текущей проверки';
+                    return {needs_category:'Нужна категория', draft:'На подготовке', ready:'Текущая проверка пройдена', published:'Опубликован', blocked:'Нужны исправления', archived:'Архив'}[this.draft?.status] || 'Черновик';
+                },
+                validationDate(value) {
+                    if (typeof value !== 'string') return '';
+                    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+                    return match ? match[3] + '.' + match[2] + '.' + match[1] : '';
                 },
                 categoryLabel() { return [this.draft?.category_path, this.draft?.product_type_name].filter(Boolean).join(' / ') || 'Выберите категорию Ozon'; },
                 linkedCategory() { return this.data?.linked_category || {mode:this.draft?.published_listing_id ? 'unavailable' : 'new'}; },

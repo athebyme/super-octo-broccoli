@@ -1,0 +1,169 @@
+{
+  "exit_code": 2,
+  "result": {
+    "active_quarantine_at_selection": false,
+    "completed_endpoints": [
+      "roles"
+    ],
+    "endpoint_results": {
+      "product_import_status": {
+        "code": "ozon_request_rejected",
+        "exception_class": "OzonAPIError",
+        "http_status": 404,
+        "status": "failed"
+      },
+      "roles": {
+        "grant_category_counts": {
+          "finance": 3,
+          "fulfillment": 5,
+          "inbox": 2,
+          "publication": 6,
+          "readback": 8
+        },
+        "grant_facts": {
+          "finance": {
+            "finance_accrual_by_day": {
+              "granted": true,
+              "path": "/v1/finance/accrual/by-day"
+            },
+            "finance_accrual_postings": {
+              "granted": true,
+              "path": "/v1/finance/accrual/postings"
+            },
+            "finance_accrual_types": {
+              "granted": true,
+              "path": "/v1/finance/accrual/types"
+            }
+          },
+          "fulfillment": {
+            "conditional_cancellation_list": {
+              "granted": true,
+              "path": "/v2/conditional-cancellation/list"
+            },
+            "posting_fbo_list": {
+              "granted": true,
+              "path": "/v3/posting/fbo/list"
+            },
+            "posting_fbs_list": {
+              "granted": true,
+              "path": "/v4/posting/fbs/list"
+            },
+            "returns_list": {
+              "granted": true,
+              "path": "/v1/returns/list"
+            },
+            "returns_rfbs_list": {
+              "granted": true,
+              "path": "/v2/returns/rfbs/list"
+            }
+          },
+          "inbox": {
+            "question_list": {
+              "granted": true,
+              "path": "/v1/question/list"
+            },
+            "review_list": {
+              "granted": true,
+              "path": "/v2/review/list"
+            }
+          },
+          "publication": {
+            "product_archive": {
+              "granted": true,
+              "path": "/v1/product/archive"
+            },
+            "product_import": {
+              "granted": true,
+              "path": "/v3/product/import"
+            },
+            "product_pictures_import": {
+              "granted": true,
+              "path": "/v1/product/pictures/import"
+            },
+            "product_prices_update": {
+              "granted": true,
+              "path": "/v1/product/import/prices"
+            },
+            "product_stocks_update": {
+              "granted": true,
+              "path": "/v2/products/stocks"
+            },
+            "product_unarchive": {
+              "granted": true,
+              "path": "/v1/product/unarchive"
+            }
+          },
+          "readback": {
+            "product_attributes": {
+              "granted": true,
+              "path": "/v4/product/info/attributes"
+            },
+            "product_import_status": {
+              "granted": true,
+              "path": "/v1/product/import/info"
+            },
+            "product_info_list": {
+              "granted": true,
+              "path": "/v3/product/info/list"
+            },
+            "product_list": {
+              "granted": true,
+              "path": "/v3/product/list"
+            },
+            "product_pictures_info": {
+              "granted": true,
+              "path": "/v2/product/pictures/info"
+            },
+            "product_prices": {
+              "granted": true,
+              "path": "/v5/product/info/prices"
+            },
+            "product_stocks": {
+              "granted": true,
+              "path": "/v4/product/info/stocks"
+            },
+            "warehouses": {
+              "granted": true,
+              "path": "/v2/warehouse/list"
+            }
+          }
+        },
+        "http_status": 200,
+        "owner_key_expiry": {
+          "expired": false,
+          "observed": true
+        },
+        "role_count": 42,
+        "status": "ok",
+        "task_status_grant": true
+      }
+    },
+    "failure": {
+      "code": "ozon_request_rejected",
+      "endpoint": "product_import_status",
+      "exception_class": "OzonAPIError",
+      "http_status": 404
+    },
+    "llm_calls": 0,
+    "max_phase_start_seconds": 45.0,
+    "max_physical_http_attempts": 2,
+    "operation_or_hold_mutation_performed": false,
+    "phase": "ozon_read_phase2",
+    "physical_http_attempts": 2,
+    "production_task_status_normalizer_used": false,
+    "production_task_status_persistence_proven": false,
+    "provider_writes": 0,
+    "read_retries": 0,
+    "redirects": false,
+    "request_invocations": 2,
+    "response_byte_limit": 1048576,
+    "saved_account_credential_expiry": {
+      "applies_to": "stored_account_credential_only",
+      "expired": false,
+      "observed": true
+    },
+    "status": "partial_failed",
+    "trust_env": false
+  },
+  "stderr_bytes": 0
+}

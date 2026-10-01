@@ -211,12 +211,68 @@ def configure_fixture():
             }, ensure_ascii=False),
             photo_urls=json.dumps([photo_url]),
         )
-        db.session.add(new_source)
+        stale_source = ImportedProduct(
+            seller_id=fixture["seller_id"],
+            external_id="journey-stale-ready-source",
+            external_vendor_code="journey-stale-ready-offer",
+            source_type="synthetic",
+            title="Карточка с устаревшей проверкой",
+            description="Синтетическая карточка для проверки текущей готовности.",
+            category="Посуда",
+            original_data=json.dumps({
+                "title": "Карточка с устаревшей проверкой",
+                "description": "Синтетическая карточка для проверки текущей готовности.",
+            }, ensure_ascii=False),
+            photo_urls=json.dumps([photo_url]),
+        )
+        db.session.add_all([new_source, stale_source])
+        db.session.flush()
+        stale_draft = MarketplaceDraftService.create_draft(
+            seller_id=fixture["seller_id"],
+            account_id=account_id,
+            imported_product_id=stale_source.id,
+            product_type_id=product_type.id,
+        )
+        stale_draft.content_json = json.dumps({
+            "name": stale_source.title,
+            "description": stale_source.description,
+        }, ensure_ascii=False)
+        stale_draft.media_json = json.dumps({
+            "primary_image": photo_url,
+            "images": [],
+        }, ensure_ascii=False)
+        stale_draft.dimensions_json = "{}"
+        stale_draft.commercial_json = json.dumps({
+            "price": "1000",
+            "currency_code": "RUB",
+        })
+        stale_draft.barcodes_json = "[]"
+        stale_draft.status = "ready"
+        stale_draft.validation_status = "valid"
+        stale_draft.validation_result_json = json.dumps({
+            "version": 1,
+            "marketplace": "ozon",
+            "publishable": True,
+            "errors": [],
+            "warnings": [],
+            "validated_at": "2026-07-25T12:00:00",
+        })
+        stale_draft.validated_at = datetime(2026, 7, 25, 12, 0, 0)
         db.session.commit()
-        return foreign_draft.id, new_source.id, product_type.id
+        current = MarketplaceDraftService._build_validation_result(stale_draft)
+        current_fields = {item["field"] for item in current["errors"]}
+        current_codes = {item["code"] for item in current["errors"]}
+        assert current["publishable"] is False
+        assert current_fields >= {
+            "dimensions.width", "dimensions.height", "dimensions.depth",
+            "dimensions.weight", "dimensions.dimension_unit", "dimensions.weight_unit",
+            "commercial.vat",
+        }, current
+        assert current_codes >= {"physical_fact_required", "vat_required"}, current
+        return foreign_draft.id, new_source.id, product_type.id, stale_draft.id
 
 
-foreign_draft_id, source_id, product_type_id = configure_fixture()
+foreign_draft_id, source_id, product_type_id, stale_ready_draft_id = configure_fixture()
 
 
 class SyntheticRegistry:
@@ -394,6 +450,71 @@ def layout(page, name):
     page.evaluate("document.documentElement.dataset.theme = 'light'")
 
 
+def stale_ready_layout(page):
+    """Reuse the journey layout check and add 320px/200% text coverage."""
+    layout(page, "stale-ready-editor")  # 390 and desktop at both themes
+    send_button = page.locator(".ode-savebar button.sh-btn--primary")
+    for theme in ("light", "dark"):
+        page.set_viewport_size({"width": 320, "height": 980})
+        page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+        page.wait_for_function("document.fonts.status === 'loaded'")
+        page.wait_for_function(
+            "!document.querySelector('.main-content')?.getAnimations().some(a => a.playState === 'running')",
+            timeout=3000,
+        )
+        metrics = page.evaluate("""() => ({
+            viewport:innerWidth, page:document.documentElement.scrollWidth,
+            theme:document.documentElement.dataset.theme,
+            status:document.querySelector('.ode-status')?.innerText || '',
+            issueRows:document.querySelectorAll('.ode-issues--actionable li').length,
+        })""")
+        assert metrics["theme"] == theme and metrics["page"] <= 321, ("stale_ready_320_geometry", metrics)
+        assert metrics["issueRows"] >= 5 and "ндс" in metrics["status"].lower(), metrics
+        assert send_button.is_disabled(), ("stale_ready_320_send_enabled", theme)
+        report["layouts"].append({
+            "name": "stale-ready-editor", "width": 320, "theme": theme, "text_scale": 100,
+        })
+        page.screenshot(path=str(OUT / f"stale-ready-{theme}-320.png"), animations="disabled")
+
+    for width in (320, 390, 1440):
+        for theme in ("light", "dark"):
+            page.set_viewport_size({"width": width, "height": 980})
+            page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+            scaled = page.locator("#ozon-draft-editor").evaluate("""async root => {
+                const nodes = Array.from(root.querySelectorAll('*')).filter(element =>
+                    Array.from(element.childNodes).some(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim())
+                );
+                const saved = nodes.map(element => ({element, value:element.style.getPropertyValue('font-size'),
+                    priority:element.style.getPropertyPriority('font-size'), size:parseFloat(getComputedStyle(element).fontSize)}));
+                const status = root.querySelector('.ode-status'), before = parseFloat(getComputedStyle(status).fontSize);
+                const settle = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                let result;
+                try {
+                    saved.forEach(({element, size}) => element.style.setProperty('font-size', `${size * 2}px`, 'important'));
+                    await settle();
+                    result = {count:nodes.length, before, after:parseFloat(getComputedStyle(status).fontSize),
+                        page:document.documentElement.scrollWidth};
+                } finally {
+                    saved.forEach(({element, value, priority}) => value
+                        ? element.style.setProperty('font-size', value, priority)
+                        : element.style.removeProperty('font-size'));
+                    await settle();
+                }
+                result.restored = saved.every(({element, value, priority}) =>
+                    element.style.getPropertyValue('font-size') === value && element.style.getPropertyPriority('font-size') === priority);
+                return result;
+            }""")
+            ratio = scaled["after"] / scaled["before"] if scaled["before"] else 0
+            assert scaled["count"] and 1.99 <= ratio <= 2.01 and scaled["restored"], (width, theme, scaled)
+            assert scaled["page"] <= width + 1, ("stale_ready_text_200_overflow", width, theme, scaled)
+            assert send_button.is_disabled(), ("stale_ready_text_200_send_enabled", width, theme)
+            report["layouts"].append({
+                "name": "stale-ready-editor-text-200", "width": width, "theme": theme, "text_scale": 200,
+            })
+    page.set_viewport_size({"width": 1440, "height": 980})
+    page.evaluate("document.documentElement.dataset.theme = 'light'")
+
+
 def api_call_from_page(page, path, method="GET", body=None, csrf=None):
     return page.evaluate(
         """async ({path,method,body,csrf}) => {
@@ -408,6 +529,108 @@ def api_call_from_page(page, path, method="GET", body=None, csrf=None):
         }""",
         {"path": path, "method": method, "body": body, "csrf": csrf},
     )
+
+
+def stale_ready_editor_check(page):
+    assert provider.physical_writes == 0 and not provider.full_read_calls
+    page.goto(base + f"/marketplaces/drafts/{stale_ready_draft_id}")
+    page.locator("#ozon-draft-editor:not([v-cloak])").wait_for()
+    page.locator(".ode-status").wait_for()
+    config = bootstrap(page, "#ode-bootstrap")
+    editor_response = api_call_from_page(page, config["urls"]["editor"])
+    assert editor_response["status"] == 200, editor_response
+    document = editor_response["document"]
+    assert document["draft"]["status"] == "ready", document["draft"]
+    assert document["draft"]["validation_status"] == "valid", document["draft"]
+    assert document["draft"]["validation"]["publishable"] is True, document["draft"]
+    assert document["draft"]["validated_at"].startswith("2026-07-25"), document["draft"]
+    assert document["readiness"]["overall"] == "ready", document["readiness"]
+    assert not document["baseline_error"], document["baseline_error"]
+    current = document["current_validation"]
+    current_codes = {item["code"] for item in current["errors"]}
+    current_fields = {item["field"] for item in current["errors"]}
+    assert current["publishable"] is False, current
+    assert "vat_required" in current_codes, current
+    assert {
+        "dimensions.width", "dimensions.height", "dimensions.depth",
+        "dimensions.weight", "dimensions.dimension_unit", "dimensions.weight_unit",
+    } <= current_fields, current
+
+    send_button = page.locator(".ode-savebar button.sh-btn--primary")
+    assert send_button.count() == 1 and send_button.is_disabled()
+    status = page.locator(".ode-status").inner_text().lower()
+    assert "упаковку" in status and "ндс" in status, status
+    issue_rows = page.locator(".ode-issues--actionable li")
+    assert issue_rows.count() >= 7
+    assert "НДС" in issue_rows.all_inner_texts()[-1] or any(
+        "НДС" in text for text in issue_rows.all_inner_texts()
+    ), issue_rows.all_inner_texts()
+    history_note = page.locator(".ode-readiness > p.ode-caption")
+    assert history_note.count() == 1, history_note.count()
+    history_text = history_note.inner_text()
+    assert "Последняя сохранённая проверка: 25.07.2026" in history_text, history_text
+    assert "Результат выше рассчитан по текущим полям." in history_text, history_text
+    current_warning = page.locator("#ode-validation > p.ode-message--warning")
+    assert current_warning.count() == 1, current_warning.count()
+    assert "Текущая проверка нашла" in current_warning.inner_text(), current_warning.inner_text()
+    assert page.locator("#ode-validation p.ode-message--success").count() == 0
+    stale_ready_layout(page)
+
+    focus_cases = (
+        ("Ширина упаковки", "ode-width"),
+        ("Выберите ставку НДС", "ode-vat"),
+    )
+    for issue_text, target_id in focus_cases:
+        row = page.locator(".ode-issues--actionable li").filter(has_text=issue_text)
+        assert row.count() == 1, (issue_text, row.count())
+        row.get_by_role(
+            "button",
+            name=re.compile(r"Перейти к полю: " + re.escape(issue_text)),
+        ).click()
+        page.wait_for_function(
+            "target => document.activeElement?.id === target",
+            arg=target_id,
+        )
+        assert page.evaluate("() => document.activeElement?.id") == target_id
+    assert page.locator(".ode-tabs button[aria-current='page']").inner_text() == "Цена и упаковка"
+
+    page.locator("#ode-width").fill("100")
+    assert page.locator(".ode-savebar strong").inner_text() == "Изменения не сохранены"
+    assert send_button.is_disabled(), "a dirty stale-ready form must keep send disabled"
+    save_button = page.locator(".ode-savebar button").filter(has_text="Сохранить")
+    assert save_button.count() == 1 and save_button.is_enabled()
+    save_button.click()
+    page.get_by_text(
+        "Изменения сохранены. Теперь проверьте карточку перед отправкой.",
+        exact=True,
+    ).wait_for()
+    assert page.locator("#ode-width").input_value() == "100"
+    assert send_button.is_disabled(), "local save must not turn a stale draft into a sendable draft"
+    assert page.locator(".ode-issues--actionable li").count() >= 6
+    saved_response = api_call_from_page(page, config["urls"]["editor"])
+    assert saved_response["status"] == 200, saved_response
+    saved_document = saved_response["document"]
+    assert saved_document["documents"]["dimensions"]["width"] == "100"
+    assert saved_document["current_validation"]["publishable"] is False
+    assert saved_document["draft"]["status"] != "ready"
+    assert send_button.is_disabled()
+    assert provider.physical_writes == 0 and not provider.full_read_calls
+    report["stale_ready_editor"] = {
+        "stored_status_before_repair": "ready",
+        "stored_validation_publishable_before_repair": True,
+        "current_validation_publishable_before_repair": False,
+        "current_error_codes_before_repair": sorted(current_codes),
+        "historical_validation_date_visible": "25.07.2026",
+        "send_enabled_before_repair": False,
+        "send_enabled_after_local_save": False,
+        "local_save_preserved_value": "100",
+        "provider_writes": provider.physical_writes,
+        "provider_readbacks": len(provider.full_read_calls),
+    }
+    passed("legacy_ready_snapshot_is_historical_and_current_errors_gate_send")
+    passed("current_error_links_focus_fields_and_dirty_local_save_stays_blocked")
+    page.goto(base + "/marketplaces/drafts/?account_id=" + str(account_id))
+    page.locator("#ozon-drafts-list:not([v-cloak])").wait_for()
 
 
 def seed_branch_counts():
@@ -500,6 +723,7 @@ try:
             list_config = bootstrap(page, "#odl-bootstrap")
             page.locator("#ozon-drafts-list:not([v-cloak])").wait_for()
             passed("real_login_and_draft_workspace")
+            stale_ready_editor_check(page)
 
             csrf = list_config["csrf"]
             prepared = post_json(page, "/marketplaces/ozon/uploads/", {

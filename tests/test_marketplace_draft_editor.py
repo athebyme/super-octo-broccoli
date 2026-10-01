@@ -1,5 +1,5 @@
 """Exact local editor reads and preservation of draft/publication boundaries."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import shutil
@@ -38,6 +38,65 @@ def test_editor_reads_exact_scope_without_provider_and_preserves_documents(draft
         assert doc['baseline_attribute_identities'] == []
         with pytest.raises(MarketplaceDraftNotFound):
             MarketplaceDraftEditor.document(seller_id=f.seller2_id, draft_id=f.draft.id)
+
+
+def test_current_validation_blocks_legacy_ready_and_preserves_saved_history(draft_fixture):
+    f = draft_fixture
+    f.draft.status = 'ready'
+    f.draft.validation_status = 'valid'
+    f.draft.validated_at = datetime(2026, 7, 25, 12, 0, 0)
+    f.draft.validation_result_json = json.dumps({
+        'version': 1, 'marketplace': 'ozon', 'publishable': True,
+        'errors': [], 'warnings': [], 'validated_at': '2026-07-25T12:00:00',
+    })
+    f.draft.dimensions_json = json.dumps({})
+    f.draft.commercial_json = json.dumps({
+        'price': '1000', 'currency_code': 'RUB',
+    })
+    db.session.commit()
+    draft_id = f.draft.id
+    stored_before = {
+        'status': f.draft.status,
+        'validation_status': f.draft.validation_status,
+        'validation_result_json': f.draft.validation_result_json,
+        'validated_at': f.draft.validated_at,
+        'dimensions_json': f.draft.dimensions_json,
+        'commercial_json': f.draft.commercial_json,
+        'version': f.draft.version,
+    }
+
+    with patch('requests.sessions.Session.request', side_effect=AssertionError('No network')):
+        document = MarketplaceDraftEditor.document(
+            seller_id=f.seller1_id, draft_id=draft_id,
+        )
+
+    current = document['current_validation']
+    current_codes = {item['code'] for item in current['errors']}
+    current_fields = {
+        item['field'] for item in current['errors']
+        if item['code'] == 'physical_fact_required'
+    }
+    assert not current['publishable']
+    assert 'vat_required' in current_codes
+    assert current_fields >= {
+        'dimensions.width', 'dimensions.height',
+        'dimensions.depth', 'dimensions.weight',
+    }
+    assert document['draft']['status'] == 'ready'
+    assert document['draft']['validation_status'] == 'valid'
+    assert document['draft']['validation']['publishable'] is True
+    assert document['draft']['validated_at'].startswith('2026-07-25')
+    assert document['operations'] == []
+
+    db.session.expire_all()
+    persisted = db.session.get(type(f.draft), draft_id)
+    assert persisted.status == stored_before['status']
+    assert persisted.validation_status == stored_before['validation_status']
+    assert persisted.validation_result_json == stored_before['validation_result_json']
+    assert persisted.validated_at == stored_before['validated_at']
+    assert persisted.dimensions_json == stored_before['dimensions_json']
+    assert persisted.commercial_json == stored_before['commercial_json']
+    assert persisted.version == stored_before['version']
 
 
 def test_cached_photo_preview_matches_delivery_slot_without_replacing_media():
@@ -129,7 +188,7 @@ const definition=ozonDraftEditor.createOptions(config);const page=definition.dat
 for(const [k,v] of Object.entries(definition.methods))page[k]=v.bind(page);
 for(const [k,v] of Object.entries(definition.computed))Object.defineProperty(page,k,{get:v.bind(page)});
 page.$refs={dictionaryDialog:{close(){},showModal(){}},publicationDialog:{close(){},showModal(){}},dictionarySearch:{focus(){}}};page.$nextTick=fn=>fn();
-const fixture={draft:{id:1,version:3,offer_id:'offer',product_type_id:7,status:'ready',validation_status:'valid',validation:{publishable:true},attribute_removals:[]},documents:{content:{name:'Товар',description:'Описание'},attributes:[{attribute_id:'31',complex_id:'0',values:[{value:'Бренд'}]}],complex_attributes:[],media:{primary_image:'https://img.test/1.jpg',images:[]},dimensions:{width:'10',height:'20',depth:'30',weight:'200',dimension_unit:'MILLIMETERS',weight_unit:'GRAMS'},commercial:{price:'100.50',vat:'0',currency_code:'RUB'},barcodes:['123']},readiness:{overall:'ready',schema:{fresh:true}},definitions:[{id:'31',complex_id:'0',name:'Бренд',editable:true,dictionary:true,dictionary_fresh:true,collection:false,max_values:1}],operations:[],active_operation_id:null,baseline_attribute_identities:[],suggestions:[]};
+const fixture={draft:{id:1,version:3,offer_id:'offer',product_type_id:7,status:'ready',validation_status:'valid',validation:{publishable:true},attribute_removals:[]},documents:{content:{name:'Товар',description:'Описание'},attributes:[{attribute_id:'31',complex_id:'0',values:[{value:'Бренд'}]}],complex_attributes:[],media:{primary_image:'https://img.test/1.jpg',images:[]},dimensions:{width:'10',height:'20',depth:'30',weight:'200',dimension_unit:'MILLIMETERS',weight_unit:'GRAMS'},commercial:{price:'100.50',vat:'0',currency_code:'RUB'},barcodes:['123']},current_validation:{publishable:true,errors:[],warnings:[],validated_at:'2026-10-01T00:00:00'},readiness:{overall:'ready',schema:{fresh:true}},definitions:[{id:'31',complex_id:'0',name:'Бренд',editable:true,dictionary:true,dictionary_fresh:true,collection:false,max_values:1}],operations:[],active_operation_id:null,baseline_attribute_identities:[],suggestions:[]};
 page.hydrate(structuredClone(fixture));page.loading=false;
 '''
 
@@ -154,6 +213,31 @@ global.confirm=()=>true;page.removeAttribute(page.data.definitions[0]);assert.de
 page.setValues(page.data.definitions[0],[{value:'Вернули бренд'}]);assert.equal(page.form.attribute_removals.length,0);
 let changed;const field={values:[],definition:{data_type:'Boolean'},$emit:(_event,values)=>changed=values};definition.components['attribute-field'].methods.change.call(field,0,'false');assert.deepEqual(changed,[{value:'false'}]);field.definition.data_type='Decimal';definition.components['attribute-field'].methods.change.call(field,0,'12,5');assert.deepEqual(changed,[{value:'12.5'}]);
 assert.equal(ozonDraftEditor.safeImage('javascript:alert(1)'),'');assert.equal(ozonDraftEditor.safeImage('https://user:secret@test/1.jpg'),'');
+''')
+
+
+def test_current_validation_not_saved_ready_snapshot_gates_publication():
+    run_node(r'''
+(async()=>{
+const savedValidation=structuredClone(page.draft.validation);
+page.data.current_validation={publishable:false,errors:[
+ {code:'physical_fact_required',field:'dimensions.width'},
+ {code:'physical_fact_required',field:'dimensions.height'},
+ {code:'physical_fact_required',field:'dimensions.depth'},
+ {code:'physical_fact_required',field:'dimensions.weight'},
+ {code:'vat_required',field:'commercial.vat'}
+],warnings:[]};
+assert.equal(page.draft.status,'ready');assert.equal(page.draft.validation_status,'valid');assert.equal(page.draft.validation.publishable,true);
+assert.equal(page.canPublish,false);assert.equal(page.statusLabel,'Заполните упаковку и выберите ставку НДС');
+assert.match(page.issueLabel(page.errors[0]),/Ширина упаковки/);assert.match(page.issueLabel(page.errors[4]),/ставку НДС/);
+let opened=[];global.document.getElementById=id=>({scrollIntoView(){},focus(){opened.push(id)}});
+page.goToIssue(page.errors[0]);page.goToIssue(page.errors[4]);assert.deepEqual(opened,['ode-width','ode-vat']);assert.equal(page.section,'delivery');
+let requests=0;page.request=async()=>{requests++;return {operation:{id:1}}};page.confirmedWrite=true;await page.publish();assert.equal(requests,0);
+assert.deepEqual(page.draft.validation,savedValidation,'read-only current evaluation leaves historical validation intact');
+page.data.current_validation=undefined;assert.equal(page.currentValidationAvailable,false);assert.equal(page.canPublish,false);assert.equal(page.statusLabel,'Текущая проверка не подтверждена');
+page.draft.status='published';assert.equal(page.statusLabel,'Опубликован');
+page.draft.status='archived';assert.equal(page.statusLabel,'Архив');
+})().catch(error=>{console.error(error);process.exitCode=1});
 ''')
 
 

@@ -68,13 +68,23 @@
             },
             methods: {
                 ...methods,
-                stateLabel(row) { return {needs_category:'Нужна категория',draft:'На подготовке',blocked:'Нужны исправления',ready:'Проверен',published:'Опубликован',archived:'Архив'}[row.status] || 'Черновик'; },
-                stateTone(row) { return {needs_category:'warn',blocked:'danger',ready:'ok',published:'ok'}[row.status] || 'muted'; },
+                stateLabel(row) { return {needs_category:'Нужна категория',draft:'На подготовке',blocked:'Нужны исправления',ready:'Готово по сохранённым данным',published:'Опубликован',archived:'Архив'}[row.status] || 'Черновик'; },
+                stateTone(row) { return {needs_category:'warn',blocked:'danger',ready:'muted',published:'ok'}[row.status] || 'muted'; },
                 validationLabel(row) {
                     if (row.validation_status === 'stale') return 'Проверьте после изменений';
                     if (row.validation_status === 'never_validated') return 'Ещё не проверялся';
                     const count = row.validation_summary?.error_count || 0;
-                    return count ? 'Замечаний: ' + count : row.validation_status === 'valid' ? 'Проверка пройдена' : 'Нужна проверка';
+                    if (count) return 'Замечаний в сохранённой проверке: ' + count;
+                    if (row.validation_status === 'valid') {
+                        const date = this.validationDate(row.validated_at);
+                        return date ? 'Проверка сохранена ' + date : 'Проверка сохранена';
+                    }
+                    return 'Нужна проверка';
+                },
+                validationDate(value) {
+                    if (typeof value !== 'string') return '';
+                    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+                    return match ? match[3] + '.' + match[2] + '.' + match[1] : '';
                 },
                 eligible(row) {
                     const account = this.accounts.find(item => item.id === row.account_id);

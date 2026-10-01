@@ -1,0 +1,32 @@
+{
+  "exit_code": 0,
+  "result": {
+    "ok": true,
+    "preflight": {
+      "attempted": true,
+      "receipt_received": true,
+      "execution_state": "cache_hit_verified",
+      "read_only_sqlite": true,
+      "draft_candidates_scanned": true,
+      "preexisting_cache_hit_count": 1,
+      "source_origin": "supplier",
+      "cache_file_size_bytes": 103974
+    },
+    "http": {
+      "requests": 1,
+      "status": 200,
+      "content_type_jpeg": true,
+      "response_bytes": 103974
+    },
+    "image": {
+      "jpeg": true,
+      "width": 1200,
+      "height": 1200,
+      "matches_cached_dimensions": true
+    },
+    "cache": {
+      "unchanged": true
+    }
+  },
+  "stderr_bytes": 0
+}
