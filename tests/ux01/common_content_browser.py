@@ -427,6 +427,11 @@ def measure_mobile_touch_targets(page, width: int, theme: str) -> dict:
             originalModes[field] = mode?.getAttribute('aria-pressed') === 'true';
             if (mode && mode.getAttribute('aria-pressed') !== 'true') mode.click();
         }
+        const pageWidthWhileExpanded = Math.max(
+            document.documentElement.scrollWidth,
+            document.body?.scrollWidth || 0,
+        );
+        const overflowWhileExpanded = pageWidthWhileExpanded > innerWidth + 1;
 
         const groups = [
             {name: 'mode_inherit', selector: '.cpc-mode-button'},
@@ -481,8 +486,10 @@ def measure_mobile_touch_targets(page, width: int, theme: str) -> dict:
             }
         }
         const root = document.documentElement;
-        const pageWidth = Math.max(root.scrollWidth, document.body?.scrollWidth || 0);
-        const pageOverflow = pageWidth > innerWidth + 1;
+        const pageWidthAfterRestore = Math.max(root.scrollWidth, document.body?.scrollWidth || 0);
+        const overflowAfterRestore = pageWidthAfterRestore > innerWidth + 1;
+        const pageWidth = Math.max(pageWidthWhileExpanded, pageWidthAfterRestore);
+        const pageOverflow = overflowWhileExpanded || overflowAfterRestore;
         targets.forEach(group => {
             group.samples.forEach(sample => { sample.meets_minimum = sample.meets_minimum && !pageOverflow; });
             group.passed = group.samples.length > 0 && group.samples.every(sample => sample.meets_minimum);
@@ -491,6 +498,10 @@ def measure_mobile_touch_targets(page, width: int, theme: str) -> dict:
             viewport_width: innerWidth,
             page_width: pageWidth,
             page_overflow: pageOverflow,
+            page_width_while_expanded: pageWidthWhileExpanded,
+            page_overflow_while_expanded: overflowWhileExpanded,
+            page_width_after_restore: pageWidthAfterRestore,
+            page_overflow_after_restore: overflowAfterRestore,
             local_modes_restored: ['photos', 'characteristics'].every(field => {
                 const mode = document.querySelector(
                     '[data-field-section="' + field + '"] .cpc-mode-button'
@@ -507,6 +518,10 @@ def measure_mobile_touch_targets(page, width: int, theme: str) -> dict:
         "page_overflow": observation["page_overflow"],
         "viewport_width": observation["viewport_width"],
         "page_width": observation["page_width"],
+        "page_width_while_expanded": observation["page_width_while_expanded"],
+        "page_overflow_while_expanded": observation["page_overflow_while_expanded"],
+        "page_width_after_restore": observation["page_width_after_restore"],
+        "page_overflow_after_restore": observation["page_overflow_after_restore"],
         "local_modes_restored": observation["local_modes_restored"],
         "targets": observation["targets"],
     }
