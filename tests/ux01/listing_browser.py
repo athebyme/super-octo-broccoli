@@ -826,15 +826,20 @@ def run_browser_scenario(page, context, browser):
     page.locator(".catalog-products .catalog-product").first.wait_for()
     assert page.locator(".catalog-products .catalog-product").count() == 1
     classic_row = page.locator(".catalog-products .catalog-product").first
-    assert "UX Listing Target" in classic_row.inner_text()
-    assert url_return_value(classic_row.get_attribute("href")) == classic_query
-    classic_detail = (
-        f"/marketplaces/listings/{FIXTURE['target_listing_id']}?return_to="
-        + quote(classic_query, safe="")
+    # The beta page number refers to grouped ImportedProduct rows, while the
+    # classic fallback paginates individual listings by updated_at/id. The
+    # target therefore is beta group page 2 but flat page 1; its later seeded
+    # update makes Result 3 the second classic row. Keep the same page and all
+    # filters and follow the row actually returned by that flat page.
+    assert "UX Listing Result 3" in classic_row.inner_text()
+    classic_detail = classic_row.get_attribute("href")
+    assert url_return_value(classic_detail) == classic_query
+    assert urlsplit(classic_detail).path == (
+        f"/marketplaces/listings/{FIXTURE['listing_ids'][2]}"
     )
     go(page, classic_detail, ".listing-workspace-head")
     classic_header = page.locator(".listing-workspace-head")
-    assert classic_header.get_by_role("heading", name="UX Listing Target", exact=True).count() == 1
+    assert classic_header.get_by_role("heading", name="UX Listing Result 3", exact=True).count() == 1
     assert classic_header.locator(".listing-workspace-channel").inner_text().strip() == "Ozon"
     assert classic_header.locator(".listing-workspace-account").count() == 1
     assert classic_header.locator(".listing-workspace-account").inner_text().strip() == "Ozon CI 0"
