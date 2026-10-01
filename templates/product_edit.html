@@ -17,8 +17,8 @@
 
     <!-- Hero Banner -->
     <div class="bg-[#0a0a0a] rounded-lg p-6 sm:p-8 mb-8">
-        <div class="relative flex items-start justify-between">
-            <div class="flex items-center space-x-4">
+        <div class="relative flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div class="flex min-w-0 w-full items-center space-x-4 lg:w-auto">
                 <!-- Фото товара -->
                 {% set photos = product.photos_json|from_json if product.photos_json else [] %}
                 {% if photos or product.nm_id %}
@@ -33,9 +33,9 @@
                 </div>
                 {% endif %}
 
-                <div>
-                    <div class="flex items-center space-x-3">
-                        <h1 class="text-3xl font-normal text-white" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Редактирование карточки</h1>
+                <div class="min-w-0 flex-1 lg:flex-none">
+                    <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                        <h1 class="min-w-0 text-2xl font-normal text-white sm:text-3xl" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Редактирование карточки</h1>
                         <!-- Индикатор несохранённых изменений -->
                         <span x-show="hasChanges"
                               x-transition:enter="transition ease-out duration-200"
@@ -46,24 +46,24 @@
                             Есть изменения
                         </span>
                     </div>
-                    <p class="mt-2 text-sm text-gray-400 flex items-center space-x-4">
-                        <span class="inline-flex items-center" x-data="{ show: false }" @mouseenter="show = true" @mouseleave="show = false">
+                    <p class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-400">
+                        <span class="relative inline-flex items-center" x-data="{ show: false }" @mouseenter="show = true" @mouseleave="show = false">
                             <span class="font-mono bg-white/15 px-1.5 py-0.5 rounded text-xs text-white">NM ID: {{ product.nm_id }}</span>
-                            <div x-show="show" x-transition class="absolute mt-8 z-50 px-2 py-1 text-xs bg-gray-900 text-white rounded shadow-lg whitespace-nowrap">
+                            <span x-show="show" x-transition class="absolute left-0 top-full mt-2 z-50 px-2 py-1 text-xs bg-gray-900 text-white rounded shadow-lg whitespace-nowrap">
                                 Идентификатор карточки в Wildberries
-                            </div>
+                            </span>
                         </span>
-                        <span class="text-gray-600">|</span>
-                        <span class="text-white">{{ product.vendor_code }}</span>
+                        <span class="hidden text-gray-600 sm:inline" aria-hidden="true">|</span>
+                        <span class="break-all text-white">{{ product.vendor_code }}</span>
                         {% if product.brand %}
-                        <span class="text-gray-600">|</span>
-                        <span class="text-gray-400">{{ product.brand }}</span>
+                        <span class="hidden text-gray-600 sm:inline" aria-hidden="true">|</span>
+                        <span class="break-words text-gray-400">{{ product.brand }}</span>
                         {% endif %}
                     </p>
                 </div>
             </div>
 
-            <div class="flex items-center space-x-3">
+            <div class="flex w-full flex-wrap items-center gap-3 lg:w-auto lg:flex-nowrap lg:justify-end">
                 <!-- Кнопка истории -->
                 <a href="{{ url_for('product_edit_history', product_id=product.id) }}"
                    class="relative inline-flex items-center px-4 py-2 bg-white/10 text-white rounded-md hover:bg-white/20 transition group"
