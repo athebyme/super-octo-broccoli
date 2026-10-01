@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from PIL import Image
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,9 +130,39 @@ def photo_status_text200(page, state, theme, width, expected_photo_width):
     page.evaluate('''() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))''')
 
     if state in ('failed', 'paused'):
-        page.evaluate('document.activeElement?.blur()')
+        # Give Tab a deterministic native starting point. blur() alone does not
+        # reset Chromium's sequential-focus cursor after earlier retry clicks.
+        focus_start = page.locator('#photo-focus-start')
+        focus_start.focus()
+        assert page.evaluate("document.activeElement?.id === 'photo-focus-start'"), (
+            'photo_status_keyboard_start', state, theme, width,
+        )
         page.keyboard.press('Tab')
-        page.wait_for_function("() => document.activeElement?.matches('.ode-image-state button')")
+        try:
+            page.wait_for_function(
+                "() => document.activeElement?.matches('.ode-image-state button')",
+                timeout=3000,
+            )
+        except PlaywrightTimeoutError as exc:
+            focus_diagnostic = page.evaluate('''() => {
+                const active = document.activeElement;
+                const state = document.querySelector('.ode-image-state');
+                return {
+                    status:state?.innerText?.slice(0, 100) || '',
+                    buttonCount:state?.querySelectorAll('button').length || 0,
+                    activeTag:active?.tagName || null,
+                    activeId:active?.id || null,
+                    activeRole:active?.getAttribute('role') || null,
+                    activeText:(active?.innerText || '').slice(0, 100),
+                    startFocused:active?.id === 'photo-focus-start',
+                };
+            }''')
+            screenshot = OUT / f'photo-status-focus-failure-{state}-{theme}-{width}.png'
+            page.screenshot(path=str(screenshot), animations='disabled')
+            raise AssertionError((
+                'photo_status_keyboard_focus', state, theme, width,
+                focus_diagnostic, screenshot.name,
+            )) from exc
 
     metrics = page.evaluate('''() => {
         const photo = document.querySelector('.ode-photo');
@@ -316,7 +346,7 @@ try:
             window.testHidden = false;
             Object.defineProperty(document, 'hidden', {configurable:true, get:() => window.testHidden});
             window.mountPhoto = () => {
-                document.querySelector('#fixture').innerHTML = '<div class="ode-photo"><draft-photo ref="photo" :src="src" :source-id="57" alt="Тестовый товар"></draft-photo><span class="ode-photo-counter">1 / 1</span></div>';
+                document.querySelector('#fixture').innerHTML = '<a id="photo-focus-start" href="#fixture">Начало фото</a><div class="ode-photo"><draft-photo ref="photo" :src="src" :source-id="57" alt="Тестовый товар"></draft-photo><span class="ode-photo-counter">1 / 1</span></div>';
                 const app = Vue.createApp({
                     components:{'draft-photo':window.ozonDraftEditor.photoComponent},
                     data:() => ({src:'/api/photos/imported-product/57/0?deferred=1'})
