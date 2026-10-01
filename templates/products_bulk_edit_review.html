@@ -29,7 +29,7 @@
     </nav>
 
     <div class="sh-card">
-        <p class="text-xs uppercase tracking-wide" style="color:var(--accent)">Аккаунт: {{ account_label }} · Канал: {{ preview.channel }}</p>
+        <p class="text-xs uppercase tracking-wide" style="color:var(--accent-text)">Аккаунт: {{ account_label }} · Канал: {{ preview.channel }}</p>
         <h1 class="mt-2 text-2xl font-semibold" style="color:var(--text)">Проверьте изменения перед применением</h1>
         <p class="mt-2 text-sm" style="color:var(--text-secondary)">
             {% if preview.subject_id %}subjectID {{ preview.subject_id }} · {{ preview.subject_name }} ·{% endif %}
@@ -80,7 +80,7 @@
                         <td class="px-4 py-3" style="color:var(--text)"><strong>{{ row.vendor_code or '—' }}</strong><div class="text-xs" style="color:var(--text-muted)">{{ row.nm_id }}</div></td>
                         <td class="px-4 py-3" style="color:var(--text)">{{ row.characteristic }}{% if row.characteristic_id %} <span class="text-xs" style="color:var(--text-muted)">#{{ row.characteristic_id }}</span>{% endif %}</td>
                         <td class="max-w-sm whitespace-pre-wrap px-4 py-3" style="color:var(--text-secondary)">{{ row.before|join(', ') if row.before else 'Пусто' }}</td>
-                        <td class="max-w-sm whitespace-pre-wrap px-4 py-3 font-medium" style="color:var(--accent)">{{ row.after|join(', ') if row.after else 'Пусто' }}</td>
+                        <td class="max-w-sm whitespace-pre-wrap px-4 py-3 font-medium" style="color:var(--accent-text)">{{ row.after|join(', ') if row.after else 'Пусто' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
