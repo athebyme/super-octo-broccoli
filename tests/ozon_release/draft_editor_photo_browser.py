@@ -76,13 +76,19 @@ def bridge(route):
 
 
 def layout(page, name, selector='.ode-photo'):
+    widths = (320, 390, 1024, 1280, 1440) if name == 'ready' else (320, 390)
     for theme in ('light', 'dark'):
-        for width in (320, 390):
+        for width in widths:
             page.set_viewport_size({'width': width, 'height': 820})
             page.evaluate('(value) => document.documentElement.dataset.theme = value', theme)
             page.screenshot(path=str(OUT / f'draft-photo-{name}-{theme}-{width}.png'), animations='disabled')
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), (name, theme, width)
             assert page.locator(selector).evaluate('(node) => node.scrollWidth <= node.clientWidth + 1'), (name, theme, width)
+            if name == 'ready':
+                assert page.locator(selector).evaluate('''node => {
+                    const rect = node.getBoundingClientRect();
+                    return Math.abs(rect.width - rect.height) <= 1;
+                }'''), (name, theme, width, 'loaded hero photo must remain square')
             report['layouts'].append({'name': name, 'theme': theme, 'width': width})
     page.set_viewport_size({'width': 390, 'height': 820})
     page.evaluate('document.documentElement.dataset.theme = "light"')
@@ -95,6 +101,188 @@ def ready(page):
         return image?.complete && image.naturalWidth === 16 &&
             !frame.querySelector('.ode-image-state');
     }''')
+
+
+def photo_status_text200(page, state, theme, width, expected_photo_width):
+    page.set_viewport_size({'width': width, 'height': 820})
+    page.evaluate('(value) => document.documentElement.dataset.theme = value', theme)
+    page.evaluate('''state => {
+        const photo = window.photoVm?.$refs?.photo;
+        if (!photo || !['loading', 'pending', 'failed', 'paused'].includes(state)) {
+            throw new Error('photo status fixture is unavailable');
+        }
+        photo.state = state;
+    }''', state)
+    scale = page.locator('.ode-photo .ode-image-state').evaluate('''state => {
+        const counter = document.querySelector('.ode-photo > .ode-photo-counter');
+        const targets = [state, state.querySelector('button'), counter].filter(Boolean);
+        window.__photoStatusTextScale = targets.map(element => ({
+            element, value:element.style.getPropertyValue('font-size'),
+            priority:element.style.getPropertyPriority('font-size'),
+            base:parseFloat(getComputedStyle(element).fontSize),
+        }));
+        window.__photoStatusTextScale.forEach(({element, base}) =>
+            element.style.setProperty('font-size', `${base * 2}px`, 'important'));
+        return window.__photoStatusTextScale.map(({base, element}) => ({
+            base, scaled:parseFloat(getComputedStyle(element).fontSize),
+        }));
+    }''')
+    page.evaluate('''() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))''')
+
+    if state in ('failed', 'paused'):
+        page.evaluate('document.activeElement?.blur()')
+        page.keyboard.press('Tab')
+        page.wait_for_function("() => document.activeElement?.matches('.ode-image-state button')")
+
+    metrics = page.evaluate('''() => {
+        const photo = document.querySelector('.ode-photo');
+        const state = photo?.querySelector('.ode-image-state');
+        const counter = photo?.querySelector('.ode-photo-counter');
+        const button = state?.querySelector('button');
+        const rect = element => {
+            if (!element) return null;
+            const value = element.getBoundingClientRect();
+            return {left:value.left, right:value.right, top:value.top, bottom:value.bottom,
+                width:value.width, height:value.height};
+        };
+        const intersects = (a, b) => !!a && !!b && a.left < b.right && a.right > b.left &&
+            a.top < b.bottom && a.bottom > b.top;
+        const inside = (inner, outer, tolerance=1) => !!inner && !!outer &&
+            inner.left >= outer.left - tolerance && inner.right <= outer.right + tolerance &&
+            inner.top >= outer.top - tolerance && inner.bottom <= outer.bottom + tolerance;
+        const textRects = element => {
+            if (!element) return [];
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            const result = [];
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (!node.textContent.trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                for (const value of range.getClientRects()) result.push({
+                    left:value.left, right:value.right, top:value.top, bottom:value.bottom,
+                });
+            }
+            return result;
+        };
+        const clipped = (element, rects) => {
+            const outside = [];
+            for (let parent = element?.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
+                for (const [axis, overflow, low, high] of [
+                    ['x', style.overflowX, 'left', 'right'], ['y', style.overflowY, 'top', 'bottom'],
+                ]) {
+                    if (!['hidden', 'clip'].includes(overflow)) continue;
+                    for (const line of rects) {
+                        if (line[low] < bounds[low] - 1 || line[high] > bounds[high] + 1) {
+                            outside.push({axis, overflow, ancestor:parent.className || parent.tagName});
+                            break;
+                        }
+                    }
+                }
+            }
+            return outside;
+        };
+        const photoRect = rect(photo), stateRect = rect(state), counterRect = rect(counter);
+        const frameRect = rect(photo?.querySelector('.ode-image-frame'));
+        const statusTextRects = textRects(state), counterTextRects = textRects(counter);
+        const image = photo?.querySelector('.ode-image-frame > img');
+        const imageStyle = image ? getComputedStyle(image) : null;
+        const stateStyle = state ? getComputedStyle(state) : null;
+        const imageRect = rect(image);
+        const focusStyle = button ? getComputedStyle(button) : null;
+        const buttonRect = rect(button);
+        const statusCounterTextOverlap = statusTextRects.some(statusText =>
+            counterTextRects.some(counterText => intersects(statusText, counterText)));
+        const outlineWidth = focusStyle ? parseFloat(focusStyle.outlineWidth) || 0 : 0;
+        const outlineOffset = focusStyle ? parseFloat(focusStyle.outlineOffset) || 0 : 0;
+        const ring = buttonRect ? {
+            left:buttonRect.left - outlineWidth - outlineOffset,
+            right:buttonRect.right + outlineWidth + outlineOffset,
+            top:buttonRect.top - outlineWidth - outlineOffset,
+            bottom:buttonRect.bottom + outlineWidth + outlineOffset,
+        } : null;
+        return {
+            stateText:state?.innerText || '', role:state?.getAttribute('role') || null,
+            photo:photoRect, frame:frameRect, status:stateRect, counter:counterRect, button:buttonRect, focusRing:ring,
+            image:image ? {rect:rect(image), display:imageStyle.display, opacity:imageStyle.opacity,
+                loading:image.getAttribute('loading')} : null,
+            stateBackground:stateStyle?.backgroundColor || null,
+            photoContainsStatus:inside(stateRect, photoRect),
+            photoContainsCounter:inside(counterRect, photoRect),
+            photoContainsButton:inside(buttonRect, photoRect),
+            photoContainsImage:inside(rect(image), photoRect),
+            frameContainsImage:inside(rect(image), frameRect),
+            statusContainsImage:inside(rect(image), stateRect),
+            statusContainsButton:inside(buttonRect, stateRect),
+            statusContainsText:statusTextRects.length > 0 && statusTextRects.every(line => inside(line, stateRect)),
+            counterContainsText:counterTextRects.length > 0 && counterTextRects.every(line => inside(line, counterRect)),
+            statusCounterOverlap:intersects(stateRect, counterRect),
+            buttonCounterOverlap:intersects(buttonRect, counterRect),
+            statusCounterTextOverlap,
+            clippedStatusText:clipped(state, statusTextRects),
+            clippedCounterText:clipped(counter, counterTextRects),
+            pageWidth:document.documentElement.scrollWidth, viewportWidth:innerWidth,
+            imageIntersectsViewport:!!imageRect && imageRect.right > 0 && imageRect.left < innerWidth &&
+                imageRect.bottom > 0 && imageRect.top < innerHeight,
+            focus:{
+                active:!!button && document.activeElement === button,
+                label:button?.getAttribute('aria-label') || null,
+                visibleRing:!!focusStyle && focusStyle.outlineStyle !== 'none' && outlineWidth >= 1,
+                ringInViewport:!!ring && ring.left >= -1 && ring.right <= innerWidth + 1,
+                ringClipped:button ? clipped(button, [ring]).length > 0 : false,
+            },
+        };
+    }''')
+    assert all(1.99 <= item['scaled'] / item['base'] <= 2.01 for item in scale), (state, theme, width, scale)
+    assert metrics['role'] == 'status', (state, theme, width, metrics)
+    assert abs(metrics['photo']['width'] - expected_photo_width) <= 1, (state, theme, width, metrics)
+    assert metrics['photoContainsStatus'] and metrics['photoContainsCounter'], (state, theme, width, metrics)
+    assert metrics['statusContainsText'] and metrics['counterContainsText'], (state, theme, width, metrics)
+    if width <= 760:
+        assert not metrics['statusCounterOverlap'], (state, theme, width, metrics)
+    else:
+        assert not metrics['statusCounterTextOverlap'], (state, theme, width, metrics)
+    assert not metrics['buttonCounterOverlap'], (state, theme, width, metrics)
+    assert not metrics['clippedStatusText'] and not metrics['clippedCounterText'], (state, theme, width, metrics)
+    assert metrics['pageWidth'] <= metrics['viewportWidth'] + 1, (state, theme, width, metrics)
+    if state in ('loading', 'pending'):
+        assert 'Загружаем фото…' in metrics['stateText'], (state, theme, width, metrics)
+        assert metrics['button'] is None, (state, theme, width, metrics)
+        if state == 'loading':
+            image = metrics['image']
+            assert image and image['rect']['width'] > 0 and image['rect']['height'] > 0, (state, theme, width, metrics)
+            assert metrics['photoContainsImage'] and metrics['frameContainsImage'] and image['display'] != 'none', (state, theme, width, metrics)
+            assert image['loading'] == 'lazy' and metrics['imageIntersectsViewport'], (state, theme, width, metrics)
+            if width <= 760:
+                assert image['opacity'] == '0', (state, theme, width, metrics)
+            else:
+                assert image['opacity'] != '0' and metrics['statusContainsImage'], (state, theme, width, metrics)
+                assert metrics['stateBackground'] not in ('transparent', 'rgba(0, 0, 0, 0)'), (state, theme, width, metrics)
+    else:
+        expected = 'Повторить' if state == 'failed' else 'Продолжить'
+        assert expected in metrics['stateText'] and metrics['photoContainsButton'] and metrics['statusContainsButton'], (state, theme, width, metrics)
+        assert metrics['focus']['active'] and metrics['focus']['visibleRing'], (state, theme, width, metrics)
+        assert metrics['focus']['ringInViewport'] and not metrics['focus']['ringClipped'], (state, theme, width, metrics)
+        expected_label = 'Повторить загрузку фото' if state == 'failed' else 'Продолжить загрузку фото'
+        assert metrics['focus']['label'].startswith(expected_label), (state, theme, width, metrics)
+    screenshot = OUT / f"draft-photo-status-{state}-200-{theme}-{width}.png"
+    page.screenshot(path=str(screenshot), animations='disabled')
+    report['layouts'].append({
+        'name':'photo-status-text-200', 'state':state, 'theme':theme, 'width':width,
+        'text_scale':200, 'photo_height':round(metrics['photo']['height'], 2),
+        'status_height':round(metrics['status']['height'], 2),
+        'counter_overlap':metrics['statusCounterTextOverlap'],
+        'control_focus':metrics['focus']['active'], 'screenshot':screenshot.name,
+    })
+    page.evaluate('''() => {
+        const saved = window.__photoStatusTextScale || [];
+        saved.forEach(({element, value, priority}) => value
+            ? element.style.setProperty('font-size', value, priority)
+            : element.style.removeProperty('font-size'));
+        delete window.__photoStatusTextScale;
+    }''')
+    page.evaluate('''() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))''')
 
 
 try:
@@ -115,7 +303,11 @@ try:
             html[data-theme="light"]{--bg-card:#fff;--text-secondary:#555;--border:#bbb;--accent:#b06542}
             html[data-theme="dark"]{--bg-card:#272724;--text-secondary:#e5e0d6;--border:#666;--accent:#e0a17d}
             body{margin:0;background:var(--bg-card);color:var(--text-secondary);font:16px Arial,sans-serif}
-            .ode-photo{width:min(100%,300px);height:300px;margin:16px 0}
+            /* Match the global box-sizing reset from templates/base.html:52. */
+            *,*::before,*::after{box-sizing:border-box}
+            .ode-photo{margin:16px 0}
+            @media(min-width:761px) and (max-width:1050px){.ode-photo{width:220px;height:220px}}
+            @media(min-width:1051px){.ode-photo{width:280px;height:280px}}
         ''')
         page.add_script_tag(path=str(ROOT / 'static/vendor/vue-3.4.38.global.prod.js'))
         page.add_script_tag(path=str(ROOT / 'static/marketplace-beta-shared.js'))
@@ -124,7 +316,7 @@ try:
             window.testHidden = false;
             Object.defineProperty(document, 'hidden', {configurable:true, get:() => window.testHidden});
             window.mountPhoto = () => {
-                document.querySelector('#fixture').innerHTML = '<div class="ode-photo"><draft-photo :src="src" :source-id="57" alt="Тестовый товар"></draft-photo></div>';
+                document.querySelector('#fixture').innerHTML = '<div class="ode-photo"><draft-photo ref="photo" :src="src" :source-id="57" alt="Тестовый товар"></draft-photo><span class="ode-photo-counter">1 / 1</span></div>';
                 const app = Vue.createApp({
                     components:{'draft-photo':window.ozonDraftEditor.photoComponent},
                     data:() => ({src:'/api/photos/imported-product/57/0?deferred=1'})
@@ -179,6 +371,15 @@ try:
         ready(page)
         assert photo['slot0'] == 5, photo
         passed('manual_retry_is_separate_and_succeeds')
+
+        status_gets_before = len(report['photo_gets'])
+        for state in ('loading', 'pending', 'failed', 'paused'):
+            for theme in ('light', 'dark'):
+                for width in (320, 390, 1024, 1280, 1440):
+                    photo_width = 100 if width <= 760 else 220 if width <= 1050 else 280
+                    photo_status_text200(page, state, theme, width, photo_width)
+        assert len(report['photo_gets']) == status_gets_before, report['photo_gets']
+        passed('hero_status_text200_grows_without_clipping_or_photo_requests')
 
         page.evaluate('window.photoApp.unmount(); window.testHidden=true; window.mountPhoto()')
         before = len(report['photo_gets'])
