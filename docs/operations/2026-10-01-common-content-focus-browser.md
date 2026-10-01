@@ -11,7 +11,7 @@ The existing synthetic write contract stays fixed at four preview POSTs, two app
 Validation performed on the isolated clone based at `e44df456be0cf7dc4cdf160aea9a22ad0f2acd64`:
 
 - `/usr/bin/python3 -m py_compile scripts/check_ux01.py tests/test_ux01_runner.py tests/ux01/common_content_browser.py` — passed.
-- `/home/athebyme/super-octo-broccoli/venv/bin/python -m pytest -q tests/test_ux01_runner.py` — 15 passed, 17 subtests passed, no skips.
+- `/home/athebyme/super-octo-broccoli/venv/bin/python -m pytest -q tests/test_ux01_runner.py` — 15 passed, 19 subtests passed, no skips.
 - `git diff --check` — passed.
 
 The actual browser fixture was not run, and this report does not claim a browser pass or screenshots. The recorded environment evidence in [environment-blocks.json](../design/ozon-ux-completion-artifacts-2026-10-01/environment-blocks.json) shows loopback binding denied and Chromium blocked at startup by the restricted crashpad socket (`TargetClosedError`, `page_created: false`). No workaround was attempted. Actual DOM, responsive geometry, and screenshots remain unverified until the combined source can run in an environment with the approved synthetic browser fixture available.

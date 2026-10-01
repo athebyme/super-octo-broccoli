@@ -290,15 +290,16 @@ def _common_content_protocol_issues(data: dict) -> list[str]:
                 check_names.append(value)
             elif isinstance(value, dict):
                 status_value = value.get("status")
+                status_is_valid = (
+                    isinstance(status_value, str) and status_value in PASS_REPORT_STATUSES
+                )
                 explicitly_failed = (
                     value.get("ok") is False or value.get("passed") is False
-                    or (isinstance(status_value, str) and status_value.lower() in {
-                        "failed", "error", "blocked", "not_run", "skipped",
-                    })
+                    or ("status" in value and not status_is_valid)
                 )
                 passed = not explicitly_failed and (
                     value.get("ok") is True or value.get("passed") is True
-                    or (isinstance(status_value, str) and status_value in PASS_REPORT_STATUSES)
+                    or status_is_valid
                 )
                 if passed and isinstance(value.get("name"), str):
                     check_names.append(value["name"])

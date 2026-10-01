@@ -376,6 +376,13 @@ class Ux01RunnerContractTest(unittest.TestCase):
             })
             invalid_reports.append(("contradictory failed check object", contradictory_check, "common_named_checks_missing_or_duplicate"))
 
+            untested_check = copy.deepcopy(report)
+            untested_check["checks"].remove("common_photo_boundary_focus_first")
+            untested_check["checks"].append({
+                "name": "common_photo_boundary_focus_first", "status": "not-tested", "ok": True,
+            })
+            invalid_reports.append(("untested check cannot be promoted by ok", untested_check, "common_named_checks_missing_or_duplicate"))
+
             no_focus = copy.deepcopy(report)
             no_focus.pop("focus_observations")
             invalid_reports.append(("missing focus telemetry", no_focus, "common_focus_observation_missing_or_duplicate"))
