@@ -86,6 +86,9 @@ EXPECTED_NEGATIVE_HTTP = {
     },
 }
 OBSERVED_EXPECTED_NEGATIVE_HTTP = set()
+EMPTY_PRODUCT_FORM_FILTERS = frozenset({
+    "category", "has_stock", "block_status", "rating_min", "rating_max",
+})
 
 os.environ.update({
     "DATABASE_URL": "sqlite:///" + str(TEMP_PATH / "wb-edit.sqlite"),
@@ -407,6 +410,17 @@ def local_post_allowlist(fixture: dict[str, int]) -> frozenset[str]:
     })
 
 
+def pinned_asset_for_url(url: str, assets: dict[str, dict[str, object]]):
+    asset = assets.get(url)
+    if asset is not None:
+        return asset
+    # Chromium resolves the existing pinned <script src="https://cdn.tailwindcss.com">
+    # to the slash-terminated origin URL. Alias only that exact root URL.
+    if url == "https://cdn.tailwindcss.com/":
+        return assets.get("https://cdn.tailwindcss.com")
+    return None
+
+
 def bridge(
     route,
     *,
@@ -435,7 +449,7 @@ def bridge(
             return
         route.continue_()
         return
-    asset = assets.get(request.url)
+    asset = pinned_asset_for_url(request.url, assets)
     if asset:
         route.fulfill(
             status=200,
@@ -514,6 +528,12 @@ def _assert_local_products_url(url: str, expected_query: dict[str, list[str]]):
     ), {"path": parsed.path, "scheme_matches": parsed.scheme == origin.scheme,
         "origin_matches": parsed.netloc == origin.netloc}
     query = parse_qs(parsed.query, keep_blank_values=True)
+    for key in EMPTY_PRODUCT_FORM_FILTERS:
+        if key not in query:
+            continue
+        if query[key] != [""]:
+            raise AssertionError({"path": parsed.path, "unexpected_filter_value": key})
+        del query[key]
     assert query == expected_query, {"path": parsed.path, "query": query}
     return parsed
 
@@ -685,6 +705,41 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert REPORT["provider_attempts"] == 0
             interaction("authenticated_login_with_csrf_enabled")
 
+            # Exercise a non-default page size before the existing exact-50
+            # selection journey. Sorting must retain 100 and all meaningful
+            # filters; only the five known blank controls from this form are
+            # canonicalized by _assert_local_products_url.
+            page.goto(
+                BASE + "/products?search=Pipedream&brand=Pipedream"
+                "&sort=vendor_code&order=asc&page=1&per_page=100",
+                wait_until="domcontentloaded",
+            )
+            _assert_local_products_url(page.url, {
+                "search": ["Pipedream"], "brand": ["Pipedream"],
+                "sort": ["vendor_code"], "order": ["asc"],
+                "page": ["1"], "per_page": ["100"],
+            })
+            assert page.locator(".product-checkbox").count() == 51
+            page.locator('select[name="sort"]').select_option("title")
+            page.locator('select[name="order"]').select_option("asc")
+            probe_form = page.locator('form[method="GET"][action="/products"]')
+            with page.expect_request(
+                lambda request: request.is_navigation_request()
+                and urlsplit(request.url).path == "/products"
+            ) as sort_request:
+                with page.expect_navigation(wait_until="domcontentloaded"):
+                    probe_form.locator('button[type="submit"]').click()
+            assert sort_request.value.method == "GET"
+            _assert_local_products_url(page.url, {
+                "search": ["Pipedream"], "brand": ["Pipedream"],
+                "sort": ["title"], "order": ["asc"], "per_page": ["100"],
+            })
+            assert page.locator(".product-checkbox").count() == 51
+            assert REPORT["provider_attempts"] == 0
+            assert REPORT["fake_wb_client_instances"] == 0
+            assert REPORT["fake_wb_write_calls"] == 0
+            interaction("sort_form_preserves_nondefault_per_page_100_and_filters")
+
             list_url = (
                 "/products?search=Pipedream&brand=Pipedream&sort=vendor_code"
                 "&order=asc&page=1&per_page=50"
@@ -735,8 +790,13 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             page.locator('select[name="order"]').select_option("asc")
             filter_form = page.locator('form[method="GET"][action="/products"]')
             assert filter_form.count() == 1, f"Expected one catalog filter form, got {filter_form.count()}"
-            with page.expect_navigation(wait_until="domcontentloaded"):
-                filter_form.locator('button[type="submit"]').click()
+            with page.expect_request(
+                lambda request: request.is_navigation_request()
+                and urlsplit(request.url).path == "/products"
+            ) as sort_request:
+                with page.expect_navigation(wait_until="domcontentloaded"):
+                    filter_form.locator('button[type="submit"]').click()
+            assert sort_request.value.method == "GET"
             _assert_local_products_url(page.url, {
                 "search": ["Pipedream"], "brand": ["Pipedream"],
                 "sort": ["title"], "order": ["asc"], "per_page": ["50"],

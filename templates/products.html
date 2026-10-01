@@ -207,6 +207,7 @@
     <!-- Поиск и расширенные фильтры -->
     <div class="sh-card" style="margin-bottom:24px">
         <form method="GET" action="{{ url_for('products_list') }}" style="display:flex;flex-direction:column;gap:16px">
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
             <!-- Поиск -->
             <div style="display:flex;gap:8px">
                 <div style="flex:1;position:relative">
