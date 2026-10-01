@@ -1,0 +1,40 @@
+{
+  "status": "passed",
+  "command": "venv/bin/python scripts/deploy_safety.py --up-all",
+  "accepted_head_at_build": "de1a71103fe66da7d6c8ce5e89ec4e359954c857",
+  "frozen_source_head": "7e9f0770c12d66d63c143f5e6cf868eb56c134f0",
+  "manifest_aggregate_sha256": "3e8093ab4a1c68be4714a5126e6aca4bf3a05d900877446ef384990ecd7f652d",
+  "guard_exit_code": 0,
+  "deploy_started_at_utc": "2026-10-01T13:08:13.777815+00:00",
+  "deploy_finished_at_utc": "2026-10-01T13:08:51.160763+00:00",
+  "runtime_image": "sha256:b2f71864d49fe1a04b6207017f231bbb3e448113c07a1838d51f0dc00cf2f89a",
+  "container_started_at_utc": "2026-10-01T13:08:51.009576964Z",
+  "running": true,
+  "health_observed": "healthy",
+  "restart_count": 0,
+  "all_1243_runtime_files_verified": true,
+  "full_environment_unchanged_at_cutover": true,
+  "environment_file_unchanged_at_cutover": true,
+  "mounts_unchanged_after_canonical_order": true,
+  "startup": {
+    "active_run_count": 0,
+    "completed_step_count": 81,
+    "current": true,
+    "journal_step_count": 81,
+    "plan_step_count": 81,
+    "running_step_count": 0
+  },
+  "scheduler": {
+    "first_age_seconds": 29,
+    "first_state": "healthy",
+    "progressed": true,
+    "samples_separated_seconds": 31,
+    "second_age_seconds": 0,
+    "second_state": "healthy"
+  },
+  "production_browser_smoke": "passed_with_restrictions",
+  "real_marketplace_writes_from_this_task": 0,
+  "auto_publish_enabled_preserved": false,
+  "previous_runtime_not_certified_for_81_step_rollback": true,
+  "final_results_only_edits_do_not_change_frozen_runtime_inputs": true
+}

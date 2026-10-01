@@ -1,0 +1,97 @@
+{
+  "scope": "operator/browser diagnostic history; frozen product code unchanged",
+  "attempts": [
+    {
+      "attempt": "r4",
+      "status": "failed",
+      "started_at_utc": "2026-10-01T13:16:11.680345+00:00",
+      "finished_at_utc": "2026-10-01T13:17:04.503095+00:00",
+      "failed_phase": null,
+      "failure_codes": [
+        "TimeoutError"
+      ],
+      "page_records": 0,
+      "layout_records": 0,
+      "partial_progress_retained": false,
+      "interpretation": "Progress lost by the original CLI exception handler; phase and request counters in this receipt are not evidence of downstream execution."
+    },
+    {
+      "attempt": "r5",
+      "status": "failed",
+      "started_at_utc": "2026-10-01T13:28:15.138787+00:00",
+      "finished_at_utc": "2026-10-01T13:29:06.882090+00:00",
+      "failed_phase": "read_only_browser_smoke",
+      "failure_codes": [
+        "TimeoutError"
+      ],
+      "page_records": 0,
+      "layout_records": 0,
+      "partial_progress_retained": true,
+      "interpretation": "Preserved failed attempt; not substituted for final r8 acceptance."
+    },
+    {
+      "attempt": "r6-chrome148",
+      "status": "failed",
+      "started_at_utc": "2026-10-01T14:15:34.601019+00:00",
+      "finished_at_utc": "2026-10-01T14:16:26.396464+00:00",
+      "failed_phase": "read_only_browser_smoke",
+      "failure_codes": [
+        "TimeoutError"
+      ],
+      "page_records": 1,
+      "layout_records": 0,
+      "partial_progress_retained": true,
+      "interpretation": "Preserved failed attempt; not substituted for final r8 acceptance."
+    },
+    {
+      "attempt": "r6-chromium136",
+      "status": "failed",
+      "started_at_utc": "2026-10-01T14:33:43.626040+00:00",
+      "finished_at_utc": "2026-10-01T14:34:35.960843+00:00",
+      "failed_phase": "read_only_browser_smoke",
+      "failure_codes": [
+        "TimeoutError"
+      ],
+      "page_records": 1,
+      "layout_records": 0,
+      "partial_progress_retained": true,
+      "interpretation": "Preserved failed attempt; not substituted for final r8 acceptance."
+    },
+    {
+      "attempt": "r7-direct",
+      "status": "failed",
+      "started_at_utc": "2026-10-01T14:55:35.054268+00:00",
+      "finished_at_utc": "2026-10-01T14:56:30.649818+00:00",
+      "failed_phase": "read_only_browser_smoke",
+      "failure_codes": [
+        "javascript_error",
+        "served_asset_hash_mismatch"
+      ],
+      "page_records": 22,
+      "layout_records": 60,
+      "partial_progress_retained": true,
+      "interpretation": "Preserved failed attempt; not substituted for final r8 acceptance."
+    }
+  ],
+  "final_attempt": "r8-direct-chromium136",
+  "final_status": "passed_with_restrictions",
+  "anonymous_direct_control": {
+    "http_status": 200,
+    "headers_response_elapsed_ms": 42,
+    "navigation_elapsed_ms": 78,
+    "one_exact_login_get": true,
+    "strict_tls": true,
+    "javascript_enabled": true,
+    "no_proxy_browser_only": true,
+    "provider_calls": 0,
+    "credentials_sent": false,
+    "script_sha256": "35eacc70e0f7125086a242513cb7a1e8a960f93dff16dbaa0cc107cbccba37c5"
+  },
+  "notes": [
+    "r1 default anonymous GET was 200; its second no-proxy variant was invalid because the manager cleanup method did not exist. That variant is not proxy evidence.",
+    "Actual r6 guard continued and returned without error in the controlled comparison; its first navigation timed out. No server/backend cause was established from that observation.",
+    "R7 opened all 22 page/API checks and collected 60 layouts. Its body-read/mismatch and console telemetry did not distinguish observer limitations; the failed status is retained.",
+    "Source-only audit found a 200ms main-content margin transition; r7 sampled at60ms. R8 samples after500ms and two paint frames and fails on stable overflow/theme mismatch.",
+    "R8 records favicon body read error1 with independent successful verification of the same exact URL15 times, zero byte mismatches. The one AI-actions console error is correlated with the explicitly blocked metadata GET on the WB catalog."
+  ]
+}

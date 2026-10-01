@@ -3,8 +3,8 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "08727eae184b7ec1d15ac5ee23e4a2d46305d74722dbecc7f14856a0f0cee8e6",
-      "bytes": 1547
+      "sha256": "03977a20e48e4c8e5a32c6a92e82a5263c5843fe342e1b5773593872196be785",
+      "bytes": 1623
     },
     {
       "path": "common-focus-root.json",
@@ -18,8 +18,8 @@
     },
     {
       "path": "final-r24/artifact-index.json",
-      "sha256": "e8d491945795abffc9ab2f367a2163b89b60a162df08c2ff9e1702f228f0fd72",
-      "bytes": 9687
+      "sha256": "fdab9decf3e6964cf21a6388d6a38a0f65c9f6a30890d9b9c702ac9d05fca39c",
+      "bytes": 10169
     },
     {
       "path": "final-r24/ozon-account-history-browser.json",
@@ -100,6 +100,21 @@
       "path": "final-r24/ozon-warehouse-read-browser-report.json",
       "sha256": "3b8b3cd698ec556f76a8144970ed3fb58f3e25956bfececffff829a5724a9c99",
       "bytes": 4499
+    },
+    {
+      "path": "final-r24/production-deployment.json",
+      "sha256": "637a7d4f6722ab6eeb1125e6871643d9e2a86e8a40d94e4add58a52b7d33ab42",
+      "bytes": 1572
+    },
+    {
+      "path": "final-r24/production-smoke-history.json",
+      "sha256": "8e0752f05d3df55ae173a784d32c6ddbba5d48d263e30929619befb78fadd73e",
+      "bytes": 4069
+    },
+    {
+      "path": "final-r24/production-smoke.json",
+      "sha256": "eefae32a1c94af126210f7bc2d3fd548413e1bf1d0cf640fd1b1d7dc008d5788",
+      "bytes": 36136
     },
     {
       "path": "final-r24/release-receipt.json",
@@ -353,8 +368,8 @@
     },
     {
       "path": "resume-checklist.md",
-      "sha256": "c7558afd5a310a33d8537b6ca7a1be05742deb73120034723af8c7b6b6f77d8d",
-      "bytes": 702
+      "sha256": "56e7645599a06d45866ec4cd0cf2633cdba14357fcf25f63978845b7e1d2587e",
+      "bytes": 1067
     },
     {
       "path": "scoped-analytics-error-dark-390.png",

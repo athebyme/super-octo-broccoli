@@ -1,6 +1,6 @@
 # UX-01.11: контрольная матрица для каждого изменения
 
-Дата исходной приёмки: 30.09.2026. Тогда 6 UX и 12 Ozon стадий прошли на своём frozen source; результаты и ограничения — в [отчёте реализации](ux-01-implementation.md). Продолжение 01.10 имеет новые исходники и 8 UX/13 Ozon стадий; прежний результат их не удостоверяет. Final r24 на snapshot7e9f077:8/8UX,13/13Ozon;startupcopy81/counts/no-op passed. Текущие passed/failed/not-tested/blocked: [отчёт продолжения](../operations/2026-10-01-ozon-ux-acceptance.md). Строка считается пройденной только при наличии результата для точного изменения; список критериев сам по себе не является успешным тестом.
+Дата исходной приёмки: 30.09.2026. Тогда 6 UX и 12 Ozon стадий прошли на своём frozen source; результаты и ограничения — в [отчёте реализации](ux-01-implementation.md). Продолжение 01.10 имеет новые исходники и 8 UX/13 Ozon стадий; прежний результат их не удостоверяет. Final r24 на snapshot7e9f077:8/8UX,13/13Ozon;startupcopy81/counts/no-op passed;guarded production deploy passed,read-only smoke22checks/60settledlayouts passed_with_restrictions. Текущие passed/failed/not-tested/blocked: [отчёт продолжения](../operations/2026-10-01-ozon-ux-acceptance.md). Строка считается пройденной только при наличии результата для точного изменения; список критериев сам по себе не является успешным тестом.
 
 ## Обязательные измерения
 

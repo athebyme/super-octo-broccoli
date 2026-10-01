@@ -1,0 +1,1344 @@
+{
+  "schema_version": 8,
+  "status": "passed_with_restrictions",
+  "scope": "bounded_read_only_seller_ui",
+  "runtime_budget_seconds": 210,
+  "started_at_utc": "2026-10-01T15:26:08.752267+00:00",
+  "finished_at_utc": "2026-10-01T15:27:32.357643+00:00",
+  "phases": {
+    "cross_surface_context_selection": {
+      "elapsed_ms": 177,
+      "started_at_utc": "2026-10-01T15:26:41.745366+00:00",
+      "status": "completed"
+    },
+    "input_validation": {
+      "elapsed_ms": 0,
+      "started_at_utc": "2026-10-01T15:26:08.752434+00:00",
+      "status": "completed"
+    },
+    "read_only_browser_smoke": {
+      "elapsed_ms": 50434,
+      "outcome": "passed",
+      "started_at_utc": "2026-10-01T15:26:41.923282+00:00",
+      "status": "completed"
+    },
+    "runtime_identity": {
+      "elapsed_ms": 26,
+      "outcome": "passed",
+      "started_at_utc": "2026-10-01T15:26:08.953508+00:00",
+      "status": "completed"
+    },
+    "runtime_source_verification": {
+      "elapsed_ms": 383,
+      "outcome": "passed",
+      "started_at_utc": "2026-10-01T15:26:08.980221+00:00",
+      "status": "completed"
+    },
+    "seller_context_selection": {
+      "elapsed_ms": 514,
+      "started_at_utc": "2026-10-01T15:26:41.230427+00:00",
+      "status": "completed"
+    },
+    "source_checkout": {
+      "elapsed_ms": 7,
+      "outcome": "passed",
+      "started_at_utc": "2026-10-01T15:26:08.946421+00:00",
+      "status": "completed"
+    },
+    "source_manifest": {
+      "elapsed_ms": 193,
+      "started_at_utc": "2026-10-01T15:26:08.752472+00:00",
+      "status": "completed"
+    },
+    "startup_and_scheduler_observation": {
+      "elapsed_ms": 31866,
+      "outcome": "passed",
+      "started_at_utc": "2026-10-01T15:26:09.364121+00:00",
+      "status": "completed"
+    }
+  },
+  "failed_phase": null,
+  "browser_stage": null,
+  "browser_transport": {
+    "application_proxy_configuration_modified": false,
+    "browser_only": true,
+    "direct": true,
+    "operator_flag": "--no-proxy-server",
+    "process_environment_modified": false
+  },
+  "auth": {
+    "cookie_persisted": false,
+    "login_post_count": 0,
+    "method": "signed_seller_session_in_memory",
+    "normal_login_exercised": false,
+    "signed_seller_session_created": true
+  },
+  "source": {
+    "file_count": 1243,
+    "head": "de1a71103fe66da7d6c8ce5e89ec4e359954c857",
+    "local_hashes_match_manifest": true,
+    "manifest_aggregate_sha256": "3e8093ab4a1c68be4714a5126e6aca4bf3a05d900877446ef384990ecd7f652d",
+    "manifest_sha256": "ca4ef18687340146edce181160c6d012936b99aa6b26b218e6c0a6b5de05e16b",
+    "runtime_file_count": 1243,
+    "runtime_file_count_matches_manifest": true,
+    "runtime_inputs_clean": true,
+    "runtime_manifest_sha_matches": true,
+    "runtime_match": true,
+    "runtime_mismatch_count": 0,
+    "verified": true
+  },
+  "runtime": {
+    "exact_image_match": true,
+    "expected_image_id": "sha256:b2f71864d49fe1a04b6207017f231bbb3e448113c07a1838d51f0dc00cf2f89a",
+    "health": "healthy",
+    "healthy_get_status": 200,
+    "restart_count": 0,
+    "running": true,
+    "running_image_id": "sha256:b2f71864d49fe1a04b6207017f231bbb3e448113c07a1838d51f0dc00cf2f89a",
+    "started_at_utc": "2026-10-01T13:08:51.009576964Z"
+  },
+  "startup": {
+    "active_run_count": 0,
+    "completed_step_count": 81,
+    "current": true,
+    "journal_step_count": 81,
+    "plan_step_count": 81,
+    "running_step_count": 0
+  },
+  "scheduler": {
+    "first_age_seconds": 29,
+    "first_state": "healthy",
+    "progressed": true,
+    "samples_separated_seconds": 31,
+    "second_age_seconds": 0,
+    "second_state": "healthy"
+  },
+  "pages": {
+    "common_content_empty": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "common_content_single": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "common_content_single_read": {
+      "http_status": 200,
+      "status": "passed"
+    },
+    "login_health": {
+      "anonymous_before_signed_session": true,
+      "http_status": 200,
+      "javascript_enabled": true,
+      "normal_login_exercised": false,
+      "status": "passed",
+      "transport_failure_codes": []
+    },
+    "ozon_account_history": {
+      "http_status": 200,
+      "status": "passed"
+    },
+    "ozon_catalog": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_draft_detail_1": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_draft_detail_2": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_draft_list": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_health_page": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_health_status": {
+      "http_status": 200,
+      "status": "passed"
+    },
+    "ozon_operation_detail": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_operation_readback": {
+      "http_status": 200,
+      "status": "passed"
+    },
+    "ozon_operation_review": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_operation_review_read": {
+      "http_status": 200,
+      "status": "passed"
+    },
+    "ozon_operations": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_settings": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "ozon_setup_status": {
+      "http_status": 200,
+      "status": "passed"
+    },
+    "wb_bulk_history": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "wb_bulk_history_detail": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "wb_catalog": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    },
+    "wb_edit": {
+      "selector_present": [
+        true,
+        true
+      ],
+      "status": "passed",
+      "status_by_theme": [
+        200,
+        200
+      ],
+      "transport_failure_codes": []
+    }
+  },
+  "layouts": [
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_catalog",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_catalog",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_catalog",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_catalog",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_edit",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_edit",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_edit",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_edit",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_bulk_history",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_bulk_history",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_bulk_history",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_bulk_history",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_bulk_history_detail",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_bulk_history_detail",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_bulk_history_detail",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "wb_bulk_history_detail",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "common_content_empty",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "common_content_empty",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "common_content_empty",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "common_content_empty",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "common_content_single",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "common_content_single",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "common_content_single",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "common_content_single",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_catalog",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_catalog",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_catalog",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_catalog",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_list",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_list",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_list",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_list",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_detail_1",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_detail_1",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_detail_1",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_detail_1",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_detail_2",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_detail_2",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_detail_2",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_draft_detail_2",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_settings",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_settings",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_settings",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_settings",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_health_page",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_health_page",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_health_page",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_health_page",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operations",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operations",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operations",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operations",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operation_detail",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operation_detail",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operation_detail",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operation_detail",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operation_review",
+      "requested_width": 390,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operation_review",
+      "requested_width": 1440,
+      "root_theme": "light",
+      "theme": "light",
+      "viewport_width": 1440
+    },
+    {
+      "document_width": 390,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operation_review",
+      "requested_width": 390,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 390
+    },
+    {
+      "document_width": 1440,
+      "horizontal_overflow": false,
+      "main_visible": true,
+      "page": "ozon_operation_review",
+      "requested_width": 1440,
+      "root_theme": "dark",
+      "theme": "dark",
+      "viewport_width": 1440
+    }
+  ],
+  "assets": {
+    "immutable_photo_assets_verified": 2,
+    "local_static_body_oversize_count": 0,
+    "local_static_body_read_errors": 1,
+    "local_static_hash_matches": 137,
+    "local_static_hash_mismatches": 0,
+    "local_static_requests": 138,
+    "local_static_unrecognized_response_count": 0,
+    "local_static_unverified_url_count": 0
+  },
+  "asset_hashes": {
+    "/static/ai-chat-popup.css?v=20260715-image1": true,
+    "/static/ai-chat-popup.js?v=20260716-marketplace-image1": true,
+    "/static/common-product-content.css": true,
+    "/static/common-product-content.js": true,
+    "/static/draft-source-picker.js": true,
+    "/static/favicon.svg": true,
+    "/static/marketplace-beta-shared.js": true,
+    "/static/marketplace-catalog-beta.css": true,
+    "/static/marketplace-catalog-beta.js": true,
+    "/static/marketplace-catalog.css": true,
+    "/static/marketplace-prices.css": true,
+    "/static/operations-workspace.css?v=ux01-7": true,
+    "/static/operations-workspace.css?v=ux01-7-9": true,
+    "/static/ozon-account-health.css": true,
+    "/static/ozon-account-health.js": true,
+    "/static/ozon-account-setup-vue.js": true,
+    "/static/ozon-account-setup.css": true,
+    "/static/ozon-account-setup.js": true,
+    "/static/ozon-draft-ai-review.js": true,
+    "/static/ozon-draft-ai.css": true,
+    "/static/ozon-draft-editor.css": true,
+    "/static/ozon-draft-editor.js": true,
+    "/static/ozon-drafts-vue.js": true,
+    "/static/ozon-drafts.css": true,
+    "/static/ozon-operation-review.css": true,
+    "/static/ozon-operation-review.js": true,
+    "/static/ozon-result-status.css": true,
+    "/static/ozon-result-status.js": true,
+    "/static/preparation-workspace.css": true,
+    "/static/seller-workspace.css?v=20260930-ux01": true,
+    "/static/sh-ui.css?v=20260716-2": true,
+    "/static/sh-ui.js?v=20260721-1": true,
+    "/static/vendor/vue-3.4.38.global.prod.js": true
+  },
+  "asset_hash_observations": {
+    "/static/ai-chat-popup.css?v=20260715-image1": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 15,
+      "verified": true
+    },
+    "/static/ai-chat-popup.js?v=20260716-marketplace-image1": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 15,
+      "verified": true
+    },
+    "/static/common-product-content.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 2,
+      "verified": true
+    },
+    "/static/common-product-content.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 2,
+      "verified": true
+    },
+    "/static/draft-source-picker.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/favicon.svg": {
+      "body_read_error_count": 1,
+      "body_read_error_types": {
+        "Error": 1
+      },
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 15,
+      "verified": true
+    },
+    "/static/marketplace-beta-shared.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 3,
+      "verified": true
+    },
+    "/static/marketplace-catalog-beta.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/marketplace-catalog-beta.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/marketplace-catalog.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/marketplace-prices.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/operations-workspace.css?v=ux01-7": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 3,
+      "verified": true
+    },
+    "/static/operations-workspace.css?v=ux01-7-9": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-account-health.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-account-health.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-account-setup-vue.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-account-setup.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-account-setup.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-draft-ai-review.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 2,
+      "verified": true
+    },
+    "/static/ozon-draft-ai.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 2,
+      "verified": true
+    },
+    "/static/ozon-draft-editor.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 3,
+      "verified": true
+    },
+    "/static/ozon-draft-editor.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 2,
+      "verified": true
+    },
+    "/static/ozon-drafts-vue.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-drafts.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-operation-review.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-operation-review.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-result-status.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/ozon-result-status.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 1,
+      "verified": true
+    },
+    "/static/preparation-workspace.css": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 3,
+      "verified": true
+    },
+    "/static/seller-workspace.css?v=20260930-ux01": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 15,
+      "verified": true
+    },
+    "/static/sh-ui.css?v=20260716-2": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 15,
+      "verified": true
+    },
+    "/static/sh-ui.js?v=20260721-1": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 15,
+      "verified": true
+    },
+    "/static/vendor/vue-3.4.38.global.prod.js": {
+      "body_read_error_count": 0,
+      "body_read_error_types": {},
+      "hash_mismatch_count": 0,
+      "oversize_count": 0,
+      "successful_match_count": 8,
+      "verified": true
+    }
+  },
+  "network": {
+    "blocked_external_image_count": 50,
+    "blocked_external_nonstatic_count": 0,
+    "blocked_mutating_get_count": 1,
+    "blocked_non_get_count": 0,
+    "blocked_photo_cache_get_count": 10,
+    "blocked_unexpected_local_get_count": 0,
+    "external_static_http_error_count": 0,
+    "external_static_invalid_status_count": 0,
+    "external_static_response_counts": {
+      "cdn.jsdelivr.net:script:200": 46,
+      "cdn.tailwindcss.com:script:200": 15,
+      "cdn.tailwindcss.com:script:302": 15,
+      "fonts.googleapis.com:stylesheet:200": 16,
+      "fonts.gstatic.com:font:200": 65
+    },
+    "http_status_counts": {
+      "common_content_empty_or_selected:200": 2,
+      "common_content_read:200": 1,
+      "immutable_local_photo:200": 2,
+      "login_health:200": 1,
+      "notification_count:200": 15,
+      "ozon_account_health:200": 3,
+      "ozon_account_history_or_setup:200": 2,
+      "ozon_catalog:200": 1,
+      "ozon_catalog_api:200": 2,
+      "ozon_draft_detail:200": 2,
+      "ozon_draft_editor:200": 2,
+      "ozon_draft_list:200": 1,
+      "ozon_operation_detail_or_review:200": 5,
+      "ozon_operations:200": 1,
+      "ozon_saved_ai_review_state:200": 2,
+      "ozon_settings:200": 1,
+      "static:200": 138,
+      "task_tray:200": 15,
+      "wb_bulk_history:200": 1,
+      "wb_bulk_history_detail:200": 1,
+      "wb_catalog:200": 1,
+      "wb_edit:200": 1
+    },
+    "local_http_errors": 0,
+    "persisted_ai_suggestion_reads": 2,
+    "provider_endpoint_attempts_blocked": 0,
+    "request_count": 403,
+    "request_failure_bucket_overflow_count": 0,
+    "request_failure_counts": {},
+    "unapproved_static_count": 0
+  },
+  "javascript": {
+    "blocked_agent_metadata_gets_by_page": {
+      "wb_catalog": 1
+    },
+    "console_error_count": 1,
+    "console_error_expected_blocked_agent_count": 1,
+    "console_error_unexpected_count": 0,
+    "console_errors_by_page": {
+      "wb_catalog": {
+        "expected_blocked_agent": 1,
+        "total": 1,
+        "unexpected": 0
+      }
+    },
+    "console_ignored_resource_error_count": 61,
+    "page_error_count": 0
+  },
+  "limitations": {
+    "admin_login": "not_run; may be checked separately with existing admin helper",
+    "agent_metadata_refresh": "not tested; known mutating GET is blocked before Flask",
+    "ai_generation_requested": false,
+    "external_product_images": "not tested; external image requests are blocked",
+    "photo_cache_and_origin_photo_delivery": "not tested; potentially mutating GETs are blocked before Flask",
+    "photo_cache_route_reached": false,
+    "photo_pixels_verified": false,
+    "provider_network_calls_from_smoke_browser": 0,
+    "publish_or_sync_requested_by_smoke": false,
+    "runtime_background_provider_reads": "not attributed or measured by this smoke",
+    "seller_session_is_not_normal_login": true
+  },
+  "failure_codes": [],
+  "browser": {
+    "playwright": "1.52.0",
+    "chromium": "136.0.7103.25",
+    "revision": 1169,
+    "binary_sha256": "88aa5dcd6b16a1692c77445b64343e192fef3051ad6537bb2819ff97392b2ee2"
+  },
+  "operator_helper": {
+    "sha256": "1d258989447315abbc2335188da117826a99a9fa8b6330384469f7fbd01ad40f",
+    "offline_checks": 143,
+    "private_helper_not_product_code": true,
+    "source_after_product_gates_unchanged": true
+  },
+  "independent_root_review": {
+    "exact_layout_rows": 60,
+    "unique_layout_rows": 60,
+    "all_main_visible": true,
+    "page_checks_passed": 22,
+    "exact_static_urls_verified": 33,
+    "business_ids_counts_bodies_and_credentials_excluded": true
+  }
+}
