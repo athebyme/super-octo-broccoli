@@ -192,6 +192,14 @@
             </div>
         </div>
 
+        {% set operation_params = bulk_operation.operation_params if bulk_operation.operation_params is mapping else {} %}
+        {% set review_summary = operation_params.get('review_summary') %}
+        {% set review_summary_valid = review_summary is mapping
+            and review_summary.get('selected') is integer and review_summary.get('selected') is not boolean and review_summary.get('selected') >= 0
+            and review_summary.get('eligible') is integer and review_summary.get('eligible') is not boolean and review_summary.get('eligible') >= 0
+            and review_summary.get('changed') is integer and review_summary.get('changed') is not boolean and review_summary.get('changed') >= 0
+            and review_summary.get('skipped') is integer and review_summary.get('skipped') is not boolean and review_summary.get('skipped') >= 0 %}
+
         <!-- Статистика -->
         <div class="operations-stats-grid grid grid-cols-4 gap-4">
             <div class="bg-gray-50 p-4 rounded-lg">
@@ -207,9 +215,15 @@
                 <p class="text-3xl font-bold text-red-700">{{ bulk_operation.error_count }}</p>
             </div>
             <div class="bg-blue-50 p-4 rounded-lg">
-                <p class="text-xs text-gray-600 mb-1">Без общей ошибки</p>
+                <p class="text-xs text-gray-600 mb-1">
+                    {% if review_summary_valid %}Без ошибки из подготовленных{% else %}Без общей ошибки{% endif %}
+                </p>
                 <p class="text-3xl font-bold text-blue-700">
-                    {% if bulk_operation.total_products > 0 %}
+                    {% if review_summary_valid and review_summary.changed > 0 %}
+                        {{ "%.0f"|format((bulk_operation.success_count / review_summary.changed) * 100) }}%
+                    {% elif review_summary_valid %}
+                        —
+                    {% elif bulk_operation.total_products > 0 %}
                         {{ "%.0f"|format((bulk_operation.success_count / bulk_operation.total_products) * 100) }}%
                     {% else %}
                         0%
@@ -218,13 +232,7 @@
             </div>
         </div>
 
-        {% set operation_params = bulk_operation.operation_params if bulk_operation.operation_params is mapping else {} %}
-        {% set review_summary = operation_params.get('review_summary') %}
-        {% if review_summary is mapping
-            and review_summary.get('selected') is integer and review_summary.get('selected') is not boolean and review_summary.get('selected') >= 0
-            and review_summary.get('eligible') is integer and review_summary.get('eligible') is not boolean and review_summary.get('eligible') >= 0
-            and review_summary.get('changed') is integer and review_summary.get('changed') is not boolean and review_summary.get('changed') >= 0
-            and review_summary.get('skipped') is integer and review_summary.get('skipped') is not boolean and review_summary.get('skipped') >= 0 %}
+        {% if review_summary_valid %}
         <section class="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4" data-operations-review-summary aria-labelledby="operations-review-summary-title">
             <h3 id="operations-review-summary-title" class="mb-3 font-semibold text-gray-900">Итог проверенного массового изменения</h3>
             <dl class="grid grid-cols-2 gap-3 md:grid-cols-4">

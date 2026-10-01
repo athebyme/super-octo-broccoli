@@ -263,6 +263,9 @@ def test_reviewed_batch31_summary_counts_skips_and_uses_changed_denominator():
     assert "Ошибок операции: <strong>0</strong>" in summary
     assert 'data-operations-review-summary' in summary
     assert "subject_id" not in summary
+    assert "Без ошибки из подготовленных" in html
+    assert "4%" not in html
+    assert "100%" in html
     technical_start = html.index("Технические параметры операции")
     details_start = html.rfind("<details", 0, technical_start)
     assert "\"subject_id\": 123" in html[technical_start:]
@@ -273,6 +276,50 @@ def test_legacy_history_without_review_summary_keeps_legacy_summary_only():
     html = _render_bulk_history_detail([], error_count=1)
     assert 'data-operations-review-summary' not in html
     assert "Всего товаров" in html
+    assert "Без общей ошибки" in html
+
+
+def test_review_history_zero_changed_uses_dash_and_bad_summary_falls_back_safely():
+    no_changes = _render_bulk_history_detail(
+        [],
+        total_products=20,
+        success_count=0,
+        operation_params={
+            "review_summary": {
+                "selected": 20,
+                "eligible": 0,
+                "changed": 0,
+                "skipped": 20,
+            },
+        },
+    )
+    stats = no_changes[
+        no_changes.index('class="operations-stats-grid'):no_changes.index("data-operations-review-summary")
+    ]
+    assert "Без ошибки из подготовленных" in stats
+    assert "—" in stats
+    assert "0%" not in stats
+
+    malformed = _render_bulk_history_detail(
+        [],
+        total_products=50,
+        success_count=2,
+        operation_params={
+            "review_summary": {
+                "selected": True,
+                "eligible": 50,
+                "changed": 2,
+                "skipped": 48,
+            },
+        },
+    )
+    stats = malformed[
+        malformed.index('class="operations-stats-grid'):malformed.index("<!-- Параметры операции -->")
+    ]
+    assert 'data-operations-review-summary' not in malformed
+    assert "Без общей ошибки" in stats
+    assert "Без ошибки из подготовленных" not in stats
+    assert "4%" in stats
 
 
 def test_bulk_detail_shows_row_identity_and_typed_error_outside_collapsed_raw_data():
