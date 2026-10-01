@@ -4929,7 +4929,7 @@ def _update_imported_from_supplier(imp: ImportedProduct, sp: SupplierProduct) ->
         provenance["title"] = "source"
     if sp.description not in (None, ""):
         source_values["description"] = sp.description
-        description_source = str(sp.description_source or "").casefold()
+        description_source = str(sp.description_source or "").strip().casefold()
         if description_source in {"ai", "ai_generated", "generated"}:
             provenance["description"] = "ai_suggestion"
         elif description_source in {"manual", "csv"}:

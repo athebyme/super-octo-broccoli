@@ -669,9 +669,10 @@ def _source_origins(product: ImportedProduct, overrides: dict | None = None) -> 
             else saved_origin("title") if "title" in override_fields else "unknown"
         )
         if supplier.description not in (None, ""):
-            if supplier.description_source == "ai":
+            description_source = str(supplier.description_source or "").strip().casefold()
+            if description_source in {"ai", "ai_generated", "generated"}:
                 origins["description"] = "ai_suggestion"
-            elif supplier.description_source == "manual":
+            elif description_source in {"manual", "csv"}:
                 origins["description"] = "supplier_enrichment"
             else:
                 origins["description"] = "source"

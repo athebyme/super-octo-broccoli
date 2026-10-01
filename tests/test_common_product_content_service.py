@@ -261,6 +261,53 @@ def test_ai_description_is_not_labeled_as_observed_source(content_app):
         assert state["fields"]["description"]["origin"] == "ai_suggestion"
 
 
+@pytest.mark.parametrize(("source_label", "expected_origin"), [
+    ("ai_generated", "ai_suggestion"),
+    ("generated", "ai_suggestion"),
+    ("AI_Generated", "ai_suggestion"),
+    ("csv", "supplier_enrichment"),
+])
+def test_supplier_description_source_aliases_keep_raw_observation_separate(
+    content_app,
+    source_label,
+    expected_origin,
+):
+    with content_app.app_context():
+        seller = _seller()
+        supplier = Supplier(name="Feed", code=f"feed-description-{source_label}")
+        db.session.add(supplier)
+        db.session.flush()
+        shared = _supplier_product(
+            supplier,
+            description="Generated or curated candidate",
+            description_source=source_label,
+            original_data_json=json.dumps({"description": "Raw source description"}),
+        )
+        product = _imported(
+            seller.id,
+            supplier_id=supplier.id,
+            supplier_product_id=shared.id,
+            supplier_product=shared,
+            description="Prior copied description",
+            original_data=shared.original_data_json,
+        )
+        db.session.commit()
+
+        from services.supplier_service import _update_imported_from_supplier
+        _update_imported_from_supplier(product, shared)
+        db.session.commit()
+
+        state = CommonProductContentService.read_many(
+            seller_id=seller.id,
+            product_ids=[product.id],
+        )[0]
+        raw = json.loads(product.original_data)
+        assert state["fields"]["description"]["inherited"] == "Generated or curated candidate"
+        assert state["fields"]["description"]["inherited_origin"] == expected_origin
+        assert raw["description"] == "Raw source description"
+        assert "Generated or curated candidate" not in json.dumps(raw, ensure_ascii=False)
+
+
 def test_supplier_refresh_preserves_all_manual_fields_and_keeps_ai_out_of_source(content_app):
     with content_app.app_context():
         seller = _seller()
@@ -722,14 +769,17 @@ def test_selected_photo_survives_source_gallery_refresh_and_missing_preview(cont
         )
         db.session.commit()
 
-        with patch("services.source_photo_display.imported_photo_previews", return_value={}):
-            state = CommonProductContentService.read_many(seller_id=seller.id, product_ids=[imported.id])[0]
+        state = CommonProductContentService.read_many(seller_id=seller.id, product_ids=[imported.id])[0]
         options = {option["url"]: option for option in state["photo_options"]}
 
         assert state["fields"]["photos"]["effective"] == [old_url]
         assert state["fields"]["photos"]["inherited"] == [new_url]
         assert options[old_url]["available_for_selection"] is True
-        assert options[new_url]["available_for_selection"] is False
+        assert options[old_url]["preview_url"] is None
+        assert options[new_url]["available_for_selection"] is True
+        assert options[new_url]["preview_url"] == (
+            f"/api/photos/imported-product/{imported.id}/0?deferred=1"
+        )
         preview = CommonProductContentService.preview(
             seller_id=seller.id,
             user_id=75,
@@ -741,6 +791,20 @@ def test_selected_photo_survives_source_gallery_refresh_and_missing_preview(cont
             }],
         )
         assert preview["preview_token"]
+        CommonProductContentService.apply(
+            seller_id=seller.id,
+            user_id=75,
+            token=preview["preview_token"],
+        )
+        db.session.commit()
+        reopened = CommonProductContentService.read_many(
+            seller_id=seller.id,
+            product_ids=[imported.id],
+        )[0]
+        assert reopened["fields"]["photos"]["effective"] == [old_url]
+        assert reopened["photo_options"][0]["url"] == old_url
+        assert reopened["photo_options"][0]["preview_url"] is None
+        assert reopened["photo_options"][0]["available_for_selection"] is True
 
 
 def test_supplier_refresh_batch_savepoint_discards_failed_row_after_guard(content_app):

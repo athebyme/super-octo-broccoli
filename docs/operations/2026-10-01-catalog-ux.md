@@ -1,8 +1,9 @@
 # Catalog UX audit and common-content editor contract
 
 2026-10-01. Audit on isolated worktree `codex/catalog-ux-20261001`, base
-`c6c5431`. This note records current ownership and a bounded implementation
-contract; it does not claim that a common editor or backend exists.
+`c6c5431`. This note records the audit findings, accepted implementation
+contract, and bounded implementation evidence for the common-content backend
+and catalog UX work.
 
 ## Findings
 
@@ -64,7 +65,7 @@ fields are title, description, existing photo selection/order, and common
 characteristics. Exclude category IDs, WB `imtID`, price, stock, channel
 identities, and publication state.
 
-Recommended additive metadata on `ImportedProduct`:
+Accepted additive metadata on `ImportedProduct`:
 
 - `content_overrides_json`: nullable, versioned, strict allowlist by field. Each
   entry records whether the seller chose an override, the typed effective value,
@@ -93,7 +94,7 @@ supplier evidence. FactPack/source-only AI paths must label or exclude manual
 overrides rather than copying them into `original_data` or presenting them as
 original source facts.
 
-Suggested API boundary in a dedicated service module and seller-scoped route
+Accepted API boundary in a dedicated service module and seller-scoped route
 module:
 
 - `GET /api/my-products/<id>/common-content`: authenticate seller ownership,
@@ -129,12 +130,11 @@ no implicit publish, relink, price/stock change, WB imtID change, or silent
 overwrite is permitted. Use existing account, listing, draft, WB edit/history,
 enrichment, FBS and link guards; do not invent parallel channel write lanes.
 
-Before implementation, enumerate every ImportedProduct writer and move all
-title/description/photo/characteristic writes that can overlap seller common
-fields behind the same override-aware helper. In particular, agent changes
-must not overwrite a manual field, and the Ozon canonical proposal must retain
-its exact listing/account/source fingerprints and explicit review. Existing
-channel draft snapshots must not be rewritten by a common save.
+The writer inventory above is implemented: supplier refresh, CSV import, and
+internal agent writes are guarded against stale common-content edits, while
+Ozon canonical updates retain their listing/account/source review and conflict
+with active manual overrides. Existing channel draft snapshots are not rewritten
+by a common save.
 
 ## UX scope accepted for the current worker
 
@@ -152,3 +152,28 @@ channel draft snapshots must not be rewritten by a common save.
 The broader UX-01.1/.11 regressions and the remaining already-accepted tasks
 must use the existing implementation and verification artifacts in
 `docs/design/ux-01-implementation.md`; this work does not repeat those changes.
+
+## Implementation notes and limits
+
+- Non-editor `ImportedProduct` writers now capture and conditionally guard the
+  exact common-content state they read before writing. Supplier refresh uses a
+  per-row savepoint inside its owned batch commit; CSV import rolls back its
+  row on any guarded-refresh failure. A late edit-version/override change
+  conflicts even when the visible common value is unchanged.
+- Current common content and observed supplier data remain separate. Supplier
+  AI suggestions and enrichment can be inherited with their own provenance,
+  but manual common values are not copied into `original_data`. Explicitly
+  cleared source characteristics stay cleared after refresh/category rollback.
+- Photo preview follows the existing authenticated supplier-first slot route.
+  If a legacy selected URL was in an imported-product slot that is now occupied
+  by a different supplier URL, the legacy URL can remain selected and ordered
+  while its `preview_url` is unavailable. The UI must show that unavailable
+  preview without substituting another supplier image. This is a display
+  limitation; it does not show that the effective/published photo URL was lost.
+  A supplier URL receives a preview only when the existing route serves that
+  exact URL from that exact slot. No arbitrary-URL proxy or second photo route
+  is introduced.
+- Focused writer, source, and history verification is recorded in commits
+  `0107b91` and `c196c62`; the exact photo-slot retention regression is in a
+  separate follow-up change. These are isolated-worktree code checks, not a
+  production or browser-session claim.
