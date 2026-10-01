@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-01T20:24:57.119025+00:00",
+  "generated_at": "2026-10-01T21:37:59.922357+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -31,7 +31,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "ffe5e5ec3152b11dc0de35676f5d73fa1f3f5bc154f5a22b81a59dbf5fd41385"
+      "sha256": "e9f73ed7dc43356ff4dac84ecd997741c79db672258505e72fab248ab9d1ba48"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -463,7 +463,7 @@
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
-      "sha256": "c70724b56e06f59045399fc41ec249be412aa5f7fcb52cd0ca92ce9dc80d2e0a"
+      "sha256": "1bae3755839c7dbab41ef68b33b0e1727279c83d5930f2d5f71c66357b685405"
     },
     {
       "path": "docs/design/ozon-vue-linking-and-category-review.md",
@@ -2627,7 +2627,7 @@
     },
     {
       "path": "static/ozon-draft-editor.css",
-      "sha256": "8b2e95d5c16fa86f12cadf3c699976edd7d6b83236d233dfe63676d5720b794e"
+      "sha256": "5d8ab54cfb1c894d7f435f7fccbac7446c835a11c25e8d7ae56615e6237b7216"
     },
     {
       "path": "static/ozon-draft-editor.js",
@@ -3615,7 +3615,7 @@
     },
     {
       "path": "tests/ozon_release/draft_editor_photo_browser.py",
-      "sha256": "1d5fad1ca8316ea70dbec94e2d0eda1f8058c723254f6c8afaa6947378c59def"
+      "sha256": "8e9df4879a80883fa2425f10a1695e0ee6e024d782ca77032feccbe3b3ef38fd"
     },
     {
       "path": "tests/ozon_release/ozon_complete_journey_browser.py",
@@ -4994,5 +4994,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "bcffdc7d1c7eae2d3165ce2c9c9eda883669369361d4fc67248baabe401784cb"
+  "aggregate_sha256": "b8a5c981343996df07c4c7d0f6c18553defbeaa5d442977dab63f9cc30bb99ee"
 }
