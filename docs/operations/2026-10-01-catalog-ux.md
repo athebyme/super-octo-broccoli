@@ -37,6 +37,18 @@ and catalog UX work.
    and account and writes a snapshot with `task_id=NULL` and
    `agent_id="ozon-canonical-review"`. Keep this source-review proposal distinct
    from seller-authored overrides.
+5. `services/image_lab_service.py:create_experiments` can seed an empty legacy
+   `ImportedProduct.photo_urls` from the exact linked seller-owned WB gallery
+   when the seller explicitly starts an image experiment. This fallback is
+   suppressed by any active seller photo override, including an explicit empty
+   selection; otherwise its persistence is guarded against a late common edit.
+   Invalid experiments do not persist the fallback. Every present link field
+   (`product_id` and/or `wb_nm_id`) must identify the same seller-owned WB row;
+   the normalized URL list is sealed with that row's raw gallery and rechecked
+   after the short write guard, without holding a database lock during URL
+   normalization. The Image Lab's source count and byte-fetch helpers honor the
+   same explicit-empty state, so opening or fetching a cleared photo selection
+   cannot silently switch back to WB media.
 
 Other nearby assignments in WB card editing, enrichment, and publication
 reconciliation write `Product` or marketplace listing snapshots; they are not
@@ -131,10 +143,11 @@ overwrite is permitted. Use existing account, listing, draft, WB edit/history,
 enrichment, FBS and link guards; do not invent parallel channel write lanes.
 
 The writer inventory above is implemented: supplier refresh, CSV import, and
-internal agent writes are guarded against stale common-content edits, while
-Ozon canonical updates retain their listing/account/source review and conflict
-with active manual overrides. Existing channel draft snapshots are not rewritten
-by a common save.
+internal agent writes are guarded against stale common-content edits; the Image
+Lab's exact linked-WB photo fallback is also override-aware and only persists
+after validation. Ozon canonical updates retain their listing/account/source
+review and conflict with active manual overrides. Existing channel draft
+snapshots are not rewritten by a common save.
 
 ## UX scope accepted for the current worker
 

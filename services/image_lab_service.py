@@ -29,7 +29,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from models import ImageGenerationExperiment, ImportedProduct, Product, db
 from services.infographic_prompts import (
@@ -835,22 +835,58 @@ def create_experiments(
     requested_views: Any = None,
     commit: bool = True,
     marketplace_target: Any = None,
+    photo_fallback_urls: Optional[List[str]] = None,
+    photo_fallback_context: Optional[Dict[str, Any]] = None,
 ) -> List[ImageGenerationExperiment]:
     product = ImportedProduct.query.filter_by(id=product_id, seller_id=seller_id).first()
     if not product:
         raise ImageLabError("Товар не найден")
+    from services.common_product_content import (
+        CommonProductContentError,
+        active_override_fields,
+        common_content_override_projection,
+        content_writer_guard_snapshot,
+        guard_content_writer,
+    )
+
+    try:
+        override_fields = active_override_fields(product)
+        manual_photo_override = "photos" in override_fields
+        if manual_photo_override:
+            # Verify that the effective photo column still matches the
+            # seller-reviewed override before using it for an experiment.
+            common_content_override_projection(product)
+    except CommonProductContentError as exc:
+        raise ImageLabError(
+            "Не удалось проверить общий выбор фотографий; обновите карточку"
+        ) from exc
+
     photos = photo_entries(product.photo_urls)
+    fallback_urls = []
+    fallback_guard_state = None
+    fallback_context = photo_fallback_context
     if not photos:
-        fallback_urls = exact_linked_wb_photo_urls(product)
-        if fallback_urls:
-            # Persist only at the seller-confirmed experiment boundary. Browser
-            # previews use the same exact link without mutating on GET.
-            product.photo_urls = json.dumps(
-                fallback_urls,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            photos = photo_entries(product.photo_urls)
+        if not manual_photo_override:
+            # Read the fallback before locking. A late common-content edit is
+            # detected by this exact raw/version seal immediately before the
+            # legacy fallback is persisted, after all request validation.
+            fallback_guard_state = content_writer_guard_snapshot(product)
+            if photo_fallback_urls is None:
+                fallback_context = capture_photo_fallback_context(product)
+                if fallback_context is None:
+                    raise ImageLabError(
+                        "Не удалось подтвердить точную связь товара с карточкой WB"
+                    )
+                raw_fallback = fallback_context.get("resolved_photo_urls")
+            else:
+                raw_fallback = photo_fallback_urls
+            fallback_urls = _validated_photo_fallback_urls(raw_fallback)
+            if (
+                not isinstance(fallback_context, dict)
+                or fallback_context.get("resolved_photo_urls") != fallback_urls
+            ):
+                raise ImageLabError("Ссылки на исходные фотографии не совпадают с источником WB")
+            photos = photo_entries(fallback_urls)
     if not photos:
         raise ImageLabError("У товара нет исходного фото")
     target_context = validate_marketplace_target(
@@ -994,6 +1030,21 @@ def create_experiments(
     job_count = len(validated) * len(job_specs)
     total_cost = sum(value[2] for value in validated) * len(job_specs)
     enforce_budget(seller_id, total_cost, job_count)
+    if fallback_urls:
+        try:
+            guard_content_writer(product, expected=fallback_guard_state)
+        except CommonProductContentError as exc:
+            raise ImageLabError(
+                "Фотографии товара изменились после чтения; обновите карточку и повторите"
+            ) from exc
+        _verify_photo_fallback_context(product, fallback_context, fallback_urls)
+        # Keep the existing seller-confirmed WB fallback behavior, but only
+        # after every request field and budget has passed validation.
+        product.photo_urls = json.dumps(
+            fallback_urls,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     experiments = []
     for photo_group, requested_view in job_specs:
         stored_mode = "single" if generation_mode == "each" else generation_mode
@@ -1948,17 +1999,140 @@ def photo_count(raw: Any) -> int:
 def _exact_linked_wb_product(source: ImportedProduct) -> Optional[Product]:
     """Resolve only the explicit seller-owned ImportedProduct -> Product link."""
     product_id = getattr(source, "product_id", None)
+    wb_nm_id = getattr(source, "wb_nm_id", None)
     seller_id = getattr(source, "seller_id", None)
     if (
-        isinstance(product_id, bool)
-        or not isinstance(product_id, int)
-        or product_id <= 0
-        or isinstance(seller_id, bool)
+        isinstance(seller_id, bool)
         or not isinstance(seller_id, int)
         or seller_id <= 0
     ):
         return None
-    return Product.query.filter_by(id=product_id, seller_id=seller_id).first()
+    if product_id is not None:
+        if (
+            isinstance(product_id, bool)
+            or not isinstance(product_id, int)
+            or product_id <= 0
+        ):
+            return None
+        product = Product.query.filter_by(
+            id=product_id, seller_id=seller_id,
+        ).first()
+        if (
+            product is None
+            or (
+                wb_nm_id is not None
+                and (
+                    isinstance(wb_nm_id, bool)
+                    or not isinstance(wb_nm_id, int)
+                    or wb_nm_id != product.nm_id
+                )
+            )
+        ):
+            return None
+        return product
+    if (
+        isinstance(wb_nm_id, bool)
+        or not isinstance(wb_nm_id, int)
+        or wb_nm_id <= 0
+    ):
+        return None
+    return Product.query.filter_by(nm_id=wb_nm_id, seller_id=seller_id).first()
+
+
+def _photo_fallback_link_matches(
+    imported_product_id: Optional[int],
+    imported_wb_nm_id: Optional[int],
+    product_id: int,
+    product_nm_id: int,
+) -> bool:
+    """Require every present legacy link field to identify the same WB row."""
+    has_product_link = imported_product_id is not None
+    has_wb_link = imported_wb_nm_id is not None
+    return bool(
+        (has_product_link or has_wb_link)
+        and (not has_product_link or imported_product_id == product_id)
+        and (not has_wb_link or imported_wb_nm_id == product_nm_id)
+    )
+
+
+def capture_photo_fallback_context(
+    source: ImportedProduct,
+    linked_product: Optional[Product] = None,
+) -> Optional[Dict[str, Any]]:
+    """Seal the exact seller-owned WB row and media used for a photo fallback."""
+    if linked_product is None:
+        linked_product = _exact_linked_wb_product(source)
+    if (
+        linked_product is None
+        or linked_product.seller_id != source.seller_id
+        or not _photo_fallback_link_matches(
+            source.product_id,
+            source.wb_nm_id,
+            linked_product.id,
+            linked_product.nm_id,
+        )
+    ):
+        return None
+    return {
+        "imported_product_id": source.id,
+        "seller_id": source.seller_id,
+        "linked_product_id": linked_product.id,
+        "imported_product_id_link": source.product_id,
+        "imported_wb_nm_id": source.wb_nm_id,
+        "linked_product_nm_id": linked_product.nm_id,
+        "linked_product_photos_json": linked_product.photos_json,
+        "resolved_photo_urls": exact_linked_wb_photo_urls(linked_product),
+    }
+
+
+def _verify_photo_fallback_context(
+    source: ImportedProduct,
+    context: Optional[Dict[str, Any]],
+    fallback_urls: List[str],
+) -> None:
+    """Recheck imported identity, exact WB link, and raw media after the lock."""
+    expected_keys = {
+        "imported_product_id", "seller_id", "linked_product_id",
+        "imported_product_id_link", "imported_wb_nm_id",
+        "linked_product_nm_id", "linked_product_photos_json",
+        "resolved_photo_urls",
+    }
+    if not isinstance(context, dict) or set(context) != expected_keys:
+        raise ImageLabError("Не удалось проверить источник фотографий WB")
+    imported = db.session.execute(select(
+        ImportedProduct.id,
+        ImportedProduct.seller_id,
+        ImportedProduct.product_id,
+        ImportedProduct.wb_nm_id,
+    ).where(ImportedProduct.id == source.id)).one_or_none()
+    product = db.session.execute(select(
+        Product.id,
+        Product.seller_id,
+        Product.nm_id,
+        Product.photos_json,
+    ).where(Product.id == context["linked_product_id"])).one_or_none()
+    if (
+        imported is None
+        or product is None
+        or imported.id != context["imported_product_id"]
+        or imported.seller_id != context["seller_id"]
+        or imported.seller_id != product.seller_id
+        or imported.product_id != context["imported_product_id_link"]
+        or imported.wb_nm_id != context["imported_wb_nm_id"]
+        or product.nm_id != context["linked_product_nm_id"]
+        or product.photos_json != context["linked_product_photos_json"]
+        or not _photo_fallback_link_matches(
+            imported.product_id,
+            imported.wb_nm_id,
+            product.id,
+            product.nm_id,
+        )
+        or not isinstance(context["resolved_photo_urls"], list)
+        or context["resolved_photo_urls"] != fallback_urls
+    ):
+        raise ImageLabError(
+            "Связь с карточкой WB или исходные фотографии изменились; повторите проверку"
+        )
 
 
 def exact_linked_wb_photo_count(source: ImportedProduct) -> int:
@@ -1987,7 +2161,7 @@ def exact_linked_wb_photo_count(source: ImportedProduct) -> int:
 
 def exact_linked_wb_photo_urls(source: ImportedProduct) -> List[str]:
     """Expand the exact linked WB gallery into bounded public source URLs."""
-    product = _exact_linked_wb_product(source)
+    product = source if isinstance(source, Product) else _exact_linked_wb_product(source)
     if product is None:
         return []
     values = _json_load(product.photos_json, [])
@@ -2008,10 +2182,50 @@ def exact_linked_wb_photo_urls(source: ImportedProduct) -> List[str]:
     return result[:MAX_SELECTED_PHOTOS]
 
 
+def _validated_photo_fallback_urls(values: Any) -> List[str]:
+    """Validate an exact linked-WB photo fallback before persisting it."""
+    if not isinstance(values, (list, tuple)) or len(values) > MAX_SELECTED_PHOTOS:
+        raise ImageLabError("Не удалось проверить список исходных фотографий")
+    result = []
+    for value in values:
+        if not isinstance(value, str) or len(value) > 2_000 or value.strip() != value:
+            raise ImageLabError("В списке исходных фото есть некорректная ссылка")
+        parsed = urlparse(value)
+        if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
+            raise ImageLabError("В списке исходных фото есть некорректная ссылка")
+        if value not in result:
+            result.append(value)
+    return result
+
+
 def effective_photo_count(source: ImportedProduct) -> int:
     """Count canonical sources, falling back only through an exact WB link."""
     stored = photo_count(source.photo_urls)
+    if _manual_common_photo_override_active(source):
+        return stored
     return stored if stored else exact_linked_wb_photo_count(source)
+
+
+def _manual_common_photo_override_active(source: ImportedProduct) -> bool:
+    """Fail closed for read helpers when common photos are explicitly selected."""
+    from services.common_product_content import (
+        CommonProductContentError,
+        active_override_fields,
+        common_content_override_projection,
+    )
+
+    try:
+        fields = active_override_fields(source)
+    except CommonProductContentError:
+        # Malformed override metadata must not silently reopen WB fallback.
+        return True
+    if "photos" not in fields:
+        return False
+    try:
+        common_content_override_projection(source)
+    except CommonProductContentError:
+        return True
+    return True
 
 
 def validate_photo_indices(values: Optional[Iterable[int]], count: int) -> List[int]:
@@ -2174,6 +2388,8 @@ def fetch_original_product_bytes(
 ) -> bytes:
     entries = photo_entries(product.photo_urls)
     if not entries:
+        if _manual_common_photo_override_active(product):
+            raise ImageLabError("У товара нет исходного фото")
         entries = photo_entries(exact_linked_wb_photo_urls(product))
     selected = validate_photo_indices([photo_index], len(entries))[0]
     entry = entries[selected]

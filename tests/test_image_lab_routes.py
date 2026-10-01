@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from PIL import Image
+from sqlalchemy import update
 
 from flask import Flask
 from flask_login import LoginManager
@@ -172,6 +173,7 @@ class ImageLabRouteTests(unittest.TestCase):
         self.seller1_id = seller1.id
         self.seller2_id = seller2.id
         self.product1_id = product1.id
+        self.foreign_product_id = product2.id
         self.product3_id = product3.id
         self.wb_fallback_product_id = wb_fallback_product.id
         self.account1_id = account1.id
@@ -183,6 +185,26 @@ class ImageLabRouteTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             session["_user_id"] = str(self.user1_id)
             session["_fresh"] = True
+
+    def _set_manual_photo_override(self, product_id, urls):
+        product = db.session.get(ImportedProduct, product_id)
+        version = int(product.content_edit_version or 1) + 1
+        product.photo_urls = json.dumps(urls, ensure_ascii=False)
+        product.content_edit_version = version
+        product.content_overrides_json = json.dumps({
+            "schema_version": 1,
+            "fields": {
+                "photos": {
+                    "value": urls,
+                    "inherited_value": [],
+                    "inherited_origin": "unknown",
+                    "edited_by_user_id": self.user1_id,
+                    "edited_at": "2026-10-01T00:00:00",
+                    "edit_version": version,
+                },
+            },
+        }, ensure_ascii=False)
+        db.session.commit()
 
     def tearDown(self):
         db.session.remove()
@@ -278,6 +300,291 @@ class ImageLabRouteTests(unittest.TestCase):
         ])
         fallback_urls.assert_called_once()
         launch.assert_called_once()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    @mock.patch(
+        "services.image_lab_service.exact_linked_wb_photo_urls",
+        side_effect=AssertionError("conflicting WB links must fail before media lookup"),
+    )
+    def test_conflicting_product_and_wb_links_do_not_fallback(
+        self,
+        fallback_urls,
+        launch,
+    ):
+        source = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+        source.wb_nm_id = 999999
+        db.session.commit()
+        self.assertEqual(image_lab_service.effective_photo_count(source), 0)
+
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.wb_fallback_product_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+        })
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertIn("точную связь", response.get_json()["error"])
+        db.session.refresh(source)
+        self.assertIsNone(source.photo_urls)
+        self.assertEqual(
+            ImageGenerationExperiment.query.filter_by(
+                imported_product_id=self.wb_fallback_product_id,
+            ).count(),
+            0,
+        )
+        fallback_urls.assert_not_called()
+        launch.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    @mock.patch(
+        "services.image_lab_service.exact_linked_wb_photo_urls",
+        return_value=["https://basket.test/should-not-fallback.webp"],
+    )
+    def test_empty_manual_photo_override_does_not_fallback_or_create_experiment(
+        self,
+        fallback_urls,
+        launch,
+    ):
+        self._set_manual_photo_override(self.wb_fallback_product_id, [])
+
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.wb_fallback_product_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+        })
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertIn("нет исходного фото", response.get_json()["error"])
+        product = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+        self.assertEqual(json.loads(product.photo_urls), [])
+        self.assertEqual(product.content_edit_version, 2)
+        self.assertEqual(
+            ImageGenerationExperiment.query.filter_by(
+                imported_product_id=self.wb_fallback_product_id,
+            ).count(),
+            0,
+        )
+        fallback_urls.assert_not_called()
+        launch.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    @mock.patch(
+        "services.image_lab_service.exact_linked_wb_photo_urls",
+        return_value=["https://basket.test/wb-fallback.webp"],
+    )
+    def test_manual_known_photo_is_used_without_overwriting_or_wb_fallback(
+        self,
+        fallback_urls,
+        launch,
+    ):
+        manual_url = "https://seller-photo.example/manual.jpg"
+        self._set_manual_photo_override(self.wb_fallback_product_id, [manual_url])
+
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.wb_fallback_product_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+        })
+
+        self.assertEqual(response.status_code, 202, response.get_json())
+        product = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+        self.assertEqual(json.loads(product.photo_urls), [manual_url])
+        self.assertEqual(product.content_edit_version, 2)
+        fallback_urls.assert_not_called()
+        launch.assert_called_once()
+
+    def test_read_helpers_respect_empty_and_selected_common_photo_overrides(self):
+        from services.image_lab_service import (
+            effective_photo_count,
+            fetch_original_product_bytes,
+        )
+
+        source = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+        source.photo_urls = None
+        self._set_manual_photo_override(self.wb_fallback_product_id, [])
+        source = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+
+        with mock.patch(
+            "services.image_lab_service.exact_linked_wb_photo_count",
+            side_effect=AssertionError("explicit empty selection must suppress WB count"),
+        ), mock.patch(
+            "services.image_lab_service.exact_linked_wb_photo_urls",
+            side_effect=AssertionError("explicit empty selection must suppress WB photos"),
+        ), mock.patch(
+            "services.image_lab_service.download_public_image",
+            side_effect=AssertionError("empty selection must not perform network I/O"),
+        ):
+            self.assertEqual(effective_photo_count(source), 0)
+            with self.assertRaisesRegex(
+                image_lab_service.ImageLabError, "нет исходного фото",
+            ):
+                fetch_original_product_bytes(source, 0)
+
+        manual_url = "https://seller-media.example/selected-known.jpg"
+        self._set_manual_photo_override(self.wb_fallback_product_id, [manual_url])
+        source = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+        with mock.patch(
+            "services.image_lab_service.exact_linked_wb_photo_urls",
+            side_effect=AssertionError("selected common photo must not be replaced"),
+        ), mock.patch(
+            "services.image_lab_service.download_public_image",
+            return_value=b"manual-bytes",
+        ) as download, mock.patch(
+            "services.image_lab_service._verified_image_bytes",
+            return_value=b"manual-bytes",
+        ):
+            self.assertEqual(effective_photo_count(source), 1)
+            self.assertEqual(
+                fetch_original_product_bytes(source, 0), b"manual-bytes",
+            )
+        self.assertEqual(download.call_args.args[0], manual_url)
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    @mock.patch(
+        "services.image_lab_service.exact_linked_wb_photo_urls",
+        return_value=["https://basket.test/wb-fallback.webp"],
+    )
+    def test_invalid_experiment_does_not_persist_legacy_photo_fallback(
+        self,
+        fallback_urls,
+        launch,
+    ):
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.wb_fallback_product_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [],
+        })
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        fallback_urls.assert_called_once()
+        product = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+        self.assertIsNone(product.photo_urls)
+        self.assertEqual(
+            ImageGenerationExperiment.query.filter_by(
+                imported_product_id=self.wb_fallback_product_id,
+            ).count(),
+            0,
+        )
+        launch.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    @mock.patch(
+        "services.image_lab_service.exact_linked_wb_photo_urls",
+        return_value=["https://basket.test/wb-fallback.webp"],
+    )
+    def test_late_empty_photo_override_conflicts_before_fallback_persist(
+        self,
+        fallback_urls,
+        launch,
+    ):
+        from services.common_product_content import guard_content_writer as real_guard
+
+        observed_version = 1
+
+        def race_empty_override(product, *, expected=None):
+            new_version = observed_version + 1
+            override = json.dumps({
+                "schema_version": 1,
+                "fields": {
+                    "photos": {
+                        "value": [],
+                        "inherited_value": [],
+                        "inherited_origin": "unknown",
+                        "edited_by_user_id": self.user1_id,
+                        "edited_at": "2026-10-01T00:00:01",
+                        "edit_version": new_version,
+                    },
+                },
+            }, ensure_ascii=False)
+            db.session.execute(
+                update(ImportedProduct)
+                .where(ImportedProduct.id == self.wb_fallback_product_id)
+                .values(
+                    photo_urls="[]",
+                    content_edit_version=new_version,
+                    content_overrides_json=override,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            db.session.commit()
+            real_guard(product, expected=expected)
+
+        with mock.patch(
+            "services.common_product_content.guard_content_writer",
+            side_effect=race_empty_override,
+        ):
+            response = self.client.post("/image-lab/api/experiments", json={
+                "product_id": self.wb_fallback_product_id,
+                "scene_key": "luxury",
+                "custom_scene": "",
+                "targets": [{
+                    "backend": "openrouter",
+                    "model": "google/gemini-3.1-flash-lite-image",
+                }],
+            })
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertIn("изменились после чтения", response.get_json()["error"])
+        product = db.session.get(ImportedProduct, self.wb_fallback_product_id)
+        self.assertEqual(json.loads(product.photo_urls), [])
+        self.assertEqual(product.content_edit_version, 2)
+        self.assertEqual(
+            ImageGenerationExperiment.query.filter_by(
+                imported_product_id=self.wb_fallback_product_id,
+            ).count(),
+            0,
+        )
+        fallback_urls.assert_called_once()
+        launch.assert_not_called()
+
+    @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
+    @mock.patch("routes.image_lab.lab.launch_experiments")
+    @mock.patch(
+        "services.image_lab_service.exact_linked_wb_photo_urls",
+        side_effect=AssertionError("foreign source photo lookup must not run"),
+    )
+    def test_foreign_product_cannot_trigger_photo_fallback_or_experiment(
+        self,
+        fallback_urls,
+        launch,
+    ):
+        foreign = db.session.get(ImportedProduct, self.foreign_product_id)
+        foreign.photo_urls = None
+        db.session.commit()
+
+        response = self.client.post("/image-lab/api/experiments", json={
+            "product_id": self.foreign_product_id,
+            "scene_key": "luxury",
+            "custom_scene": "",
+            "targets": [{
+                "backend": "openrouter",
+                "model": "google/gemini-3.1-flash-lite-image",
+            }],
+        })
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        product = db.session.get(ImportedProduct, self.foreign_product_id)
+        self.assertIsNone(product.photo_urls)
+        fallback_urls.assert_not_called()
+        launch.assert_not_called()
 
     @mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test"})
     @mock.patch("routes.image_lab.lab.launch_experiments")

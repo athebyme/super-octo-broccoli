@@ -31,6 +31,8 @@ EXTRA_TESTS = (
     'test_supplier_enrichment_parallel.py', 'test_enrichment_inference.py',
     'test_admin_flash_handoff.py',
     'test_product_selection_dom.py',
+    'test_image_lab_service.py', 'test_image_lab_routes.py',
+    'test_internal_agent_security.py',
 )
 
 

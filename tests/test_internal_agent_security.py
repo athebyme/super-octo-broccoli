@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from flask import Flask
 from werkzeug.security import generate_password_hash
+from sqlalchemy import update
 
 from models import (
     db, APILog, AgentChangeSnapshot, AgentConversation, AgentMessage, AgentTask,
@@ -141,6 +142,41 @@ class InternalAgentSecurityTestCase(unittest.TestCase):
 
     def task_headers(self, task_id='task-1'):
         return {**self.auth, 'X-Task-Id': task_id}
+
+    def _set_photo_override(
+        self,
+        source,
+        urls,
+        *,
+        inherited_urls=None,
+        inherited_origin='unknown',
+    ):
+        version = int(source.content_edit_version or 1) + 1
+        if inherited_urls is None:
+            inherited_urls = []
+        source.photo_urls = json.dumps(urls, ensure_ascii=False)
+        source.content_edit_version = version
+        source.content_overrides_json = json.dumps({
+            'schema_version': 1,
+            'fields': {
+                'photos': {
+                    'value': urls,
+                    'inherited_value': inherited_urls,
+                    'inherited_origin': inherited_origin,
+                    'edited_by_user_id': self.seller1.user_id,
+                    'edited_at': '2026-10-01T00:00:00',
+                    'edit_version': version,
+                },
+            },
+        }, ensure_ascii=False)
+
+    def _approve_image_generation_for_product(self, product):
+        self.task1.input_data = json.dumps({
+            'risk': 'write',
+            'steps': [{'agent': 'image-generator'}],
+            'product_ids': [product.id],
+            'entity_scope': {'kind': 'product', 'ids': [product.id]},
+        })
 
     def test_task_endpoints_hide_foreign_tasks(self):
         owned = self.client.get('/internal/v1/tasks/task-1', headers=self.auth)
@@ -518,7 +554,8 @@ class InternalAgentSecurityTestCase(unittest.TestCase):
         )
         db.session.add(product)
         db.session.flush()
-        source.product_id = product.id
+        # Exercise the accepted fallback when only the exact WB nmID is stored.
+        source.product_id = None
         source.wb_nm_id = product.nm_id
         self.task1.input_data = json.dumps({
             'risk': 'write',
@@ -574,6 +611,366 @@ class InternalAgentSecurityTestCase(unittest.TestCase):
         experiment = db.session.get(ImageGenerationExperiment, experiment_id)
         self.assertEqual(experiment.imported_product_id, source.id)
         launch.assert_called_once_with(self.app, [experiment_id])
+
+    def test_paid_image_generation_respects_explicit_empty_common_photo_override(self):
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        source.photo_urls = '[]'
+        product = Product(
+            seller_id=self.seller1.id,
+            nm_id=100138375,
+            title='Связанная карточка с WB-фото',
+            photos_json='[1, 2, 3]',
+        )
+        db.session.add(product)
+        db.session.flush()
+        source.product_id = product.id
+        source.wb_nm_id = product.nm_id
+        self._set_photo_override(source, [])
+        self._approve_image_generation_for_product(product)
+        db.session.commit()
+        base = f'/internal/v1/sellers/{self.seller1.id}/image-generation'
+
+        with patch(
+            'services.wb_media.normalize_photo_urls',
+            side_effect=AssertionError('empty manual photo selection must suppress WB fallback'),
+        ), patch.dict(
+            'os.environ', {'OPENROUTER_API_KEY': 'synthetic-test-key'},
+        ), patch(
+            'services.image_lab_service.launch_experiments',
+        ) as launch:
+            response = self.client.post(
+                f'{base}/experiments',
+                headers=self.task_headers(),
+                json={
+                    'entity_kind': 'product',
+                    'product_id': product.id,
+                    'photo_index': 0,
+                    'scene_prompt': (
+                        'Cool tropical studio with clear water reflections and a clean '
+                        'white pedestal under soft directional daylight'
+                    ),
+                    'prompt_model': 'gemini-2.5-flash',
+                },
+            )
+
+        self.assertEqual(response.status_code, 409, response.get_json())
+        source = db.session.get(ImportedProduct, source.id)
+        self.assertEqual(json.loads(source.photo_urls), [])
+        self.assertEqual(source.content_edit_version, 2)
+        self.assertEqual(ImageGenerationExperiment.query.filter_by(
+            imported_product_id=source.id,
+        ).count(), 0)
+        checkpoint = self.task1.get_checkpoint()
+        self.assertNotIn('image_generation', checkpoint)
+        launch.assert_not_called()
+
+    def test_paid_image_generation_uses_approved_manual_common_photo(self):
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        manual_url = 'https://seller-media.example/known-photo.jpg'
+        source.original_data = json.dumps({'photo_urls': [manual_url]})
+        product = Product(
+            seller_id=self.seller1.id,
+            nm_id=100138378,
+            title='Карточка с выбранным общим фото',
+        )
+        db.session.add(product)
+        db.session.flush()
+        source.product_id = product.id
+        source.wb_nm_id = product.nm_id
+        self._set_photo_override(
+            source,
+            [manual_url],
+            inherited_urls=[manual_url],
+            inherited_origin='source',
+        )
+        self._approve_image_generation_for_product(product)
+        db.session.commit()
+        base = f'/internal/v1/sellers/{self.seller1.id}/image-generation'
+
+        with patch(
+            'services.image_lab_service.exact_linked_wb_photo_urls',
+            side_effect=AssertionError('manual common photo must remain the experiment source'),
+        ), patch.dict(
+            'os.environ', {'OPENROUTER_API_KEY': 'synthetic-test-key'},
+        ), patch(
+            'services.image_lab_service.launch_experiments',
+        ) as launch:
+            response = self.client.post(
+                f'{base}/experiments',
+                headers=self.task_headers(),
+                json={
+                    'entity_kind': 'product',
+                    'product_id': product.id,
+                    'photo_index': 0,
+                    'scene_prompt': (
+                        'Cool tropical studio with clear water reflections and a clean '
+                        'white pedestal under soft directional daylight'
+                    ),
+                    'prompt_model': 'gemini-2.5-flash',
+                },
+            )
+
+        self.assertEqual(response.status_code, 202, response.get_json())
+        source = db.session.get(ImportedProduct, source.id)
+        self.assertEqual(json.loads(source.photo_urls), [manual_url])
+        self.assertEqual(source.content_edit_version, 2)
+        self.assertEqual(ImageGenerationExperiment.query.filter_by(
+            imported_product_id=source.id,
+        ).count(), 1)
+        launch.assert_called_once()
+
+    def test_paid_image_generation_rejects_late_common_photo_override_race(self):
+        from services.common_product_content import guard_content_writer as real_guard
+
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        source.photo_urls = '[]'
+        product = Product(
+            seller_id=self.seller1.id,
+            nm_id=100138376,
+            title='Карточка для проверки версии фото',
+            photos_json='[1, 2, 3]',
+        )
+        db.session.add(product)
+        db.session.flush()
+        source.product_id = product.id
+        source.wb_nm_id = product.nm_id
+        self._approve_image_generation_for_product(product)
+        db.session.commit()
+        source_id = source.id
+        source_version = source.content_edit_version
+        base = f'/internal/v1/sellers/{self.seller1.id}/image-generation'
+        normalized = [
+            f'https://basket.example/{product.nm_id}/{index}.webp'
+            for index in (1, 2, 3)
+        ]
+
+        def race_empty_photo_override(imported, *, expected=None):
+            version = source_version + 1
+            override = json.dumps({
+                'schema_version': 1,
+                'fields': {
+                    'photos': {
+                        'value': [],
+                        'inherited_value': [],
+                        'inherited_origin': 'unknown',
+                        'edited_by_user_id': self.seller1.user_id,
+                        'edited_at': '2026-10-01T00:00:01',
+                        'edit_version': version,
+                    },
+                },
+            }, ensure_ascii=False)
+            db.session.execute(
+                update(ImportedProduct)
+                .where(ImportedProduct.id == source_id)
+                .values(
+                    photo_urls='[]',
+                    content_edit_version=version,
+                    content_overrides_json=override,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            db.session.commit()
+            real_guard(imported, expected=expected)
+
+        body = {
+            'entity_kind': 'product',
+            'product_id': product.id,
+            'photo_index': 0,
+            'scene_prompt': (
+                'Cool tropical studio with clear water reflections and a clean '
+                'white pedestal under soft directional daylight'
+            ),
+            'prompt_model': 'gemini-2.5-flash',
+        }
+        with patch(
+            'services.wb_media.normalize_photo_urls', return_value=normalized,
+        ), patch.dict(
+            'os.environ', {'OPENROUTER_API_KEY': 'synthetic-test-key'},
+        ), patch(
+            'services.common_product_content.guard_content_writer',
+            side_effect=race_empty_photo_override,
+        ), patch(
+            'services.image_lab_service.launch_experiments',
+        ) as launch:
+            response = self.client.post(
+                f'{base}/experiments', headers=self.task_headers(), json=body,
+            )
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertIn('изменились после чтения', response.get_json()['error'])
+        source = db.session.get(ImportedProduct, source_id)
+        self.assertEqual(json.loads(source.photo_urls), [])
+        self.assertEqual(source.content_edit_version, source_version + 1)
+        self.assertEqual(ImageGenerationExperiment.query.filter_by(
+            imported_product_id=source_id,
+        ).count(), 0)
+        checkpoint = self.task1.get_checkpoint()
+        self.assertNotIn('image_generation', checkpoint)
+        launch.assert_not_called()
+
+    def test_paid_image_generation_rejects_late_wb_link_or_media_drift(self):
+        from services.common_product_content import guard_content_writer as real_guard
+
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        source.photo_urls = '[]'
+        product = Product(
+            seller_id=self.seller1.id,
+            nm_id=100138377,
+            title='Карточка для проверки источника WB',
+            photos_json='[1, 2, 3]',
+        )
+        db.session.add(product)
+        db.session.flush()
+        source.product_id = product.id
+        source.wb_nm_id = product.nm_id
+        self._approve_image_generation_for_product(product)
+        db.session.commit()
+        source_id = source.id
+        product_id = product.id
+        base = f'/internal/v1/sellers/{self.seller1.id}/image-generation'
+        normalized = [
+            f'https://basket.example/{product.nm_id}/{index}.webp'
+            for index in (1, 2, 3)
+        ]
+
+        def race_source_photo_change(imported, *, expected=None):
+            db.session.execute(
+                update(Product)
+                .where(Product.id == product_id)
+                .values(photos_json='[1, 2, 3, 4]')
+                .execution_options(synchronize_session=False)
+            )
+            db.session.commit()
+            real_guard(imported, expected=expected)
+
+        with patch(
+            'services.wb_media.normalize_photo_urls', return_value=normalized,
+        ), patch.dict(
+            'os.environ', {'OPENROUTER_API_KEY': 'synthetic-test-key'},
+        ), patch(
+            'services.common_product_content.guard_content_writer',
+            side_effect=race_source_photo_change,
+        ), patch(
+            'services.image_lab_service.launch_experiments',
+        ) as launch:
+            response = self.client.post(
+                f'{base}/experiments',
+                headers=self.task_headers(),
+                json={
+                    'entity_kind': 'product',
+                    'product_id': product.id,
+                    'photo_index': 0,
+                    'scene_prompt': (
+                        'Cool tropical studio with clear water reflections and a clean '
+                        'white pedestal under soft directional daylight'
+                    ),
+                    'prompt_model': 'gemini-2.5-flash',
+                },
+            )
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertIn('изменились', response.get_json()['error'])
+        source = db.session.get(ImportedProduct, source_id)
+        self.assertEqual(json.loads(source.photo_urls), [])
+        self.assertEqual(ImageGenerationExperiment.query.filter_by(
+            imported_product_id=source_id,
+        ).count(), 0)
+        checkpoint = self.task1.get_checkpoint()
+        self.assertNotIn('image_generation', checkpoint)
+        launch.assert_not_called()
+
+    def test_paid_image_generation_rejects_late_wb_relink(self):
+        from services.common_product_content import guard_content_writer as real_guard
+
+        source = ImportedProduct.query.filter_by(
+            seller_id=self.seller1.id, title='Полная карточка',
+        ).one()
+        source.photo_urls = '[]'
+        original = Product(
+            seller_id=self.seller1.id,
+            nm_id=100138379,
+            title='Исходная WB-связь',
+            photos_json='[1, 2, 3]',
+        )
+        replacement = Product(
+            seller_id=self.seller1.id,
+            nm_id=100138380,
+            title='Новая WB-связь',
+            photos_json='[4, 5, 6]',
+        )
+        db.session.add_all([original, replacement])
+        db.session.flush()
+        source.product_id = original.id
+        source.wb_nm_id = original.nm_id
+        self._approve_image_generation_for_product(original)
+        db.session.commit()
+        source_id = source.id
+        original_id = original.id
+        replacement_id = replacement.id
+        replacement_nm_id = replacement.nm_id
+        base = f'/internal/v1/sellers/{self.seller1.id}/image-generation'
+        normalized = [
+            f'https://basket.example/{original.nm_id}/{index}.webp'
+            for index in (1, 2, 3)
+        ]
+
+        def race_relink(imported, *, expected=None):
+            db.session.execute(
+                update(ImportedProduct)
+                .where(ImportedProduct.id == source_id)
+                .values(
+                    product_id=replacement_id,
+                    wb_nm_id=replacement_nm_id,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            db.session.commit()
+            real_guard(imported, expected=expected)
+
+        with patch(
+            'services.wb_media.normalize_photo_urls', return_value=normalized,
+        ), patch.dict(
+            'os.environ', {'OPENROUTER_API_KEY': 'synthetic-test-key'},
+        ), patch(
+            'services.common_product_content.guard_content_writer',
+            side_effect=race_relink,
+        ), patch(
+            'services.image_lab_service.launch_experiments',
+        ) as launch:
+            response = self.client.post(
+                f'{base}/experiments',
+                headers=self.task_headers(),
+                json={
+                    'entity_kind': 'product',
+                    'product_id': original_id,
+                    'photo_index': 0,
+                    'scene_prompt': (
+                        'Cool tropical studio with clear water reflections and a clean '
+                        'white pedestal under soft directional daylight'
+                    ),
+                    'prompt_model': 'gemini-2.5-flash',
+                },
+            )
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertIn('изменились', response.get_json()['error'])
+        source = db.session.get(ImportedProduct, source_id)
+        self.assertEqual(source.product_id, replacement_id)
+        self.assertEqual(source.wb_nm_id, replacement_nm_id)
+        self.assertEqual(json.loads(source.photo_urls), [])
+        self.assertEqual(ImageGenerationExperiment.query.filter_by(
+            imported_product_id=source_id,
+        ).count(), 0)
+        self.assertNotIn('image_generation', self.task1.get_checkpoint())
+        launch.assert_not_called()
 
     def test_paid_image_generation_checks_provider_balance_before_gemini(self):
         source = ImportedProduct.query.filter_by(

@@ -2525,19 +2525,31 @@ def _agent_image_source_photo_data(
     requested,
     source: ImportedProduct,
 ):
-    """Return available photo count and an optional exact WB-media backfill.
+    """Return photos plus an optional sealed exact WB-media fallback.
 
     Image Lab historically stores sources on ImportedProduct. Published Product
     cards can still be used when their exact linked import row has lost or never
     received ``photo_urls``: integer WB photo slots are expanded to public CDN
-    URLs without fuzzy product matching. The caller decides whether to persist
-    the returned backfill.
+    URLs without fuzzy product matching. Persistence belongs to
+    ``image_lab.create_experiments`` after it validates and seals the write.
     """
     from services import image_lab_service as image_lab
+    from services.common_product_content import (
+        CommonProductContentError,
+        active_override_fields,
+        common_content_override_projection,
+    )
 
     stored_count = image_lab.photo_count(source.photo_urls)
+    try:
+        override_fields = active_override_fields(source)
+        if "photos" in override_fields:
+            common_content_override_projection(source)
+            return (stored_count, None, None) if stored_count else (0, None, None)
+    except CommonProductContentError:
+        return 0, None, None
     if stored_count > 0:
-        return stored_count, None
+        return stored_count, None, None
 
     product = requested if isinstance(requested, Product) else None
     if product is None and source.product_id:
@@ -2549,24 +2561,18 @@ def _agent_image_source_photo_data(
             nm_id=source.wb_nm_id, seller_id=seller_id,
         ).first()
     if product is None or not product.photos_json:
-        return 0, None
+        return 0, None, None
 
-    try:
-        raw_photos = json.loads(product.photos_json)
-    except (TypeError, ValueError):
-        return 0, None
-    if not isinstance(raw_photos, list):
-        return 0, None
-
-    from services.wb_media import normalize_photo_urls
-
-    urls = normalize_photo_urls(product.nm_id, raw_photos[:10], 'big')
-    urls = [
-        url for url in urls
-        if isinstance(url, str)
-        and re.match(r'^https?://', url.strip(), flags=re.IGNORECASE)
-    ][:10]
-    return len(urls), urls or None
+    photo_fallback_context = image_lab.capture_photo_fallback_context(
+        source,
+        product,
+    )
+    if photo_fallback_context is None:
+        return 0, None, None
+    urls = photo_fallback_context.get('resolved_photo_urls')
+    if not isinstance(urls, list):
+        return 0, None, None
+    return len(urls), urls or None, photo_fallback_context if urls else None
 
 
 def _agent_image_experiment_payload(experiment: ImageGenerationExperiment) -> dict:
@@ -2633,7 +2639,7 @@ def internal_image_generation_brief(seller_id):
 
     from services import image_lab_service as image_lab
 
-    source_photo_count, _ = _agent_image_source_photo_data(
+    source_photo_count, _, _ = _agent_image_source_photo_data(
         seller_id, requested, source,
     )
     if source_photo_count <= 0:
@@ -2722,7 +2728,11 @@ def internal_create_image_generation_experiment(seller_id):
 
     from services import image_lab_service as image_lab
 
-    source_photo_count, source_photo_backfill = _agent_image_source_photo_data(
+    (
+        source_photo_count,
+        source_photo_backfill,
+        photo_fallback_context,
+    ) = _agent_image_source_photo_data(
         seller_id, requested, source,
     )
     if photo_index >= source_photo_count:
@@ -2759,12 +2769,6 @@ def internal_create_image_generation_experiment(seller_id):
         }), 409
 
     try:
-        if source_photo_backfill:
-            # This exact Product -> ImportedProduct media repair is committed in
-            # the same transaction as the paid experiment and task checkpoint.
-            source.photo_urls = json.dumps(
-                source_photo_backfill, ensure_ascii=False,
-            )
         experiments = image_lab.create_experiments(
             seller_id=seller_id,
             product_id=source.id,
@@ -2782,6 +2786,8 @@ def internal_create_image_generation_experiment(seller_id):
             additional_prompt='',
             requested_views=None,
             commit=False,
+            photo_fallback_urls=source_photo_backfill,
+            photo_fallback_context=photo_fallback_context,
         )
         experiment = experiments[0]
         checkpoint = task.get_checkpoint()
