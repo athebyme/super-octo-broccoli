@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-01T08:38:48.708974+00:00",
+  "generated_at": "2026-10-01T08:46:30.021156+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -1317,7 +1317,7 @@
     },
     {
       "path": "routes/common_product_content.py",
-      "sha256": "40257cbd3a4038c5f3810166ded1881d01e231f2084bd84a9756d31f7ec02e80"
+      "sha256": "51b47ffa3c983dfc30ddb5d1cc3f01b560bd108c27ef1d7c639be252907e6b5b"
     },
     {
       "path": "routes/competitors.py",
@@ -2961,7 +2961,7 @@
     },
     {
       "path": "templates/common_product_content.html",
-      "sha256": "57efb3e90a363840e2e48a6e7f3cee78c677e9c4143365deaf9dee3a48a6b0e1"
+      "sha256": "4a83ccdcd66d05f42f6d9680b33bafbab6c60cc2053df8012d879d8a2f5d3b69"
     },
     {
       "path": "templates/competitors_alerts.html",
@@ -3849,7 +3849,7 @@
     },
     {
       "path": "tests/test_common_product_content_ui.py",
-      "sha256": "80915655ce1c463653ef131189c579791c439b515c0229e6f84f971ca2e67495"
+      "sha256": "23a7c4bf6dd3a920b6b7a36650701dc6db2d6ee4920fd05ff0b79df77204116d"
     },
     {
       "path": "tests/test_competitor_compaction.py",
@@ -4992,5 +4992,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "139b00b158ac43b62f9965f2908c151fa15231ab2986253b8be21afc9789e1e5"
+  "aggregate_sha256": "2b9bffb2c414c2c6f4ba0055426937d2723ddc8f6ad678970d1ba7515565876b"
 }
