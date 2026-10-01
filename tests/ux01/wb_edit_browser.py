@@ -508,6 +508,142 @@ def interaction(name: str, **details) -> None:
     REPORT["interactions"].append({"name": name, **details})
 
 
+def wait_for_layout_settle(page, *, width: int, theme: str) -> dict:
+    result = page.evaluate("""async ({expectedWidth, theme, timeoutMs, stableFrames}) => {
+        const started = performance.now();
+        const boundedTimeout = Math.min(5000, Math.max(1, Number(timeoutMs) || 5000));
+        const deadline = started + boundedTimeout;
+        const tolerance = 0.75;
+        const rounded = value => Math.round(value * 100) / 100;
+        const fonts = document.fonts || null;
+        let fontsSettled = !fonts;
+        let fontsRejected = false;
+        if (fonts) {
+            Promise.resolve(fonts.ready).then(
+                () => { fontsSettled = true; },
+                () => { fontsSettled = true; fontsRejected = true; },
+            );
+        }
+        const mainContent = document.querySelector('.main-content');
+        const main = document.querySelector('#main-content');
+        const sidebar = document.querySelector('.sidebar');
+        if (!mainContent || !main || !sidebar) {
+            throw new Error('responsive layout anchors are missing');
+        }
+        const relevantTransitionRunning = (element, properties) => {
+            if (typeof element.getAnimations !== 'function') return false;
+            return element.getAnimations({subtree: false}).some(animation =>
+                animation.playState === 'running'
+                && properties.includes(animation.transitionProperty)
+            );
+        };
+        const measure = () => {
+            const contentRect = mainContent.getBoundingClientRect();
+            const mainRect = main.getBoundingClientRect();
+            const sidebarRect = sidebar.getBoundingClientRect();
+            return {
+                viewportWidth: window.innerWidth,
+                contentLeft: rounded(contentRect.left),
+                contentWidth: rounded(contentRect.width),
+                contentMarginLeft: rounded(parseFloat(getComputedStyle(mainContent).marginLeft) || 0),
+                mainLeft: rounded(mainRect.left),
+                mainWidth: rounded(mainRect.width),
+                activeTheme: document.documentElement.getAttribute('data-theme') || '',
+                sidebarLeft: rounded(sidebarRect.left),
+                sidebarRight: rounded(sidebarRect.right),
+                sidebarWidth: rounded(sidebarRect.width),
+                documentWidth: document.documentElement.scrollWidth,
+                bodyWidth: document.body.scrollWidth,
+                fontStatus: fonts ? fonts.status : 'unsupported',
+                fontsSettled,
+                fontsRejected,
+                mainMarginTransition: relevantTransitionRunning(mainContent, ['margin-left']),
+                sidebarTransition: relevantTransitionRunning(sidebar, ['width', 'transform']),
+            };
+        };
+        const stableAcrossFrames = (before, after) => {
+            if (!before) return false;
+            const numeric = [
+                'viewportWidth', 'contentLeft', 'contentWidth', 'contentMarginLeft',
+                'mainLeft', 'mainWidth', 'sidebarLeft', 'sidebarRight', 'sidebarWidth',
+                'documentWidth', 'bodyWidth',
+            ];
+            return numeric.every(key => Math.abs(before[key] - after[key]) <= tolerance)
+                && before.fontStatus === after.fontStatus
+                && before.fontsSettled === after.fontsSettled
+                && before.activeTheme === after.activeTheme;
+        };
+        const targetGeometryMatches = current => {
+            if (current.viewportWidth !== expectedWidth) return false;
+            if (expectedWidth < 1024) {
+                return Math.abs(current.contentLeft) <= tolerance
+                    && Math.abs(current.contentWidth - expectedWidth) <= tolerance
+                    && Math.abs(current.contentMarginLeft) <= tolerance;
+            }
+            const availableWidth = expectedWidth - current.sidebarRight;
+            return Math.abs(current.sidebarLeft) <= tolerance
+                && Math.abs(current.contentLeft - current.sidebarRight) <= tolerance
+                && Math.abs(current.contentMarginLeft - current.sidebarRight) <= tolerance
+                && Math.abs(current.contentWidth - availableWidth) <= tolerance;
+        };
+        let previous = null;
+        let stableCount = 0;
+        let latest = null;
+        while (performance.now() < deadline) {
+            const remaining = Math.max(1, deadline - performance.now());
+            let timer = null;
+            const frameArrived = await Promise.race([
+                new Promise(resolve => requestAnimationFrame(() => resolve(true))),
+                new Promise(resolve => { timer = setTimeout(() => resolve(false), remaining); }),
+            ]);
+            if (timer !== null) clearTimeout(timer);
+            if (!frameArrived) break;
+            latest = measure();
+            const transitionsRunning = latest.mainMarginTransition || latest.sidebarTransition;
+            const fontsReady = latest.fontsSettled && latest.fontStatus === 'loaded';
+            const themeReady = latest.activeTheme === theme;
+            const geometryMatches = targetGeometryMatches(latest);
+            if (
+                !transitionsRunning && fontsReady && themeReady && geometryMatches
+                && stableAcrossFrames(previous, latest)
+            ) {
+                stableCount += 1;
+                if (stableCount >= stableFrames) {
+                    return {
+                        theme,
+                        elapsed_ms: rounded(performance.now() - started),
+                        stable_frames: stableCount,
+                        fonts_ready: fontsReady,
+                        theme_ready: themeReady,
+                        transitions_running: false,
+                        viewport_width: latest.viewportWidth,
+                        main_content_left: latest.contentLeft,
+                        main_content_width: latest.contentWidth,
+                        sidebar_right: latest.sidebarRight,
+                    };
+                }
+            } else {
+                stableCount = 0;
+            }
+            previous = latest;
+        }
+        throw new Error(JSON.stringify({
+            reason: 'layout_not_stable_before_deadline',
+            expected_width: expectedWidth,
+            theme,
+            elapsed_ms: rounded(performance.now() - started),
+            stable_frames: stableCount,
+            latest,
+        }));
+    }""", arg={
+        "expectedWidth": width,
+        "theme": theme,
+        "timeoutMs": 5000,
+        "stableFrames": 3,
+    })
+    return result
+
+
 def collect_overflow_diagnostics(
     page, *, label: str, theme: str, width: int, geometry: dict,
 ) -> dict:
@@ -648,17 +784,31 @@ def capture_layout(page, label: str) -> None:
         raise AssertionError(f"Unexpected WB browser page label: {label!r}")
     ARTIFACTS_PATH.mkdir(parents=True, exist_ok=True)
     for theme in ("light", "dark"):
-        page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
-        page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+        page.evaluate(
+            "theme => document.documentElement.setAttribute('data-theme', theme)",
+            arg=theme,
+        )
+        wait_for_layout_settle(page, width=1280, theme=theme)
         for width in (390, 768, 1280):
             page.set_viewport_size({"width": width, "height": 900})
-            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            settled = wait_for_layout_settle(page, width=width, theme=theme)
             geometry = page.evaluate("""() => ({
                 viewport_width: window.innerWidth,
                 document_width: document.documentElement.scrollWidth,
                 body_width: document.body.scrollWidth,
                 main_width: document.querySelector('main')?.getBoundingClientRect().width ?? null,
+                main_content_left: document.querySelector('.main-content')?.getBoundingClientRect().left ?? null,
+                main_content_width: document.querySelector('.main-content')?.getBoundingClientRect().width ?? null,
             })""")
+            if (
+                geometry["viewport_width"] != width
+                or abs(geometry["main_content_left"] - settled["main_content_left"]) > 0.75
+                or abs(geometry["main_content_width"] - settled["main_content_width"]) > 0.75
+            ):
+                raise AssertionError(
+                    f"Responsive layout changed after settle on {label} ({theme}, {width}px): "
+                    f"{geometry}; settle={settled}"
+                )
             if geometry["document_width"] > width or geometry["body_width"] > width:
                 try:
                     diagnostics = collect_overflow_diagnostics(
@@ -677,13 +827,16 @@ def capture_layout(page, label: str) -> None:
                     f"Horizontal overflow on {label} ({theme}, {width}px): {geometry}; "
                     f"bounded element diagnostics captured"
                 )
-            REPORT["layouts"].append({"page": label, "theme": theme, **geometry})
+            REPORT["layouts"].append({
+                "page": label, "theme": theme, **geometry,
+                "layout_settle": settled,
+            })
             if width in (390, 1280):
                 filename = f"wb-edit-{label.replace('_', '-')}-{theme}-{width}.png"
                 screenshot = ARTIFACTS_PATH / filename
                 page.screenshot(
                     path=str(screenshot), full_page=True,
-                    animations="disabled", timeout=10000,
+                    timeout=10000,
                 )
                 REPORT["artifacts"].append({
                     "kind": "layout_screenshot",
