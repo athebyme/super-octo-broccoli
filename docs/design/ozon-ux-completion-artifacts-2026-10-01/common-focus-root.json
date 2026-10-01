@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "source_commit": "0db6fd3268473befb96205c60e2c575c80e056b3",
+  "generated_at": "2026-10-01T02:08:30.737137+00:00",
+  "synthetic_only": true,
+  "real_browser_run": false,
+  "checks": [
+    "common_photo_boundary_focus_first",
+    "common_photo_boundary_focus_last",
+    "common_preview_cancel_focus_return",
+    "successful_apply_restores_focus",
+    "saved_but_readback_failed_restores_focus_and_keeps_status",
+    "apply_completion_does_not_steal_external_focus",
+    "mode_photo_characteristic_product_reset_focus_restored",
+    "refresh_success_and_error_focus_restored_after_busy",
+    "refresh_completion_does_not_steal_external_focus"
+  ],
+  "harness_sha256": "985b426f169ca99dfd9a796b222870e1620ae58b3510a35ce117cbf84d0ec47c",
+  "current_module_sha256": "238bbfe8abdfc4f50b8181e06bb56bb93229c71a3f477ced38a724fd0751c012",
+  "current_exit_code": 0,
+  "baseline_commit": "e44df456be0cf7dc4cdf160aea9a22ad0f2acd64",
+  "baseline_module_sha256": "4718df6b7762d6bad85e7320c286d5598056f0b6554f4a08c310f3746581789d",
+  "baseline_exit_code": 1,
+  "baseline_failed_assertion": "photo moved to first position must focus its enabled down control"
+}

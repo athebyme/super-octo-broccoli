@@ -33,5 +33,14 @@
   "host_unit_stages": {
     "status": "available",
     "full_release_gate": false
+  },
+  "latest_audit": {
+    "at": "2026-10-01T02:17:36.141985+00:00",
+    "original_main": "d1d56fcd75b6e231bf04ffc0cc7227fd4eaee949",
+    "original_worktree_clean": true,
+    "docker_info_recheck": "permission denied /var/run/docker.sock",
+    "new_chromium_retry": false,
+    "merge_or_deploy_attempted": false,
+    "remaining_meaningful_local_packet": "completed; required external gates remain blocked"
   }
 }

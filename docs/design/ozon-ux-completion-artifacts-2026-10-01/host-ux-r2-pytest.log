@@ -1,0 +1,9 @@
+........................................................................ [ 32%]
+....................................................................................................................................................               [100%]
+=============================== warnings summary ===============================
+tests/test_wb_edit_review_replay.py: 42 warnings
+  /tmp/seller-hub-completion-20261001/seller_platform.py:340: LegacyAPIWarning: The Query.get() method is considered legacy as of the 1.x series of SQLAlchemy and becomes a legacy construct in 2.0. The method is now available as Session.get() (deprecated since: 2.0) (Background on SQLAlchemy 2.0 at: https://sqlalche.me/e/b8d9)
+    return User.query.get(int(user_id))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+220 passed, 42 warnings, 54 subtests passed in 53.99s

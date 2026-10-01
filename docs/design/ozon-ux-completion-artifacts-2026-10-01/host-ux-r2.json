@@ -1,0 +1,68 @@
+{
+  "stage": "ux",
+  "status": "passed",
+  "started_at": "2026-10-01T02:15:16.987536+00:00",
+  "source_commit": "52bdced0c86b899b36419e4ca53ae10082e3861a",
+  "source_file_count": 1243,
+  "source_aggregate_sha256": "12ff8a710b76ac96718015f7fd30e0445e8c264d301126292151308ca771ca54",
+  "source_verified_before": {
+    "verified": true,
+    "issues": []
+  },
+  "test_files": [
+    "tests/test_common_product_content_routes.py",
+    "tests/test_common_product_content_service.py",
+    "tests/test_common_product_content_ui.py",
+    "tests/test_competitor_routes.py",
+    "tests/test_marketplace_listing_routes.py",
+    "tests/test_marketplace_readiness.py",
+    "tests/test_product_selection.py",
+    "tests/test_product_selection_dom.py",
+    "tests/test_ux01_analytics.py",
+    "tests/test_ux01_competitor_settings.py",
+    "tests/test_ux01_listing_moderation.py",
+    "tests/test_ux01_listing_navigation.py",
+    "tests/test_ux01_listing_workspace.py",
+    "tests/test_ux01_navigation.py",
+    "tests/test_ux01_operations.py",
+    "tests/test_ux01_preparation.py",
+    "tests/test_ux01_pricing.py",
+    "tests/test_ux01_runner.py",
+    "tests/test_ux01_settings_quality.py",
+    "tests/test_ux01_theme_contrast.py",
+    "tests/test_wb_bulk_review_key_migration.py",
+    "tests/test_wb_edit_review_replay.py"
+  ],
+  "synthetic_only": true,
+  "host_unit_stage_only": true,
+  "full_release_gate": false,
+  "docker_stage_run": false,
+  "browser_stages_run": false,
+  "production_deployment_verified": false,
+  "provider_transport": "synthetic test fixtures",
+  "environment": {
+    "private_tmpdir": true,
+    "scheduler": "off",
+    "publication": "off",
+    "commercial_writes": "off",
+    "auto_publish": "off",
+    "inline_image_worker": "off"
+  },
+  "exit_code": 0,
+  "source_verified_after": {
+    "verified": true,
+    "issues": []
+  },
+  "junit": {
+    "valid": true,
+    "reason": null,
+    "tests": 220,
+    "passed": 220,
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0
+  },
+  "seconds": 55.94,
+  "finished_at": "2026-10-01T02:16:12.929057+00:00",
+  "pytest_summary": "220 passed, 42 warnings, 54 subtests passed in 53.99s"
+}
