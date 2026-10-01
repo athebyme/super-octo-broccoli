@@ -48,6 +48,7 @@ socket.create_connection = no_network
 from seller_platform import app
 from models import (db, MarketplaceProductDraft, MarketplaceOperation,
                     MarketplaceAttributeDefinition)
+from services.marketplace_drafts import MarketplaceDraftService
 from services.ozon_draft_ai_completion import OzonDraftAICompletionService as Service
 from services.ozon_draft_ai_completion import DraftAIError
 from tests.ozon_release.seed import seed, USERNAME, PASSWORD
@@ -58,6 +59,13 @@ account_id, draft_id = fixture['account_id'], fixture['draft_id']
 with app.app_context():
     draft = db.session.get(MarketplaceProductDraft,draft_id)
     version = draft.version
+    # Make the forbidden-brand issue a live source fact, not just an old
+    # validation snapshot. The editor now renders current validation errors.
+    source = draft.imported_product
+    original = MarketplaceDraftService._stored_json(source.original_data, dict)
+    original['brand'] = 'SVAKOM'
+    source.brand = 'SVAKOM'
+    source.original_data = MarketplaceDraftService._canonical_json(original, dict)
     schema = [
         ('909001', 'Цвет', False),
         ('909002', 'Фактура', False),
@@ -74,7 +82,7 @@ with app.app_context():
             data_type='String',
             is_required=required,
             max_value_count=1,
-            attribute_complex_id='0',
+            attribute_complex_id=None,
             is_available=True,
             is_enabled=True,
         )
@@ -101,6 +109,10 @@ with app.app_context():
         ],
         'warnings':[],
     })
+    source_facts, source_provenance, source_fact_hash = MarketplaceDraftService._fact_snapshot(source)
+    draft.source_facts_json = MarketplaceDraftService._canonical_json(source_facts, dict)
+    draft.provenance_json = MarketplaceDraftService._canonical_json(source_provenance, dict)
+    draft.source_fact_hash = source_fact_hash
     db.session.commit()
     version = draft.version
 run_uid = 'ozon-ai-'+'a'*32
@@ -209,6 +221,22 @@ def passed(name):
     report['checks'].append(name)
     print(json.dumps({'ai_browser_check':name}),flush=True)
 
+def editor_document(page):
+    config = page.locator('#ode-bootstrap').evaluate('node => JSON.parse(node.textContent)')
+    response = page.evaluate('''async (url) => {
+        const response = await fetch(url, {credentials:'same-origin', headers:{Accept:'application/json'}});
+        let document = null;
+        try { document = await response.json(); } catch (_) {}
+        return {status:response.status, document};
+    }''', config['urls']['editor'])
+    assert response['status'] == 200 and isinstance(response.get('document'), dict), {
+        'status': response['status'],
+        'code': (response.get('document') or {}).get('code'),
+    }
+    document = response['document']
+    assert document.get('draft', {}).get('id') == config.get('draftId')
+    return document
+
 def layout(page,name):
     page.bring_to_front()
     for theme in ('light','dark'):
@@ -299,11 +327,62 @@ try:
             assert 'не гарантируют устранение ошибок проверки' in page.locator('.ode-ai-scope-foot').inner_text()
             assert page.locator('.ode-ai-preflight-note').get_attribute('aria-live') == 'polite'
             assert page.locator('.ode-issues').get_attribute('aria-live') == 'polite'
-            assert page.locator('.ode-issues li').count() == 4
-            assert 'Удалите лишние значения вручную' in page.locator('.ode-issues').inner_text()
-            assert 'не обходит запрет' in page.locator('.ode-issues').inner_text()
-            assert 'уточните у администратора соответствия' in page.locator('.ode-issues').inner_text()
-            assert f"внутреннюю карточку № {fixture['source_id']}" in page.locator('.ode-issues').inner_text()
+            before_ai = editor_document(page)
+            current_validation = before_ai.get('current_validation') or {}
+            current_errors = current_validation.get('errors')
+            historical_errors = (before_ai.get('draft', {}).get('validation') or {}).get('errors')
+            assert current_validation.get('publishable') is False
+            assert isinstance(current_errors, list) and current_errors
+            assert isinstance(historical_errors, list) and len(historical_errors) == 4
+            known_current = {
+                (item.get('code'), item.get('field'))
+                for item in current_errors if isinstance(item, dict)
+            }
+            known_historical = {
+                (item.get('code'), item.get('field'))
+                for item in historical_errors if isinstance(item, dict)
+            }
+            expected_manual_states = {
+                ('ozon_brand_forbidden', 'brand'),
+                ('attribute_max_value_count', 'attributes[0].values'),
+                ('required_attribute_missing', 'attributes.22232'),
+                ('required_attribute_missing', 'attributes.23536'),
+            }
+            assert expected_manual_states <= known_current, {
+                'missing_current_states': sorted(expected_manual_states - known_current),
+                'current_codes_fields': sorted(known_current),
+            }
+            assert expected_manual_states == known_historical, {
+                'historical_codes_fields': sorted(known_historical),
+            }
+            max_values_error = next(
+                item for item in current_errors
+                if item.get('code') == 'attribute_max_value_count'
+                and item.get('field') == 'attributes[0].values'
+            )
+            assert max_values_error.get('attribute_id') == '909003'
+            assert page.locator('.ode-issues li').count() == len(current_errors), {
+                'rendered_current_errors': page.locator('.ode-issues li').count(),
+                'current_validation_errors': len(current_errors),
+            }
+            assert page.locator('.ode-savebar button.sh-btn--primary').is_disabled()
+            current_issue_text = page.locator('.ode-issues').inner_text()
+            assert 'Удалите лишние значения вручную' in current_issue_text
+            assert 'не обходит запрет' in current_issue_text
+            assert 'уточните у администратора соответствия' in current_issue_text
+            assert f"внутреннюю карточку № {fixture['source_id']}" in current_issue_text
+            report['preflight_states'] = {
+                'current_publishable': current_validation.get('publishable'),
+                'current_errors': [
+                    {'code': item.get('code'), 'field': item.get('field')}
+                    for item in current_errors if isinstance(item, dict)
+                ],
+                'historical_errors': [
+                    {'code': item.get('code'), 'field': item.get('field')}
+                    for item in historical_errors if isinstance(item, dict)
+                ],
+                'send_enabled': page.locator('.ode-savebar button.sh-btn--primary').is_enabled(),
+            }
             source_link = page.get_by_role('link',name='К внутренним товарам')
             assert source_link.get_attribute('href') == '/my-products?account_id='+str(account_id)
             assert 'search=' not in source_link.get_attribute('href')
@@ -335,6 +414,13 @@ try:
             assert page.locator('.ode-ai-item.is-accepted').count() == 1
             assert page.locator('.ode-ai-item.is-proposed').count() == 1
             assert state['review_effects'] == 1
+            after_ai = editor_document(page)
+            assert after_ai['draft']['version'] == before_ai['draft']['version']
+            assert after_ai['draft']['source_fact_hash'] == before_ai['draft']['source_fact_hash']
+            assert after_ai['documents']['content'] == before_ai['documents']['content']
+            assert after_ai['documents']['attributes'] == before_ai['documents']['attributes']
+            assert after_ai['documents']['media'] == before_ai['documents']['media']
+            assert after_ai['current_validation']['publishable'] is False
             assert report['posts']['/marketplaces/api/drafts/'+str(draft_id)+'/ai-suggestions/apply'] == 2
             layout(page,'accepted-review')
             passed('lost_apply_replays_exact_key_once_and_never_auto_publishes')
