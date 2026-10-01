@@ -796,6 +796,40 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             self.assertEqual(operation.operation_params['review_summary']['changed'], 1)
             self.assertEqual(operation.operation_params['review_summary']['skipped'], 1)
 
+    def test_successful_keyword_apply_does_not_log_raw_posted_form_values(self):
+        operation_value = 'RAW_OPERATION_VALUE_SENTINEL'
+        submission = self._manual_review_submission(
+            'update_keywords', operation_value,
+        )
+        submission.update({
+            'csrf_token': 'RAW_CSRF_SENTINEL',
+            'unknown_form_key_sentinel': 'RAW_UNKNOWN_FIELD_SENTINEL',
+            'return_to': 'https://untrusted.example/RAW_RETURN_TO_SENTINEL',
+        })
+
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('keyword operation is local-only'),
+        ), self.assertLogs(self.seller_platform.app.logger.name, level='INFO') as captured:
+            response = self._client().post('/products/bulk-edit', data=submission)
+
+        self.assertEqual(response.status_code, 302)
+        log_text = '\n'.join(captured.output)
+        self.assertIn('operation=update_keywords', log_text)
+        self.assertIn('selected=1', log_text)
+        self.assertIn(f'value_length={len(operation_value)}', log_text)
+        for raw_value in (
+            'RAW_OPERATION_VALUE_SENTINEL',
+            'RAW_CSRF_SENTINEL',
+            'unknown_form_key_sentinel',
+            'RAW_UNKNOWN_FIELD_SENTINEL',
+            'RAW_RETURN_TO_SENTINEL',
+            submission['selection_token'],
+            submission['preview_token'],
+        ):
+            self.assertNotIn(raw_value, log_text)
+
     def test_keyword_apply_detects_tags_race_after_claim_without_overwrite(self):
         from models import BulkEditHistory, Product
         from services.wb_edit_review import commit_wb_bulk_review_claim as original_claim

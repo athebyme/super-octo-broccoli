@@ -909,7 +909,7 @@ def click_next_product_page(page, *, sort: str, expected_page: int = 2) -> None:
 
 def run_browser(app, fixture: dict[str, int]) -> None:
     from seller_platform import app as seller_app
-    from models import Product, db
+    from models import BulkEditHistory, CardEditHistory, Product, db
 
     assets = load_pinned_assets()
     origin = BASE
@@ -1267,12 +1267,81 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             check("fresh_preview_after_description_restore_reports_exact_selection", selected=50)
             interaction("fresh_review_created_after_restoring_local_description")
 
-            page.get_by_role("button", name="Подтвердить и применить 50 карточек").click()
-            page.wait_for_url("**/bulk-history/*")
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                page.get_by_role("button", name="Подтвердить и применить 50 карточек").click()
+            _assert_local_products_url(page.url, expected_return_query)
+            assert "Успешно обновлено товаров: 50" in page.locator("body").inner_text()
             assert REPORT["fake_wb_write_calls"] == 1
             assert len(REPORT["fake_wb_written_products"]) == 50
             assert len(set(REPORT["fake_wb_written_products"])) == 50
+            assert sorted(REPORT["fake_wb_written_products"]) == list(range(900000, 900050))
             assert REPORT["provider_attempts"] == 0
+
+            expected_product_ids = list(range(
+                fixture["product_id"], fixture["product_id"] + 50,
+            ))
+            with seller_app.app_context():
+                history = BulkEditHistory.query.filter_by(
+                    seller_id=fixture["seller_id"],
+                    operation_type="update_brand",
+                ).order_by(BulkEditHistory.id.desc()).first()
+                assert history is not None
+                history_id = int(history.id)
+                assert history.status == "completed"
+                assert history.total_products == 50
+                assert history.success_count == 50
+                assert history.error_count == 0
+                summary = (history.operation_params or {}).get("review_summary") or {}
+                assert summary.get("selected") == 50
+                assert summary.get("eligible") == 50
+                assert summary.get("changed") == 50
+                assert summary.get("skipped") == 0
+                assert summary.get("errors") == 0
+                assert summary.get("changed_product_ids") == expected_product_ids
+                saved_rows = CardEditHistory.query.filter_by(
+                    seller_id=fixture["seller_id"],
+                    bulk_edit_id=history_id,
+                ).order_by(CardEditHistory.id.asc()).all()
+                assert [int(row.product_id) for row in saved_rows] == expected_product_ids
+
+            history_nav_links = page.locator('a[href="/bulk-history"]')
+            assert history_nav_links.count() == 1
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                history_nav_links.first.click()
+            history_url = urlsplit(page.url)
+            assert (
+                history_url.scheme == urlsplit(BASE).scheme
+                and history_url.netloc == urlsplit(BASE).netloc
+                and history_url.path == "/bulk-history"
+                and not history_url.query and not history_url.fragment
+            ), {"path": history_url.path}
+            detail_link = page.locator(f'a[href="/bulk-history/{history_id}"]')
+            assert detail_link.count() == 1
+            with page.expect_navigation(wait_until="domcontentloaded"):
+                detail_link.click()
+            detail_url = urlsplit(page.url)
+            assert (
+                detail_url.scheme == urlsplit(BASE).scheme
+                and detail_url.netloc == urlsplit(BASE).netloc
+                and detail_url.path == f"/bulk-history/{history_id}"
+                and not detail_url.query and not detail_url.fragment
+            ), {"path": detail_url.path}
+            assert "Изменённые товары (50)" in page.locator("body").inner_text()
+            detail_product_ids = page.locator(
+                "[data-operations-product-id]",
+            ).evaluate_all(
+                "rows => rows.map(row => Number(row.dataset.operationsProductId))",
+            )
+            assert sorted(detail_product_ids) == expected_product_ids
+            assert len(detail_product_ids) == 50
+            assert page.locator('[data-operations-changed-field="brand"]').count() == 50
+            check(
+                "successful_exact_50_apply_is_seller_scoped_and_readable_in_history",
+                selected=50,
+                history_rows=len(detail_product_ids),
+                fake_wb_write_calls=REPORT["fake_wb_write_calls"],
+            )
+            interaction("successful_apply_returns_to_context_then_opens_own_history_detail")
             check(
                 "reviewed_apply_reaches_only_fake_provider_with_exact_50_products",
                 fake_wb_write_calls=REPORT["fake_wb_write_calls"],

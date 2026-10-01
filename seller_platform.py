@@ -3570,23 +3570,13 @@ def products_bulk_edit():
             db.session.add(bulk_operation)
             db.session.commit()  # Коммитим чтобы получить ID
 
-        app.logger.info(f"🚀 Starting bulk operation {bulk_operation.id}: {operation} for {len(products)} products")
-
-        # Логируем все данные формы для отладки
-        app.logger.info(f"📋 Form data: operation={operation}")
-        app.logger.info('Bulk edit input value length=%s', len(operation_value))
-        app.logger.info(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
-        app.logger.info(f"📋 Form selected_category: '{request.form.get('selected_category', '')}'")
-        app.logger.info(f"📋 All form keys: {list(request.form.keys())}")
-
-        # Показываем ВСЕ поля (кроме product_ids) для отладки
-        app.logger.info("📋 All form fields:")
-        for key, value in request.form.items():
-            if key not in {
-                'product_ids', 'selection_token', 'preview_token', 'value',
-                'characteristics_batch',
-            }:
-                app.logger.info(f"   {key} = '{value}'")
+        safe_operation = operation if operation in operation_descriptions else 'unknown'
+        app.logger.info(
+            'Bulk operation started: operation=%s selected=%s value_length=%s',
+            safe_operation,
+            len(products),
+            len(operation_value),
+        )
 
         try:
             from contextlib import nullcontext
@@ -3884,9 +3874,10 @@ def products_bulk_edit():
                         db.session.commit()
                         return redirect(url_for('products_list'))
 
-                    app.logger.info(f"🔍 Update characteristics (batch): {len(char_changes)} changes, category='{selected_category}'")
-                    for ch in char_changes:
-                        app.logger.info(f"   char_id={ch['char_id']}, value='{ch['value']}'")
+                    app.logger.info(
+                        'Bulk characteristic update prepared: change_count=%s',
+                        len(char_changes),
+                    )
 
                     # Обновляем описание операции
                     bulk_operation.description = f'Обновление {len(char_changes)} характеристик'
@@ -4039,8 +4030,6 @@ def products_bulk_edit():
                         characteristic_id = request.form.get('char_id', '').strip()
                         new_value = request.form.get('value', '').strip()
                     selected_category = request.form.get('selected_category', '').strip()
-
-                    app.logger.info(f"🔍 Add characteristic: char_id='{characteristic_id}', value='{new_value}', category='{selected_category}'")
 
                     if not characteristic_id:
                         flash('Не указан ID характеристики (char_id пустой)', 'warning')
