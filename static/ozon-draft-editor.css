@@ -171,4 +171,9 @@ body:has(#ozon-draft-editor) .sh-ai-pop-panel { max-height: calc(100dvh - 210px)
     .ode-savebar { bottom: 8px; padding: 12px; flex-wrap: wrap; gap: 10px; } .ode-savebar > div { width: 100%; min-width: 0; } .ode-savebar .ode-actions { min-width: 0; flex-wrap: wrap; } .ode-savebar .ode-actions button { flex: 1 1 7rem; min-width: 0; max-width: 100%; padding: 9px 7px; font-size: 11px; white-space: normal; overflow-wrap: anywhere; } .ode-savebar small { font-size: 9px; } .ode-message { align-items: start; flex-direction: column; } .ode-media-grid { grid-template-columns: 1fr 1fr; } .ode-dialog { padding: 18px; }
     .ode-loading { grid-template-columns: 90px 1fr; gap: 14px; min-height: 220px; } .ode-skeleton { height: 100px; } .ode-skeleton--line { height: 22px; }
 }
+@media (max-width: 440px) {
+    .ode-savebar { position: static; }
+    .ode-savebar .ode-actions { width: 100%; flex-direction: column; align-items: stretch; }
+    .ode-savebar .ode-actions button { flex: 1 1 100%; width: 100%; }
+}
 @media (prefers-reduced-motion: reduce) { .ode *, .ode *::before, .ode *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; } }

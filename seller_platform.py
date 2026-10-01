@@ -3173,6 +3173,7 @@ def products_bulk_edit():
         build_product_list_query,
         load_product_selection_token,
         parse_product_list_state,
+        parse_selected_product_ids,
         query_for_selection,
         safe_products_return_url,
     )
@@ -3351,7 +3352,12 @@ def products_bulk_edit():
                 posted_subject = request.form.get('selected_category', '').strip()
                 if not posted_subject.isascii() or not posted_subject.isdecimal():
                     raise WBEditReviewError('Выберите точный subjectID WB')
-                posted_subject_id = int(posted_subject)
+                try:
+                    posted_subject_id = parse_selected_product_ids(
+                        [posted_subject], from_query=True,
+                    )[0]
+                except ProductSelectionError as exc:
+                    raise WBEditReviewError('Выберите точный subjectID WB') from exc
                 preview_token = request.form.get('preview_token', '').strip()
                 if preview_token:
                     apply_preview_payload = load_wb_edit_preview_token(
@@ -5453,13 +5459,24 @@ def api_characteristics_multi_category():
             raise ProductSelectionError('Некорректный список subjectID')
         normalized_subject_ids = []
         for subject_id in subject_ids:
-            if isinstance(subject_id, str) and subject_id.isascii() and subject_id.isdecimal():
-                subject_id = int(subject_id)
-            if not isinstance(subject_id, int) or isinstance(subject_id, bool) or subject_id <= 0:
-                raise ProductSelectionError('subjectID должен быть positive integer')
-            if subject_id in normalized_subject_ids:
+            try:
+                if isinstance(subject_id, str):
+                    normalized_subject_id = parse_selected_product_ids(
+                        [subject_id], from_query=True,
+                    )[0]
+                elif type(subject_id) is int:
+                    normalized_subject_id = parse_selected_product_ids([subject_id])[0]
+                else:
+                    raise ProductSelectionError(
+                        'subjectID должен быть положительным целым числом'
+                    )
+            except ProductSelectionError as exc:
+                raise ProductSelectionError(
+                    'subjectID должен быть положительным целым числом'
+                ) from exc
+            if normalized_subject_id in normalized_subject_ids:
                 raise ProductSelectionError('В списке subjectID есть повторы')
-            normalized_subject_ids.append(subject_id)
+            normalized_subject_ids.append(normalized_subject_id)
 
         rows = Product.query.filter(
             Product.seller_id == current_user.seller.id,

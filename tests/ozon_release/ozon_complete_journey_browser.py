@@ -960,7 +960,37 @@ try:
             page.get_by_role("button", name="Сохранить", exact=True).click()
             page.get_by_text("Все изменения сохранены", exact=True).wait_for()
             page.get_by_role("button", name="Проверить карточку", exact=True).click()
-            page.get_by_text("Карточка прошла локальную проверку. При отправке данные будут проверены повторно.", exact=True).wait_for()
+            page.get_by_text(
+                "Текущие поля проходят локальную проверку. При отправке данные будут проверены повторно.",
+                exact=True,
+            ).wait_for()
+            positive_config = bootstrap(page, "#ode-bootstrap")
+            assert positive_config.get("draftId") == draft_id, {
+                "bootstrap_draft_id_matches": positive_config.get("draftId") == draft_id,
+            }
+            fresh_editor_response = api_call_from_page(page, positive_config["urls"]["editor"])
+            assert fresh_editor_response["status"] == 200, {
+                "status": fresh_editor_response["status"],
+                "code": (fresh_editor_response.get("document") or {}).get("code"),
+            }
+            fresh_editor = fresh_editor_response["document"]
+            fresh_validation = fresh_editor.get("current_validation") or {}
+            fresh_draft = fresh_editor.get("draft") or {}
+            fresh_errors = fresh_validation.get("errors")
+            assert fresh_draft.get("id") == draft_id, {
+                "draft_id_matches": fresh_draft.get("id") == draft_id,
+            }
+            assert fresh_validation.get("publishable") is True, {
+                "current_publishable": fresh_validation.get("publishable"),
+                "error_codes": [
+                    item.get("code") for item in fresh_errors[:30] if isinstance(item, dict)
+                ] if isinstance(fresh_errors, list) else None,
+            }
+            assert fresh_errors == [], {"current_errors": fresh_errors}
+            assert fresh_draft.get("status") == "ready" and fresh_draft.get("validation_status") == "valid", {
+                "stored_status": fresh_draft.get("status"),
+                "stored_validation_status": fresh_draft.get("validation_status"),
+            }
             page.get_by_role("button", name=re.compile("Отправить в Ozon")).wait_for()
             assert page.get_by_role("button", name=re.compile("Отправить в Ozon")).is_enabled()
             page.reload()

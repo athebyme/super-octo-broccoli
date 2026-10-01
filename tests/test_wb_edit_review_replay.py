@@ -1647,6 +1647,70 @@ class WBBulkReviewReplayTest(unittest.TestCase):
         })
         self.assertEqual(foreign_subject.status_code, 403)
 
+    def test_multi_category_subject_ids_keep_exact_shape_bounds_and_subset_checks(self):
+        from services.product_selection import MAX_SIGNED_SQLITE_ID
+
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('local subject parsing must not call WB'),
+        ):
+            valid_string = self._client().post('/api/characteristics/multi-category', json={
+                'product_ids': [self.product_id],
+                'subject_ids': ['5880'],
+            })
+            self.assertEqual(valid_string.status_code, 200)
+
+            # 5070 and signed-64 max are valid numeric identities, but are not
+            # backed by this selected product; they must reach the ownership
+            # subset guard, not fail parsing or trigger schema/provider reads.
+            for subject_id in ('5070', str(MAX_SIGNED_SQLITE_ID)):
+                with self.subTest(subject_id_length=len(subject_id)):
+                    foreign = self._client().post('/api/characteristics/multi-category', json={
+                        'product_ids': [self.product_id],
+                        'subject_ids': [subject_id],
+                    })
+                    self.assertEqual(foreign.status_code, 403)
+
+            invalid_values = (
+                '9' * 5000,
+                str(MAX_SIGNED_SQLITE_ID + 1),
+                '0', 0, -1, True, 5880.0, '５８８０',
+            )
+            for subject_id in invalid_values:
+                with self.subTest(value_type=type(subject_id).__name__,
+                                  size=len(subject_id) if isinstance(subject_id, str) else None):
+                    with patch(
+                        'services.wb_edit_review.bulk_characteristics_payload',
+                        side_effect=AssertionError('invalid subject must stop before schema lookup'),
+                    ):
+                        rejected = self._client().post('/api/characteristics/multi-category', json={
+                            'product_ids': [self.product_id],
+                            'subject_ids': [subject_id],
+                        })
+                    self.assertEqual(rejected.status_code, 400)
+
+            duplicate = self._client().post('/api/characteristics/multi-category', json={
+                'product_ids': [self.product_id],
+                'subject_ids': [5880, '05880'],
+            })
+            self.assertEqual(duplicate.status_code, 400)
+
+    def test_bulk_edit_rejects_unrepresentable_subject_before_preview_or_provider(self):
+        submission = self._review_submission()
+        submission['preview_token'] = ''
+        for value in ('9' * 5000, '9223372036854775808', '５８８０'):
+            with self.subTest(value_length=len(value)):
+                submission['selected_category'] = value
+                with patch.object(
+                    self.seller_platform,
+                    'WildberriesAPIClient',
+                    side_effect=AssertionError('invalid subject must not create WB client'),
+                ):
+                    response = self._client().post('/products/bulk-edit', data=submission)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('Выберите точный subjectID WB'.encode(), response.data)
+
 
 def test_concurrent_review_claim_is_single_use(tmp_path):
     from models import BulkEditHistory, Seller, User, db

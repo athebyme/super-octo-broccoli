@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-01T19:34:49.958931+00:00",
+  "generated_at": "2026-10-01T19:45:18.179664+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -31,7 +31,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "6e75f6ff934a0626029e24e27b21a6a6c49bc0eb34a94d53f8562b45fbbe6693"
+      "sha256": "ffe5e5ec3152b11dc0de35676f5d73fa1f3f5bc154f5a22b81a59dbf5fd41385"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -1715,7 +1715,7 @@
     },
     {
       "path": "seller_platform.py",
-      "sha256": "2c99976b576c452aa54e31d6e6117dc877bc7dff2c78e6306b63763b28d85ea3"
+      "sha256": "139f07c1d95cdc54c2ca34ee8a2c805523427e0496542512694ebf4eda34c605"
     },
     {
       "path": "services/__init__.py",
@@ -2627,7 +2627,7 @@
     },
     {
       "path": "static/ozon-draft-editor.css",
-      "sha256": "014f5c7e913c79a5318d7edd74b6c342c10703e966af3e5563ba7c8ed48c0a8e"
+      "sha256": "8b2e95d5c16fa86f12cadf3c699976edd7d6b83236d233dfe63676d5720b794e"
     },
     {
       "path": "static/ozon-draft-editor.js",
@@ -3619,7 +3619,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_complete_journey_browser.py",
-      "sha256": "cddb93c96cd4fbd3f99f5127f884d0bed03e5d42e367fae662ce272bbe235c1d"
+      "sha256": "ea40622950e4ad050ee60df57c401cc45f54df5d7c78e33985cb4e6fcf151271"
     },
     {
       "path": "tests/ozon_release/quarantine_browser.py",
@@ -4915,7 +4915,7 @@
     },
     {
       "path": "tests/test_wb_edit_review_replay.py",
-      "sha256": "2908b25b13d0c4b1e0f1df4b4a6aafca3cbc337672965f5735328e0763eb6f55"
+      "sha256": "3371dd7eb4183768cb2a627355305125318aebc0ffa0eb9ff118b73214ce420b"
     },
     {
       "path": "tests/test_wb_enrichment_merge.py",
@@ -4994,5 +4994,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "a13f9f7923354131eae6ab6c2f41f84852aa1b9c0a15bd74f6e71ad9d83ecd03"
+  "aggregate_sha256": "b647dd50e83c34a6ee0b1fefe61a688712b1307526796f239bee75a1d3910bef"
 }
