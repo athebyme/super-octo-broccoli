@@ -214,6 +214,7 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             self.user_id = user.id
             self.seller_id = seller.id
             self.product_id = product.id
+            self.sibling_product_id = exact_brand_sibling.id
             self.foreign_product_id = foreign_product.id
             self.nm_id = product.nm_id
 
@@ -288,6 +289,135 @@ class WBBulkReviewReplayTest(unittest.TestCase):
                 'characteristics_batch': json.dumps([
                     {'char_id': '101', 'value': ['new']},
                 ]),
+            }
+
+    def _manual_review_submission(self, operation, value, *, product_ids=None):
+        from models import Product
+        from services.product_selection import (
+            issue_product_selection_token,
+            load_product_selection_token,
+            parse_product_list_state,
+        )
+        from services.wb_edit_review import (
+            build_bulk_manual_preview,
+            issue_wb_edit_preview_token,
+        )
+
+        submission = self._review_submission()
+        submission.pop('preview_token')
+        submission.pop('selected_category')
+        submission.pop('characteristics_batch')
+        submission.update({'operation': operation, 'value': value})
+        exact_ids = list(product_ids or [self.product_id])
+        with self.app.app_context():
+            products_by_id = {
+                int(product.id): product
+                for product in Product.query.filter(
+                    Product.seller_id == self.seller_id,
+                    Product.id.in_(exact_ids),
+                ).all()
+            }
+            if set(products_by_id) != set(exact_ids):
+                raise AssertionError('test selection fixture is incomplete')
+            products = [products_by_id[product_id] for product_id in exact_ids]
+            selection_token = issue_product_selection_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                product_ids=exact_ids,
+                state=parse_product_list_state({}, strict=True),
+                return_to='/products?page=1',
+                wb_account_id='synthetic-wb-account',
+            )
+            submission['selection_token'] = selection_token
+            selection = load_product_selection_token(
+                selection_token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            preview = build_bulk_manual_preview(
+                products, operation=operation, value=value,
+            )
+            submission['preview_token'] = issue_wb_edit_preview_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                selection_payload=selection,
+                preview=preview,
+            )
+        return submission
+
+    def _characteristic_review_submission(
+        self, operation, *, char_id=None, value=None, changes=None,
+        product_ids=None,
+    ):
+        from models import Product
+        from services.product_selection import (
+            issue_product_selection_token,
+            load_product_selection_token,
+            parse_product_list_state,
+        )
+        from services.wb_edit_review import (
+            build_bulk_characteristic_preview,
+            issue_wb_edit_preview_token,
+        )
+
+        exact_ids = list(product_ids or [self.product_id])
+        with self.app.app_context():
+            products_by_id = {
+                int(product.id): product
+                for product in Product.query.filter(
+                    Product.seller_id == self.seller_id,
+                    Product.id.in_(exact_ids),
+                ).all()
+            }
+            products = [products_by_id[product_id] for product_id in exact_ids]
+            selection_token = issue_product_selection_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                product_ids=exact_ids,
+                state=parse_product_list_state({}, strict=True),
+                return_to='/products?page=1',
+                wb_account_id='synthetic-wb-account',
+            )
+            selection_payload = load_product_selection_token(
+                selection_token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            preview = build_bulk_characteristic_preview(
+                products,
+                operation=operation,
+                subject_id=5880,
+                change_input=changes,
+                char_id=char_id,
+                value=value,
+            )
+            token = issue_wb_edit_preview_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                selection_payload=selection_payload,
+                preview=preview,
+            )
+            normalized = preview['normalized_changes']
+            return {
+                'selection_token': selection_token,
+                'preview_token': token,
+                'operation': operation,
+                'selected_category': '5880',
+                'characteristics_batch': json.dumps([
+                    {'char_id': str(row['id']), 'value': row['value']}
+                    for row in normalized
+                ]) if operation == 'update_characteristic' else '',
+                'char_id': str(normalized[0]['id']) if operation == 'add_characteristic' else '',
+                'value': json.dumps(normalized[0]['value'], ensure_ascii=False)
+                if operation == 'add_characteristic' else '',
             }
 
     def _run_review_with_fake_provider(self, *, ambiguous=False):
@@ -401,6 +531,337 @@ class WBBulkReviewReplayTest(unittest.TestCase):
         fake_state, _history_id = self._run_review_with_fake_provider()
         self.assertEqual(fake_state, {'reads': 1, 'writes': 1})
 
+    def test_manual_wb_claim_precedes_provider_and_replay_is_single_use(self):
+        from models import BulkEditHistory
+
+        submission = self._manual_review_submission('update_brand', 'Synthetic brand')
+        state = {'calls': 0}
+
+        class FakeWBClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update_cards_merged(self, updates, **_kwargs):
+                state['calls'] += 1
+                self_owner = owner
+                claimed = BulkEditHistory.query.filter_by(
+                    seller_id=self_owner.seller_id,
+                ).filter(BulkEditHistory.review_key.isnot(None)).first()
+                assert claimed is not None
+                assert updates == {9741: {'brand': 'Synthetic brand'}}
+                return {
+                    'sent': [], 'missing': [9741], 'invalid': {}, 'failed': {},
+                    'snapshots': {}, 'requests': 1,
+                }
+
+        owner = self
+        with patch.object(self.seller_platform, 'WildberriesAPIClient', FakeWBClient):
+            client = self._client()
+            first = client.post('/products/bulk-edit', data=submission)
+            self.assertEqual(first.status_code, 302)
+            with self.app.app_context():
+                history_id = BulkEditHistory.query.filter_by(
+                    seller_id=self.seller_id,
+                ).one().id
+            replay = client.post('/products/bulk-edit', data=submission)
+            self.assertEqual(replay.status_code, 302)
+            self.assertEqual(replay.headers['Location'], f'/bulk-history/{history_id}')
+        self.assertEqual(state['calls'], 1)
+
+    def test_brand_apply_uses_only_changed_review_rows_and_history_counts(self):
+        from models import BulkEditHistory, Product
+
+        submission = self._manual_review_submission(
+            'update_brand', 'Pipedream',
+            product_ids=[self.product_id, self.sibling_product_id],
+        )
+        state = {'updates': None, 'callback_ids': []}
+
+        class FakeWBClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update_cards_merged(self, updates, *, pre_merge_callback=None, **_kwargs):
+                state['updates'] = updates
+                for nm_id, patch_data in updates.items():
+                    state['callback_ids'].append(nm_id)
+                    pre_merge_callback(
+                        nm_id,
+                        {'nmID': nm_id, 'subjectID': 5880, 'brand': 'Pipedream Classic'},
+                        patch_data,
+                    )
+                return {
+                    'sent': [9742], 'missing': [], 'invalid': {}, 'failed': {},
+                    'snapshots': {
+                        9742: {
+                            'before': {'nmID': 9742, 'brand': 'Pipedream Classic'},
+                            'after': {'nmID': 9742, 'brand': 'Pipedream'},
+                        },
+                    },
+                }
+
+        with patch.object(self.seller_platform, 'WildberriesAPIClient', FakeWBClient):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(state['updates'], {9742: {'brand': 'Pipedream'}})
+        self.assertEqual(state['callback_ids'], [9742])
+        with self.app.app_context():
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            self.assertEqual(operation.total_products, 2)
+            self.assertEqual(operation.success_count, 1)
+            self.assertEqual(operation.operation_params['review_summary'], {
+                'selected': 2,
+                'eligible': 2,
+                'changed': 1,
+                'skipped': 1,
+                'errors': 0,
+                'changed_product_ids': [self.sibling_product_id],
+                'mode': 'replace',
+                'subject_id': None,
+            })
+            products = {
+                product.id: product
+                for product in Product.query.filter(
+                    Product.id.in_([self.product_id, self.sibling_product_id]),
+                ).all()
+            }
+            self.assertEqual(products[self.product_id].brand, 'Pipedream')
+            self.assertEqual(products[self.sibling_product_id].brand, 'Pipedream')
+
+    def test_brand_provider_drift_skips_row_before_write(self):
+        from models import BulkEditHistory, Product
+
+        submission = self._manual_review_submission(
+            'update_brand', 'Synthetic brand',
+        )
+        state = {'writes': 0}
+
+        class FakeWBClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update_cards_merged(self, updates, *, pre_merge_callback=None, **_kwargs):
+                for nm_id, patch_data in updates.items():
+                    try:
+                        pre_merge_callback(
+                            nm_id,
+                            {'nmID': nm_id, 'subjectID': 5880, 'brand': 'Provider changed'},
+                            patch_data,
+                        )
+                    except ValueError as exc:
+                        return {
+                            'sent': [], 'missing': [], 'invalid': {nm_id: str(exc)},
+                            'failed': {}, 'snapshots': {},
+                        }
+                state['writes'] += 1
+                return {'sent': list(updates), 'missing': [], 'invalid': {}, 'failed': {}, 'snapshots': {}}
+
+        with patch.object(self.seller_platform, 'WildberriesAPIClient', FakeWBClient):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(state['writes'], 0)
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            self.assertEqual(product.brand, 'Pipedream')
+            self.assertEqual(operation.success_count, 0)
+            self.assertEqual(operation.error_count, 1)
+            self.assertIn('изменилось в WB после предпросмотра', operation.errors_details[0])
+
+    def test_append_description_provider_drift_does_not_rebuild_unreviewed_after(self):
+        from models import BulkEditHistory, Product
+
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            product.description = 'Local A'
+            self.db.session.commit()
+        submission = self._manual_review_submission('append_description', 'Reviewed B')
+        state = {'writes': 0, 'fresh_after': []}
+
+        class FakeWBClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update_cards_batch(self, cards, **_kwargs):
+                state['writes'] += 1
+                state['fresh_after'].extend(card['description'] for card in cards)
+
+        def stale_prepare(products, updates_fn, _client, *, fresh_cards_out=None, **_kwargs):
+            for product in products:
+                full_card = {
+                    'nmID': product.nm_id,
+                    'subjectID': 5880,
+                    'sizes': [{'skus': ['synthetic-description-drift']}],
+                    'description': 'Provider C',
+                }
+                if fresh_cards_out is not None:
+                    fresh_cards_out[product.nm_id] = copy.deepcopy(full_card)
+                with self.assertRaisesRegex(ValueError, 'изменилось в WB'):
+                    updates_fn(product, full_card)
+            return [], {}, ['Provider description drift; review again']
+
+        with patch.object(self.seller_platform, 'WildberriesAPIClient', FakeWBClient), patch(
+            'services.wb_validators.prepare_batch_cards_safe', stale_prepare,
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(state['writes'], 0)
+        self.assertEqual(state['fresh_after'], [])
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            self.assertEqual(product.description, 'Local A')
+            self.assertEqual(operation.success_count, 0)
+            self.assertEqual(operation.error_count, 1)
+            self.assertIn('Provider description drift', operation.errors_details[0])
+
+    def test_local_keyword_apply_has_no_wb_client_and_replay_does_not_repeat(self):
+        from models import BulkEditHistory, Product
+
+        submission = self._manual_review_submission('update_keywords', 'synthetic, local')
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('local keyword operation must not create WB client'),
+        ):
+            client = self._client()
+            first = client.post('/products/bulk-edit', data=submission)
+            self.assertEqual(first.status_code, 302)
+            with self.app.app_context():
+                history_id = BulkEditHistory.query.filter_by(
+                    seller_id=self.seller_id,
+                ).one().id
+                product = Product.query.filter_by(id=self.product_id).one()
+                self.assertEqual(json.loads(product.tags_json), ['synthetic', 'local'])
+            replay = client.post('/products/bulk-edit', data=submission)
+            self.assertEqual(replay.status_code, 302)
+            self.assertEqual(replay.headers['Location'], f'/bulk-history/{history_id}')
+        with self.app.app_context():
+            self.assertEqual(BulkEditHistory.query.filter_by(seller_id=self.seller_id).count(), 1)
+
+    def test_keyword_apply_changes_only_products_in_review_diff(self):
+        from models import BulkEditHistory, Product
+
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            product.tags_json = json.dumps(['one', 'two'])
+            self.db.session.commit()
+        submission = self._manual_review_submission(
+            'update_keywords', 'one, two',
+            product_ids=[self.product_id, self.sibling_product_id],
+        )
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('keyword review is local-only'),
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            products = {
+                product.id: product
+                for product in Product.query.filter(
+                    Product.id.in_([self.product_id, self.sibling_product_id]),
+                ).all()
+            }
+            self.assertEqual(json.loads(products[self.product_id].tags_json), ['one', 'two'])
+            self.assertEqual(json.loads(products[self.sibling_product_id].tags_json), ['one', 'two'])
+            self.assertEqual(operation.total_products, 2)
+            self.assertEqual(operation.success_count, 1)
+            self.assertEqual(operation.operation_params['review_summary']['changed'], 1)
+            self.assertEqual(operation.operation_params['review_summary']['skipped'], 1)
+
+    def test_keyword_apply_detects_tags_race_after_claim_without_overwrite(self):
+        from models import BulkEditHistory, Product
+        from services.wb_edit_review import commit_wb_bulk_review_claim as original_claim
+
+        submission = self._manual_review_submission('update_keywords', 'reviewed tags')
+
+        def claim_then_race(history):
+            result = original_claim(history)
+            product = Product.query.filter_by(id=self.product_id).one()
+            product.tags_json = json.dumps(['concurrent', 'tags'])
+            self.db.session.commit()
+            return result
+
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('keyword operation must remain local-only'),
+        ), patch(
+            'services.wb_edit_review.commit_wb_bulk_review_claim',
+            side_effect=claim_then_race,
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            self.assertEqual(json.loads(product.tags_json), ['concurrent', 'tags'])
+            self.assertEqual(operation.status, 'failed')
+            self.assertIn('изменились', operation.errors_details[0])
+
+    def test_keyword_race_on_later_row_rolls_back_earlier_cas_in_batch(self):
+        from models import BulkEditHistory, Product
+        from services.wb_edit_review import commit_wb_bulk_review_claim as original_claim
+
+        submission = self._manual_review_submission(
+            'update_keywords', 'reviewed tags',
+            product_ids=[self.product_id, self.sibling_product_id],
+        )
+
+        def claim_then_race_later_product(history):
+            result = original_claim(history)
+            product = Product.query.filter_by(id=self.sibling_product_id).one()
+            product.tags_json = json.dumps(['concurrent', 'sibling'])
+            self.db.session.commit()
+            return result
+
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('keyword CAS batch must be local-only'),
+        ), patch(
+            'services.wb_edit_review.commit_wb_bulk_review_claim',
+            side_effect=claim_then_race_later_product,
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            first = Product.query.filter_by(id=self.product_id).one()
+            sibling = Product.query.filter_by(id=self.sibling_product_id).one()
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            self.assertIsNone(first.tags_json)
+            self.assertEqual(json.loads(sibling.tags_json), ['concurrent', 'sibling'])
+            self.assertEqual(operation.status, 'failed')
+            self.assertEqual(operation.success_count, 0)
+            self.assertEqual(operation.error_count, 1)
+
     def test_characteristic_preview_is_local_and_shows_exact_scope_and_diff(self):
         submission = self._review_submission()
         submission.pop('preview_token')
@@ -420,6 +881,370 @@ class WBBulkReviewReplayTest(unittest.TestCase):
         self.assertIn('Изменится', html)
         self.assertIn('old', html)
         self.assertIn('new', html)
+
+    def test_characteristic_apply_sends_only_reviewed_product_field_pairs(self):
+        from models import BulkEditHistory, Product
+        from services.product_selection import (
+            issue_product_selection_token,
+            load_product_selection_token,
+            parse_product_list_state,
+        )
+        from services.wb_edit_review import (
+            build_bulk_characteristic_preview,
+            issue_wb_edit_preview_token,
+        )
+
+        with self.app.app_context():
+            sibling = Product.query.filter_by(id=self.sibling_product_id).one()
+            sibling.characteristics_json = json.dumps([
+                {'id': 101, 'name': 'Synthetic free-text field', 'value': ['new']},
+            ])
+            self.db.session.commit()
+            products = [
+                Product.query.filter_by(id=product_id, seller_id=self.seller_id).one()
+                for product_id in [self.product_id, self.sibling_product_id]
+            ]
+            product_ids = [self.product_id, self.sibling_product_id]
+            selection_token = issue_product_selection_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                product_ids=product_ids,
+                state=parse_product_list_state({}, strict=True),
+                return_to='/products',
+                wb_account_id='synthetic-wb-account',
+            )
+            selection_payload = load_product_selection_token(
+                selection_token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            changes = [
+                {'char_id': '101', 'value': ['new']},
+                {'char_id': '202', 'value': ['Россия']},
+            ]
+            preview = build_bulk_characteristic_preview(
+                products,
+                operation='update_characteristic',
+                subject_id=5880,
+                change_input=changes,
+            )
+            self.assertEqual(preview['selected_count'], 2)
+            self.assertEqual(preview['changed_count'], 2)
+            self.assertEqual(preview['diff_count'], 3)
+            preview_token = issue_wb_edit_preview_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                selection_payload=selection_payload,
+                preview=preview,
+            )
+
+        state = {'patches': {}, 'writes': []}
+
+        class FakeWBClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update_cards_batch(self, cards, **_kwargs):
+                state['writes'].extend(copy.deepcopy(cards))
+                return {'accepted': len(cards)}
+
+        def fake_prepare(products_arg, updates_fn, client, *, fresh_cards_out=None, **_kwargs):
+            cards = []
+            product_map = {}
+            for product in products_arg:
+                chars = (
+                    [{'id': 101, 'name': 'Synthetic free-text field', 'value': ['old']}]
+                    if product.id == self.product_id else
+                    [{'id': 101, 'name': 'Synthetic free-text field', 'value': ['new']}]
+                )
+                full_card = {
+                    'nmID': int(product.nm_id),
+                    'vendorCode': product.vendor_code,
+                    'subjectID': 5880,
+                    'sizes': [{'skus': [f'synthetic-{product.nm_id}']}],
+                    'characteristics': copy.deepcopy(chars),
+                }
+                if fresh_cards_out is not None:
+                    fresh_cards_out[int(product.nm_id)] = copy.deepcopy(full_card)
+                patch_data = updates_fn(product, full_card)
+                state['patches'][int(product.nm_id)] = copy.deepcopy(patch_data['characteristics'])
+                by_id = {item['id']: item for item in chars}
+                by_id.update({item['id']: item for item in patch_data['characteristics']})
+                full_card['characteristics'] = list(by_id.values())
+                cards.append(full_card)
+                product_map[int(product.nm_id)] = product
+            return cards, product_map, []
+
+        submission = {
+            'selection_token': selection_token,
+            'preview_token': preview_token,
+            'operation': 'update_characteristic',
+            'selected_category': '5880',
+            'characteristics_batch': json.dumps(changes),
+        }
+        with patch.object(self.seller_platform, 'WildberriesAPIClient', FakeWBClient), patch(
+            'services.wb_validators.prepare_batch_cards_safe', fake_prepare,
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            {nm_id: {row['id'] for row in patch_rows}
+             for nm_id, patch_rows in state['patches'].items()},
+            {9741: {101, 202}, 9742: {202}},
+        )
+        with self.app.app_context():
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            self.assertEqual(operation.success_count, 2)
+            self.assertEqual(operation.operation_params['review_summary']['changed'], 2)
+            self.assertEqual(operation.operation_params['review_summary']['selected'], 2)
+
+    def test_characteristic_provider_drift_skips_row_before_batch_write(self):
+        from models import BulkEditHistory, Product
+
+        submission = self._review_submission()
+        state = {'writes': 0}
+
+        class FakeWBClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update_cards_batch(self, *_args, **_kwargs):
+                state['writes'] += 1
+
+        def stale_prepare(products, updates_fn, _client, *, fresh_cards_out=None, **_kwargs):
+            for product in products:
+                full_card = {
+                    'nmID': product.nm_id,
+                    'subjectID': 5880,
+                    'sizes': [{'skus': ['synthetic-stale']}],
+                    'characteristics': [
+                        {'id': 101, 'name': 'Synthetic free-text field', 'value': ['provider-newer']},
+                    ],
+                }
+                if fresh_cards_out is not None:
+                    fresh_cards_out[product.nm_id] = copy.deepcopy(full_card)
+                with self.assertRaisesRegex(ValueError, 'изменилась в WB'):
+                    updates_fn(product, full_card)
+            return [], {}, ['Provider content drift; refresh preview']
+
+        with patch.object(self.seller_platform, 'WildberriesAPIClient', FakeWBClient), patch(
+            'services.wb_validators.prepare_batch_cards_safe', stale_prepare,
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(state['writes'], 0)
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            self.assertEqual(json.loads(product.characteristics_json)[0]['value'], ['old'])
+            self.assertEqual(operation.status, 'failed')
+            self.assertEqual(operation.error_count, 1)
+            self.assertIn('Provider content drift', operation.errors_details[0])
+
+    def test_fill_missing_apply_rejects_new_provider_value_without_write(self):
+        from models import BulkEditHistory, Product
+
+        submission = self._characteristic_review_submission(
+            'add_characteristic', char_id='202', value='Россия',
+        )
+        state = {'writes': 0}
+
+        class FakeWBClient:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def update_cards_batch(self, *_args, **_kwargs):
+                state['writes'] += 1
+
+        def stale_prepare(products, updates_fn, _client, *, fresh_cards_out=None, **_kwargs):
+            skipped = []
+            for product in products:
+                full_card = {
+                    'nmID': product.nm_id,
+                    'subjectID': 5880,
+                    'sizes': [{'skus': ['synthetic-fill-missing']}],
+                    'characteristics': [
+                        {'id': 202, 'name': 'Страна производства', 'value': ['Китай']},
+                    ],
+                }
+                if fresh_cards_out is not None:
+                    fresh_cards_out[product.nm_id] = copy.deepcopy(full_card)
+                with self.assertRaisesRegex(ValueError, 'изменилась в WB'):
+                    updates_fn(product, full_card)
+                skipped.append('Provider content drift; review again')
+            return [], {}, skipped
+
+        with patch.object(self.seller_platform, 'WildberriesAPIClient', FakeWBClient), patch(
+            'services.wb_validators.prepare_batch_cards_safe', stale_prepare,
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(state['writes'], 0)
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            operation = BulkEditHistory.query.filter_by(seller_id=self.seller_id).one()
+            current = json.loads(product.characteristics_json)
+            self.assertFalse(any(row.get('id') == 202 for row in current))
+            self.assertEqual(operation.success_count, 0)
+            self.assertGreaterEqual(operation.error_count, 1)
+
+    def test_manual_bulk_operations_preview_locally_before_any_write(self):
+        cases = (
+            ('update_brand', 'Fixture brand', 'Бренд', 'Pipedream', 'Fixture brand'),
+            ('append_description', 'New paragraph', 'Описание', '', 'New paragraph'),
+            ('replace_description', 'Replacement', 'Описание', '', 'Replacement'),
+            ('update_keywords', 'one, two\nthree', 'Ключевые слова', '', 'one, two, three'),
+        )
+        for operation, value, label, old, new in cases:
+            with self.subTest(operation=operation):
+                submission = self._review_submission()
+                submission.pop('preview_token')
+                submission.pop('selected_category')
+                submission.pop('characteristics_batch')
+                submission.update({'operation': operation, 'value': value})
+                with patch.object(
+                    self.seller_platform,
+                    'WildberriesAPIClient',
+                    side_effect=AssertionError('preview must not construct WB client'),
+                ):
+                    response = self._client().post('/products/bulk-edit', data=submission)
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                self.assertIn('Выбрано', html)
+                self.assertIn('Изменится', html)
+                self.assertIn(label, html)
+                self.assertIn(new, html)
+                if old:
+                    self.assertIn(old, html)
+                if operation == 'update_keywords':
+                    self.assertIn('Изменятся только локальные ключевые слова Seller Hub', html)
+
+    def test_manual_bulk_preview_blocks_empty_and_noop_values_without_token(self):
+        from models import Product
+
+        submission = self._review_submission()
+        submission.pop('preview_token')
+        submission.pop('selected_category')
+        submission.pop('characteristics_batch')
+        submission.update({'operation': 'update_brand', 'value': ''})
+        empty = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(empty.status_code, 200)
+        empty_html = empty.get_data(as_text=True)
+        self.assertIn('Значение операции не должно быть пустым', empty_html)
+        self.assertIn('name="preview_token" value=""', empty_html)
+        self.assertNotIn('name="preview_token" value=".', empty_html)
+
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            product.brand = 'Already there'
+            self.db.session.commit()
+        submission['value'] = 'Already there'
+        noop = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(noop.status_code, 200)
+        noop_html = noop.get_data(as_text=True)
+        self.assertIn('Нет изменений для применения', noop_html)
+        self.assertIn('name="preview_token" value=""', noop_html)
+
+    def test_mixed_manual_and_ai_post_is_rejected_without_hidden_followup(self):
+        from models import BulkEditHistory
+
+        submission = self._review_submission()
+        submission.pop('preview_token')
+        submission.pop('selected_category')
+        submission.pop('characteristics_batch')
+        submission.update({
+            'operation': 'update_brand',
+            'value': 'Synthetic brand',
+            'ai_operations': ['ai_keywords'],
+        })
+        with patch.object(
+            self.seller_platform,
+            'WildberriesAPIClient',
+            side_effect=AssertionError('mixed action must not reach WB'),
+        ):
+            response = self._client().post('/products/bulk-edit', data=submission)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Ручная и AI-операции не объединяются'.encode(), response.data)
+        with self.app.app_context():
+            self.assertEqual(BulkEditHistory.query.filter_by(seller_id=self.seller_id).count(), 0)
+
+    def test_manual_preview_token_is_bound_to_operation_and_local_content(self):
+        from models import Product
+        from services.product_selection import (
+            issue_product_selection_token,
+            load_product_selection_token,
+            parse_product_list_state,
+        )
+        from services.wb_edit_review import (
+            build_bulk_manual_preview,
+            issue_wb_edit_preview_token,
+            load_wb_edit_preview_token,
+            validate_preview_against_current,
+        )
+
+        with self.app.app_context():
+            product = Product.query.filter_by(id=self.product_id).one()
+            state = parse_product_list_state({}, strict=True)
+            selection_token = issue_product_selection_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                product_ids=[self.product_id],
+                state=state,
+                return_to='/products',
+                wb_account_id='synthetic-wb-account',
+            )
+            selection = load_product_selection_token(
+                selection_token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                wb_account_id='synthetic-wb-account',
+            )
+            preview = build_bulk_manual_preview(
+                [product], operation='replace_description', value='reviewed text',
+            )
+            token = issue_wb_edit_preview_token(
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+                selection_payload=selection,
+                preview=preview,
+            )
+            payload = load_wb_edit_preview_token(
+                token,
+                secret_key=self.app.config['SECRET_KEY'],
+                user_id=self.user_id,
+                seller_id=self.seller_id,
+            )
+            checked = validate_preview_against_current(payload, [product])
+            self.assertEqual(checked['changed_count'], 1)
+            product.description = 'drifted after preview'
+            self.db.session.commit()
+            with self.assertRaisesRegex(ValueError, 'изменил|изменились'):
+                validate_preview_against_current(payload, [product])
 
     def test_product_edit_get_uses_cached_schema_and_keeps_sizes_read_only(self):
         with patch.object(

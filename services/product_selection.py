@@ -27,6 +27,10 @@ from models import (
 
 
 MAX_BULK_PRODUCT_SELECTION = 200
+MAX_SIGNED_SQLITE_ID = (1 << 63) - 1
+MAX_SIGNED_SQLITE_ID_TEXT = str(MAX_SIGNED_SQLITE_ID)
+MAX_PRODUCT_LIST_PAGE = 1_000_000
+MAX_PRODUCT_LIST_PER_PAGE = 200
 SELECTION_TOKEN_MAX_AGE_SECONDS = 15 * 60
 SELECTION_TOKEN_SALT = 'wb-product-selection-v1'
 
@@ -116,10 +120,25 @@ def _positive_int(value: Any, name: str, *, strict: bool) -> int | None:
     elif isinstance(value, int):
         parsed = value
     elif isinstance(value, str) and value.isascii() and value.isdecimal():
-        parsed = int(value)
+        # Bound before converting: Python integers are arbitrary precision,
+        # but Product/Supplier keys and SQLite OFFSET are signed 64-bit.
+        if len(value) > len(MAX_SIGNED_SQLITE_ID_TEXT):
+            parsed = None
+        else:
+            normalized = value.lstrip('0') or '0'
+            if (
+                len(normalized) > len(MAX_SIGNED_SQLITE_ID_TEXT)
+                or (
+                    len(normalized) == len(MAX_SIGNED_SQLITE_ID_TEXT)
+                    and normalized > MAX_SIGNED_SQLITE_ID_TEXT
+                )
+            ):
+                parsed = None
+            else:
+                parsed = int(normalized)
     else:
         parsed = None
-    if parsed is None or parsed <= 0:
+    if parsed is None or parsed <= 0 or parsed > MAX_SIGNED_SQLITE_ID:
         if strict:
             raise ProductSelectionError(f'Некорректное значение фильтра {name}')
         return None
@@ -196,7 +215,18 @@ def parse_product_list_state(
     per_page = _positive_int(
         _single(source, 'per_page', strict=strict), 'per_page', strict=strict,
     ) or 50
-    per_page = min(per_page, 200)
+    if per_page > MAX_PRODUCT_LIST_PER_PAGE:
+        if strict:
+            raise ProductSelectionError(
+                f'Размер страницы не может превышать {MAX_PRODUCT_LIST_PER_PAGE}'
+            )
+        per_page = MAX_PRODUCT_LIST_PER_PAGE
+    if page > MAX_PRODUCT_LIST_PAGE:
+        if strict:
+            raise ProductSelectionError(
+                f'Номер страницы не может превышать {MAX_PRODUCT_LIST_PAGE}'
+            )
+        page = MAX_PRODUCT_LIST_PAGE
 
     filters = {
         'search': search,
@@ -411,12 +441,20 @@ def parse_selected_product_ids(raw_ids: Any, *, from_query: bool = False) -> lis
     seen = set()
     for raw in raw_ids:
         if from_query and isinstance(raw, str) and raw.isascii() and raw.isdecimal():
-            product_id = int(raw)
+            if len(raw) > len(MAX_SIGNED_SQLITE_ID_TEXT):
+                raise ProductSelectionError('ID товара выходит за поддерживаемый диапазон')
+            normalized = raw.lstrip('0') or '0'
+            if len(normalized) > len(MAX_SIGNED_SQLITE_ID_TEXT) or (
+                len(normalized) == len(MAX_SIGNED_SQLITE_ID_TEXT)
+                and normalized > MAX_SIGNED_SQLITE_ID_TEXT
+            ):
+                raise ProductSelectionError('ID товара выходит за поддерживаемый диапазон')
+            product_id = int(normalized)
         elif isinstance(raw, int) and not isinstance(raw, bool):
             product_id = raw
         else:
             raise ProductSelectionError('ID товара должен быть positive integer')
-        if product_id <= 0:
+        if product_id <= 0 or product_id > MAX_SIGNED_SQLITE_ID:
             raise ProductSelectionError('ID товара должен быть positive integer')
         if product_id in seen:
             raise ProductSelectionError('В выборе есть повторяющиеся товары')

@@ -502,7 +502,7 @@
                     {% for product in products %}
                     <tr class="hover:bg-indigo-50/50 transition-colors group {% if not product.is_active %}opacity-50{% endif %}">
                         <td class="px-4 py-3">
-                            <input type="checkbox" class="product-checkbox w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300" value="{{ product.id }}" onchange="updateSelection()" aria-label="Выбрать товар {{ product.vendor_code }}">
+                            <input type="checkbox" class="product-checkbox w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300" value="{{ product.id }}" onchange="ingestSelectionFromPage(this)" aria-label="Выбрать товар {{ product.vendor_code }}">
                         </td>
                         <td class="px-4 py-3">
                             {% if product.photos_json %}
@@ -802,27 +802,14 @@ function initializeSelection() {
     } catch (_error) {
         selectedProductIds = new Set();
     }
-    document.querySelectorAll('.product-checkbox').forEach(checkbox => {
-        checkbox.checked = selectedProductIds.has(Number(checkbox.value));
-    });
-    persistSelection();
-    updateSelection();
+    renderSelection();
 }
 
-function updateSelection() {
+function renderSelection() {
     const checkboxes = Array.from(document.querySelectorAll('.product-checkbox'));
-    const proposed = new Set(selectedProductIds);
     for (const checkbox of checkboxes) {
-        const id = Number(checkbox.value);
-        if (checkbox.checked) proposed.add(id);
-        else proposed.delete(id);
+        checkbox.checked = selectedProductIds.has(Number(checkbox.value));
     }
-    if (proposed.size > selectionConfig.selectionLimit) {
-        setSelectionStatus(`Партия ограничена ${selectionConfig.selectionLimit} товарами. Снимите часть выбора или сузьте фильтры.`);
-        for (const checkbox of checkboxes) checkbox.checked = selectedProductIds.has(Number(checkbox.value));
-        return;
-    }
-    selectedProductIds = proposed;
     persistSelection();
     const ids = Array.from(selectedProductIds);
     document.getElementById('selectedCount').textContent = ids.length;
@@ -847,6 +834,25 @@ function updateSelection() {
     setSelectionStatus(ids.length ? `Точно выбрано ${ids.length} товаров для Wildberries.` : 'Выбор пуст.');
 }
 
+function ingestSelectionFromPage(changedCheckbox) {
+    if (!changedCheckbox || !changedCheckbox.matches('.product-checkbox')) return;
+    const id = Number(changedCheckbox.value);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+        changedCheckbox.checked = false;
+        return;
+    }
+    const proposed = new Set(selectedProductIds);
+    if (changedCheckbox.checked) proposed.add(id);
+    else proposed.delete(id);
+    if (proposed.size > selectionConfig.selectionLimit) {
+        changedCheckbox.checked = false;
+        setSelectionStatus(`Партия ограничена ${selectionConfig.selectionLimit} товарами. Снимите часть выбора или сузьте фильтры.`);
+        return;
+    }
+    selectedProductIds = proposed;
+    renderSelection();
+}
+
 function toggleSelectAll(checkbox) {
     const pageIds = Array.from(document.querySelectorAll('.product-checkbox'), box => Number(box.value));
     const proposed = new Set(selectedProductIds);
@@ -858,14 +864,12 @@ function toggleSelectAll(checkbox) {
         return;
     }
     selectedProductIds = proposed;
-    persistSelection();
-    updateSelection();
+    renderSelection();
 }
 
 function clearSelection() {
     selectedProductIds = new Set();
-    persistSelection();
-    updateSelection();
+    renderSelection();
 }
 
 function currentSelectionRequest(mode, ids = []) {
@@ -900,8 +904,7 @@ async function selectAllFiltered() {
     try {
         const resolved = await resolveSelection('all_filtered');
         selectedProductIds = new Set(resolved.ids.map(Number));
-        persistSelection();
-        updateSelection();
+        renderSelection();
     } catch (error) {
         setSelectionStatus(error.message);
     } finally {

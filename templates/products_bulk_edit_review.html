@@ -13,12 +13,14 @@
             <input type="hidden" name="return_to" value="{{ return_to }}">
             <input type="hidden" name="back_to_editor" value="1">
             <input type="hidden" name="operation" value="{{ preview.operation }}">
-            <input type="hidden" name="selected_category" value="{{ selected_category }}">
+            {% if preview.subject_id %}<input type="hidden" name="selected_category" value="{{ selected_category }}">{% endif %}
             {% if preview.operation == 'update_characteristic' %}
             <textarea hidden name="characteristics_batch">{{ characteristics_batch }}</textarea>
-            {% else %}
+            {% elif preview.operation == 'add_characteristic' %}
             <input type="hidden" name="char_id" value="{{ char_id }}">
             <input type="hidden" name="value" value="{{ value }}">
+            {% else %}
+            <input type="hidden" name="value" value="{{ operation_value }}">
             {% endif %}
             <button type="submit" class="hover:underline">Массовое редактирование</button>
         </form>
@@ -30,16 +32,26 @@
         <p class="text-xs uppercase tracking-wide" style="color:var(--accent)">Аккаунт: {{ account_label }} · Канал: {{ preview.channel }}</p>
         <h1 class="mt-2 text-2xl font-semibold" style="color:var(--text)">Проверьте изменения перед применением</h1>
         <p class="mt-2 text-sm" style="color:var(--text-secondary)">
-            subjectID {{ preview.subject_id }} · {{ preview.subject_name }} ·
-            {% if preview.mode == 'fill_missing' %}Заполнить отсутствующие значения{% else %}Обновить выбранные значения{% endif %}
+            {% if preview.subject_id %}subjectID {{ preview.subject_id }} · {{ preview.subject_name }} ·{% endif %}
+            {% if preview.mode == 'fill_missing' %}Заполнить отсутствующие значения
+            {% elif preview.mode == 'replace_existing' %}Обновить выбранные значения
+            {% elif preview.mode == 'local_only' %}Записать только в локальные данные Seller Hub
+            {% elif preview.mode == 'append' %}Добавить текст к существующему описанию
+            {% else %}Заменить значение{% endif %}
         </p>
-        <p class="mt-2 text-sm" style="color:var(--text-secondary)">Предпросмотр рассчитан по локальному снимку и справочнику. Он не отправляет данные в WB.</p>
+        <p class="mt-2 text-sm" style="color:var(--text-secondary)">
+            {% if preview.channel == 'Seller Hub · локальные данные' %}
+            Изменятся только локальные ключевые слова Seller Hub. В WB они не отправляются.
+            {% else %}
+            Предпросмотр рассчитан по локальному снимку и справочнику. Он не отправляет данные в WB.
+            {% endif %}
+        </p>
     </div>
 
     <section class="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5" aria-label="Сводка предпросмотра">
         {% for label, value in [
             ('Выбрано', preview.selected_count),
-            ('Подходит по subjectID', preview.eligible_count),
+            ('Подходит по subjectID' if preview.subject_id else ('Обрабатывается локально' if preview.mode == 'local_only' else 'Подходит для операции'), preview.eligible_count),
             ('Изменится', preview.changed_count),
             ('Пропущено', preview.skipped_count),
             ('Ошибки', preview.error_count)
@@ -66,7 +78,7 @@
                     {% for row in preview.diff %}
                     <tr>
                         <td class="px-4 py-3" style="color:var(--text)"><strong>{{ row.vendor_code or '—' }}</strong><div class="text-xs" style="color:var(--text-muted)">{{ row.nm_id }}</div></td>
-                        <td class="px-4 py-3" style="color:var(--text)">{{ row.characteristic }} <span class="text-xs" style="color:var(--text-muted)">#{{ row.characteristic_id }}</span></td>
+                        <td class="px-4 py-3" style="color:var(--text)">{{ row.characteristic }}{% if row.characteristic_id %} <span class="text-xs" style="color:var(--text-muted)">#{{ row.characteristic_id }}</span>{% endif %}</td>
                         <td class="max-w-sm whitespace-pre-wrap px-4 py-3" style="color:var(--text-secondary)">{{ row.before|join(', ') if row.before else 'Пусто' }}</td>
                         <td class="max-w-sm whitespace-pre-wrap px-4 py-3 font-medium" style="color:var(--accent)">{{ row.after|join(', ') if row.after else 'Пусто' }}</td>
                     </tr>
@@ -107,12 +119,14 @@
             <input type="hidden" name="preview_token" value="{{ preview_token or '' }}">
             <input type="hidden" name="return_to" value="{{ return_to }}">
             <input type="hidden" name="operation" value="{{ preview.operation }}">
-            <input type="hidden" name="selected_category" value="{{ selected_category }}">
+            {% if preview.subject_id %}<input type="hidden" name="selected_category" value="{{ selected_category }}">{% endif %}
             {% if preview.operation == 'update_characteristic' %}
             <textarea hidden name="characteristics_batch">{{ characteristics_batch }}</textarea>
-            {% else %}
+            {% elif preview.operation == 'add_characteristic' %}
             <input type="hidden" name="char_id" value="{{ char_id }}">
             <input type="hidden" name="value" value="{{ value }}">
+            {% else %}
+            <input type="hidden" name="value" value="{{ operation_value }}">
             {% endif %}
             <button type="submit" class="sh-btn sh-btn--accent" {% if not preview_token %}disabled{% endif %}>
                 Подтвердить и применить {{ preview.changed_count }} карточек

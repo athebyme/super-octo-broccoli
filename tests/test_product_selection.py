@@ -4,6 +4,8 @@ import pytest
 from werkzeug.datastructures import MultiDict
 
 from services.product_selection import (
+    MAX_PRODUCT_LIST_PAGE,
+    MAX_SIGNED_SQLITE_ID,
     ProductSelectionError,
     parse_product_list_state,
     parse_selected_product_ids,
@@ -73,3 +75,28 @@ def test_return_state_preserves_numeric_zero_filter_values():
     assert state['filters']['rating_min'] == 0.0
     assert product_list_url_args(state)['rating_min'] == 0.0
     assert 'rating_min=0.0' in safe_products_return_url('/products?rating_min=0')
+
+
+def test_selection_and_numeric_controls_reject_values_outside_sqlite_bounds():
+    assert parse_selected_product_ids([MAX_SIGNED_SQLITE_ID]) == [MAX_SIGNED_SQLITE_ID]
+    assert parse_selected_product_ids([str(MAX_SIGNED_SQLITE_ID)], from_query=True) == [
+        MAX_SIGNED_SQLITE_ID,
+    ]
+    for raw_ids, from_query in (
+        ([MAX_SIGNED_SQLITE_ID + 1], False),
+        ([str(MAX_SIGNED_SQLITE_ID + 1)], True),
+        (['9' * 5000], True),
+        (['0' * 20 + '7'], True),
+    ):
+        with pytest.raises(ProductSelectionError):
+            parse_selected_product_ids(raw_ids, from_query=from_query)
+
+    with pytest.raises(ProductSelectionError, match='страницы'):
+        parse_product_list_state({'page': str(MAX_PRODUCT_LIST_PAGE + 1)}, strict=True)
+    with pytest.raises(ProductSelectionError):
+        parse_product_list_state({'page': '9' * 5000}, strict=True)
+    with pytest.raises(ProductSelectionError, match='страницы'):
+        parse_product_list_state({'per_page': '201'}, strict=True)
+    assert safe_products_return_url(
+        f'/products?page={MAX_PRODUCT_LIST_PAGE + 1}'
+    ) == '/products'

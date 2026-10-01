@@ -1598,6 +1598,9 @@ class WildberriesAPIClient:
         seller_id: int = None,
         chunk_size: int = 1000,
         _content_lock_held: bool = False,
+        pre_merge_callback: Optional[
+            Callable[[int, Dict[str, Any], Dict[str, Any]], None]
+        ] = None,
     ) -> Dict[str, Any]:
         """
         Пакетное редактирование: слить updates с полными карточками и отправить
@@ -1634,6 +1637,7 @@ class WildberriesAPIClient:
                     seller_id=seller_id,
                     chunk_size=chunk_size,
                     _content_lock_held=True,
+                    pre_merge_callback=pre_merge_callback,
                 )
             finally:
                 release_wb_seller_content_lock(claim)
@@ -1674,6 +1678,24 @@ class WildberriesAPIClient:
                 result['missing'].append(nm)
                 continue
             upd = dict(updates)
+
+            # Reviewed bulk operations use this hook to compare the exact
+            # freshly fetched full-card fields with the values shown in the
+            # user's preview. A mismatch rejects this row before preparation
+            # or any cards/update call. Copies keep the validator away from
+            # the client's merge and wire payload.
+            if pre_merge_callback is not None:
+                try:
+                    pre_merge_callback(
+                        int(nm), copy.deepcopy(full_card), copy.deepcopy(upd),
+                    )
+                except Exception as exc:
+                    result['invalid'][nm] = str(exc)[:500]
+                    logger.warning(
+                        'Card nmID=%s rejected by pre-merge review guard: %s',
+                        nm, result['invalid'][nm],
+                    )
+                    continue
 
             # Legacy generic prepare заполняет невалидный габарит захардкоженным
             # DEFAULT_DIMENSIONS и молча отправлял бы в WB 0.1 кг вместо

@@ -90,6 +90,52 @@ class TestUpdateCardsMerged(unittest.TestCase):
         self.assertEqual(result['sent'], [1])
         self.assertEqual(result['missing'], [99])
 
+    def test_pre_merge_review_drift_rejects_card_before_any_write(self):
+        cards_map = {1: _card(1, brand='Changed after review')}
+        callback_inputs = []
+
+        def reject_drift(nm_id, fresh, updates):
+            callback_inputs.append((nm_id, fresh['brand'], updates['brand']))
+            # A mutation proves the callback receives copies rather than the
+            # actual fetched card or update payload used for merge.
+            fresh['brand'] = 'Callback mutation'
+            updates['brand'] = 'Callback mutation'
+            raise ValueError('brand drift after review')
+
+        with patch.object(
+            self.client, 'fetch_cards_by_nm_ids', return_value=cards_map,
+        ), patch.object(
+            self.client, 'update_cards_batch', return_value={'error': False},
+        ) as mock_batch:
+            result = self.client.update_cards_merged(
+                {1: {'brand': 'Reviewed brand'}},
+                pre_merge_callback=reject_drift,
+            )
+
+        self.assertEqual(callback_inputs, [(1, 'Changed after review', 'Reviewed brand')])
+        self.assertEqual(result['sent'], [])
+        self.assertIn(1, result['invalid'])
+        self.assertIn('brand drift', result['invalid'][1])
+        mock_batch.assert_not_called()
+
+    def test_pre_merge_review_callback_is_forwarded_through_content_lock(self):
+        seen = []
+        cards_map = {1: _card(1)}
+        with patch('services.marketplace_operation_locks.try_wb_seller_content_lock', return_value=object()), \
+             patch('services.marketplace_operation_locks.release_wb_seller_content_lock') as release, \
+             patch.object(self.client, 'fetch_cards_by_nm_ids', return_value=cards_map), \
+             patch.object(self.client, 'update_cards_batch', return_value={'error': False}):
+            result = self.client.update_cards_merged(
+                {1: {'brand': 'Reviewed brand'}},
+                seller_id=44,
+                pre_merge_callback=lambda nm, card, updates: seen.append(
+                    (nm, card['brand'], updates['brand']),
+                ),
+            )
+        self.assertEqual(result['sent'], [1])
+        self.assertEqual(seen, [(1, 'Old', 'Reviewed brand')])
+        release.assert_called_once()
+
     def test_invalid_card_skipped_with_error(self):
         # без vendorCode карточка не проходит валидацию
         bad = _card(5)

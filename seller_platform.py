@@ -3186,6 +3186,7 @@ def products_bulk_edit():
         issue_wb_edit_preview_token,
         load_wb_edit_preview_token,
         parse_exact_wb_subject_id,
+        assert_provider_value_matches_review,
         validate_preview_against_current,
     )
 
@@ -3286,6 +3287,31 @@ def products_bulk_edit():
     def render_bulk_editor():
         return render_template('products_bulk_edit.html', **bulk_context)
 
+    def render_bulk_review(
+        preview, *, preview_token='', selected_category='',
+        characteristics_batch='', char_id='', value='',
+    ):
+        account_label = (
+            f"{current_user.seller.company_name} · WB account "
+            f"{current_user.seller.wb_seller_id}"
+            if current_user.seller.wb_seller_id
+            else f"{current_user.seller.company_name or 'WB'} · "
+                 f"Seller Hub #{current_user.seller.id}"
+        )
+        return render_template(
+            'products_bulk_edit_review.html',
+            preview=preview,
+            account_label=account_label,
+            preview_token=preview_token,
+            selection_token=selection_token,
+            return_to=return_to,
+            selected_category=selected_category,
+            characteristics_batch=characteristics_batch,
+            char_id=char_id,
+            value=value,
+            operation_value=value,
+        )
+
     if request.method == 'POST':
         if request.form.get('back_to_editor') == '1':
             return render_bulk_editor()
@@ -3299,7 +3325,21 @@ def products_bulk_edit():
         if not operation:
             return render_bulk_editor()
 
+        reviewed_manual_operations = {
+            'update_brand', 'append_description', 'replace_description',
+            'update_keywords', 'update_characteristic', 'add_characteristic',
+        }
+        if operation in reviewed_manual_operations and ai_operations_list:
+            flash(
+                'Ручная и AI-операции не объединяются в одном подтверждении. '
+                'Ничего не было применено: сначала выполните ручную проверку отдельно, '
+                'затем вернитесь и запустите выбранные AI-операции отдельным действием.',
+                'warning',
+            )
+            return render_bulk_editor()
+
         apply_preview_payload = None
+        current_preview = None
         if operation in {'update_characteristic', 'add_characteristic'}:
             try:
                 posted_subject = request.form.get('selected_category', '').strip()
@@ -3359,19 +3399,9 @@ def products_bulk_edit():
                             selection_payload=selection_payload,
                             preview=preview,
                         )
-                    return render_template(
-                        'products_bulk_edit_review.html',
-                        preview=preview,
-                        account_label=(
-                            f"{current_user.seller.company_name} · WB account "
-                            f"{current_user.seller.wb_seller_id}"
-                            if current_user.seller.wb_seller_id
-                            else f"{current_user.seller.company_name or 'WB'} · "
-                                 f"Seller Hub #{current_user.seller.id}"
-                        ),
+                    return render_bulk_review(
+                        preview,
                         preview_token=preview_token,
-                        selection_token=selection_token,
-                        return_to=return_to,
                         selected_category=str(posted_subject_id),
                         characteristics_batch=json.dumps(
                             preview['normalized_changes'], ensure_ascii=False,
@@ -3382,6 +3412,95 @@ def products_bulk_edit():
             except WBEditReviewError as exc:
                 flash(str(exc), 'danger')
                 return render_bulk_editor()
+        elif operation in {
+            'update_brand', 'append_description', 'replace_description', 'update_keywords',
+        }:
+            try:
+                preview_token = request.form.get('preview_token', '').strip()
+                operation_value = request.form.get('value', '').strip()
+                if preview_token:
+                    apply_preview_payload = load_wb_edit_preview_token(
+                        preview_token,
+                        secret_key=app.config['SECRET_KEY'],
+                        user_id=current_user.id,
+                        seller_id=current_user.seller.id,
+                    )
+                    if (
+                        apply_preview_payload.get('product_ids') != selection_payload['ids']
+                        or apply_preview_payload.get('operation') != operation
+                        or apply_preview_payload.get('subject_id') is not None
+                        or apply_preview_payload.get('wb_account_id')
+                        != selection_payload.get('wb_account_id')
+                        or apply_preview_payload.get('selection_filter_fingerprint')
+                        != selection_payload.get('filter_fingerprint')
+                        or len(apply_preview_payload.get('normalized_changes') or []) != 1
+                        or apply_preview_payload['normalized_changes'][0].get('value')
+                        != operation_value
+                    ):
+                        raise WBEditReviewError('Операция или точная выборка не совпадает с предпросмотром')
+                    existing_review = find_wb_bulk_review_claim(
+                        current_user.seller.id,
+                        apply_preview_payload['review_key'],
+                    )
+                    if existing_review is not None:
+                        flash(
+                            'Этот предпросмотр уже был отправлен. Повторной отправки не было; проверьте историю операции.',
+                            'info',
+                        )
+                        return redirect(url_for(
+                            'bulk_edit_history_detail', bulk_id=existing_review.id,
+                        ))
+                    current_preview = validate_preview_against_current(
+                        apply_preview_payload, products,
+                    )
+                    if current_preview.get('changed_count', 0) <= 0 or current_preview.get('error_count', 0):
+                        raise WBEditReviewError('Нет безопасных изменений для применения')
+                else:
+                    from services.wb_edit_review import build_bulk_manual_preview
+
+                    preview = build_bulk_manual_preview(
+                        products, operation=operation, value=operation_value,
+                    )
+                    preview_token = ''
+                    if preview.get('changed_count', 0) > 0 and preview.get('error_count', 0) == 0:
+                        preview_token = issue_wb_edit_preview_token(
+                            secret_key=app.config['SECRET_KEY'],
+                            user_id=current_user.id,
+                            seller_id=current_user.seller.id,
+                            selection_payload=selection_payload,
+                            preview=preview,
+                        )
+                    return render_bulk_review(
+                        preview,
+                        preview_token=preview_token,
+                        value=operation_value,
+                    )
+            except WBEditReviewError as exc:
+                flash(str(exc), 'danger')
+                return render_bulk_editor()
+
+        # Only rows that appeared in the freshly rebuilt reviewed diff may
+        # reach an apply branch. The full selected set remains visible in the
+        # history summary, but preview-skipped products/fields are not writes.
+        reviewed_rows_by_product = {}
+        review_summary = None
+        if apply_preview_payload is not None:
+            from services.wb_edit_review import reviewed_diff_by_product
+
+            reviewed_rows_by_product = reviewed_diff_by_product(current_preview)
+            if set(reviewed_rows_by_product).difference(selection_payload['ids']):
+                flash('Diff предпросмотра вышел за точный набор товаров', 'danger')
+                return render_bulk_editor()
+            review_summary = {
+                'selected': int(current_preview.get('selected_count') or 0),
+                'eligible': int(current_preview.get('eligible_count') or 0),
+                'changed': int(current_preview.get('changed_count') or 0),
+                'skipped': int(current_preview.get('skipped_count') or 0),
+                'errors': int(current_preview.get('error_count') or 0),
+                'changed_product_ids': sorted(reviewed_rows_by_product),
+                'mode': current_preview.get('mode'),
+                'subject_id': current_preview.get('subject_id'),
+            }
 
         start_time = time.time()
 
@@ -3414,10 +3533,15 @@ def products_bulk_edit():
             'ai_bulk': 'AI пакет: ' + ', '.join(_ai_op_names.get(op, op) for op in ai_operations_list) if ai_operations_list else 'AI пакет',
         }
 
+        operation_params = {'value': operation_value} if operation_value else {}
+        if review_summary is not None:
+            operation_params['review_summary'] = review_summary
+            operation_params['review_diff'] = current_preview.get('diff') or []
+
         bulk_operation = BulkEditHistory(
             seller_id=current_user.seller.id,
             operation_type=operation,
-            operation_params={'value': operation_value} if operation_value else {},
+            operation_params=operation_params,
             description=operation_descriptions.get(operation, 'Массовая операция'),
             total_products=len(products),
             status='in_progress',
@@ -3444,7 +3568,7 @@ def products_bulk_edit():
 
         # Логируем все данные формы для отладки
         app.logger.info(f"📋 Form data: operation={operation}")
-        app.logger.info(f"📋 Form value field: '{operation_value}'")
+        app.logger.info('Bulk edit input value length=%s', len(operation_value))
         app.logger.info(f"📋 Form char_id: '{request.form.get('char_id', '')}'")
         app.logger.info(f"📋 Form selected_category: '{request.form.get('selected_category', '')}'")
         app.logger.info(f"📋 All form keys: {list(request.form.keys())}")
@@ -3452,17 +3576,32 @@ def products_bulk_edit():
         # Показываем ВСЕ поля (кроме product_ids) для отладки
         app.logger.info("📋 All form fields:")
         for key, value in request.form.items():
-            if key not in {'product_ids', 'selection_token', 'preview_token'}:
+            if key not in {
+                'product_ids', 'selection_token', 'preview_token', 'value',
+                'characteristics_batch',
+            }:
                 app.logger.info(f"   {key} = '{value}'")
 
         try:
-            with WildberriesAPIClient(
-                current_user.seller.wb_api_key,
-                db_logger_callback=APILog.log_request
-            ) as client:
+            from contextlib import nullcontext
+
+            wb_client_context = (
+                nullcontext(None)
+                if operation == 'update_keywords'
+                else WildberriesAPIClient(
+                    current_user.seller.wb_api_key,
+                    db_logger_callback=APILog.log_request,
+                )
+            )
+            with wb_client_context as client:
                 success_count = 0
                 error_count = 0
                 errors = []
+                reviewed_product_ids = set(reviewed_rows_by_product)
+                reviewed_products = [
+                    product for product in products
+                    if int(product.id) in reviewed_product_ids
+                ]
 
                 if operation == 'update_brand':
                     new_brand = operation_value
@@ -3475,11 +3614,20 @@ def products_bulk_edit():
 
                     # Батч: один cards/update на все карточки вместо запроса
                     # на карточку (лимит WB — 10 запросов/мин, до 3000 в запросе)
-                    nm_map = {int(p.nm_id): p for p in products if p.nm_id}
-                    for p in products:
-                        if not p.nm_id:
-                            error_count += 1
-                            errors.append(f"Товар {p.vendor_code}: нет nm_id (не привязан к WB)")
+                    nm_map = {int(p.nm_id): p for p in reviewed_products if p.nm_id}
+                    reviewed_by_nm = {int(p.nm_id): p for p in reviewed_products if p.nm_id}
+
+                    def _brand_review_guard(nm_id, full_card, updates):
+                        product = reviewed_by_nm.get(int(nm_id))
+                        if product is None:
+                            raise ValueError('Карточка не входит в проверенный diff')
+                        rows = reviewed_rows_by_product[int(product.id)]
+                        assert_provider_value_matches_review(
+                            operation, rows, full_card,
+                        )
+                        expected_after = rows[0].get('after') or []
+                        if updates.get('brand') != (expected_after[0] if expected_after else ''):
+                            raise ValueError('Бренд не совпадает с проверенным diff')
 
                     brand_outcome = {'sent': [], 'missing': [], 'invalid': {}}
                     brand_batch_error = None
@@ -3489,6 +3637,7 @@ def products_bulk_edit():
                                 {nm: {'brand': new_brand} for nm in nm_map},
                                 log_to_db=True,
                                 seller_id=current_user.seller.id,
+                                pre_merge_callback=_brand_review_guard,
                             )
                         except Exception as e:
                             brand_batch_error = str(e)
@@ -3501,9 +3650,9 @@ def products_bulk_edit():
 
                     # Итерируем по товарам (не по nm_map): дубликаты nm_id
                     # должны получить каждый свой результат и историю
-                    for product in products:
+                    for product in reviewed_products:
                         if not product.nm_id:
-                            continue  # уже учтён как ошибка выше
+                            continue
                         nm = int(product.nm_id)
                         if nm in _sent:
                             wb_snapshots = brand_outcome.get('snapshots') or {}
@@ -3548,18 +3697,23 @@ def products_bulk_edit():
 
                     from services.wb_api_client import chunk_list
                     from services.wb_validators import prepare_batch_cards_safe
+                    reviewed_by_nm = {int(p.nm_id): p for p in reviewed_products if p.nm_id}
 
                     desc_map = {}  # nmID -> new_desc
                     fresh_cards = {}
 
                     def _append_desc_updates(product, full_card):
-                        current_desc = full_card.get('description') or ''
-                        new_desc = f"{current_desc}\n\n{append_text}".strip()
+                        rows = reviewed_rows_by_product[int(product.id)]
+                        assert_provider_value_matches_review(
+                            operation, rows, full_card,
+                        )
+                        after = rows[0].get('after') or []
+                        new_desc = str(after[0]) if after else ''
                         desc_map[product.nm_id] = new_desc
                         return {'description': new_desc}
 
                     cards_to_update, product_map, skipped = prepare_batch_cards_safe(
-                        products, _append_desc_updates, client,
+                        reviewed_products, _append_desc_updates, client,
                         seller_id=current_user.seller.id,
                         fresh_cards_out=fresh_cards,
                     )
@@ -3621,11 +3775,16 @@ def products_bulk_edit():
                     from services.wb_validators import prepare_batch_cards_safe
 
                     def _replace_desc_updates(product, full_card):
-                        return {'description': new_description}
+                        rows = reviewed_rows_by_product[int(product.id)]
+                        assert_provider_value_matches_review(
+                            operation, rows, full_card,
+                        )
+                        after = rows[0].get('after') or []
+                        return {'description': str(after[0]) if after else ''}
 
                     fresh_cards = {}
                     cards_to_update, product_map, skipped = prepare_batch_cards_safe(
-                        products, _replace_desc_updates, client,
+                        reviewed_products, _replace_desc_updates, client,
                         seller_id=current_user.seller.id,
                         fresh_cards_out=fresh_cards,
                     )
@@ -3725,14 +3884,19 @@ def products_bulk_edit():
 
                     # Обновляем описание операции
                     bulk_operation.description = f'Обновление {len(char_changes)} характеристик'
-                    bulk_operation.operation_params = {'characteristics_batch': char_changes}
+                    operation_params = dict(bulk_operation.operation_params or {})
+                    operation_params['characteristics_batch'] = char_changes
+                    bulk_operation.operation_params = operation_params
                     db.session.commit()
 
                     # Фильтруем товары по категории если выбрана
                     subject_id = int(selected_category) if selected_category.isascii() and selected_category.isdecimal() else 0
                     if not subject_id or (apply_preview_payload and subject_id != apply_preview_payload.get('subject_id')):
                         raise ValueError('Нужен точный subjectID из предпросмотра')
-                    products_to_update = [p for p in products if p.subject_id == subject_id]
+                    products_to_update = [
+                        p for p in reviewed_products
+                        if p.subject_id == subject_id
+                    ]
                     app.logger.info(f"Filtering by exact subjectID {subject_id}: {len(products_to_update)}/{len(products)} products")
 
                     # ==================== БАТЧИНГ ====================
@@ -3751,14 +3915,26 @@ def products_bulk_edit():
                             raise ValueError(
                                 f"nmID {product.nm_id}: fresh WB subjectID does not match {subject_id}"
                             )
-                        # Только изменяемые IDs: helper сам сольёт patch со
-                        # свежим полным массивом характеристик WB.
+                        reviewed_rows = reviewed_rows_by_product[int(product.id)]
+                        assert_provider_value_matches_review(
+                            operation, reviewed_rows, full_card,
+                        )
+                        reviewed_char_ids = {
+                            int(row['characteristic_id']) for row in reviewed_rows
+                        }
+                        normalized_by_id = {
+                            int(change['id']): change['value']
+                            for change in apply_preview_payload['normalized_changes']
+                        }
+                        # Только пары товар/поле, которые присутствовали в
+                        # diff предпросмотра; обновление соседнего поля или
+                        # товара не расширяет запись.
                         return {'characteristics': [
                             {
-                                'id': int(change['char_id']),
-                                'value': change['value'],
+                                'id': char_id,
+                                'value': normalized_by_id[char_id],
                             }
-                            for change in char_changes
+                            for char_id in sorted(reviewed_char_ids)
                         ]}
 
                     fresh_cards = {}
@@ -3775,6 +3951,9 @@ def products_bulk_edit():
 
                     if not cards_to_update:
                         flash('Не удалось подготовить ни одной карточки для обновления', 'danger')
+                        bulk_operation.success_count = success_count
+                        bulk_operation.error_count = error_count
+                        bulk_operation.errors_details = errors if errors else None
                         bulk_operation.status = 'failed'
                         bulk_operation.completed_at = datetime.utcnow()
                         db.session.commit()
@@ -3895,26 +4074,11 @@ def products_bulk_edit():
                     subject_id = int(selected_category) if selected_category.isascii() and selected_category.isdecimal() else 0
                     if not subject_id or (apply_preview_payload and subject_id != apply_preview_payload.get('subject_id')):
                         raise ValueError('Нужен точный subjectID из предпросмотра')
-                    products_to_update = [p for p in products if p.subject_id == subject_id]
+                    products_to_update = [
+                        p for p in reviewed_products
+                        if p.subject_id == subject_id
+                    ]
                     app.logger.info(f"Filtering by exact subjectID {subject_id}: {len(products_to_update)}/{len(products)} products")
-
-                    # Определяем тип значения: ID из справочника или текст
-                    # ВАЖНО: Сохраняем как строку, затем prepare_card_for_update автоматически
-                    # вызовет clean_characteristics_for_update для оборачивания в массив
-                    app.logger.info(f"Adding characteristic ID {characteristic_id} with value: '{new_value}' (type: {type(new_value).__name__})")
-
-                    # Форматируем как строку, позже автоматически обернется в массив
-                    # "Россия" -> ["Россия"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    # "123" -> ["123"] (в prepare_card_for_update -> clean_characteristics_for_update)
-                    formatted_value = (
-                        [str(part).strip() for part in new_value if str(part).strip()]
-                        if isinstance(new_value, list)
-                        else str(new_value).strip()
-                    )
-                    app.logger.info(
-                        'Prepared validated characteristic value with type %s',
-                        type(formatted_value).__name__,
-                    )
 
                     # Проверяем существование и мержим только по свежим full
                     # cards WB, а не по потенциально устаревшему Product.
@@ -3922,7 +4086,6 @@ def products_bulk_edit():
                     from services.wb_validators import prepare_batch_cards_safe
 
                     fresh_cards = {}
-                    already_present = {}
 
                     def _add_char_updates(product, full_card):
                         fresh_subject_id = full_card.get('subjectID') or full_card.get('subjectId')
@@ -3934,16 +4097,17 @@ def products_bulk_edit():
                             raise ValueError(
                                 f"nmID {product.nm_id}: fresh WB subjectID does not match {subject_id}"
                             )
-                        current = full_card.get('characteristics') or []
-                        if any(
-                            str(item.get('id')) == characteristic_id
-                            for item in current if isinstance(item, dict)
-                        ):
-                            already_present[product.id] = full_card
-                            return None
+                        reviewed_rows = reviewed_rows_by_product[int(product.id)]
+                        assert_provider_value_matches_review(
+                            operation, reviewed_rows, full_card,
+                        )
+                        reviewed_row = next(
+                            row for row in reviewed_rows
+                            if int(row['characteristic_id']) == int(characteristic_id)
+                        )
                         return {'characteristics': [{
                             'id': int(characteristic_id),
-                            'value': formatted_value,
+                            'value': reviewed_row.get('after') or [],
                         }]}
 
                     cards_to_update, product_map, skipped = prepare_batch_cards_safe(
@@ -3956,16 +4120,6 @@ def products_bulk_edit():
                     for message in skipped:
                         error_count += 1
                         errors.append(message)
-
-                    # Уже существующее значение не меняем, но устраняем
-                    # локальный рассинхрон полным фактическим WB-массивом.
-                    for product in products_to_update:
-                        existing_card = already_present.get(product.id)
-                        if existing_card is not None:
-                            product.set_characteristics(
-                                existing_card.get('characteristics') or [])
-                            product.last_sync = datetime.utcnow()
-                            success_count += 1
 
                     for batch in chunk_list(cards_to_update, 100):
                         try:
@@ -4165,39 +4319,83 @@ def products_bulk_edit():
                             app.logger.error(f"❌ {error_msg}")
 
                 elif operation == 'update_keywords':
-                    keywords_text = operation_value
-                    if not keywords_text:
-                        flash('Укажите ключевые слова', 'warning')
-                        bulk_operation.status = 'failed'
-                        bulk_operation.completed_at = datetime.utcnow()
-                        db.session.commit()
-                        return redirect(url_for('bulk_edit_history_detail', bulk_id=bulk_operation.id))
+                    from sqlalchemy import update as sqlalchemy_update
+                    from services.wb_edit_review import product_content_fingerprint
 
-                    # Разбиваем на список, чистим пустые
-                    keywords_list = [k.strip() for k in keywords_text.replace('\n', ',').split(',') if k.strip()]
+                    changed_ids = sorted(reviewed_product_ids)
+                    fresh_products = Product.query.filter(
+                        Product.seller_id == current_user.seller.id,
+                        Product.id.in_(changed_ids),
+                    ).populate_existing().with_for_update().all()
+                    if {int(product.id) for product in fresh_products} != set(changed_ids):
+                        raise WBEditReviewError(
+                            'Точный локальный набор товаров изменился после предпросмотра; проверьте снова'
+                        )
 
-                    for product in products:
+                    # Recheck the signed content revision after the durable
+                    # single-use claim. Then update each tags_json with a
+                    # compare-and-set predicate, so a concurrent local edit
+                    # cannot be overwritten by this review.
+                    for product in fresh_products:
+                        expected_fingerprint = apply_preview_payload.get(
+                            'local_fingerprints', {},
+                        ).get(str(product.id))
+                        if product_content_fingerprint(product) != expected_fingerprint:
+                            raise WBEditReviewError(
+                                f'Локальные данные товара {product.vendor_code} изменились; откройте предпросмотр снова'
+                            )
+                        rows = reviewed_rows_by_product[int(product.id)]
+                        if len(rows) != 1:
+                            raise WBEditReviewError('Локальный diff ключевых слов неоднозначен')
+                        row = rows[0]
+                        before_raw = product.tags_json
                         try:
-                            snapshot_before = _create_product_snapshot(product)
-                            product.tags_json = json.dumps(keywords_list, ensure_ascii=False)
-                            snapshot_after = _create_product_snapshot(product)
-                            db.session.add(CardEditHistory(
-                                product_id=product.id,
-                                seller_id=current_user.seller.id,
-                                bulk_edit_id=bulk_operation.id,
-                                action='update',
-                                changed_fields=['keywords'],
-                                snapshot_before=snapshot_before,
-                                snapshot_after=snapshot_after,
-                                wb_synced=False,
-                                wb_sync_status='local_only'
-                            ))
-                            success_count += 1
-                        except Exception as e:
-                            error_count += 1
-                            errors.append(f"Товар {product.vendor_code}: {str(e)}")
+                            before_value = json.loads(before_raw) if before_raw not in (None, '') else []
+                        except (TypeError, json.JSONDecodeError) as exc:
+                            raise WBEditReviewError('Локальные ключевые слова повреждены; запись отменена') from exc
+                        if before_value != row.get('before'):
+                            raise WBEditReviewError(
+                                f'Ключевые слова товара {product.vendor_code} изменились; откройте предпросмотр снова'
+                            )
+                        after_value = row.get('after')
+                        if not isinstance(after_value, list) or any(
+                            not isinstance(item, str) for item in after_value
+                        ):
+                            raise WBEditReviewError('Diff локальных ключевых слов повреждён')
 
-                    db.session.commit()
+                        snapshot_before = _create_product_snapshot(product)
+                        after_raw = json.dumps(after_value, ensure_ascii=False)
+                        updated_at = datetime.utcnow()
+                        changed = db.session.execute(
+                            sqlalchemy_update(Product)
+                            .where(
+                                Product.id == int(product.id),
+                                Product.seller_id == current_user.seller.id,
+                                Product.tags_json == before_raw,
+                            )
+                            .values(tags_json=after_raw, updated_at=updated_at)
+                            .execution_options(synchronize_session=False)
+                        )
+                        if changed.rowcount != 1:
+                            raise WBEditReviewError(
+                                f'Ключевые слова товара {product.vendor_code} изменились одновременно; запись отменена'
+                            )
+                        product.tags_json = after_raw
+                        product.updated_at = updated_at
+                        snapshot_after = _create_product_snapshot(product)
+                        db.session.add(CardEditHistory(
+                            product_id=product.id,
+                            seller_id=current_user.seller.id,
+                            bulk_edit_id=bulk_operation.id,
+                            action='update',
+                            changed_fields=['keywords'],
+                            snapshot_before=snapshot_before,
+                            snapshot_after=snapshot_after,
+                            wb_synced=False,
+                            wb_sync_status='local_only'
+                        ))
+                        success_count += 1
+
                     bulk_operation.wb_synced = False  # Ключевые слова хранятся локально
 
                 elif operation == 'ai_bulk':
@@ -4586,8 +4784,17 @@ def products_bulk_edit():
         except Exception as e:
             app.logger.exception(f"Ошибка массового редактирования: {e}")
 
+            # Discard any uncommitted local rows from a failed CAS or batch
+            # preflight before finalizing the already-claimed history record.
+            db.session.rollback()
+            if operation == 'update_keywords':
+                # This local-only branch commits once at the end. All row
+                # updates were rolled back together if any CAS failed.
+                success_count = 0
             # Помечаем bulk операцию как failed
             bulk_operation.status = 'failed'
+            bulk_operation.success_count = int(locals().get('success_count') or 0)
+            bulk_operation.error_count = max(1, int(locals().get('error_count') or 0))
             bulk_operation.completed_at = datetime.utcnow()
             bulk_operation.duration_seconds = time.time() - start_time
             bulk_operation.errors_details = [str(e)]

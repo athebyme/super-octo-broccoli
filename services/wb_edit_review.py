@@ -716,6 +716,160 @@ def build_bulk_characteristic_preview(
     }
 
 
+_MANUAL_BULK_FIELDS = {
+    'update_brand': ('brand', 'Бренд', 'replace', 'Wildberries'),
+    'append_description': ('description', 'Описание', 'append', 'Wildberries'),
+    'replace_description': ('description', 'Описание', 'replace', 'Wildberries'),
+    'update_keywords': ('keywords', 'Ключевые слова', 'local_only', 'Seller Hub · локальные данные'),
+}
+
+
+def _manual_operation_result(operation: str, raw_value: Any) -> tuple[Any, str | None]:
+    if operation not in _MANUAL_BULK_FIELDS:
+        raise WBEditReviewError('Эта ручная операция не поддерживает предпросмотр')
+    if not isinstance(raw_value, str):
+        return None, 'Введите текст для операции'
+    value = raw_value.strip()
+    if not value:
+        return None, 'Значение операции не должно быть пустым'
+    if operation == 'update_keywords':
+        values = [
+            item.strip() for item in value.replace('\n', ',').split(',')
+            if item.strip()
+        ]
+        if not values:
+            return None, 'Укажите хотя бы одно ключевое слово'
+        return values, None
+    return value, None
+
+
+def build_bulk_manual_preview(
+    products: list[Product],
+    *,
+    operation: str,
+    value: Any,
+) -> dict[str, Any]:
+    """Preview one of the existing manual bulk operations from local facts."""
+    if operation not in _MANUAL_BULK_FIELDS:
+        raise WBEditReviewError('Эта ручная операция не поддерживает предпросмотр')
+    field, field_label, mode, channel = _MANUAL_BULK_FIELDS[operation]
+    selected_count = len(products)
+    fingerprints = {
+        str(product.id): product_content_fingerprint(product)
+        for product in products
+    }
+    new_value, input_error = _manual_operation_result(operation, value)
+    diff = []
+    skipped = []
+    errors = []
+    changed_ids = set()
+    skipped_ids = set()
+    error_ids = set()
+    eligible = 0
+
+    if input_error:
+        errors.append({
+            'product_id': None,
+            'vendor_code': '',
+            'reason': input_error,
+        })
+    else:
+        for product in products:
+            if operation != 'update_keywords' and (
+                not isinstance(product.nm_id, int)
+                or isinstance(product.nm_id, bool)
+                or product.nm_id <= 0
+            ):
+                skipped_ids.add(int(product.id))
+                skipped.append({
+                    'product_id': int(product.id),
+                    'vendor_code': product.vendor_code or '',
+                    'reason': 'Карточка не привязана к WB nmID',
+                })
+                continue
+            eligible += 1
+            if operation == 'update_brand':
+                before = product.brand or ''
+                after = new_value
+            elif operation == 'append_description':
+                before = product.description or ''
+                after = f'{before}\n\n{new_value}'.strip()
+            elif operation == 'replace_description':
+                before = product.description or ''
+                after = new_value
+            else:
+                before = []
+                if product.tags_json not in (None, ''):
+                    try:
+                        parsed_tags = json.loads(product.tags_json)
+                    except (TypeError, json.JSONDecodeError):
+                        parsed_tags = None
+                    if not isinstance(parsed_tags, list) or any(
+                        not isinstance(item, str) for item in parsed_tags
+                    ):
+                        error_ids.add(int(product.id))
+                        errors.append({
+                            'product_id': int(product.id),
+                            'vendor_code': product.vendor_code or '',
+                            'reason': 'Локальный список ключевых слов повреждён',
+                        })
+                        continue
+                    before = parsed_tags
+                after = list(new_value)
+
+            if before == after:
+                skipped_ids.add(int(product.id))
+                skipped.append({
+                    'product_id': int(product.id),
+                    'vendor_code': product.vendor_code or '',
+                    'reason': 'Значение уже совпадает',
+                })
+                continue
+
+            changed_ids.add(int(product.id))
+            diff.append({
+                'product_id': int(product.id),
+                'nm_id': int(product.nm_id) if product.nm_id else None,
+                'vendor_code': product.vendor_code or '',
+                'title': product.title or '',
+                'subject_id': product.subject_id,
+                'subject_name': product.object_name or '',
+                'characteristic_id': None,
+                'characteristic': field_label,
+                'before': before if isinstance(before, list) else ([before] if before else []),
+                'after': after if isinstance(after, list) else ([after] if after else []),
+            })
+
+    normalized_changes = (
+        [{'field': field, 'value': value.strip()}]
+        if not input_error else []
+    )
+    skipped_only_product_ids = skipped_ids.difference(changed_ids, error_ids)
+    return {
+        'channel': channel,
+        'marketplace_code': 'wb',
+        'mode': mode,
+        'operation': operation,
+        'subject_id': None,
+        'subject_name': None,
+        'selected_count': selected_count,
+        'eligible_count': eligible,
+        'changed_count': len(changed_ids),
+        'diff_count': len(diff),
+        'skipped_count': len(skipped_only_product_ids),
+        'skipped_detail_count': len(skipped),
+        'error_count': max(len(error_ids), 1 if input_error else 0),
+        'error_detail_count': len(errors),
+        'diff': diff,
+        'skipped': skipped,
+        'errors': errors,
+        'normalized_changes': normalized_changes,
+        'local_fingerprints': fingerprints,
+        'schema_revisions': {},
+        'created_at': datetime.utcnow().isoformat(),
+    }
+
+
 def review_digest(preview: Mapping[str, Any], product_ids: list[int]) -> str:
     payload = {
         'seller_product_ids': [int(value) for value in product_ids],
@@ -761,7 +915,9 @@ def issue_wb_edit_preview_token(
         'selection_filter_fingerprint': selection_payload.get('filter_fingerprint'),
         'review_key': secrets.token_hex(32),
         'operation': preview.get('operation'),
-        'subject_id': int(preview['subject_id']),
+        'subject_id': (
+            int(preview['subject_id']) if preview.get('subject_id') is not None else None
+        ),
         'normalized_changes': preview['normalized_changes'],
         'local_fingerprints': preview['local_fingerprints'],
         'schema_revisions': preview['schema_revisions'],
@@ -843,17 +999,28 @@ def validate_preview_against_current(
         raise WBEditReviewError('Точный набор товаров предпросмотра изменился')
     operation = payload.get('operation')
     normalized_changes = payload.get('normalized_changes')
-    preview = build_bulk_characteristic_preview(
-        products,
-        operation=operation,
-        subject_id=payload.get('subject_id'),
-        change_input=[
-            {'char_id': str(row['id']), 'value': row['value']}
-            for row in normalized_changes
-        ] if operation == 'update_characteristic' else None,
-        char_id=(normalized_changes[0]['id'] if operation == 'add_characteristic' else None),
-        value=(normalized_changes[0]['value'] if operation == 'add_characteristic' else None),
-    )
+    if operation in {'update_characteristic', 'add_characteristic'}:
+        preview = build_bulk_characteristic_preview(
+            products,
+            operation=operation,
+            subject_id=payload.get('subject_id'),
+            change_input=[
+                {'char_id': str(row['id']), 'value': row['value']}
+                for row in normalized_changes
+            ] if operation == 'update_characteristic' else None,
+            char_id=(normalized_changes[0]['id'] if operation == 'add_characteristic' else None),
+            value=(normalized_changes[0]['value'] if operation == 'add_characteristic' else None),
+        )
+    else:
+        if len(normalized_changes) != 1 or not isinstance(
+            normalized_changes[0].get('value'), str,
+        ):
+            raise WBEditReviewError('Предпросмотр ручной операции повреждён')
+        preview = build_bulk_manual_preview(
+            products,
+            operation=operation,
+            value=normalized_changes[0]['value'],
+        )
     expected_digest = review_digest(preview, payload['product_ids'])
     if expected_digest != payload.get('digest'):
         raise WBEditReviewError('Карточка или схема WB изменилась после предпросмотра; проверьте снова')
@@ -862,3 +1029,122 @@ def validate_preview_against_current(
     if payload.get('schema_revisions') != preview.get('schema_revisions'):
         raise WBEditReviewError('Схема WB изменилась после предпросмотра')
     return preview
+
+
+def reviewed_diff_by_product(preview: Mapping[str, Any]) -> dict[int, list[dict[str, Any]]]:
+    """Index the freshly rebuilt, reviewed diff by exact local Product ID.
+
+    The preview token intentionally binds a digest rather than embedding a
+    caller-controlled diff. Apply routes must rebuild the preview, then use
+    only these rows to choose products and fields for the external/local write.
+    """
+    diff = preview.get('diff')
+    if not isinstance(diff, list):
+        raise WBEditReviewError('Предпросмотр не содержит проверенный diff')
+    result: dict[int, list[dict[str, Any]]] = {}
+    for row in diff:
+        if not isinstance(row, dict):
+            raise WBEditReviewError('Diff предпросмотра повреждён')
+        product_id = row.get('product_id')
+        if (
+            not isinstance(product_id, int)
+            or isinstance(product_id, bool)
+            or product_id <= 0
+        ):
+            raise WBEditReviewError('Diff содержит неверный ID товара')
+        result.setdefault(product_id, []).append(row)
+    return result
+
+
+def _provider_characteristic_values(full_card: Mapping[str, Any], char_id: int) -> list[str]:
+    characteristics = full_card.get('characteristics')
+    if not isinstance(characteristics, list):
+        raise WBEditReviewError('Свежая WB-карточка не содержит характеристики')
+    found = []
+    for item in characteristics:
+        if not isinstance(item, dict):
+            raise WBEditReviewError('Свежая WB-карточка содержит неверную характеристику')
+        raw_id = item.get('id')
+        if isinstance(raw_id, bool):
+            raise WBEditReviewError('Свежая характеристика содержит неверный ID')
+        if isinstance(raw_id, int):
+            item_id = raw_id
+        elif isinstance(raw_id, str) and raw_id.isascii() and raw_id.isdecimal():
+            item_id = int(raw_id)
+        else:
+            continue
+        if item_id == char_id:
+            found.append(item)
+    if len(found) > 1:
+        raise WBEditReviewError(f'Свежая WB-карточка повторяет characteristic ID {char_id}')
+    return _values_for_form(found[0].get('value')) if found else []
+
+
+def assert_provider_value_matches_review(
+    operation: str,
+    diff_rows: list[Mapping[str, Any]],
+    full_card: Mapping[str, Any],
+) -> None:
+    """Fail closed when a provider full-card field drifted since local review."""
+    if operation in {'update_characteristic', 'add_characteristic'}:
+        subject_id = full_card.get('subjectID') or full_card.get('subjectId')
+        exact_subject = parse_exact_wb_subject_id(subject_id)
+        expected_subject = {int(row['subject_id']) for row in diff_rows}
+        if expected_subject != {exact_subject}:
+            raise WBEditReviewError(
+                'Категория карточки WB изменилась после предпросмотра; обновите карточку и проверьте снова'
+            )
+        for row in diff_rows:
+            char_id = _positive_int(row.get('characteristic_id'))
+            actual = _provider_characteristic_values(full_card, char_id)
+            expected = _values_for_form(row.get('before'))
+            schema = schema_for_subject(exact_subject)
+            field = next((
+                item for item in schema.get('characteristics', [])
+                if int(item.get('id', 0)) == char_id
+            ), None)
+            if field and field.get('charc_type') == 4:
+                unit = field.get('unit_name')
+                actual_numbers = [_coerce_number(value, unit) for value in actual]
+                expected_numbers = [_coerce_number(value, unit) for value in expected]
+                matches = actual_numbers == expected_numbers and all(
+                    value is not None for value in actual_numbers
+                )
+            elif field and field.get('dictionary_values'):
+                allowed = {
+                    str(value).strip().casefold(): str(value).strip()
+                    for value in field['dictionary_values']
+                }
+                actual_values = [allowed.get(value.casefold(), value) for value in actual]
+                expected_values = [allowed.get(value.casefold(), value) for value in expected]
+                matches = [value.casefold() for value in actual_values] == [
+                    value.casefold() for value in expected_values
+                ]
+            else:
+                matches = actual == expected
+            if not matches:
+                raise WBEditReviewError(
+                    f'Характеристика «{row.get("characteristic") or char_id}» '
+                    'изменилась в WB после предпросмотра; обновите карточку и проверьте снова'
+                )
+        return
+
+    field = {
+        'update_brand': 'brand',
+        'append_description': 'description',
+        'replace_description': 'description',
+    }.get(operation)
+    if field is None:
+        raise WBEditReviewError('Для этой операции нет проверки свежего WB-поля')
+    for row in diff_rows:
+        before_values = row.get('before')
+        expected_before = (
+            str(before_values[0]) if isinstance(before_values, list) and before_values
+            else ''
+        )
+        actual = full_card.get(field) or ''
+        if actual != expected_before:
+            raise WBEditReviewError(
+                f'Поле «{row.get("characteristic") or field}» изменилось в WB '
+                'после предпросмотра; обновите карточку и проверьте снова'
+            )
