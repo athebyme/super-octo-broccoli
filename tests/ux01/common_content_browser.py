@@ -120,7 +120,7 @@ socket.create_connection = forbid_provider_network
 from seller_platform import app
 from models import ImportedProduct, MarketplaceProductDraft, Seller, db
 from routes.common_product_content import register_common_product_content_routes
-from services.common_product_content import CommonProductContentService
+from services.common_product_content import CommonProductContentService, MAX_TITLE
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
 
 
@@ -159,14 +159,24 @@ with app.app_context():
     external_id_column = ImportedProduct.__table__.columns["external_id"]
     if len(second_external_id) > external_id_column.type.length:
         raise AssertionError("Navigator fixture external ID must fit ImportedProduct.external_id")
+    second_title = "Длинное название товара " + ("безразрывного-текста-" * 21)
+    title_column = ImportedProduct.__table__.columns["title"]
+    second_title_limit = min(title_column.type.length, MAX_TITLE)
+    second_title_suffixes = (" — ручная правка", " — проверка конфликта сохранения")
+    if (
+        len(second_title) < 400
+        or len(second_title) > second_title_limit
+        or any(len(second_title + suffix) > second_title_limit for suffix in second_title_suffixes)
+    ):
+        raise AssertionError("Navigator fixture title and edits must fit model and editor limits")
     second = ImportedProduct(
         seller_id=FIXTURE["seller_id"],
         external_id=second_external_id,
         source_type="manual",
-        title="Длинное название товара " + ("безразрывного-текста-" * 35),
+        title=second_title,
         description="Второе описание.",
         original_data=json.dumps({
-            "title": "Второй синтетический товар",
+            "title": second_title,
             "description": "Второе описание.",
         }, ensure_ascii=False),
     )
@@ -174,6 +184,7 @@ with app.app_context():
     db.session.commit()
     FIXTURE["second_source_id"] = second.id
     FIXTURE["second_title"] = second.title
+    FIXTURE["second_title_limit"] = second_title_limit
     FIXTURE["second_external_id"] = second.external_id
     FIXTURE["second_external_id_limit"] = external_id_column.type.length
     FIXTURE["user_id"] = db.session.get(Seller, FIXTURE["seller_id"]).user_id
@@ -1331,7 +1342,14 @@ def run():
         second_button.click()
         second_title = page.get_by_role("textbox", name="Общее название товара")
         assert second_title.is_disabled()
-        assert await_text(second_title) == FIXTURE["second_title"]
+        reopened_title = await_text(second_title)
+        assert reopened_title == FIXTURE["second_title"], {
+            "expected_length": len(FIXTURE["second_title"]),
+            "actual_length": len(reopened_title),
+            "expected_prefix": FIXTURE["second_title"][:80],
+            "actual_prefix": reopened_title[:80],
+            "model_editor_limit": FIXTURE["second_title_limit"],
+        }
         REPORT["checks"].append("cancel_reopen_discards_unapplied_edits_and_preserves_other_product")
 
         title_section.get_by_role("button", name="Изменить значение", exact=True).click()
