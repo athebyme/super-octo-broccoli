@@ -25,11 +25,11 @@
                 <div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px">
                     <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
                         <span class="sh-badge-dot" style="color:rgba(255,255,255,.5)"></span>
-                        Всего: {{ total_products }}
+                        Найдено: {{ total_products }}
                     </span>
                     <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">
                         <span class="sh-badge-dot" style="color:#4ade80"></span>
-                        Активных: {{ active_products }}
+                        Активных в каталоге: {{ active_products }}
                     </span>
                     {% if disabled_products is defined and disabled_products > 0 %}
                     <span class="sh-badge sh-badge--sm" style="background:rgba(255,255,255,.1);color:rgba(255,255,255,.8)">

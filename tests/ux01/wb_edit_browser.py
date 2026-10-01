@@ -59,6 +59,7 @@ REPORT = {
     "database": "disposable_sqlite",
     "network_policy": "loopback_and_hash_pinned_assets_only",
     "layouts": [],
+    "overflow_diagnostics": [],
     "checks": [],
     "interactions": [],
     "artifacts": [],
@@ -507,6 +508,93 @@ def interaction(name: str, **details) -> None:
     REPORT["interactions"].append({"name": name, **details})
 
 
+def collect_overflow_diagnostics(
+    page, *, label: str, theme: str, width: int, geometry: dict,
+) -> dict:
+    return page.evaluate("""({label, theme, width, geometry}) => {
+        const viewport = window.innerWidth;
+        const rounded = value => Math.round(value * 100) / 100;
+        const styleText = value => String(value || '').slice(0, 160);
+        const describe = element => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return {
+                tag: element.tagName.toLowerCase(),
+                id: (element.id || '').slice(0, 80),
+                classes: typeof element.className === 'string' ? element.className.slice(0, 180) : '',
+                rect: {
+                    left: rounded(rect.left), right: rounded(rect.right),
+                    width: rounded(rect.width),
+                },
+                clientWidth: element.clientWidth,
+                scrollWidth: element.scrollWidth,
+                style: {
+                    display: styleText(style.display),
+                    position: styleText(style.position),
+                    boxSizing: styleText(style.boxSizing),
+                    width: styleText(style.width),
+                    minWidth: styleText(style.minWidth),
+                    maxWidth: styleText(style.maxWidth),
+                    overflowX: styleText(style.overflowX),
+                    whiteSpace: styleText(style.whiteSpace),
+                    flex: styleText(style.flex),
+                    flexBasis: styleText(style.flexBasis),
+                    flexShrink: styleText(style.flexShrink),
+                    gridTemplateColumns: styleText(style.gridTemplateColumns),
+                    paddingLeft: styleText(style.paddingLeft),
+                    paddingRight: styleText(style.paddingRight),
+                },
+            };
+        };
+        const all = Array.from(document.body.querySelectorAll('*'));
+        const spillsRight = all.map(element => ({element, rect: element.getBoundingClientRect()}))
+            .filter(item => item.rect.width > 0 && item.rect.right > viewport + 1)
+            .sort((a, b) => b.rect.right - a.rect.right);
+        const firstSpillingChildren = spillsRight.filter(({element}) => {
+            const parent = element.parentElement;
+            return !parent || parent.getBoundingClientRect().right <= viewport + 1;
+        }).slice(0, 12).map(({element}) => {
+            const ancestors = [];
+            for (let parent = element.parentElement; parent && ancestors.length < 6; parent = parent.parentElement) {
+                ancestors.push(describe(parent));
+            }
+            return {element: describe(element), ancestors};
+        });
+        const scrollContainers = all.filter(element => {
+            const style = getComputedStyle(element);
+            return ['auto', 'scroll'].includes(style.overflowX)
+                && element.scrollWidth > element.clientWidth + 1;
+        }).sort((a, b) => {
+            return (b.scrollWidth - b.clientWidth) - (a.scrollWidth - a.clientWidth);
+        }).slice(0, 8).map(describe);
+        const main = document.querySelector('#main-content');
+        return {
+            page: label,
+            theme,
+            viewport_width: width,
+            geometry,
+            viewport_inner_width: viewport,
+            document: {
+                client_width: document.documentElement.clientWidth,
+                scroll_width: document.documentElement.scrollWidth,
+            },
+            body: {
+                client_width: document.body.clientWidth,
+                scroll_width: document.body.scrollWidth,
+            },
+            main: main ? describe(main) : null,
+            first_spilling_children: firstSpillingChildren,
+            largest_right_edges: spillsRight.slice(0, 12).map(({element}) => describe(element)),
+            horizontal_scroll_containers: scrollContainers,
+        };
+    }""", {
+        "label": label,
+        "theme": theme,
+        "width": width,
+        "geometry": geometry,
+    })
+
+
 def _assert_local_products_href(href: str, expected_query: dict[str, list[str]]):
     parsed = urlsplit(href)
     assert (
@@ -572,8 +660,22 @@ def capture_layout(page, label: str) -> None:
                 main_width: document.querySelector('main')?.getBoundingClientRect().width ?? null,
             })""")
             if geometry["document_width"] > width or geometry["body_width"] > width:
+                try:
+                    diagnostics = collect_overflow_diagnostics(
+                        page, label=label, theme=theme, width=width, geometry=geometry,
+                    )
+                except Exception as exc:
+                    diagnostics = {
+                        "page": label,
+                        "theme": theme,
+                        "viewport_width": width,
+                        "geometry": geometry,
+                        "diagnostic_error": type(exc).__name__,
+                    }
+                REPORT["overflow_diagnostics"].append(diagnostics)
                 raise AssertionError(
-                    f"Horizontal overflow on {label} ({theme}, {width}px): {geometry}"
+                    f"Horizontal overflow on {label} ({theme}, {width}px): {geometry}; "
+                    f"bounded element diagnostics captured"
                 )
             REPORT["layouts"].append({"page": label, "theme": theme, **geometry})
             if width in (390, 1280):
