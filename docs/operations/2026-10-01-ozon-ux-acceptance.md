@@ -10,6 +10,9 @@
 - Ozon/UX-01.6: принят сквозной synthetic journey и исправление per-draft VAT UI gate (`2ba2c73`). На объединённом коде — 17 passed и 7 subtests для journey/runner. Browser evidence ниже относится к scoped worker source до ограничения среды.
 - WB-EDIT-01..04/UX-01.2: приняты exact selection, typed single/bulk schema, local preview и durable reviewed apply (`0270d52`, `d7980a1`); common routes зарегистрированы (`c51b110`). Root focused проверка на объединённом коде: 114 passed, 66 subtests, включая selection DOM, no-op/exact changed-set, свежий provider drift, replay, local keyword CAS/rollback и весь quarantine service. Browser fixture ещё готовится; live WB write не выполнялась. Ручные и AI операции проверяются отдельно, без скрытого follow-up.
 - Ozon analytics: принят coherent UTC day anchor (`ea0378d`) вместо local-day/UTC смешения. Default clock, Moscow next-day boundary, aware offset, explicit today и pinned future denial покрыты regression. Независимый root прогон workspace + analytics service с `TZ=Europe/Moscow`: 19 passed. Это исправление не меняет расчёты, scope или stored snapshots.
+- CAT writer safety: приняты exact conditional writer guards, CSV rollback и supplier per-row savepoints (`56f19c5`), supplier/AI provenance и exact фото retention (`08cf4cd`). Root проверка common service/routes/UI, canonical proposal, draft preparation/native Flash и theme: 149 passed, 73 subtests на `fc10791`; более поздние фото/provenance и history follow-ups ожидают финального общего прогона. Дополнительно выявленный fallback writer фотостудии проверяется отдельным пакетом.
+- UX-01.7/WB-EDIT-04: приняты readable reviewed coverage (`2b868c6`) и единый denominator (`53f2998`): selected50/changed2/skipped48 при двух успехах показывает 100% подготовленных, а ноль changed — «—». Legacy history остаётся прежней при отсутствии валидного summary; технические параметры свёрнуты.
+- UX-01.1/.4: приняты semantic text/action/status tokens (`fc10791`), opaque focus и честная подпись недоступного selected photo preview (`5cbaf36`). Focused worker static/Node checks passed; оставшиеся исходные CSS text/focus usages проходят механическую сверку. Full browser AA/keyboard на final source ещё не подтверждены.
 
 ## Новые доказательства и review
 
@@ -17,7 +20,7 @@
 
 Обнаружен и исправлен Ozon UI gate: готовая карточка с собственным VAT блокировалась при отсутствии VAT по умолчанию у аккаунта. Backend уже проверял VAT самой карточки. Остальные права, доступность аккаунта/ключа и fresh per-draft validation сохраняются. Diff принят; полный итоговый browser gate ещё не выполнен.
 
-Analytics scoped worker evidence: 48 long-data layouts (320..1440 px, обе темы, оба положения sidebar и text scale) и 16 отдельных empty/error state cases (390/1024/1280/1440 px, обе темы), без root overflow, JS/API/external errors и provider calls. Квитанция: `/tmp/ux01-analytics-audit-20261001/analytics-report.json`. Эти результаты не являются повторной приёмкой final merged source. Review theme tokens выявил недостаточный контраст muted text и нескольких accent/warning пар; точечное исправление в работе.
+Analytics scoped worker evidence: 48 long-data layouts (320..1440 px, обе темы, оба положения sidebar и text scale) и 16 отдельных empty/error state cases (390/1024/1280/1440 px, обе темы), без root overflow, JS/API/external errors и provider calls. Квитанция: `/tmp/ux01-analytics-audit-20261001/analytics-report.json`. Эти результаты не являются повторной приёмкой final merged source. Выявленный недостаточный контраст muted text и нескольких accent/warning пар исправлен в tokens; actual final browser проверка остаётся открытой.
 
 Review выявил пробелы WB selection JS (clear/page/all-filtered сначала меняли Set, затем восстанавливали старые DOM-отметки) и покрытия preview остальных ручных WB операций. Exact changed-set при записи, сравнение reviewed before со свежей full-card и локальный CAS для keywords исправлены и приняты отдельным пакетом. Первоначальные focused результаты не выдаются за доказательство позднее найденных пробелов. Полнота source/channel fingerprints общего редактора также исправлена и проверена отдельным принятым пакетом.
 
@@ -46,7 +49,7 @@ WB-EDIT-02, ограниченное read-only наблюдение: для пр
 | UX-01.4 | Прежнее меню и legacy входы | Приёмка текущего merged source | Keyboard/contrast browser matrix впереди |
 | UX-01.5 | Читаемые причины, status, photo semantics | Браузерная проверка | Focused пакет принят |
 | UX-01.6 | Прежние flows; приняты полный synthetic journey и per-draft VAT gate | Итоговый browser rerun | Unit17/7subtests; scoped browser12checks/20layouts; live новая публикация требует фактов/review |
-| UX-01.7 | Читаемые изменения и защищённые fix links | Route wiring и browser acceptance | Focused пакет принят; реальный rollback не выполнялся |
+| UX-01.7 | Читаемые изменения/fix links, reviewed selected/changed/skipped и корректная доля успеха | Final browser acceptance | Focused history13 passed у worker; реальный rollback не выполнялся |
 | UX-01.8 | Legacy/beta/студия/merge сохранены; добавлен bounded вход в common editor | Browser проверка нового доступа | Entry points и exact ID bounds unit passed; browser matrix впереди |
 | UX-01.9 | Прежние price/stock proposal guards | Повторная synthetic приёмка | Buyer price/скидка Ozon unknown |
 | UX-01.10 | Прежние секрет-free settings/health | Повторная synthetic приёмка | Inbox access denied; method grant не доказывает доступ |
@@ -56,8 +59,8 @@ WB-EDIT-02, ограниченное read-only наблюдение: для пр
 | WB-EDIT-02 | Exact subjectID и typed local-schema путь приняты | Browser problem/working category | Unit5880/5070/schema drift passed; исторический provider response отсутствует |
 | WB-EDIT-03 | Single edit с missing fields, dictionaries/types/grams принят | Browser fixture save/rights | Sizes/SKU read-only; local validation/fresh subject guards passed |
 | WB-EDIT-04 | Manual preview/diff/counts/confirm, exact changed-set, live drift guards, single-use claim приняты | Browser, final history summary | Unit114+66subtests в общем пакете; preview без provider I/O, write только synthetic |
-| CAT-EDIT-01 | Контракт, service/API, migrations, raw/source/recipient seals и manual projection приняты | Writer guards и photo delivery | Focused57; sealing/draft/Flash112+69subtests; source facts сохранены |
-| CAT-EDIT-02 | Backend и UI single/bulk preview/apply приняты | Writer guards, actual UI cancel/reopen/photos browser | Только общий товар; применение в канал отдельно; root47/7subtests, browser blocked средой |
+| CAT-EDIT-01 | Контракт/service/API/migrations/seals/projection и source/agent/canonical guards приняты | Image Lab fallback guard, final startup/browser | Root149/73subtests; source facts сохранены; exact фото display ограничение явно описано |
+| CAT-EDIT-02 | Backend и UI single/bulk preview/apply, фото/order/provenance приняты | Actual UI cancel/reopen/photos/async browser | Только общий товар; применение в канал отдельно; root47/7subtests, browser blocked средой |
 
 ## Внешние ограничения
 
