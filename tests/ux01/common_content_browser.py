@@ -392,7 +392,7 @@ def delay_fetches(page, request_keys: list[str]) -> None:
 def wait_for_delayed_fetch(page, request_key: str) -> None:
     page.wait_for_function(
         "key => typeof window.__commonContentDelayed?.[key] === 'function'",
-        request_key,
+        arg=request_key,
         timeout=5000,
     )
 
@@ -652,7 +652,7 @@ def wait_for_navigator_focus_geometry(page, product_id: str) -> bool:
                 && left >= clipLeft - 0.5 && right <= clipRight + 0.5
                 && top >= clipTop - 0.5 && bottom <= clipBottom + 0.5
                 && left >= 0 && top >= 0 && right <= innerWidth && bottom <= innerHeight;
-        }""", product_id, timeout=600)
+        }""", arg=product_id, timeout=600)
         return True
     except PlaywrightTimeoutError:
         return False
