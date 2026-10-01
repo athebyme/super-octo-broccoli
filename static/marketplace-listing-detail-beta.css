@@ -203,7 +203,8 @@
 #marketplace-detail-app .mdet-price-card .mcat-prices :is(dt, dd, p) {
     overflow-wrap: anywhere;
 }
-#marketplace-detail-app .mcat-linkline > .mcat-link {
+#marketplace-detail-app .mcat-linkline > .mcat-link,
+#marketplace-detail-app .mdet-kv .mcat-link {
     white-space: normal;
     overflow-wrap: anywhere;
 }
@@ -213,7 +214,7 @@
     .listing-workspace-controls { align-items: stretch; }
     .listing-workspace-modes { width: 100%; }
     .listing-workspace-mode { flex: 1; min-height: 44px; }
-    .listing-workspace-members { max-width: 100%; width: 100%; overflow-x: auto; }
+    .listing-workspace-members { min-width: 0; max-width: 100%; width: 100%; overflow-x: auto; }
     .listing-workspace-members .sh-channel-tab { flex: none; }
 
     #marketplace-detail-app form,
