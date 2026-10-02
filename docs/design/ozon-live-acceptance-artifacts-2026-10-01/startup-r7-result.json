@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "image": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96",
+  "source_head": "1babee1ae5daa142db23eb51481b4a2b9db75110",
+  "manifest": "0213b188317bab8e671d773acfc12d979db7aecd9a66e1ed558f9b8092fbb47e",
+  "source_files": 1245,
+  "database_scope": "isolated restored task copy; production database not replaced",
+  "network_none": true,
+  "scheduler_disabled": true,
+  "provider_attempts": 0,
+  "credentials_passed": false,
+  "steps_current": 81,
+  "changed_receipts": 0,
+  "protected_table_count": 7,
+  "protected_counts_unchanged": true,
+  "first_and_repeat_startup_noop": true
+}

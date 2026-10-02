@@ -1,0 +1,173 @@
+{
+  "schema_version": 9,
+  "scope": "bounded_read_only_seller_ui",
+  "started_at_utc": "2026-10-01T23:58:47.509702+00:00",
+  "finished_at_utc": "2026-10-02T00:00:10.217162+00:00",
+  "status": "passed_with_restrictions",
+  "source": {
+    "file_count": 1245,
+    "head": "1babee1ae5daa142db23eb51481b4a2b9db75110",
+    "local_hashes_match_manifest": true,
+    "manifest_aggregate_sha256": "0213b188317bab8e671d773acfc12d979db7aecd9a66e1ed558f9b8092fbb47e",
+    "manifest_sha256": "91c97ff8a6df3b30766d5988ef1a38a759d56db706da8d0a2f6cc08bb1d050ab",
+    "runtime_file_count": 1245,
+    "runtime_file_count_matches_manifest": true,
+    "runtime_inputs_clean": true,
+    "runtime_manifest_sha_matches": true,
+    "runtime_match": true,
+    "runtime_mismatch_count": 0,
+    "verified": true
+  },
+  "runtime": {
+    "exact_image_match": true,
+    "expected_image_id": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96",
+    "health": "healthy",
+    "healthy_get_status": 200,
+    "restart_count": 0,
+    "running": true,
+    "running_image_id": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96",
+    "started_at_utc": "2026-10-01T23:53:22.459097694Z"
+  },
+  "startup": {
+    "active_run_count": 0,
+    "completed_step_count": 81,
+    "current": true,
+    "journal_step_count": 81,
+    "plan_step_count": 81,
+    "running_step_count": 0
+  },
+  "scheduler": {
+    "first_age_seconds": 20,
+    "first_state": "healthy",
+    "progressed": true,
+    "samples_separated_seconds": 31,
+    "second_age_seconds": 21,
+    "second_state": "healthy"
+  },
+  "draft_validation": {
+    "checked_draft_count": 2,
+    "passed_draft_count": 2,
+    "results": [
+      {
+        "actionable_current_message": true,
+        "actionable_error_visible": false,
+        "current_and_saved_validation_separate": true,
+        "current_error_count": 14,
+        "current_publishable": false,
+        "current_validation_present": true,
+        "current_validation_shape_valid": true,
+        "dto_structure_valid": true,
+        "guarded_if_enabled": false,
+        "http_status": 200,
+        "label": "draft_1",
+        "outcome": "current_validation_blocks_send",
+        "response_kind": "valid_dto",
+        "saved_summary_present": true,
+        "saved_summary_publishable": false,
+        "send_enabled": false
+      },
+      {
+        "actionable_current_message": true,
+        "actionable_error_visible": false,
+        "current_and_saved_validation_separate": true,
+        "current_error_count": 15,
+        "current_publishable": false,
+        "current_validation_present": true,
+        "current_validation_shape_valid": true,
+        "dto_structure_valid": true,
+        "guarded_if_enabled": false,
+        "http_status": 200,
+        "label": "draft_2",
+        "outcome": "current_validation_blocks_send",
+        "response_kind": "valid_dto",
+        "saved_summary_present": true,
+        "saved_summary_publishable": true,
+        "send_enabled": false
+      }
+    ],
+    "selected_draft_count": 2
+  },
+  "javascript": {
+    "blocked_agent_metadata_gets_by_page": {
+      "wb_catalog": 1
+    },
+    "console_error_count": 1,
+    "console_error_expected_blocked_agent_count": 1,
+    "console_error_unexpected_count": 0,
+    "console_errors_by_page": {
+      "wb_catalog": {
+        "expected_blocked_agent": 1,
+        "total": 1,
+        "unexpected": 0
+      }
+    },
+    "console_ignored_resource_error_count": 61,
+    "page_error_count": 0
+  },
+  "network": {
+    "blocked_external_image_count": 50,
+    "blocked_external_nonstatic_count": 0,
+    "blocked_mutating_get_count": 1,
+    "blocked_non_get_count": 0,
+    "blocked_photo_cache_get_count": 10,
+    "blocked_unexpected_local_get_count": 0,
+    "external_static_http_error_count": 0,
+    "external_static_invalid_status_count": 0,
+    "external_static_response_counts": {
+      "cdn.jsdelivr.net:script:200": 46,
+      "cdn.tailwindcss.com:script:200": 15,
+      "cdn.tailwindcss.com:script:302": 15,
+      "fonts.googleapis.com:stylesheet:200": 16,
+      "fonts.gstatic.com:font:200": 65
+    },
+    "http_status_counts": {
+      "common_content_empty_or_selected:200": 2,
+      "common_content_read:200": 1,
+      "immutable_local_photo:200": 2,
+      "login_health:200": 1,
+      "notification_count:200": 15,
+      "ozon_account_health:200": 3,
+      "ozon_account_history_or_setup:200": 2,
+      "ozon_catalog:200": 1,
+      "ozon_catalog_api:200": 2,
+      "ozon_draft_detail:200": 2,
+      "ozon_draft_editor:200": 2,
+      "ozon_draft_list:200": 1,
+      "ozon_operation_detail_or_review:200": 5,
+      "ozon_operations:200": 1,
+      "ozon_saved_ai_review_state:200": 2,
+      "ozon_settings:200": 1,
+      "static:200": 138,
+      "task_tray:200": 15,
+      "wb_bulk_history:200": 1,
+      "wb_bulk_history_detail:200": 1,
+      "wb_catalog:200": 1,
+      "wb_edit:200": 1
+    },
+    "local_http_errors": 0,
+    "persisted_ai_suggestion_reads": 2,
+    "provider_endpoint_attempts_blocked": 0,
+    "request_count": 403,
+    "request_failure_bucket_overflow_count": 0,
+    "request_failure_counts": {},
+    "unapproved_static_count": 0
+  },
+  "limitations": {
+    "admin_login": "not_run; may be checked separately with existing admin helper",
+    "agent_metadata_refresh": "not tested; known mutating GET is blocked before Flask",
+    "ai_generation_requested": false,
+    "external_product_images": "not tested; external image requests are blocked",
+    "photo_cache_and_origin_photo_delivery": "not tested; potentially mutating GETs are blocked before Flask",
+    "photo_cache_route_reached": false,
+    "photo_pixels_verified": false,
+    "provider_network_calls_from_smoke_browser": 0,
+    "publish_or_sync_requested_by_smoke": false,
+    "runtime_background_provider_reads": "not attributed or measured by this smoke",
+    "seller_session_is_not_normal_login": true
+  },
+  "failure_codes": [],
+  "checks": 22,
+  "layout_count": 60,
+  "authenticated_session": "short-lived signed seller session; normal login not tested",
+  "operator_provider_writes": 0
+}

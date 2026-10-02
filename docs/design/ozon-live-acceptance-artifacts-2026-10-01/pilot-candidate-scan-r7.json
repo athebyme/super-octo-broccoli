@@ -1,0 +1,87 @@
+{
+  "status": "scan_finished",
+  "page_count": 34,
+  "linked_available_rows_scanned": 4129,
+  "native_validator_attempt_count": 3312,
+  "native_validator_publishable_count": 0,
+  "type_name_only_projection_publishable_count": 0,
+  "truncated": false,
+  "linked_scope_exhausted": true,
+  "all_catalog_exhausted_claim": false,
+  "blocker_counts": {
+    "barcode_set_not_representable_by_import": 638,
+    "native_validator_errors": 3312,
+    "type_schema_or_tree_stale_or_mismatched": 483,
+    "unknown_state_contract_error": 385,
+    "source_fact_hash_stale": 2,
+    "active_or_uncertain_listing_write_operation": 1
+  },
+  "native_validation_error_counts": {
+    "attribute_max_value_count": 3286,
+    "description_required": 7,
+    "dictionary_value_id_missing": 301,
+    "dictionary_value_out_of_scope": 788,
+    "required_attribute_missing": 8764,
+    "unknown_attribute": 3780,
+    "attribute_not_collection": 110,
+    "dictionary_display_mismatch": 707,
+    "ozon_brand_forbidden": 680
+  },
+  "candidate_results": {
+    "blocked": 3314
+  },
+  "database_writes": 0,
+  "provider_calls": 0,
+  "credentials_decrypted": false,
+  "saved_draft_mutated": false,
+  "helper_sha256": "c8473a91c5cb68ae77e026178eb975824ceb8125eebea9d1300276c5c27a9b69",
+  "scope": "one owned Ozon account; exact linked available non-archived listings with owned ImportedProduct, on isolated restored 2026-10-01 snapshot",
+  "runtime_source_commit": "1babee1ae5daa142db23eb51481b4a2b9db75110",
+  "helper_offline_tests_passed": 19,
+  "read_only_database_mount": true,
+  "network": "none",
+  "credentials_inherited": false,
+  "snapshot_is_current_production_state": false,
+  "all_3286_overlimit_errors_have_distinct_values": true,
+  "exact_duplicate_removal_corrections_proven": 0,
+  "max_value_count_zero_errors": 0,
+  "required_missing_counts": {
+    "tnved_22232": 3310,
+    "marking_23536": 2141,
+    "type_name_8229": 3311
+  },
+  "required_only_source_followup_count": 177,
+  "pilot_provider_writes": 0,
+  "prior_diagnostic_limits": [
+    {
+      "revision": "r6 first invocation",
+      "status": "failed before DB import",
+      "reason": "root helper mounted as operator.py shadowed standard library; invocation corrected"
+    },
+    {
+      "revision": "r6 corrected invocation",
+      "status": "freshness eligibility conclusion invalidated",
+      "reason": "helper used missing marketplace_id instead of selected listing_marketplace_id; corrected and regression-tested in r7"
+    }
+  ],
+  "overlimit_error_groups": [
+    {
+      "actual_count": 5,
+      "json_distinct_count": 5,
+      "max_value_count": 4,
+      "error_count": 2893
+    },
+    {
+      "actual_count": 6,
+      "json_distinct_count": 6,
+      "max_value_count": 4,
+      "error_count": 2
+    },
+    {
+      "actual_count": 2,
+      "json_distinct_count": 2,
+      "max_value_count": 1,
+      "error_count": 391
+    }
+  ]
+}

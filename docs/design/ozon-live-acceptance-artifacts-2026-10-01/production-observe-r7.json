@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "scope": "bounded_read_only_post_cutover_observation",
+  "observed_at_utc": "2026-10-01T23:54:55.530933+00:00",
+  "status": "passed_with_restrictions",
+  "runtime": {
+    "expected_image_matches": true,
+    "health": "healthy",
+    "health_wait_seconds": 0.013,
+    "latest_retained_health_success_at_utc": "2026-10-02T02:54:30.527211081+03:00",
+    "post_observation_inspect": {
+      "checked_at_utc": "2026-10-01T23:54:55.530914+00:00",
+      "health": "healthy",
+      "image_matches": true,
+      "latest_retained_health_success_at_utc": "2026-10-02T02:54:45.797941087+03:00",
+      "restart_count": 0,
+      "running": true,
+      "started_at_utc": "2026-10-01T23:53:22.459097694Z"
+    },
+    "post_observation_inspect_passed": true,
+    "restart_count": 0,
+    "running": true,
+    "started_at_utc": "2026-10-01T23:53:22.459097694Z"
+  },
+  "startup": {
+    "active_run": false,
+    "completed_count": 81,
+    "current": true,
+    "database_mode_ro": true,
+    "expected_receipts": 81,
+    "query_only": true,
+    "receipt_count": 81,
+    "transaction_open": false,
+    "whole_receipt_present": true
+  },
+  "scheduler": {
+    "after": {
+      "age_seconds": 25,
+      "checked_at_utc": "2026-10-01T23:54:55.017161+00:00",
+      "heartbeat_at_utc": "2026-10-01T23:54:29.098442+00:00",
+      "state": "healthy"
+    },
+    "assessment": "fresh_not_progress_within_observation_window",
+    "before": {
+      "age_seconds": 5,
+      "checked_at_utc": "2026-10-01T23:54:35.016683+00:00",
+      "heartbeat_at_utc": "2026-10-01T23:54:29.098442+00:00",
+      "state": "healthy"
+    },
+    "fresh": true,
+    "health": "healthy",
+    "observation_wait_seconds": 20,
+    "progress_observed": false
+  },
+  "https": {
+    "draft_editor_css": {
+      "attempts": 1,
+      "body_bytes": 20090,
+      "http_status": 200,
+      "redirects": 0,
+      "sha256_match": true,
+      "tls_verified": true,
+      "trust_env": false
+    },
+    "draft_editor_js": {
+      "attempts": 1,
+      "body_bytes": 57669,
+      "http_status": 200,
+      "redirects": 0,
+      "sha256_match": true,
+      "tls_verified": true,
+      "trust_env": false
+    },
+    "login": {
+      "attempts": 1,
+      "body_bytes": 26577,
+      "http_status": 200,
+      "redirects": 0,
+      "sha256_match": null,
+      "tls_verified": true,
+      "trust_env": false
+    },
+    "non_allowlisted_requests_attempted": 0,
+    "redirects": 0,
+    "retries": 0
+  },
+  "restrictions": [
+    "anonymous GET only; no login POST/session",
+    "no provider/API writes, no AI calls, no publish/apply/sync",
+    "running scheduler background reads are not attributed by this observer",
+    "scheduler heartbeat remained fresh but did not advance in the bounded observation window"
+  ],
+  "failure_codes": []
+}

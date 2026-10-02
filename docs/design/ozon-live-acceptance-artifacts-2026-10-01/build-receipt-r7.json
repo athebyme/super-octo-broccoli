@@ -1,0 +1,13 @@
+{
+  "source_head": "1babee1ae5daa142db23eb51481b4a2b9db75110",
+  "source_clean": true,
+  "manifest": "0213b188317bab8e671d773acfc12d979db7aecd9a66e1ed558f9b8092fbb47e",
+  "manifest_file_sha256": "91c97ff8a6df3b30766d5988ef1a38a759d56db706da8d0a2f6cc08bb1d050ab",
+  "source_files": 1245,
+  "build_exit_code": 0,
+  "ci_image_tag": "seller-hub-ozon-live-check:20261002-r7",
+  "ci_image": "sha256:cc558915de4e9ef176573564c22a7603684b28024c64f0733a092652fd6037c1",
+  "image_tag": "seller-hub-ozon-live-runtime:20261002-r7",
+  "image": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96",
+  "built_at": "2026-10-01T23:29:28.030072+00:00"
+}

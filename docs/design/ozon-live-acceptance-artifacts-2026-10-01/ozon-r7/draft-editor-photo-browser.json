@@ -1,0 +1,709 @@
+{
+  "status": "passed",
+  "scope": "synthetic_draft_editor_photo_component",
+  "checks": [
+    "cold_cache_202_then_jpeg_without_reload_or_overlay",
+    "late_old_image_error_cannot_change_new_source",
+    "hung_visible_image_has_12s_deadline_and_bounded_wait_state",
+    "unmount_cancels_pending_retry",
+    "four_bounded_gets_then_actionable_fallback",
+    "manual_retry_is_separate_and_succeeds",
+    "hero_status_text200_grows_without_clipping_or_photo_requests",
+    "hidden_mount_uses_no_get_and_requires_explicit_resume",
+    "compact_bulk_repair_fallback_has_independent_manual_retry"
+  ],
+  "layouts": [
+    {
+      "name": "ready",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "ready",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "ready",
+      "theme": "light",
+      "width": 1024
+    },
+    {
+      "name": "ready",
+      "theme": "light",
+      "width": 1280
+    },
+    {
+      "name": "ready",
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "name": "ready",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "ready",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "ready",
+      "theme": "dark",
+      "width": 1024
+    },
+    {
+      "name": "ready",
+      "theme": "dark",
+      "width": 1280
+    },
+    {
+      "name": "ready",
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "name": "fallback",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "fallback",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "fallback",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "fallback",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "light",
+      "width": 320,
+      "text_scale": 200,
+      "photo_height": 153.08,
+      "status_height": 118.28,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-light-320.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "light",
+      "width": 390,
+      "text_scale": 200,
+      "photo_height": 153.08,
+      "status_height": 118.28,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-light-390.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "light",
+      "width": 1024,
+      "text_scale": 200,
+      "photo_height": 220,
+      "status_height": 218,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-light-1024.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "light",
+      "width": 1280,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-light-1280.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "light",
+      "width": 1440,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-light-1440.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "dark",
+      "width": 320,
+      "text_scale": 200,
+      "photo_height": 153.08,
+      "status_height": 118.28,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-dark-320.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "dark",
+      "width": 390,
+      "text_scale": 200,
+      "photo_height": 153.08,
+      "status_height": 118.28,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-dark-390.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "dark",
+      "width": 1024,
+      "text_scale": 200,
+      "photo_height": 220,
+      "status_height": 218,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-dark-1024.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "dark",
+      "width": 1280,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-dark-1280.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "loading",
+      "theme": "dark",
+      "width": 1440,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-loading-200-dark-1440.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "light",
+      "width": 320,
+      "text_scale": 200,
+      "photo_height": 153.08,
+      "status_height": 118.28,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-light-320.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "light",
+      "width": 390,
+      "text_scale": 200,
+      "photo_height": 153.08,
+      "status_height": 118.28,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-light-390.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "light",
+      "width": 1024,
+      "text_scale": 200,
+      "photo_height": 220,
+      "status_height": 218,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-light-1024.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "light",
+      "width": 1280,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-light-1280.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "light",
+      "width": 1440,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-light-1440.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "dark",
+      "width": 320,
+      "text_scale": 200,
+      "photo_height": 153.08,
+      "status_height": 118.28,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-dark-320.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "dark",
+      "width": 390,
+      "text_scale": 200,
+      "photo_height": 153.08,
+      "status_height": 118.28,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-dark-390.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "dark",
+      "width": 1024,
+      "text_scale": 200,
+      "photo_height": 220,
+      "status_height": 218,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-dark-1024.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "dark",
+      "width": 1280,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-dark-1280.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "pending",
+      "theme": "dark",
+      "width": 1440,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": false,
+      "screenshot": "draft-photo-status-pending-200-dark-1440.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "light",
+      "width": 320,
+      "text_scale": 200,
+      "photo_height": 243.27,
+      "status_height": 208.47,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-light-320.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "light",
+      "width": 390,
+      "text_scale": 200,
+      "photo_height": 243.27,
+      "status_height": 208.47,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-light-390.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "light",
+      "width": 1024,
+      "text_scale": 200,
+      "photo_height": 220,
+      "status_height": 218,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-light-1024.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "light",
+      "width": 1280,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-light-1280.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "light",
+      "width": 1440,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-light-1440.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "dark",
+      "width": 320,
+      "text_scale": 200,
+      "photo_height": 243.27,
+      "status_height": 208.47,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-dark-320.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "dark",
+      "width": 390,
+      "text_scale": 200,
+      "photo_height": 243.27,
+      "status_height": 208.47,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-dark-390.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "dark",
+      "width": 1024,
+      "text_scale": 200,
+      "photo_height": 220,
+      "status_height": 218,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-dark-1024.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "dark",
+      "width": 1280,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-dark-1280.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "failed",
+      "theme": "dark",
+      "width": 1440,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-failed-200-dark-1440.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "light",
+      "width": 320,
+      "text_scale": 200,
+      "photo_height": 277.36,
+      "status_height": 242.56,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-light-320.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "light",
+      "width": 390,
+      "text_scale": 200,
+      "photo_height": 277.36,
+      "status_height": 242.56,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-light-390.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "light",
+      "width": 1024,
+      "text_scale": 200,
+      "photo_height": 220,
+      "status_height": 218,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-light-1024.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "light",
+      "width": 1280,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-light-1280.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "light",
+      "width": 1440,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-light-1440.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "dark",
+      "width": 320,
+      "text_scale": 200,
+      "photo_height": 277.36,
+      "status_height": 242.56,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-dark-320.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "dark",
+      "width": 390,
+      "text_scale": 200,
+      "photo_height": 277.36,
+      "status_height": 242.56,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-dark-390.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "dark",
+      "width": 1024,
+      "text_scale": 200,
+      "photo_height": 220,
+      "status_height": 218,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-dark-1024.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "dark",
+      "width": 1280,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-dark-1280.png"
+    },
+    {
+      "name": "photo-status-text-200",
+      "state": "paused",
+      "theme": "dark",
+      "width": 1440,
+      "text_scale": 200,
+      "photo_height": 280,
+      "status_height": 278,
+      "counter_overlap": false,
+      "focus_ring_counter_overlap": false,
+      "control_focus": true,
+      "screenshot": "draft-photo-status-paused-200-dark-1440.png"
+    },
+    {
+      "name": "compact-fallback",
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "name": "compact-fallback",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "name": "compact-fallback",
+      "theme": "dark",
+      "width": 320
+    },
+    {
+      "name": "compact-fallback",
+      "theme": "dark",
+      "width": 390
+    }
+  ],
+  "js_errors": [],
+  "external": [],
+  "provider_attempts": 0,
+  "unexpected_http": [],
+  "visibility_simulated": true,
+  "photo_gets": [
+    {
+      "slot": 0,
+      "query": "deferred=1",
+      "mode": "cold"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=1",
+      "mode": "cold"
+    },
+    {
+      "slot": 1,
+      "query": "deferred=1",
+      "mode": "cold"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1",
+      "mode": "hang"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=1",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=2",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=3",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&manual_retry=1",
+      "mode": "ready"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&manual_retry=1",
+      "mode": "ready"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=1",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=2",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&preview_attempt=3",
+      "mode": "always202"
+    },
+    {
+      "slot": 0,
+      "query": "deferred=1&manual_retry=1",
+      "mode": "ready"
+    }
+  ]
+}

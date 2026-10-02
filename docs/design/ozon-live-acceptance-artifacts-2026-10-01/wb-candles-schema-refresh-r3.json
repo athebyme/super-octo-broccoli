@@ -1,0 +1,58 @@
+{
+  "status": "passed",
+  "scope": "exact WB category Свечи эротик; identity matched by 32 owned WB product rows",
+  "runtime": {
+    "head": "1babee1ae5daa142db23eb51481b4a2b9db75110",
+    "aggregate_manifest_sha256": "0213b188317bab8e671d773acfc12d979db7aecd9a66e1ed558f9b8092fbb47e",
+    "manifest_sha256": "91c97ff8a6df3b30766d5988ef1a38a759d56db706da8d0a2f6cc08bb1d050ab",
+    "manifest_file_count": 1245,
+    "runtime_image_match": true,
+    "runtime_healthy": true,
+    "r7_source_match": true
+  },
+  "helper_sha256": "ca71d1e781da519e1c757c51fe6322e9ad52bc40c29b9ec5faf79149390a63cf",
+  "offline_tests_passed": 24,
+  "configured_admin_identity_verified": true,
+  "normal_password_login_and_csrf": true,
+  "login_cookie_rotated": true,
+  "permissions_changed": false,
+  "normal_login_post_attempt_count_final_run": 1,
+  "normal_login_post_attempt_count_including_prior_run": 2,
+  "category_sync_post_attempt_count": 1,
+  "wb_provider_write_attempt_count": 0,
+  "provider_read_count": "not measured; existing server-side limiter/retries and conditional TNVED read apply",
+  "post_http_status": 302,
+  "readback_page_status": 200,
+  "before": {
+    "sync_status": "success",
+    "synced_at": "2026-09-30 18:09:54.924237",
+    "fresh": true,
+    "schema_hash": "5d08b031044de04edf4a7b4d650ecb0d5a20e7f94082c9756ca9a7305d3c18c0",
+    "schema_version": 5,
+    "characteristics_count": 32,
+    "required_count": 0,
+    "updated_at": "2026-10-01 23:55:05.573459",
+    "busy": false
+  },
+  "after": {
+    "sync_status": "success",
+    "synced_at": "2026-10-02 00:58:08.285899",
+    "fresh": true,
+    "schema_hash": "3a2a1a45deb246869cd2da6af3e494c56eaa898e79b60184b913d838ccf38d15",
+    "schema_version": 6,
+    "characteristics_count": 32,
+    "required_count": 0,
+    "updated_at": "2026-10-02 00:58:09.084276",
+    "busy": false
+  },
+  "data_effect": "one global WB category reference schema refreshed; no product card publication/write",
+  "provider_access_proven": "targeted category-schema read only",
+  "historical_subject_not_found_cause": "unknown",
+  "live_mass_editor_browser": "not tested in this continuation",
+  "prior_failure": {
+    "root_r2_login_status_from_bounded_server_logs": 302,
+    "category_sync_post_attempt_count": 0,
+    "client_problem": "requests max_redirects=0 raised while preparing a disabled redirect; real requests mock-adapter regression passed after correction",
+    "raw_logs_saved": false
+  }
+}

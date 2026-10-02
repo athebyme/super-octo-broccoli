@@ -1,0 +1,12 @@
+{
+  "status": "passed",
+  "old_code_reproduction": "expected failure: orphan uncertain operation absent from editor active_operation_id",
+  "old_code_test_failures": 1,
+  "candidate_tests_passed": 6,
+  "network": "none",
+  "provider_attempts": 0,
+  "tenant_listing_scope_preserved": true,
+  "commercial_operations_excluded": true,
+  "queued_priority_and_idempotent_replay_preserved": true,
+  "legacy_queued_rollback_limitation": "blocked legacy queued rollback can leave parent rollback_status failed; no automatic availability reset/retry"
+}

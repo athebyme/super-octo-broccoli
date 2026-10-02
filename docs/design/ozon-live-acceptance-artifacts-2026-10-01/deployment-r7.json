@@ -1,0 +1,21 @@
+{
+  "status": "guarded_cutover_verified",
+  "source_head": "1babee1ae5daa142db23eb51481b4a2b9db75110",
+  "manifest": "0213b188317bab8e671d773acfc12d979db7aecd9a66e1ed558f9b8092fbb47e",
+  "image": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96",
+  "started_at_utc": "2026-10-01T23:53:22.459097694Z",
+  "source_files": 1245,
+  "runtime_environment_preserved": true,
+  "mounts_network_preserved": true,
+  "auto_publish_disabled": true,
+  "caddy_unchanged": true,
+  "healthy": true,
+  "restart_count": 0,
+  "observer": "passed_with_restrictions: heartbeat fresh; no advance inside first 20-second window",
+  "smoke": "passed_with_restrictions",
+  "cutover_helper_offline_tests": 11,
+  "initial_operator_attempt": "r7 guarded cutover succeeded on first attempt",
+  "pilot_publication_verified": false,
+  "initial_smoke_attempt": "system Python lacked Playwright; failed before browser; rerun in project venv passed",
+  "scheduler_progress_confirmed_by_smoke": true
+}

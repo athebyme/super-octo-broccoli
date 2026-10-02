@@ -1,0 +1,18 @@
+{
+  "status": "candidate_rejected",
+  "basis": "isolated restored copy; current cached schema and deterministic validator",
+  "validation_errors": 4,
+  "attributes_projection_difference": "order only; identical unordered item multiset",
+  "over_limit_value_count": 6,
+  "over_limit_distinct_value_count": 6,
+  "exact_duplicate_groups": 0,
+  "current_max_value_count": 4,
+  "invalid_dictionary_values": 2,
+  "unique_exact_current_dictionary_replacements": 0,
+  "exact_official_type_name_proof": true,
+  "no_loss_repair_proven": false,
+  "database_writes": 0,
+  "provider_writes": 0,
+  "api_calls": 0,
+  "credentials_decrypted": false
+}

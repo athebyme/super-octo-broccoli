@@ -1,0 +1,82 @@
+{
+  "started_at": "2026-10-01T23:36:14.128254+00:00",
+  "status": "passed",
+  "network": "none",
+  "synthetic_only": true,
+  "browser_only": false,
+  "hosted_ci_execution_proven": false,
+  "production_or_live_api_verified": false,
+  "stages": [
+    {
+      "name": "contracts",
+      "exit_code": 0,
+      "seconds": 580.0
+    },
+    {
+      "name": "browser",
+      "exit_code": 0,
+      "seconds": 53.11
+    },
+    {
+      "name": "bulk-browser",
+      "exit_code": 0,
+      "seconds": 38.44
+    },
+    {
+      "name": "credential-browser",
+      "exit_code": 0,
+      "seconds": 16.34
+    },
+    {
+      "name": "account-history-browser",
+      "exit_code": 0,
+      "seconds": 25.03
+    },
+    {
+      "name": "quarantine-browser",
+      "exit_code": 0,
+      "seconds": 18.01
+    },
+    {
+      "name": "quarantine-commercial-browser",
+      "exit_code": 0,
+      "seconds": 13.0
+    },
+    {
+      "name": "warehouse-read-browser",
+      "exit_code": 0,
+      "seconds": 34.17
+    },
+    {
+      "name": "vue-link-category-browser",
+      "exit_code": 0,
+      "seconds": 39.23
+    },
+    {
+      "name": "upload-two-step-browser",
+      "exit_code": 0,
+      "seconds": 20.53
+    },
+    {
+      "name": "draft-ai-browser",
+      "exit_code": 0,
+      "seconds": 15.5
+    },
+    {
+      "name": "draft-editor-photo-browser",
+      "exit_code": 0,
+      "seconds": 50.14
+    },
+    {
+      "name": "ozon-complete-journey-browser",
+      "exit_code": 0,
+      "seconds": 29.42
+    }
+  ],
+  "contracts": {
+    "tests": 2736,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}
