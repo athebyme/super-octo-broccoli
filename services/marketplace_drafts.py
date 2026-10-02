@@ -5963,6 +5963,7 @@ class MarketplaceDraftService:
                     products=[product],
                     now=now,
                     commit=False,
+                    guard_seller_unlinked_siblings=True,
                 )
             except MarketplaceProductLinkError as exc:
                 raise MarketplaceDraftConflict(
@@ -5970,6 +5971,9 @@ class MarketplaceDraftService:
                 ) from exc
             if (
                 link_result.get("blocked", {}).get(product.id) is not None
+                or link_result.get(
+                    "unresolved_seller_unlink_listing_ids", {}
+                ).get(product.id)
                 or link_result.get("resolved_listing_ids", {}).get(product.id)
                 != listing.id
                 or any(

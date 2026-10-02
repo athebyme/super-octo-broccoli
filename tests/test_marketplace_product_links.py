@@ -328,8 +328,45 @@ class MarketplaceProductLinkServiceTest(unittest.TestCase):
             {canonical.id: listing.id},
         )
         self.assertEqual(result["blocked"], {})
+        self.assertNotIn("unresolved_seller_unlink_listing_ids", result)
         db.session.refresh(listing)
         self.assertEqual(listing.imported_product_id, canonical.id)
+
+    def test_private_preflight_reports_only_exact_seller_unlink_siblings(self):
+        canonical = self._canonical(
+            offer="known-main-offer",
+            with_wb=False,
+        )
+        selected = self._listing(
+            offer=canonical.external_vendor_code,
+            imported_product_id=canonical.id,
+        )
+        selected.link_status = "linked"
+        selected.link_source = "exact_offer_identity"
+        db.session.commit()
+        sibling = self._listing(offer=canonical.external_id)
+        sibling.link_source = "seller_unlink"
+        db.session.commit()
+
+        result = MarketplaceProductLinkService._reconcile_account_products_impl(
+            seller_id=self.seller1.id,
+            account_id=self.account1.id,
+            products=[canonical],
+            commit=False,
+            guard_seller_unlinked_siblings=True,
+        )
+
+        self.assertEqual(result["linked"], 0)
+        self.assertEqual(
+            result["resolved_listing_ids"],
+            {canonical.id: selected.id},
+        )
+        self.assertEqual(
+            result["unresolved_seller_unlink_listing_ids"],
+            {canonical.id: [sibling.id]},
+        )
+        self.assertFalse(db.session.new or db.session.dirty or db.session.deleted)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
 
     def test_private_selected_preflight_does_not_commit_staged_link_or_event(self):
         canonical = self._canonical(offer="caller-owned-no-commit")

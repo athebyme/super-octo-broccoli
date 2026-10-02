@@ -517,6 +517,179 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         self.assertEqual(MarketplaceProductDraft.query.count(), 0)
         self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
 
+    def test_atomic_existing_linked_create_stops_exact_seller_unlink_sibling(self):
+        product, selected, expected = self._existing_listing_precondition(
+            external_id="strict-seller-unlink-sibling"
+        )
+        sibling = MarketplaceListing(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account1.id,
+            imported_product_id=None,
+            offer_id=product.external_id,
+            external_product_id="sibling-900001",
+            title="Seller-unlinked exact source sibling",
+            link_status="unlinked",
+            link_source="seller_unlink",
+            is_available=True,
+            is_archived=False,
+            sync_fingerprint="e" * 64,
+        )
+        db.session.add(sibling)
+        db.session.commit()
+        selected_tuple = (
+            selected.imported_product_id,
+            selected.link_status,
+            selected.link_source,
+            selected.link_version,
+            selected.link_evidence_json,
+        )
+        sibling_tuple = (
+            sibling.imported_product_id,
+            sibling.link_status,
+            sibling.link_source,
+            sibling.link_version,
+            sibling.link_evidence_json,
+        )
+
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                expected_existing_listing=expected,
+            )
+
+        db.session.refresh(selected)
+        db.session.refresh(sibling)
+        self.assertEqual((
+            selected.imported_product_id,
+            selected.link_status,
+            selected.link_source,
+            selected.link_version,
+            selected.link_evidence_json,
+        ), selected_tuple)
+        self.assertEqual((
+            sibling.imported_product_id,
+            sibling.link_status,
+            sibling.link_source,
+            sibling.link_version,
+            sibling.link_evidence_json,
+        ), sibling_tuple)
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_atomic_existing_linked_create_rolls_back_ambiguous_sibling(self):
+        product, selected, expected = self._existing_listing_precondition(
+            external_id="strict-ambiguous-sibling"
+        )
+        sibling = MarketplaceListing(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account1.id,
+            imported_product_id=None,
+            offer_id=product.external_id,
+            external_product_id="sibling-900002",
+            title="Previously ambiguous exact source sibling",
+            link_status="ambiguous",
+            link_source="exact_offer_identity",
+            link_evidence_json='{"reason":"previous_review"}',
+            link_version=3,
+            is_available=True,
+            is_archived=False,
+            sync_fingerprint="f" * 64,
+        )
+        db.session.add(sibling)
+        db.session.commit()
+        before = (
+            sibling.imported_product_id,
+            sibling.link_status,
+            sibling.link_source,
+            sibling.link_version,
+            sibling.link_evidence_json,
+        )
+
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                expected_existing_listing=expected,
+            )
+
+        db.session.refresh(selected)
+        db.session.refresh(sibling)
+        self.assertEqual(selected.imported_product_id, product.id)
+        self.assertEqual((
+            sibling.imported_product_id,
+            sibling.link_status,
+            sibling.link_source,
+            sibling.link_version,
+            sibling.link_evidence_json,
+        ), before)
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_atomic_existing_linked_create_ignores_sql_superset_known_other_listing(self):
+        product, selected, expected = self._existing_listing_precondition(
+            external_id="7725"
+        )
+        product.source_type = "sexoptovik"
+        product.external_id = "7725"
+        db.session.commit()
+        _facts, _provenance, fact_hash = MarketplaceDraftService._fact_snapshot(
+            product
+        )
+        expected["source_fact_hash"] = fact_hash
+
+        other_product = self._product(external_id="known-other-product")
+        sql_superset = MarketplaceListing(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account1.id,
+            imported_product_id=other_product.id,
+            offer_id="id-7725-not-a-number",
+            external_product_id="known-other-900003",
+            title="Known other canonical card",
+            link_status="linked",
+            link_source="exact_source_identity",
+            is_available=True,
+            is_archived=False,
+            sync_fingerprint="1" * 64,
+        )
+        db.session.add(sql_superset)
+        db.session.commit()
+        from services.marketplace_product_links import MarketplaceProductLinkService
+        from services.marketplace_source_identity import (
+            encoded_record_identities,
+        )
+
+        bounded_candidates = MarketplaceProductLinkService._target_listing_candidates(
+            seller_id=self.seller1_id,
+            account=self.account1,
+            products=[product],
+        )
+        self.assertIn(sql_superset.id, {row.id for row in bounded_candidates})
+        self.assertEqual(
+            encoded_record_identities(sql_superset.offer_id),
+            frozenset(),
+        )
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            expected_existing_listing=expected,
+        )
+
+        self.assertEqual(draft.published_listing_id, selected.id)
+        db.session.refresh(selected)
+        db.session.refresh(sql_superset)
+        self.assertEqual(selected.imported_product_id, product.id)
+        self.assertEqual(sql_superset.imported_product_id, other_product.id)
+        self.assertEqual(sql_superset.link_status, "linked")
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
     def test_existing_listing_precondition_rejects_unpaired_unicode(self):
         product, _listing, expected = self._existing_listing_precondition(
             external_id="strict-unpaired-unicode"

@@ -1494,6 +1494,7 @@ class MarketplaceProductLinkService:
         products: Sequence[ImportedProduct],
         now: Optional[datetime] = None,
         commit: bool,
+        guard_seller_unlinked_siblings: bool = False,
     ) -> dict:
         """Resolve existing Ozon listings before a selected create/update flow.
 
@@ -1507,6 +1508,10 @@ class MarketplaceProductLinkService:
         if not isinstance(commit, bool):
             raise MarketplaceProductLinkValidationError(
                 "commit должен быть boolean"
+            )
+        if not isinstance(guard_seller_unlinked_siblings, bool):
+            raise MarketplaceProductLinkValidationError(
+                "guard_seller_unlinked_siblings должен быть boolean"
             )
         seller_id = cls._positive_integer(seller_id, "seller_id")
         account_id = cls._positive_integer(account_id, "account_id")
@@ -1593,7 +1598,22 @@ class MarketplaceProductLinkService:
                 relevant[product_id].append(listing)
 
         blocked = {}
+        seller_unlinked_siblings = {}
         for product_id in product_ids:
+            if guard_seller_unlinked_siblings:
+                sibling_ids = sorted({
+                    listing.id
+                    for listing in relevant[product_id]
+                    if (
+                        listing.id != resolved.get(product_id)
+                        and listing.imported_product_id is None
+                        and listing.link_source == "seller_unlink"
+                    )
+                })
+                if sibling_ids:
+                    seller_unlinked_siblings[product_id] = sibling_ids[
+                        :cls.MAX_EVIDENCE_CANDIDATES
+                    ]
             if product_id in resolved or not relevant[product_id]:
                 continue
             listing_ids = sorted({
@@ -1610,12 +1630,17 @@ class MarketplaceProductLinkService:
                     :cls.MAX_EVIDENCE_CANDIDATES
                 ],
             }
-        return {
+        result = {
             **reconcile_result,
             "candidate_count": len(candidates),
             "resolved_listing_ids": resolved,
             "blocked": blocked,
         }
+        if guard_seller_unlinked_siblings:
+            result["unresolved_seller_unlink_listing_ids"] = (
+                seller_unlinked_siblings
+            )
+        return result
 
     @classmethod
     def reconcile_listing(
