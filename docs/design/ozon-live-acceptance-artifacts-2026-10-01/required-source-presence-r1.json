@@ -1,0 +1,40 @@
+{
+  "schema": "ozon-required-source-presence-receipt-v1",
+  "checked_at": "2026-10-02T01:25:47.515742+00:00",
+  "status": "passed_with_restrictions",
+  "helper_sha256": "03772a5b45aeccfa8c260663ae47e2b9399095e76af8f860ae99921b9c7cd558",
+  "fixture_test_count": 14,
+  "fixture_test_result": "passed",
+  "scope": "exact177required-only own-linked-available candidates from isolated restored2026-10-01snapshot; not allcatalog/currentproduction",
+  "aggregate": {
+    "exact_owned_available_linked": 177,
+    "listing_rows_found": 177,
+    "listing_rows_missing": 0,
+    "listings_missing_source_literal": 36,
+    "listings_with_conflicting_tnved_literals": 0,
+    "listings_with_known_marking_literal": 0,
+    "listings_with_valid_tnved_literal": 141,
+    "original_data_imported_used": 174,
+    "original_data_supplier_fallback_used": 3,
+    "scope_count": 177,
+    "source_freshness_unconfirmed": 177,
+    "wb_product_identity_exact": 164
+  },
+  "isolation": {
+    "database_mode": "ro",
+    "query_only": true,
+    "write_authorizer_denies_writes": true,
+    "named_volume_readonly": true,
+    "network": "none",
+    "credentials": false,
+    "production_database_replaced": false
+  },
+  "interpretation": "source_presence_only_not_eligibility; literal syntax and exact source-link guards do not prove field freshness or legal classification",
+  "provider_reads": 0,
+  "provider_writes": 0,
+  "operator_database_writes": 0,
+  "llm_calls": 0,
+  "pilot_completed": false,
+  "followup": "fresh exact own-WB observation and per-draft current Ozon schema match remain necessary before selecting a publication candidate",
+  "private_values_published": false
+}
