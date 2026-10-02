@@ -110,14 +110,12 @@ def validate_decision_input(*, product_type_id, tnved_code, rationale) -> dict:
 def save_decision(*, product_type_id, tnved_code, rationale, user_id):
     """Заменить активное решение по типу новым, подписанным админом.
 
-    ДО любой записи код обязан пройти проверку по свежему официальному
-    словарю ТН ВЭД этого типа (``is_type_tnved_code_available``). Без этой
-    проверки опечатка в поле ввода тихо сохранялась бы как «успех»:
-    ``resolve_tnved`` позже молча вернул бы ``None`` для несуществующего в
-    словаре кода, и карточки типа остались бы заблокированы без единой
-    видимой причины — та же инертность, что уже чинили в Task 6, только
-    теперь она приходит от простой опечатки, а не от отсутствия версии
-    реестра.
+    До изменения активного решения код обязан совпасть ровно с одним
+    доступным значением свежего type-scoped словаря ТН ВЭД после применения
+    restriction. Отсутствующий или неоднозначный код отклоняется до
+    retirement прежней строки: ``resolve_tnved`` не может разрешить более
+    одного provider ID и иначе тихо вернул бы ``None`` для нового активного
+    решения.
 
     Старое активное решение переводится в ``retired``, новое создаётся со
     ``status='active'`` в той же транзакции: partial-unique индекс допускает
@@ -132,7 +130,7 @@ def save_decision(*, product_type_id, tnved_code, rationale, user_id):
         OzonComplianceDefault,
     )
     from services.ozon_compliance_defaults import (
-        TNVED_ATTRIBUTE_ID, is_type_tnved_code_available,
+        TNVED_ATTRIBUTE_ID, type_tnved_dictionary_status,
     )
 
     cleaned = validate_decision_input(
@@ -144,19 +142,30 @@ def save_decision(*, product_type_id, tnved_code, rationale, user_id):
     if product_type is None:
         raise OzonComplianceAdminError("Ozon product type не найден")
 
-    available = is_type_tnved_code_available(
-        product_type.id, cleaned["tnved_code"],
-    )
-    if available is None:
+    dictionary_status = type_tnved_dictionary_status(product_type.id)
+    if not dictionary_status["is_fresh"]:
         raise OzonComplianceAdminError(
             "Официальный словарь ТН ВЭД этого типа недоступен или устарел — "
             "решение нельзя сохранить до синхронизации справочника"
         )
-    if not available:
+    matches = [
+        entry for entry in dictionary_status["entries"]
+        if entry["code"] == cleaned["tnved_code"]
+    ]
+    if not matches:
         raise OzonComplianceAdminError(
             f"Код {cleaned['tnved_code']} не найден среди официальных "
             "значений ТН ВЭД этого типа — выберите код из списка"
         )
+    if len(matches) > 1:
+        raise OzonComplianceAdminError(
+            f"Код {cleaned['tnved_code']} неоднозначен: в свежем словаре "
+            "Ozon этого типа найдено несколько доступных значений. "
+            "Выберите точное значение справочника в ручном редакторе "
+            "карточки либо уточните ограничение словаря для этого типа; "
+            "активное решение не изменено"
+        )
+    tnved_entry = matches[0]
 
     definition = MarketplaceAttributeDefinition.query.filter_by(
         product_type_id=product_type.id,
@@ -176,7 +185,7 @@ def save_decision(*, product_type_id, tnved_code, rationale, user_id):
             marketplace_id=product_type.marketplace_id,
             product_type_id=product_type.id,
             tnved_code=cleaned["tnved_code"],
-            tnved_display=_observed_display(definition, cleaned["tnved_code"]),
+            tnved_display=tnved_entry["value"][:500],
             status="active",
             decided_by_user_id=int(user_id),
             decided_at=datetime.utcnow(),
@@ -193,21 +202,6 @@ def save_decision(*, product_type_id, tnved_code, rationale, user_id):
             "повторите"
         ) from None
     return decision
-
-
-def _observed_display(definition, code):
-    """Наблюдённый display кода на момент решения — только для аудита."""
-    if definition is None:
-        return None
-    from models import MarketplaceAttributeValue
-    from services.ozon_compliance_defaults import dictionary_code
-
-    for row in MarketplaceAttributeValue.query.filter_by(
-        attribute_id=definition.id, is_available=True,
-    ).all():
-        if dictionary_code(row.value) == code:
-            return row.value[:500]
-    return None
 
 
 def list_type_rows() -> list:

@@ -322,6 +322,36 @@ class ActivateRegistryVersionTestCase(_AdminServiceDbTestCase):
 
 
 class SaveDecisionPersistenceTestCase(_AdminServiceDbTestCase):
+    @staticmethod
+    def _decision_snapshot(decision):
+        return (
+            decision.id,
+            decision.status,
+            decision.tnved_code,
+            decision.tnved_display,
+            decision.decided_by_user_id,
+            decision.decided_at,
+            decision.rationale,
+            decision.dictionary_version,
+            decision.dictionary_hash,
+            decision.version,
+        )
+
+    def _assert_existing_active_unchanged(self, product_type, before):
+        from models import OzonComplianceDefault
+
+        active = OzonComplianceDefault.query.filter_by(
+            product_type_id=product_type.id, status="active",
+        ).all()
+        self.assertEqual(len(active), 1)
+        self.assertEqual(self._decision_snapshot(active[0]), before)
+        self.assertEqual(
+            OzonComplianceDefault.query.filter_by(
+                product_type_id=product_type.id,
+            ).count(),
+            1,
+        )
+
     def test_replacing_active_decision_retires_old_and_activates_new(self):
         from models import OzonComplianceDefault
         from services.ozon_compliance_admin import save_decision
@@ -401,6 +431,70 @@ class SaveDecisionPersistenceTestCase(_AdminServiceDbTestCase):
             0,
         )
 
+    def test_missing_code_rejection_preserves_existing_active_decision(self):
+        from models import OzonComplianceDefault
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            save_decision,
+        )
+
+        product_type = self._make_product_type("1612")
+        self._make_draft(product_type.id, "offer-4")
+        self._make_tnved_dictionary(
+            product_type, ["6402990000", "3307900008"],
+        )
+        old = save_decision(
+            product_type_id=product_type.id,
+            tnved_code="6402990000",
+            rationale="Существующее решение",
+            user_id=self.user_id,
+        )
+        before = self._decision_snapshot(old)
+
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            save_decision(
+                product_type_id=product_type.id,
+                tnved_code="9999999999",
+                rationale="Код отсутствует",
+                user_id=self.user_id,
+            )
+
+        self.assertIn("не найден", str(ctx.exception))
+        self._assert_existing_active_unchanged(product_type, before)
+
+    def test_stale_dictionary_rejection_preserves_existing_active_decision(self):
+        from models import db
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            save_decision,
+        )
+
+        product_type = self._make_product_type("1613")
+        self._make_draft(product_type.id, "offer-5")
+        definition = self._make_tnved_dictionary(
+            product_type, ["6402990000", "3307900008"],
+        )
+        old = save_decision(
+            product_type_id=product_type.id,
+            tnved_code="6402990000",
+            rationale="Существующее решение",
+            user_id=self.user_id,
+        )
+        before = self._decision_snapshot(old)
+        definition.values_synced_at = datetime(2000, 1, 1)
+        db.session.commit()
+
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            save_decision(
+                product_type_id=product_type.id,
+                tnved_code="3307900008",
+                rationale="Словарь устарел",
+                user_id=self.user_id,
+            )
+
+        self.assertIn("синхронизации", str(ctx.exception))
+        self._assert_existing_active_unchanged(product_type, before)
+
     def test_stale_or_missing_dictionary_blocks_save_with_sync_message(self):
         """Critical (ревью Task 7): без свежего словаря (или вовсе без
         определения атрибута ТН ВЭД у типа) решение нельзя ни подтвердить,
@@ -429,6 +523,7 @@ class SaveDecisionPersistenceTestCase(_AdminServiceDbTestCase):
         self.assertIn("синхрон", message.lower())
 
     def test_valid_code_in_fresh_dictionary_is_accepted(self):
+        from services.ozon_compliance_defaults import resolve_tnved
         from services.ozon_compliance_admin import save_decision
 
         product_type = self._make_product_type("1611")
@@ -445,6 +540,98 @@ class SaveDecisionPersistenceTestCase(_AdminServiceDbTestCase):
         )
         self.assertEqual(decision.tnved_code, "3307900008")
         self.assertEqual(decision.status, "active")
+        resolved = resolve_tnved(product_type.id)
+        self.assertEqual(resolved["code"], "3307900008")
+        self.assertEqual(resolved["external_value_id"], "1001")
+
+    def test_ambiguous_code_is_rejected_before_replacing_active_decision(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            save_decision,
+        )
+
+        product_type = self._make_product_type("1614")
+        self._make_draft(product_type.id, "offer-6")
+        self._make_tnved_dictionary(
+            product_type,
+            ["6402990000", "3307900008", "3307900008"],
+        )
+        old = save_decision(
+            product_type_id=product_type.id,
+            tnved_code="6402990000",
+            rationale="Существующее решение",
+            user_id=self.user_id,
+        )
+        before = self._decision_snapshot(old)
+
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            save_decision(
+                product_type_id=product_type.id,
+                tnved_code="3307900008",
+                rationale="Код встречается несколько раз",
+                user_id=self.user_id,
+            )
+
+        message = str(ctx.exception).lower()
+        self.assertIn("неоднозначен", message)
+        self.assertIn("несколько", message)
+        self.assertIn("карточки", message)
+        self._assert_existing_active_unchanged(product_type, before)
+
+    def test_type_restriction_narrowing_duplicate_code_resolves_exact_value(self):
+        from services.ozon_compliance_admin import save_decision
+        from services.ozon_compliance_defaults import resolve_tnved
+
+        product_type = self._make_product_type("1615")
+        self._make_draft(product_type.id, "offer-7")
+        self._make_tnved_dictionary(
+            product_type,
+            ["3307900008", "3307900008"],
+            restriction=["1002"],
+        )
+
+        decision = save_decision(
+            product_type_id=product_type.id,
+            tnved_code="3307900008",
+            rationale="Точное значение разрешено ограничением типа",
+            user_id=self.user_id,
+        )
+        resolved = resolve_tnved(product_type.id)
+
+        self.assertEqual(decision.tnved_display, "3307900008 - Описание 3307900008")
+        self.assertEqual(resolved["external_value_id"], "1002")
+
+    def test_type_restriction_excluding_duplicate_codes_preserves_active_decision(self):
+        from services.ozon_compliance_admin import (
+            OzonComplianceAdminError,
+            save_decision,
+        )
+
+        product_type = self._make_product_type("1616")
+        self._make_draft(product_type.id, "offer-8")
+        self._make_tnved_dictionary(
+            product_type,
+            ["6402990000", "3307900008", "3307900008"],
+            restriction=["1001"],
+        )
+        old = save_decision(
+            product_type_id=product_type.id,
+            tnved_code="6402990000",
+            rationale="Существующее разрешённое решение",
+            user_id=self.user_id,
+        )
+        before = self._decision_snapshot(old)
+
+        with self.assertRaises(OzonComplianceAdminError) as ctx:
+            save_decision(
+                product_type_id=product_type.id,
+                tnved_code="3307900008",
+                rationale="Код исключён restriction",
+                user_id=self.user_id,
+            )
+
+        self.assertIn("не найден", str(ctx.exception))
+        self._assert_existing_active_unchanged(product_type, before)
 
 
 class ListTypeRowsTestCase(_AdminServiceDbTestCase):
