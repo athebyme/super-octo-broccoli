@@ -1,0 +1,15 @@
+{
+  "database_writes": 0,
+  "exact_identity_verified": true,
+  "key_persisted": false,
+  "legal_classification_inferred": false,
+  "normal_client_zero_retries": true,
+  "physical_request_attempts": 1,
+  "provider_writes": 0,
+  "read_completed_at_utc": "2026-10-02T04:07:03.740906+00:00",
+  "read_started_at_utc": "2026-10-02T04:07:03.450560+00:00",
+  "schema": "root-fresh-wb-source-r4b",
+  "scope": "one root-selected exact own WB card; normalclient read only",
+  "selected_tnved_observed": true,
+  "status": "passed"
+}

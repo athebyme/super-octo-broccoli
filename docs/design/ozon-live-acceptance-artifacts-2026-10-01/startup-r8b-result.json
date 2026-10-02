@@ -1,0 +1,19 @@
+{
+  "counts_and_receipts_unchanged": true,
+  "database_requires_manual_review": false,
+  "domain_table_count": 7,
+  "earlier_attempt": "stopped at host_preflight before DB/startup because report output directory already existed; corrected with unique new directory",
+  "first_and_repeat_noop": true,
+  "network_none": true,
+  "provider_attempts": 0,
+  "provider_credentials_passed": false,
+  "receipt_count": 81,
+  "runtime_image": "sha256:ddb316f8b3966f26ff727f24034b5f8f13d25ea7cf9704268c61e84a6835107a",
+  "scheduler_disabled": true,
+  "schema": "root-startup-r8b-public-receipt",
+  "source_file_count": 1245,
+  "source_head": "ccb026dac065baa78933a1ca8ab566c7dbb3b115",
+  "source_manifest": "8e50d4a0441ceef36b3c08258a142bc516c1891f968a75cc07044ebe43fd5983",
+  "startup_started": true,
+  "status": "passed"
+}

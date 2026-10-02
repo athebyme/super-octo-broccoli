@@ -1,0 +1,18 @@
+{
+  "actual_database_scope": "current production database through read-only nested named volume mount",
+  "aggregate_result_codes": {
+    "native_local_pass_cached_tnved_unconfirmed": 1
+  },
+  "all_seven_proposed_blocks_verified": true,
+  "candidate_count": 1,
+  "credentials_decrypted": false,
+  "database_writes": 0,
+  "exact_current_wb_evidence_bound": true,
+  "manual_choice": "explicit existing current provider row; one candidate; no automatic ambiguous default",
+  "native_validation_zero_errors": true,
+  "provider_calls": 0,
+  "provider_network": "none",
+  "saved_draft_mutated": false,
+  "schema": "root-current-production-native-r3b",
+  "status": "passed"
+}

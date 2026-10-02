@@ -1,0 +1,20 @@
+{
+  "schema": "ozon-live-r8-root-deployment-observation-v1",
+  "observed_at_utc": "2026-10-02T04:56:54.246142+00:00",
+  "source_head": "ccb026dac065baa78933a1ca8ab566c7dbb3b115",
+  "runtime_image": "sha256:ddb316f8b3966f26ff727f24034b5f8f13d25ea7cf9704268c61e84a6835107a",
+  "started_at_utc": "2026-10-02T04:01:59.370709869Z",
+  "healthy": true,
+  "restart_count": 0,
+  "guarded_cutover_completed": true,
+  "cutover_completion_evidence": "Root command session 39820 completed exit 0 and reported cutover_restarted_guarded; runtime was inspected afterwards.",
+  "cutover_plan_sha256": "9190907774792e1b719a762a531a68355a967c28dc4f2b763b2f2fcf305e8d06",
+  "guarded_cutover_helper_sha256": "66c036391315fde7b1968dafa6b7b50888db67f207d12f58d02eb0ff71f4f767",
+  "environment_matches_reviewed_overlay": true,
+  "manual_publication_enabled": true,
+  "auto_publication_enabled": false,
+  "source_compose_sha256": "06e9c77c56f5b1efdb1a41e122f7c729f8108af7ef254a088c9a3178e4d3ebf5",
+  "caddyfile_sha256": "46aa5b129995d5d431d9f0780d51d18e70f84ff1422944fc95f70f38358909f3",
+  "deploy_safety_sha256": "fc4c6f86e2aa2eaabbee1b3f018f91b9c4e91199ae10d002913293ebe41bcdb2",
+  "previous_image_retained": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96"
+}

@@ -1,0 +1,30 @@
+{
+  "account_key_changed": false,
+  "adapter_handoff_attempts": 1,
+  "completed_at_utc": "2026-10-02T03:39:13Z",
+  "confirmed_http_responses": 1,
+  "database_writes": 0,
+  "http_status": 200,
+  "import_grant_is_permission_only": true,
+  "method_grants": {
+    "/v1/product/import/info": true,
+    "/v2/product/pictures/info": true,
+    "/v3/product/import": true,
+    "/v3/product/info/list": true,
+    "/v3/product/list": true,
+    "/v4/product/info/attributes": true,
+    "/v5/product/info/prices": true
+  },
+  "outcome": "response_received",
+  "phase": "roles",
+  "product_import_grant_present": true,
+  "provider_writes": 0,
+  "raw_provider_body_saved": false,
+  "redirect_response_received": false,
+  "required_read_grants_all_exactly_present": true,
+  "role_response_parse_complete": true,
+  "schema": "ozon-saved-operational-key-roles-r1",
+  "scope": "one own active saved Ozon account; decrypted key memory only",
+  "started_at_utc": "2026-10-02T03:39:13Z",
+  "transport_policy_violation": false
+}

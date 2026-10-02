@@ -1,0 +1,79 @@
+{
+  "adapter_handoff_attempts": 5,
+  "calls": [
+    {
+      "adapter_handoff_attempts": 1,
+      "confirmed_http_responses": 1,
+      "endpoint": "product_list",
+      "http_status": 200,
+      "outcome": "response_received",
+      "path": "/v3/product/list"
+    },
+    {
+      "adapter_handoff_attempts": 1,
+      "confirmed_http_responses": 1,
+      "endpoint": "product_info_list",
+      "http_status": 200,
+      "outcome": "response_received",
+      "path": "/v3/product/info/list"
+    },
+    {
+      "adapter_handoff_attempts": 1,
+      "confirmed_http_responses": 1,
+      "endpoint": "product_attributes",
+      "http_status": 200,
+      "outcome": "response_received",
+      "path": "/v4/product/info/attributes"
+    },
+    {
+      "adapter_handoff_attempts": 1,
+      "confirmed_http_responses": 1,
+      "endpoint": "product_prices",
+      "http_status": 200,
+      "outcome": "response_received",
+      "path": "/v5/product/info/prices"
+    },
+    {
+      "adapter_handoff_attempts": 1,
+      "confirmed_http_responses": 1,
+      "endpoint": "product_pictures_info",
+      "http_status": 200,
+      "outcome": "response_received",
+      "path": "/v2/product/pictures/info"
+    }
+  ],
+  "comparison": {
+    "all_seven_blocks_equal": true,
+    "block_equal": {
+      "attributes": true,
+      "barcodes": true,
+      "commercial": true,
+      "complex_attributes": true,
+      "content": true,
+      "dimensions": true,
+      "media": true
+    },
+    "fingerprint_equal": true
+  },
+  "confirmed_http_responses": 5,
+  "database_writes": 0,
+  "full_typed_documents_private_only": true,
+  "outcome": "complete",
+  "phase": "current_identity_and_full_state",
+  "preflight": {
+    "active_connected_account": true,
+    "active_marketplace_and_type_refs": true,
+    "credential_expiry_valid": true,
+    "current_baseline_loaded_before_provider_io": true,
+    "current_exact_owned_listing": true,
+    "fresh_listing_and_reference_snapshots": true,
+    "roles_reviewed": true,
+    "source_link_unique_for_account": true
+  },
+  "provider_response_bodies_persisted": false,
+  "provider_writes": 0,
+  "raw_provider_body_saved": false,
+  "schema": "ozon-saved-current-state-r1",
+  "scope": "one exact owned existing available Ozon listing; saved operational key; five bounded reads",
+  "transport_policy_violation": false
+}

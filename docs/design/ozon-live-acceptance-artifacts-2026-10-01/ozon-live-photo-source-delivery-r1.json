@@ -1,0 +1,62 @@
+{
+  "result": "passed",
+  "photo_slots": 2,
+  "network_get_count": 4,
+  "writes": 0,
+  "raw_images_persisted": false,
+  "source_normalized_bytes_equal_delivered_asset": true,
+  "provider_stored_url_matches_asset_url": true,
+  "ozon_storefront_rendering_tested": false,
+  "slots": [
+    {
+      "asset_signature_and_local_file_sha_verified": true,
+      "decoded_dimensions": [
+        800,
+        1200
+      ],
+      "checks": [
+        {
+          "kind": "source",
+          "http_status": 200,
+          "single_attempt": true,
+          "redirect_followed": false,
+          "bytes_count": 87499,
+          "matches_existing_asset": true
+        },
+        {
+          "kind": "delivery",
+          "http_status": 200,
+          "single_attempt": true,
+          "redirect_followed": false,
+          "bytes_count": 95246,
+          "matches_existing_asset": true
+        }
+      ]
+    },
+    {
+      "asset_signature_and_local_file_sha_verified": true,
+      "decoded_dimensions": [
+        771,
+        1200
+      ],
+      "checks": [
+        {
+          "kind": "source",
+          "http_status": 200,
+          "single_attempt": true,
+          "redirect_followed": false,
+          "bytes_count": 54592,
+          "matches_existing_asset": true
+        },
+        {
+          "kind": "delivery",
+          "http_status": 200,
+          "single_attempt": true,
+          "redirect_followed": false,
+          "bytes_count": 58274,
+          "matches_existing_asset": true
+        }
+      ]
+    }
+  ]
+}
