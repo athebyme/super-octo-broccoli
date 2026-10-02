@@ -59,6 +59,7 @@ REPORT = {
     "database": "disposable_sqlite",
     "network_policy": "loopback_and_hash_pinned_assets_only",
     "layouts": [],
+    "footer_mobile_layouts": [],
     "overflow_diagnostics": [],
     "checks": [],
     "interactions": [],
@@ -506,6 +507,102 @@ def check(name: str, **details) -> None:
 
 def interaction(name: str, **details) -> None:
     REPORT["interactions"].append({"name": name, **details})
+
+
+def assert_bulk_editor_mobile_footer(
+    page, expected_return_query: dict[str, list[str]],
+) -> None:
+    """Check the sticky action bar at narrow widths and its exact return path."""
+    page.locator('input[name="operation"][value="update_brand"]').check()
+    footer = page.locator('form[action="/products/bulk-edit"] > div.sticky.bottom-0')
+    footer.wait_for(state="visible")
+    cancel_link = footer.get_by_role("link", name="Отмена", exact=True)
+    return_to = page.locator('form[action="/products/bulk-edit"] input[name="return_to"]')
+    expected_return = return_to.input_value()
+    assert cancel_link.get_attribute("href") == expected_return
+    _assert_local_products_href(expected_return, expected_return_query)
+
+    submit_label = footer.locator('button[type="submit"] span[x-text="submitLabel"]')
+    original_label = submit_label.inner_text()
+    long_label = (
+        "Сформировать проверку, сверить выбранные изменения и продолжить "
+        "для всех пятидесяти выбранных товаров"
+    )
+    submit_label.evaluate("(element, text) => { element.textContent = text; }", long_label)
+
+    for theme in ("light", "dark"):
+        page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
+        for width in (320, 360, 390):
+            page.set_viewport_size({"width": width, "height": 844})
+            wait_for_layout_settle(page, width=width, theme=theme)
+            measurement = page.evaluate("""() => {
+                const footer=document.querySelector('form[action="/products/bulk-edit"] > div.sticky.bottom-0');
+                const row=footer?.firstElementChild;
+                const actions=row?.lastElementChild;
+                const cancel=footer?.querySelector('a');
+                const button=footer?.querySelector('button[type="submit"]');
+                const label=button?.querySelector('[x-text="submitLabel"]');
+                const rect=element => {
+                    if(!element)return null;
+                    const box=element.getBoundingClientRect();
+                    return {left:box.left,right:box.right,width:box.width,height:box.height};
+                };
+                return {
+                    viewport_width:window.innerWidth,
+                    document_width:document.documentElement.scrollWidth,
+                    body_width:document.body.scrollWidth,
+                    footer:rect(footer),
+                    cancel:rect(cancel),
+                    submit:rect(button),
+                    actions_direction:actions ? getComputedStyle(actions).flexDirection : null,
+                    footer_row_direction:row ? getComputedStyle(row).flexDirection : null,
+                    label_wraps_without_overflow:!!label && label.clientWidth > 0
+                        && label.scrollWidth <= label.clientWidth + 1,
+                };
+            }""")
+            footer_box = measurement["footer"] or {}
+            cancel_box = measurement["cancel"] or {}
+            submit_box = measurement["submit"] or {}
+            assert measurement["viewport_width"] == width, measurement
+            assert measurement["document_width"] <= width and measurement["body_width"] <= width, measurement
+            assert footer_box.get("left", -1) >= -0.75 and footer_box.get("right", width + 1) <= width + 0.75, measurement
+            assert measurement["footer_row_direction"] == "column", measurement
+            assert measurement["actions_direction"] == "column", measurement
+            assert cancel_box.get("width", 0) >= 44 and cancel_box.get("height", 0) >= 44, measurement
+            assert submit_box.get("width", 0) >= 44 and submit_box.get("height", 0) >= 44, measurement
+            assert cancel_box.get("left", -1) >= -0.75 and cancel_box.get("right", width + 1) <= width + 0.75, measurement
+            assert submit_box.get("left", -1) >= -0.75 and submit_box.get("right", width + 1) <= width + 0.75, measurement
+            assert measurement["label_wraps_without_overflow"] is True, measurement
+            REPORT["footer_mobile_layouts"].append({
+                "theme": theme,
+                "viewport_width": width,
+                "document_width": measurement["document_width"],
+                "controls_in_viewport": True,
+                "touch_targets_at_least_44px": True,
+                "long_label_fits": True,
+                "layout_direction": measurement["footer_row_direction"],
+            })
+
+    submit_label.evaluate("(element, text) => { element.textContent = text; }", original_label)
+    page.evaluate("document.documentElement.setAttribute('data-theme', 'light')")
+    page.set_viewport_size({"width": 1280, "height": 900})
+    wait_for_layout_settle(page, width=1280, theme="light")
+    with page.expect_navigation(wait_until="domcontentloaded"):
+        cancel_link.click()
+    _assert_local_products_url(page.url, expected_return_query)
+    assert page.locator("#selectedCount").inner_text().strip() == "50"
+    assert page.locator('select[name="sort"]').input_value() == "title"
+    interaction("sticky_cancel_restores_exact_filter_sort_page_selection")
+    check(
+        "sticky_footer_mobile_long_label_and_exact_cancel_return",
+        widths=[320, 360, 390],
+        themes=["light", "dark"],
+        layouts=len(REPORT["footer_mobile_layouts"]),
+        minimum_touch_target_px=44,
+        exact_return_context=True,
+    )
+    page.get_by_role("button", name="Редактировать", exact=True).click()
+    page.wait_for_url("**/products/bulk-edit")
 
 
 def wait_for_layout_settle(page, *, width: int, theme: str) -> dict:
@@ -1126,6 +1223,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 "page": ["2"], "per_page": ["50"],
             }
             _assert_local_products_href(return_href, expected_return_query)
+            assert_bulk_editor_mobile_footer(page, expected_return_query)
             assert REPORT["fake_wb_client_instances"] == 0
             capture_layout(page, "bulk_editor")
             interaction("bulk_editor_names_wb_account_channel_and_safe_return_context")
@@ -1519,6 +1617,18 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             }
             assert len(REPORT["layouts"]) == 30 and actual_layouts == expected_layouts, (
                 f"Expected all 30 page/theme/viewport rows, got {len(REPORT['layouts'])}"
+            )
+            expected_footer_layouts = {
+                (theme, width)
+                for theme in ("light", "dark")
+                for width in (320, 360, 390)
+            }
+            actual_footer_layouts = {
+                (row.get("theme"), row.get("viewport_width"))
+                for row in REPORT["footer_mobile_layouts"]
+            }
+            assert len(REPORT["footer_mobile_layouts"]) == 6 and actual_footer_layouts == expected_footer_layouts, (
+                "Expected six sticky-footer rows for 320/360/390px in both themes"
             )
             expected_screenshots = {
                 (page_name, theme, width)
