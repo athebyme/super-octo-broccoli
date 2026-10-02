@@ -1,0 +1,18 @@
+{
+  "schema": "ozon-compliance-ambiguity-focused-tests-v1",
+  "source_commit": "9516745a69e226e893fc14be3ed7fc5d9338a026",
+  "scope": [
+    "tests/test_ozon_compliance_admin.py",
+    "tests/test_ozon_compliance_defaults.py"
+  ],
+  "root_ran": true,
+  "passed": 117,
+  "failed": 0,
+  "warnings": 65,
+  "warning_kind": "existing SQLAlchemy LegacyAPIWarning",
+  "elapsed_seconds": 13.63,
+  "provider_calls": 0,
+  "production_database_used": false,
+  "deployed": false,
+  "acceptance": "Ambiguous current restricted TNVED provider rows are rejected before retirement or mutation of the prior active decision. An explicitly selected manual card dictionary row remains a separate contract."
+}

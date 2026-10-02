@@ -1,0 +1,50 @@
+{
+  "schema": "fresh-own-wb-source-result-v1",
+  "runtime_image": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96",
+  "helper_sha256": "3ec4c01b5fe6071065d4b13c84b944a0ceabac215cca4b2094799d6c4af16081",
+  "offline_tests_passed": 20,
+  "status": "passed_source_observation_only",
+  "read_started_at_utc": "2026-10-02T02:32:46.605747+00:00",
+  "read_completed_at_utc": "2026-10-02T02:32:47.645877+00:00",
+  "physical_wb_card_read_attempts": 1,
+  "http_status": 200,
+  "redirects": 0,
+  "retries": 0,
+  "exact_owned_fk_nm_subject_vendor_identity_confirmed": true,
+  "source_tnved_present": true,
+  "fresh_tnved_matches_selected_cached_literal": true,
+  "dimensions_observed": true,
+  "imported_cached_subject_matches_current_wb_subject": false,
+  "stored_source_classification_modified": false,
+  "global_catalog_fingerprint_available": false,
+  "current_category_schema_fingerprint_available": true,
+  "wb_tnved_directory": {
+    "status": "listed",
+    "allowed": true,
+    "is_kiz": true
+  },
+  "card_need_kiz": false,
+  "card_kiz_marked": false,
+  "database_writes": 0,
+  "provider_writes": 0,
+  "ozon_publications": 0,
+  "limitations": [
+    "WB marking fields and directory metadata are distinct observations; no Ozon/legal marking conclusion is inferred.",
+    "Global WB taxonomy hash is not written by the existing WB sync and is optional metadata; exact selected category schema freshness/hash/version remain required.",
+    "One own card was read; this is not proof for other candidates.",
+    "Credentials stayed in runtime memory; IDs, code, dimensions and minimized source details are private.",
+    "Separate-process WB limiter does not coordinate with web-process limiter."
+  ],
+  "preflight_attempts": [
+    {
+      "helper": "r2",
+      "reason": "selected_source_link_mismatch",
+      "physical_provider_attempts": 0
+    },
+    {
+      "helper": "r3",
+      "reason": "wb_category_catalog_fingerprint_missing",
+      "physical_provider_attempts": 0
+    }
+  ]
+}

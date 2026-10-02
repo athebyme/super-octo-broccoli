@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-01T23:28:13.380535+00:00",
+  "generated_at": "2026-10-02T03:34:41.321576+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -31,7 +31,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "26a5bbe524e3353a92cfa17ba70f9f0f490820a08c8b9c273ee1ba6e9d9c9a02"
+      "sha256": "b8fb61f39a7c93e5da0c9b3cdd39e92fd58a12b655e7dc7a95d408c6959bee46"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -1367,7 +1367,7 @@
     },
     {
       "path": "routes/marketplace_drafts.py",
-      "sha256": "48d3d4dc1e7adbe2c2258bf11bccff3fb52641e765465ef514001b6207094fd7"
+      "sha256": "67d0b7f0cadafea20e74c8f6a612fb39072c9fc6862750e57aaada92790dbfd7"
     },
     {
       "path": "routes/marketplace_finance.py",
@@ -1987,7 +1987,7 @@
     },
     {
       "path": "services/marketplace_drafts.py",
-      "sha256": "0409a9342e7cd9b73c68a07803354d347ebcc7d5d8830a9525c4ddaa305fb7df"
+      "sha256": "9cc3ede959c2d0f71b0774f2555fca07fdac898d53d0a077d868c473d4409bab"
     },
     {
       "path": "services/marketplace_fact_pack.py",
@@ -2059,7 +2059,7 @@
     },
     {
       "path": "services/marketplace_product_links.py",
-      "sha256": "c04b931eed26d099a5b43b3d225dbbc6d8226819dd911c93c874ddbccfcb49b3"
+      "sha256": "c4e6f87e91f14329080b1951a655d860c0f50de6fed1ae3420ac1efc677dc7f7"
     },
     {
       "path": "services/marketplace_publications.py",
@@ -2163,7 +2163,7 @@
     },
     {
       "path": "services/ozon_compliance_admin.py",
-      "sha256": "437fafb75c354c470fa488e0d4f3fea9b74f816f9eacb89bb1fee1e58748250c"
+      "sha256": "ff1ea0a04700a8a0a3c5098d2af81b649db9e8a8a9a740c7a41d83cc57efa700"
     },
     {
       "path": "services/ozon_compliance_defaults.py",
@@ -3391,7 +3391,7 @@
     },
     {
       "path": "templates/products_bulk_edit.html",
-      "sha256": "7c4e564abb937953d02efe5ad5da3dca37e68f031fed4900f681f81152781eb6"
+      "sha256": "f39cf43db77200f3f0f03f9b5af66c1c0f7437ba13907c7b935572be5dca452e"
     },
     {
       "path": "templates/products_bulk_edit_review.html",
@@ -4139,11 +4139,11 @@
     },
     {
       "path": "tests/test_marketplace_draft_routes.py",
-      "sha256": "225e3b91bf79a18ece120272770ee5c889b2fa3cfb5951fda4700304ec873d2b"
+      "sha256": "2ac439ef61b4f9beb699c05bc471f2e6c22a369ca986c0989d929b5aa373e1a5"
     },
     {
       "path": "tests/test_marketplace_drafts.py",
-      "sha256": "da16a448cd8fa531617e9e8b9140df87c21211679772a56acf096367091fd626"
+      "sha256": "b1108f2245e460de0bbaff1564fc6e51f86283c2f354666a6cc5791d88658b41"
     },
     {
       "path": "tests/test_marketplace_drafts_migration.py",
@@ -4243,7 +4243,7 @@
     },
     {
       "path": "tests/test_marketplace_product_links.py",
-      "sha256": "9b6156104c744b56f92365b107f80d28786afea302012a8d8c51f717dccd1f20"
+      "sha256": "44bdf57a3c327fdc77c0d48e850ca66a19bad8b602892cd5c060be822a4bdfcd"
     },
     {
       "path": "tests/test_marketplace_product_links_migration.py",
@@ -4399,7 +4399,7 @@
     },
     {
       "path": "tests/test_ozon_compliance_admin.py",
-      "sha256": "57dcb52dd2ab71549990b003711ca4cf10da63dcffb293d122ef4f19c94cfabe"
+      "sha256": "972125c014409c4f45a78dcd5f4b17112d2131f9534e2399317051b52aff7516"
     },
     {
       "path": "tests/test_ozon_compliance_admin_routes.py",
@@ -4991,7 +4991,7 @@
     },
     {
       "path": "tests/ux01/wb_edit_browser.py",
-      "sha256": "0e50c4e0044147ed0aa1ba71bb8953dc1234478e2c707ba27c5a890d8773ca48"
+      "sha256": "7402a5bc0c0f52d3d2b76dee15822896a5fd53a5531ea556818f5fd4ba0bba0d"
     },
     {
       "path": "tests/ux01/wb_product_selection_dom.js",
@@ -5002,5 +5002,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "0213b188317bab8e671d773acfc12d979db7aecd9a66e1ed558f9b8092fbb47e"
+  "aggregate_sha256": "8e50d4a0441ceef36b3c08258a142bc516c1891f968a75cc07044ebe43fd5983"
 }

@@ -1,0 +1,51 @@
+{
+  "schema": "ozon-explicit-manual-native-acceptance-v1",
+  "helper_revision": "r3",
+  "helper_sha256": "fc7bd71f7cf0391861d25009db58fe622ef75a05e83cfb8ba894b51403e1030a",
+  "root_offline_tests_passed": 12,
+  "actual_candidate_count": 1,
+  "scope": "isolated restored database with network none, read-only app and database, bounded private tmpfs",
+  "fresh_exact_owned_wb_card_confirmed": true,
+  "cached_imported_subject_matches_current_product": false,
+  "cached_taxonomy_changed": false,
+  "wb_tnved_required": false,
+  "ozon_requiredness_checked_independently": true,
+  "manual_current_dictionary_pair_proven": true,
+  "pair_difference": "one terminal ASCII period in the full provider display",
+  "manual_selection": "one explicitly selected existing provider row; no automatic default",
+  "type_dictionary_exact_value_confirmed": true,
+  "native_validation": {
+    "error_codes": {},
+    "error_fields": [],
+    "publishable": true,
+    "valid_result": true
+  },
+  "baseline_seven_blocks_semantically_equal": true,
+  "canonical_baseline_matches": true,
+  "changed_document_blocks": [
+    "attributes"
+  ],
+  "simple_attribute_count_before": 24,
+  "simple_attribute_count_after": 26,
+  "proposed_projection_seven_blocks_equal": true,
+  "proposed_canonical_payload_matches": true,
+  "guards": {
+    "credentials_decrypted": false,
+    "draft_persisted": false,
+    "llm_calls": 0,
+    "network_calls": 0,
+    "provider_calls": 0,
+    "saved_draft_mutated": false,
+    "source_links_reconciled": false,
+    "sqlalchemy_before_flush_denied": true,
+    "sqlite_query_only": true,
+    "sqlite_uri_mode_ro": true,
+    "sqlite_write_authorizer": true
+  },
+  "provider_publication": "not performed",
+  "prior_diagnostic_limits": [
+    "r2 stopped before DB due to an incorrect assumption that the WB field was required",
+    "first r3 run had no writable temp directory and stopped before database validation; unchanged helper passed with a bounded private tmpfs"
+  ],
+  "legal_classification_inferred": false
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "bounded-dictionary-native-result-v1",
+  "runtime_source_commit": "1babee1ae5daa142db23eb51481b4a2b9db75110",
+  "runtime_image": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96",
+  "helper_sha256": "5b45e3185f8f228c040443c1e481230e5d30cddba279ad19b66fdcede90f619d",
+  "offline_tests_passed": 19,
+  "candidate_count": 2,
+  "scope": "two owned selected linked listings on separately restored database",
+  "result_codes": {
+    "one_or_more_exact_current_dictionary_proofs_unavailable": 2
+  },
+  "baseline_all_seven_blocks_preserved": true,
+  "simple_attribute_row_order_only_ignored": true,
+  "ordered_attribute_values_and_multiplicity_preserved": true,
+  "type_name_unique_current_dictionary_matches": 2,
+  "tnved_unique_matches": 0,
+  "tnved_ambiguous_matches": 2,
+  "cached_dictionary_complete": true,
+  "available_dictionary_rows_per_checked_candidate": 169,
+  "database_writes": 0,
+  "provider_calls": 0,
+  "credentials_decrypted": false,
+  "drafts_persisted": 0,
+  "limitation": "Code-to-ID automatic proof remains ambiguous; this does not reject the separate normal explicit manual dictionary-ID contract. Cached source values are not live WB observations."
+}

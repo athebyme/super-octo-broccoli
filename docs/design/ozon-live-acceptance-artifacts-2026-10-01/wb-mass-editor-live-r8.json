@@ -1,0 +1,241 @@
+{
+  "status": "blocked",
+  "reason": "mobile_horizontal_overflow",
+  "diagnostic": {
+    "phase": "category_fields_ui",
+    "failure_type": "AcceptanceGate",
+    "phase_status": {
+      "login": 200,
+      "dashboard": 200,
+      "products": 200,
+      "editor": 200,
+      "schema": 200
+    },
+    "policy_counts": {
+      "requests": 131,
+      "allowed_local_gets": 20,
+      "allowed_local_posts": 4,
+      "allowed_external_static_gets": 33,
+      "known_mutating_gets_blocked": 1,
+      "photo_gets_blocked": 0,
+      "external_nonstatic_blocked": 64,
+      "unexpected_local_gets_blocked": 9,
+      "unexpected_posts_blocked": 0,
+      "other_methods_blocked": 0,
+      "wb_provider_hosts_blocked": 0,
+      "resolver_posts": 2
+    },
+    "resolver_modes": [
+      "all_filtered",
+      "ids"
+    ],
+    "selection": {
+      "response_status": 200,
+      "body_ready": true,
+      "payload_valid": true,
+      "id_count": 32,
+      "token_present": true,
+      "ui_selected_count": true
+    },
+    "bulk_editor_posts": 1,
+    "schema_posts": 1,
+    "schema": {
+      "http_status": 200,
+      "body_ready": true,
+      "cached_local_aggregate": {
+        "cached_local_schema": true,
+        "provider_io": false,
+        "category_group_count": 1,
+        "characteristic_count": 32,
+        "required_count": 0,
+        "usable_count": 29,
+        "unusable_count": 3,
+        "fields_rendered": true
+      },
+      "schema_post_count": 1
+    },
+    "ui": {
+      "state_present": true,
+      "model_present": true,
+      "operation_enum": "update_characteristic",
+      "selected_category_matches_target": true,
+      "category_group_count": 1,
+      "load_error_present": false,
+      "loading": false,
+      "pending_change_count": 0,
+      "model_field_count": 32,
+      "required_field_count": 0,
+      "usable_field_count": 29,
+      "unusable_field_count": 3,
+      "document_form_count": 1,
+      "document_xshow_count": 92,
+      "form_xshow_count": 42,
+      "document_target_section_count": 2,
+      "form_target_section_count": 2,
+      "document_field_select_count": 1,
+      "form_field_select_count": 1,
+      "target_field_select_count": 1,
+      "target_heading_count": 1,
+      "target_sections_with_controls_count": 1,
+      "target_section_select_counts": [
+        0,
+        1
+      ],
+      "target_section_heading_counts": [
+        0,
+        1
+      ],
+      "field_select_present": true,
+      "field_select_enabled": true,
+      "category_panel_visible": true,
+      "rendered_field_option_count": 32,
+      "rendered_enabled_field_option_count": 29,
+      "focus_control": "update_characteristic",
+      "focus_visible": true,
+      "viewport_width": 390,
+      "document_scroll_width": 398,
+      "mobile_horizontal_overflow": true,
+      "overflowing_element_count": 107,
+      "max_left_overflow_px": 259,
+      "max_right_overflow_px": 7,
+      "widest_element": {
+        "tag": "div",
+        "role": "editor-form-descendant",
+        "ancestor_tags": [
+          "div",
+          "form",
+          "div",
+          "main",
+          "div",
+          "body",
+          "html"
+        ],
+        "class_families": [
+          "border",
+          "spacing"
+        ],
+        "width_px": 406
+      },
+      "element_scan_count": 1465,
+      "element_scan_truncated": false,
+      "computed_styles": {
+        "html": {
+          "display": "block",
+          "width": "390px",
+          "box_sizing": "border-box",
+          "margin_top": "0px",
+          "margin_right": "0px",
+          "margin_bottom": "0px",
+          "margin_left": "0px"
+        },
+        "body": {
+          "display": "block",
+          "width": "390px",
+          "box_sizing": "border-box",
+          "margin_top": "0px",
+          "margin_right": "0px",
+          "margin_bottom": "0px",
+          "margin_left": "0px"
+        }
+      },
+      "selector_structure_sha256": "1553517e2f8c4bbb42788b9d3b4dd06c7584bc583852c7fd7e94b0cd7c26d8b0"
+    },
+    "static_asset_loads": {
+      "tailwind_script": {
+        "expected": true,
+        "request_count": 3,
+        "response_count": 3,
+        "loaded_success_count": 0,
+        "redirect_response_count": 3,
+        "http_error_response_count": 0,
+        "non_success_response_count": 3,
+        "request_failed_count": 0
+      },
+      "alpine_collapse_script": {
+        "expected": true,
+        "request_count": 3,
+        "response_count": 3,
+        "loaded_success_count": 3,
+        "redirect_response_count": 0,
+        "http_error_response_count": 0,
+        "non_success_response_count": 0,
+        "request_failed_count": 0
+      },
+      "alpine_focus_script": {
+        "expected": true,
+        "request_count": 3,
+        "response_count": 3,
+        "loaded_success_count": 3,
+        "redirect_response_count": 0,
+        "http_error_response_count": 0,
+        "non_success_response_count": 0,
+        "request_failed_count": 0
+      },
+      "alpine_core_script": {
+        "expected": true,
+        "request_count": 4,
+        "response_count": 4,
+        "loaded_success_count": 4,
+        "redirect_response_count": 0,
+        "http_error_response_count": 0,
+        "non_success_response_count": 0,
+        "request_failed_count": 0
+      },
+      "seller_hub_ui_script": {
+        "expected": true,
+        "request_count": 3,
+        "response_count": 3,
+        "loaded_success_count": 3,
+        "redirect_response_count": 0,
+        "http_error_response_count": 0,
+        "non_success_response_count": 0,
+        "request_failed_count": 0
+      },
+      "google_fonts_stylesheet": {
+        "expected": true,
+        "request_count": 4,
+        "response_count": 4,
+        "loaded_success_count": 4,
+        "redirect_response_count": 0,
+        "http_error_response_count": 0,
+        "non_success_response_count": 0,
+        "request_failed_count": 0
+      },
+      "google_font_files": {
+        "expected": true,
+        "request_count": 16,
+        "response_count": 8,
+        "loaded_success_count": 8,
+        "redirect_response_count": 0,
+        "http_error_response_count": 0,
+        "non_success_response_count": 0,
+        "request_failed_count": 8
+      }
+    },
+    "detail": {
+      "resolver_modes": [
+        "all_filtered",
+        "ids"
+      ],
+      "selection": {
+        "response_status": 200,
+        "id_count": 32,
+        "body_ready": true,
+        "payload_valid": true,
+        "token_present": true,
+        "ui_selected_count": true
+      }
+    }
+  },
+  "schema": "wb-mass-editor-bounded-browser-receipt-v1",
+  "helper_revision": "r8",
+  "helper_sha256": "8881dbf95cf7d69e2909f41c80c19121db6a3b92935c23aac08100690772f4f0",
+  "root_offline_tests_passed": 20,
+  "source_commit": "db4ddfaee1045e07119898bb23abe6ea7d83cf2b",
+  "runtime_image": "sha256:7bfb4e147c75e9c49970ee4427a3280df8ec71cc2fc085b89f8a91ae88522a96",
+  "operator_provider_writes": 0,
+  "card_save_preview_apply_attempted": false,
+  "empty_submit_and_cancel_flow": "not reached after mobile layout failure",
+  "earlier_r7_diagnostic": "controls lookup targeted a decorative x-show section; R8 locates the control-bearing section",
+  "tailwind_resource_limit": "root CDN requests redirected; final version path is outside this telemetry classifier, so the zero root-success count does not prove missing Tailwind"
+}

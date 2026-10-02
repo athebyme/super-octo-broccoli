@@ -1,0 +1,38 @@
+{
+  "schema": "ozon-existing-linked-create-focused-tests-v1",
+  "source_commits": [
+    "40c2f78be78bca2ed7e4ecdd6be03defb10ebe5b",
+    "dadced714cf8fb46b1cb288044a175cdbc10eef2"
+  ],
+  "integrated_commits": [
+    "869583e",
+    "7782718"
+  ],
+  "root_ran": true,
+  "passed": 113,
+  "subtests_passed": 67,
+  "failed": 0,
+  "elapsed_seconds": 65.62,
+  "scope": [
+    "tests/test_marketplace_draft_routes.py",
+    "tests/test_marketplace_drafts.py",
+    "tests/test_marketplace_product_links.py"
+  ],
+  "real_sqlite_races": [
+    "external second-connection link drift with a cached ORM row",
+    "competing BEGIN IMMEDIATE writer"
+  ],
+  "no_mutation_cases": [
+    "malformed or duplicate-key link evidence",
+    "stale source or baseline",
+    "existing draft",
+    "staged reconciliation changes",
+    "exact seller-unlinked sibling",
+    "ambiguous sibling"
+  ],
+  "false_positive_case": "bounded SQL LIKE superset linked to another canonical product does not block when exact source identity does not match",
+  "ordinary_create_without_precondition": "unchanged",
+  "provider_calls": 0,
+  "production_database_used": false,
+  "deployed": false
+}
