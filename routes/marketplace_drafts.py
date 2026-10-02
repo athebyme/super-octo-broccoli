@@ -322,6 +322,7 @@ def create():
         allowed = {
             "account_id", "imported_product_id", "product_type_id",
             "offer_id", "save_mapping", "validate",
+            "expected_existing_listing",
         }
         unknown = set(data) - allowed
         if unknown:
@@ -346,15 +347,38 @@ def create():
             data.get("validate"),
             "validate",
         )
-        draft = MarketplaceDraftService.create_draft(
-            seller_id=seller_id,
-            account_id=account_id,
-            imported_product_id=imported_product_id,
-            product_type_id=product_type_id,
-            offer_id=data.get("offer_id") or None,
-            save_mapping=save_mapping,
-            corrected_by_user_id=getattr(current_user, "id", None),
-        )
+        create_kwargs = {
+            "seller_id": seller_id,
+            "account_id": account_id,
+            "imported_product_id": imported_product_id,
+            "product_type_id": product_type_id,
+            "offer_id": data.get("offer_id") or None,
+            "save_mapping": save_mapping,
+            "corrected_by_user_id": getattr(current_user, "id", None),
+        }
+        if "expected_existing_listing" in data:
+            if not request.is_json or not isinstance(
+                data["expected_existing_listing"], dict,
+            ):
+                raise MarketplaceDraftValidationError(
+                    "expected_existing_listing должен быть JSON-объектом"
+                )
+            if (
+                product_type_id is not None
+                or "product_type_id" in data
+                or "offer_id" in data
+            ):
+                raise MarketplaceDraftValidationError(
+                    "Для уже связанного листинга тип и offer берутся только из текущей карточки"
+                )
+            if save_mapping or validate_immediately:
+                raise MarketplaceDraftValidationError(
+                    "Подготовка по существующей связи требует save_mapping=false и validate=false"
+                )
+            create_kwargs["expected_existing_listing"] = data[
+                "expected_existing_listing"
+            ]
+        draft = MarketplaceDraftService.create_draft(**create_kwargs)
         if validate_immediately:
             draft = MarketplaceDraftService.validate_draft(
                 seller_id=seller_id,

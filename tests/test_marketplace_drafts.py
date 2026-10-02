@@ -3,7 +3,11 @@
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+import hashlib
 import json
+import os
+import sqlite3
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +20,7 @@ from models import (
     MarketplaceAttributeValue,
     MarketplaceCategoryMapping,
     MarketplaceListing,
+    MarketplaceListingLinkEvent,
     MarketplaceProductDraft,
     MarketplaceProductType,
     MarketplaceTaxonomyCategory,
@@ -33,20 +38,35 @@ from models import (
 from services.marketplace_drafts import (
     MarketplaceDraftConflict,
     MarketplaceDraftNotFound,
+    MarketplaceDraftValidationError,
     MarketplaceDraftService,
 )
 from services.marketplace_fact_pack import MarketplaceFactPackBuilder
 from services.common_product_content import CommonProductContentService
 from services.ozon_reference_service import OzonReferenceService
+from services.ozon_product_state import OzonProductStateContract
 
 
 class MarketplaceDraftServiceTest(unittest.TestCase):
     def setUp(self):
+        self.sqlite_path = None
+        if self._testMethodName in {
+            "test_atomic_existing_linked_create_reloads_external_link_change",
+            "test_atomic_existing_linked_create_stops_on_competing_sqlite_writer",
+        }:
+            descriptor, self.sqlite_path = tempfile.mkstemp(
+                prefix="marketplace-draft-race-",
+                suffix=".sqlite",
+            )
+            os.close(descriptor)
+            database_uri = f"sqlite:///{self.sqlite_path}"
+        else:
+            database_uri = "sqlite://"
         self.app = Flask(__name__)
         self.app.config.update(
             TESTING=True,
             SECRET_KEY="marketplace-drafts-test-secret",
-            SQLALCHEMY_DATABASE_URI="sqlite://",
+            SQLALCHEMY_DATABASE_URI=database_uri,
             SQLALCHEMY_TRACK_MODIFICATIONS=False,
         )
         db.init_app(self.app)
@@ -162,6 +182,12 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         db.session.remove()
         db.drop_all()
         self.context.pop()
+        if self.sqlite_path:
+            for suffix in ("", "-journal", "-wal", "-shm"):
+                try:
+                    os.unlink(self.sqlite_path + suffix)
+                except FileNotFoundError:
+                    pass
 
     @staticmethod
     def _seller(username, email):
@@ -324,6 +350,312 @@ class MarketplaceDraftServiceTest(unittest.TestCase):
         db.session.add(listing)
         db.session.commit()
         return listing
+
+    def _existing_listing_precondition(self, *, external_id="strict-existing"):
+        product = self._product(external_id=external_id)
+        listing = self._linked_listing(
+            product,
+            product_type=self.product_type,
+        )
+        listing.external_category_id = self.category.external_category_id
+        listing.external_type_id = self.product_type.external_type_id
+        listing.link_version = 1
+        listing.linked_at = self.now
+        listing.link_evidence_json = "{}"
+        listing.title = "Футболка"
+        listing.attributes_json = "[]"
+        listing.complex_attributes_json = "[]"
+        listing.media_json = json.dumps({
+            "primary_image": f"https://img.test/{external_id}.jpg",
+            "images": [],
+        })
+        listing.dimensions_json = json.dumps({
+            "width": 20,
+            "height": 3,
+            "depth": 30,
+            "weight": 250,
+            "dimension_unit": "CENTIMETERS",
+            "weight_unit": "GRAMS",
+        })
+        listing.barcodes_json = json.dumps(["4600000000001"])
+        listing.price_summary_json = json.dumps({
+            "values": {
+                "price": "1000",
+                "old_price": "1200",
+                "currency_code": "RUB",
+                "vat": "0.22",
+            },
+        })
+        listing.last_seen_at = self.now
+        listing.attributes_synced_at = self.now
+        listing.prices_synced_at = self.now
+        db.session.commit()
+
+        state, _freshness = MarketplaceDraftService._listing_projection_state(
+            listing,
+            now=self.now,
+        )
+        canonical_evidence = json.dumps(
+            json.loads(listing.link_evidence_json),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        _facts, _provenance, fact_hash = MarketplaceDraftService._fact_snapshot(
+            product
+        )
+        expected = {
+            "listing_id": listing.id,
+            "link_version": listing.link_version,
+            "link_status": listing.canonical_link_status,
+            "link_source": listing.link_source,
+            "link_evidence_sha256": hashlib.sha256(
+                canonical_evidence.encode("utf-8")
+            ).hexdigest(),
+            "linked_at": listing.linked_at.isoformat(),
+            "offer_id": listing.offer_id,
+            "external_product_id": listing.external_product_id,
+            "external_category_id": listing.external_category_id,
+            "external_type_id": listing.external_type_id,
+            "source_fact_hash": fact_hash,
+            "baseline_fingerprint": state["fingerprint"],
+            "baseline_contract_version": OzonProductStateContract.CONTRACT_VERSION,
+        }
+        return product, listing, expected
+
+    def test_atomic_existing_linked_create_preserves_exact_link_tuple(self):
+        product, listing, expected = self._existing_listing_precondition()
+        before = (
+            listing.imported_product_id,
+            listing.link_status,
+            listing.link_source,
+            listing.link_version,
+            listing.linked_at,
+            listing.link_evidence_json,
+        )
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            expected_existing_listing=expected,
+        )
+
+        self.assertEqual(draft.imported_product_id, product.id)
+        self.assertEqual(draft.account_id, self.account1.id)
+        self.assertEqual(draft.published_listing_id, listing.id)
+        self.assertEqual(draft.offer_id, listing.offer_id)
+        self.assertEqual(draft.product_type_id, self.product_type.id)
+        db.session.refresh(listing)
+        self.assertEqual((
+            listing.imported_product_id,
+            listing.link_status,
+            listing.link_source,
+            listing.link_version,
+            listing.linked_at,
+            listing.link_evidence_json,
+        ), before)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+        self.assertEqual(MarketplaceProductDraft.query.count(), 1)
+
+    def test_atomic_existing_linked_create_preserves_nullable_legacy_link_fields(self):
+        product, listing, expected = self._existing_listing_precondition(
+            external_id="strict-nullable-link"
+        )
+        listing.link_source = None
+        listing.linked_at = None
+        db.session.commit()
+        expected["link_source"] = None
+        expected["linked_at"] = None
+
+        draft = MarketplaceDraftService.create_draft(
+            seller_id=self.seller1_id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            expected_existing_listing=expected,
+        )
+
+        self.assertEqual(draft.published_listing_id, listing.id)
+        db.session.refresh(listing)
+        self.assertIsNone(listing.link_source)
+        self.assertIsNone(listing.linked_at)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_atomic_existing_linked_create_rejects_malformed_evidence_json(self):
+        product, listing, expected = self._existing_listing_precondition(
+            external_id="strict-malformed-evidence"
+        )
+        listing.link_evidence_json = '{"observed":1,"observed":2}'
+        db.session.commit()
+
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                expected_existing_listing=expected,
+            )
+
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_atomic_existing_linked_create_rejects_stale_source_without_writes(self):
+        product, listing, expected = self._existing_listing_precondition(
+            external_id="strict-stale-source"
+        )
+        expected["source_fact_hash"] = "0" * 64
+
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                expected_existing_listing=expected,
+            )
+
+        db.session.refresh(listing)
+        self.assertEqual(listing.imported_product_id, product.id)
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_existing_listing_precondition_rejects_unpaired_unicode(self):
+        product, _listing, expected = self._existing_listing_precondition(
+            external_id="strict-unpaired-unicode"
+        )
+        expected["offer_id"] = "\ud800"
+
+        with self.assertRaises(MarketplaceDraftValidationError):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                expected_existing_listing=expected,
+            )
+
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+
+    def test_atomic_existing_linked_create_reloads_external_link_change(self):
+        product, listing, expected = self._existing_listing_precondition(
+            external_id="strict-external-link-race"
+        )
+        db.session().expire_on_commit = False
+        db.session.commit()
+        self.assertEqual(listing.link_source, "exact_source_identity")
+
+        external = sqlite3.connect(self.sqlite_path, timeout=1)
+        try:
+            external.execute(
+                "UPDATE marketplace_listings SET link_source = ? WHERE id = ?",
+                ("external_change", listing.id),
+            )
+            external.commit()
+        finally:
+            external.close()
+
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                expected_existing_listing=expected,
+            )
+
+        db.session.refresh(listing)
+        self.assertEqual(listing.link_source, "external_change")
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_atomic_existing_linked_create_stops_on_competing_sqlite_writer(self):
+        product, listing, expected = self._existing_listing_precondition(
+            external_id="strict-sqlite-writer-race"
+        )
+        competing = sqlite3.connect(self.sqlite_path, timeout=1)
+        competing.execute("BEGIN IMMEDIATE")
+        try:
+            with self.assertRaises(MarketplaceDraftConflict):
+                MarketplaceDraftService.create_draft(
+                    seller_id=self.seller1_id,
+                    account_id=self.account1.id,
+                    imported_product_id=product.id,
+                    expected_existing_listing=expected,
+                )
+        finally:
+            competing.rollback()
+            competing.close()
+
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        db.session.refresh(listing)
+        self.assertEqual(listing.imported_product_id, product.id)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_atomic_existing_linked_create_rolls_back_staged_reconcile_mutation(self):
+        from services.marketplace_product_links import MarketplaceProductLinkService
+
+        product, listing, expected = self._existing_listing_precondition(
+            external_id="strict-staged-reconcile"
+        )
+
+        def stage_link_change(**kwargs):
+            self.assertIs(kwargs["commit"], False)
+            listing.link_source = "unexpected_change"
+            return {
+                "linked": 0,
+                "materialized": 0,
+                "wb_attached": 0,
+                "ambiguous": 0,
+                "unmatched": 0,
+                "busy": 0,
+                "candidate_count": 0,
+                "resolved_listing_ids": {product.id: listing.id},
+                "blocked": {},
+            }
+
+        with patch.object(
+            MarketplaceProductLinkService,
+            "_reconcile_account_products_impl",
+            side_effect=stage_link_change,
+        ), self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                expected_existing_listing=expected,
+            )
+
+        db.session.refresh(listing)
+        self.assertEqual(listing.link_source, "exact_source_identity")
+        self.assertEqual(listing.imported_product_id, product.id)
+        self.assertEqual(MarketplaceProductDraft.query.count(), 0)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
+    def test_atomic_existing_linked_create_refuses_existing_draft(self):
+        product, listing, expected = self._existing_listing_precondition(
+            external_id="strict-existing-draft"
+        )
+        existing = MarketplaceProductDraft(
+            seller_id=self.seller1_id,
+            marketplace_id=self.marketplace.id,
+            account_id=self.account1.id,
+            imported_product_id=product.id,
+            published_listing_id=listing.id,
+            offer_id=listing.offer_id,
+            status="needs_category",
+            source_fact_hash="a" * 64,
+        )
+        db.session.add(existing)
+        db.session.commit()
+
+        with self.assertRaises(MarketplaceDraftConflict):
+            MarketplaceDraftService.create_draft(
+                seller_id=self.seller1_id,
+                account_id=self.account1.id,
+                imported_product_id=product.id,
+                expected_existing_listing=expected,
+            )
+
+        self.assertEqual(MarketplaceProductDraft.query.count(), 1)
+        db.session.refresh(listing)
+        self.assertEqual(listing.imported_product_id, product.id)
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
 
     def _dictionary_attribute(
         self,

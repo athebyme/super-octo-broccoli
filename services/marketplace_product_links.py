@@ -1476,13 +1476,38 @@ class MarketplaceProductLinkService:
         products: Sequence[ImportedProduct],
         now: Optional[datetime] = None,
     ) -> dict:
+        """Run the selected-source account reconciliation and commit it."""
+        return cls._reconcile_account_products_impl(
+            seller_id=seller_id,
+            account_id=account_id,
+            products=products,
+            now=now,
+            commit=True,
+        )
+
+    @classmethod
+    def _reconcile_account_products_impl(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        products: Sequence[ImportedProduct],
+        now: Optional[datetime] = None,
+        commit: bool,
+    ) -> dict:
         """Resolve existing Ozon listings before a selected create/update flow.
 
         The method performs local exact matching only.  When an equivalent
         Ozon offer exists but cannot be linked uniquely, the affected selected
         product is returned in ``blocked`` so callers cannot create a duplicate
-        offer under a different seller suffix.
+        offer under a different seller suffix.  The private caller-owned mode
+        is used only by the atomic existing-linked draft-create path; its
+        caller must inspect counters/session mutations and own rollback/commit.
         """
+        if not isinstance(commit, bool):
+            raise MarketplaceProductLinkValidationError(
+                "commit должен быть boolean"
+            )
         seller_id = cls._positive_integer(seller_id, "seller_id")
         account_id = cls._positive_integer(account_id, "account_id")
         rows = list(products)
@@ -1528,7 +1553,7 @@ class MarketplaceProductLinkService:
             seller_id=seller_id,
             listings=candidates,
             now=now,
-            commit=True,
+            commit=commit,
         )
 
         linked_rows = MarketplaceListing.query.filter(

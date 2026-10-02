@@ -91,6 +91,23 @@ class MarketplaceCategoryImpactTooLarge(MarketplaceDraftConflict):
 
 class MarketplaceDraftService:
     MAX_JSON_BYTES = 256 * 1024
+    MAX_EXISTING_LISTING_PRECONDITION_BYTES = 4 * 1024
+    MAX_SIGNED_INT64 = (1 << 63) - 1
+    EXISTING_LISTING_PRECONDITION_FIELDS = frozenset({
+        "listing_id",
+        "link_version",
+        "link_status",
+        "link_source",
+        "link_evidence_sha256",
+        "linked_at",
+        "offer_id",
+        "external_product_id",
+        "external_category_id",
+        "external_type_id",
+        "source_fact_hash",
+        "baseline_fingerprint",
+        "baseline_contract_version",
+    })
     MAX_ATTRIBUTES = 5_000
     MAX_ATTRIBUTE_REMOVALS = 5_000
     MAX_COMPLEX_GROUPS = 500
@@ -177,6 +194,112 @@ class MarketplaceDraftService:
                 f"{field_name} должен быть положительным целым числом"
             )
         return value
+
+    @classmethod
+    def _positive_signed_int64(cls, value: Any, field_name: str) -> int:
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+            or value > cls.MAX_SIGNED_INT64
+        ):
+            raise MarketplaceDraftValidationError(
+                f"{field_name} должен быть положительным signed-64 ID"
+            )
+        return value
+
+    @classmethod
+    def _normalize_existing_listing_precondition(cls, value: Any) -> dict:
+        if not isinstance(value, dict) or set(value) != cls.EXISTING_LISTING_PRECONDITION_FIELDS:
+            raise MarketplaceDraftValidationError(
+                "expected_existing_listing имеет неизвестные или отсутствующие поля"
+            )
+        try:
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            encoded_bytes = encoded.encode("utf-8")
+        except (TypeError, ValueError, UnicodeError):
+            raise MarketplaceDraftValidationError(
+                "expected_existing_listing содержит неподдерживаемые значения"
+            ) from None
+        if len(encoded_bytes) > cls.MAX_EXISTING_LISTING_PRECONDITION_BYTES:
+            raise MarketplaceDraftValidationError(
+                "expected_existing_listing превышает лимит размера"
+            )
+
+        result = dict(value)
+        result["listing_id"] = cls._positive_signed_int64(
+            value["listing_id"], "expected_existing_listing.listing_id",
+        )
+        result["link_version"] = cls._positive_signed_int64(
+            value["link_version"], "expected_existing_listing.link_version",
+        )
+        if value["link_status"] != "linked":
+            raise MarketplaceDraftConflict(
+                "Проверенная связь листинга больше не активна; перечитайте карточку"
+            )
+        if value["link_source"] is not None and (
+            not isinstance(value["link_source"], str)
+            or len(value["link_source"]) > 40
+        ):
+            raise MarketplaceDraftValidationError(
+                "expected_existing_listing.link_source имеет неверный формат"
+            )
+        if value["linked_at"] is not None and (
+            not isinstance(value["linked_at"], str)
+            or len(value["linked_at"]) > 40
+        ):
+            raise MarketplaceDraftValidationError(
+                "expected_existing_listing.linked_at имеет неверный формат"
+            )
+        for field_name, maximum in (
+            ("offer_id", 200),
+            ("external_product_id", 100),
+            ("external_category_id", 100),
+            ("external_type_id", 100),
+        ):
+            field_value = value[field_name]
+            if (
+                not isinstance(field_value, str)
+                or not field_value
+                or len(field_value) > maximum
+                or field_value.strip() != field_value
+            ):
+                raise MarketplaceDraftValidationError(
+                    f"expected_existing_listing.{field_name} имеет неверный формат"
+                )
+        for field_name in (
+            "link_evidence_sha256",
+            "source_fact_hash",
+            "baseline_fingerprint",
+        ):
+            field_value = value[field_name]
+            if (
+                not isinstance(field_value, str)
+                or re.fullmatch(r"[0-9a-f]{64}", field_value) is None
+            ):
+                raise MarketplaceDraftValidationError(
+                    f"expected_existing_listing.{field_name} должен быть SHA-256"
+                )
+        contract_version = value["baseline_contract_version"]
+        if (
+            not isinstance(contract_version, str)
+            or not contract_version
+            or len(contract_version) > 100
+        ):
+            raise MarketplaceDraftValidationError(
+                "expected_existing_listing.baseline_contract_version имеет неверный формат"
+            )
+        if contract_version != OzonProductStateContract.CONTRACT_VERSION:
+            raise MarketplaceDraftConflict(
+                "Версия проверенного снимка изменилась; перечитайте карточку"
+            )
+        return result
 
     @staticmethod
     def _strict_boolean(value: Any, field_name: str) -> bool:
@@ -5393,6 +5516,59 @@ class MarketplaceDraftService:
                 "Тип или категория связанного листинга Ozon изменились; синхронизируйте каталог",
             )
 
+        state, freshness = cls._listing_projection_state(listing, now=now)
+        baseline_documents = OzonProductStateContract.draft_documents(
+            state["payload"]
+        )
+        try:
+            effective_documents = cls._merge_listing_documents(
+                baseline=baseline_documents,
+                draft=stored,
+                attribute_removals=attribute_removals,
+            )
+        except MarketplaceDraftConflict as exc:
+            raise cls._listing_state_error(
+                "ozon_attribute_removal_snapshot_changed",
+                str(exc),
+            ) from exc
+        baseline_identities = []
+        if include_baseline_editor_data:
+            baseline_rows = baseline_documents['attributes'] + [
+                attribute for group in baseline_documents['complex_attributes']
+                for attribute in group.get('attributes', [])
+            ]
+            exact_identities = set()
+            for row in baseline_rows:
+                identity = cls._attribute_identity(row)
+                if identity is not None:
+                    exact_identities.add(identity)
+            baseline_identities = [
+                {'attribute_id': item[0], 'complex_id': item[1]}
+                for item in sorted(exact_identities)
+            ]
+        return (
+            effective_documents,
+            {
+                "listing_id": listing.id,
+                "external_product_id": listing.external_product_id,
+                "fingerprint": state["fingerprint"],
+                "synced_at": min(freshness).isoformat(),
+                "contract_version": OzonProductStateContract.CONTRACT_VERSION,
+                **({'attribute_identities': baseline_identities,
+                    'preserved_media': baseline_documents['media'],
+                    'preserved_barcodes': baseline_documents['barcodes'][:1]}
+                   if include_baseline_editor_data else {}),
+            },
+        )
+
+    @classmethod
+    def _listing_projection_state(
+        cls,
+        listing: MarketplaceListing,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Tuple[dict, tuple]:
+        """Rebuild the normal full-update baseline from one cached listing."""
         current_time = now or datetime.utcnow()
         freshness = (
             listing.last_seen_at,
@@ -5436,53 +5612,11 @@ class MarketplaceDraftService:
                     dict,
                 ),
             })
-            baseline_documents = OzonProductStateContract.draft_documents(
-                state["payload"]
-            )
         except MarketplaceDraftError:
             raise
         except OzonProductStateError as exc:
             raise cls._product_state_error_for_seller(exc) from exc
-        try:
-            effective_documents = cls._merge_listing_documents(
-                baseline=baseline_documents,
-                draft=stored,
-                attribute_removals=attribute_removals,
-            )
-        except MarketplaceDraftConflict as exc:
-            raise cls._listing_state_error(
-                "ozon_attribute_removal_snapshot_changed",
-                str(exc),
-            ) from exc
-        baseline_identities = []
-        if include_baseline_editor_data:
-            baseline_rows = baseline_documents['attributes'] + [
-                attribute for group in baseline_documents['complex_attributes']
-                for attribute in group.get('attributes', [])
-            ]
-            exact_identities = set()
-            for row in baseline_rows:
-                identity = cls._attribute_identity(row)
-                if identity is not None:
-                    exact_identities.add(identity)
-            baseline_identities = [
-                {'attribute_id': item[0], 'complex_id': item[1]}
-                for item in sorted(exact_identities)
-            ]
-        return (
-            effective_documents,
-            {
-                "listing_id": listing.id,
-                "external_product_id": listing.external_product_id,
-                "fingerprint": state["fingerprint"],
-                "synced_at": min(freshness).isoformat(),
-                "contract_version": OzonProductStateContract.CONTRACT_VERSION,
-                **({'attribute_identities': baseline_identities,
-                    'preserved_media': baseline_documents['media'],
-                    'preserved_barcodes': baseline_documents['barcodes'][:1]}
-                   if include_baseline_editor_data else {}),
-            },
-        )
+        return state, freshness
 
     @classmethod
     def _apply_linked_listing_to_existing_draft(
@@ -5552,6 +5686,465 @@ class MarketplaceDraftService:
         return True
 
     @classmethod
+    def _existing_listing_evidence_hash(
+        cls,
+        listing: MarketplaceListing,
+    ) -> str:
+        raw = listing.link_evidence_json
+        try:
+            raw_size = len(raw.encode("utf-8")) if isinstance(raw, str) else None
+        except UnicodeError:
+            raw_size = None
+        if raw_size is None or raw_size > 32_768:
+            raise MarketplaceDraftConflict(
+                "Подтверждение связи повреждено; перечитайте карточку"
+            )
+
+        def exact_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate JSON object key")
+                value[key] = item
+            return value
+
+        try:
+            evidence = json.loads(
+                raw,
+                object_pairs_hook=exact_object,
+                parse_constant=lambda _value: (_ for _ in ()).throw(
+                    ValueError("invalid JSON constant")
+                ),
+            )
+        except (TypeError, ValueError, RecursionError):
+            raise MarketplaceDraftConflict(
+                "Подтверждение связи повреждено; перечитайте карточку"
+            ) from None
+        if not isinstance(evidence, dict):
+            raise MarketplaceDraftConflict(
+                "Подтверждение связи повреждено; перечитайте карточку"
+            )
+        try:
+            canonical = cls._canonical_json(evidence, dict)
+        except (MarketplaceDraftValidationError, UnicodeError):
+            raise MarketplaceDraftConflict(
+                "Подтверждение связи повреждено; перечитайте карточку"
+            ) from None
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _assert_existing_listing_precondition(
+        cls,
+        *,
+        seller_id: int,
+        account: SellerMarketplaceAccount,
+        product: ImportedProduct,
+        expected: dict,
+        now: datetime,
+    ) -> Tuple[MarketplaceListing, MarketplaceProductType, dict, dict, str]:
+        rows = MarketplaceListing.query.options(
+            joinedload(MarketplaceListing.product_type).joinedload(
+                MarketplaceProductType.category
+            ),
+        ).filter_by(
+            id=expected["listing_id"],
+            seller_id=seller_id,
+            marketplace_id=account.marketplace_id,
+            account_id=account.id,
+        ).limit(2).all()
+        if len(rows) != 1:
+            raise MarketplaceDraftConflict(
+                "Точный листинг больше не найден в этом кабинете; перечитайте карточку"
+            )
+        listing = rows[0]
+        if (
+            listing.imported_product_id != product.id
+            or listing.canonical_link_status != "linked"
+            or not listing.external_product_id
+            or not listing.is_available
+            or listing.is_archived
+            or listing.offer_id != expected["offer_id"]
+            or listing.external_product_id != expected["external_product_id"]
+            or listing.external_category_id != expected["external_category_id"]
+            or listing.external_type_id != expected["external_type_id"]
+            or listing.link_version != expected["link_version"]
+            or listing.link_source != expected["link_source"]
+            or (
+                listing.linked_at.isoformat() if listing.linked_at else None
+            ) != expected["linked_at"]
+            or cls._existing_listing_evidence_hash(listing)
+            != expected["link_evidence_sha256"]
+        ):
+            raise MarketplaceDraftConflict(
+                "Связь или identity листинга изменилась; перечитайте карточку"
+            )
+
+        exact_link = cls._linked_listing_for_product(
+            seller_id=seller_id,
+            account=account,
+            product=product,
+        )
+        if exact_link is None or exact_link.id != listing.id:
+            raise MarketplaceDraftConflict(
+                "Связь внутренней карточки неоднозначна; перечитайте карточку"
+            )
+
+        if listing.product_type_id is None:
+            raise MarketplaceDraftConflict(
+                "У точного листинга отсутствует тип Ozon; синхронизируйте каталог"
+            )
+        product_type = cls._product_type(
+            marketplace_id=account.marketplace_id,
+            product_type_id=listing.product_type_id,
+        )
+        if (
+            listing.external_category_id != product_type.category.external_category_id
+            or listing.external_type_id != product_type.external_type_id
+            or not OzonReferenceService.reference_is_fresh(
+                product_type,
+                now=now,
+            )
+        ):
+            raise MarketplaceDraftConflict(
+                "Тип или официальная схема Ozon устарели либо изменились; синхронизируйте каталог"
+            )
+
+        facts_document, provenance, fact_hash = cls._fact_snapshot(product)
+        if fact_hash != expected["source_fact_hash"]:
+            raise MarketplaceDraftConflict(
+                "Факты внутренней карточки изменились; перечитайте карточку"
+            )
+        state, _freshness = cls._listing_projection_state(listing, now=now)
+        if state["fingerprint"] != expected["baseline_fingerprint"]:
+            raise MarketplaceDraftConflict(
+                "Снимок листинга изменился; синхронизируйте каталог и перечитайте карточку"
+            )
+        return listing, product_type, facts_document, provenance, fact_hash
+
+    @classmethod
+    def _assert_no_existing_draft_for_listing(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        product_id: int,
+        listing: MarketplaceListing,
+    ) -> None:
+        existing = MarketplaceProductDraft.query.filter(
+            MarketplaceProductDraft.seller_id == seller_id,
+            MarketplaceProductDraft.account_id == account_id,
+            or_(
+                MarketplaceProductDraft.imported_product_id == product_id,
+                MarketplaceProductDraft.published_listing_id == listing.id,
+                MarketplaceProductDraft.offer_id == listing.offer_id,
+            ),
+        ).limit(2).all()
+        if existing:
+            raise MarketplaceDraftConflict(
+                "Для этой внутренней карточки или листинга уже есть черновик; откройте существующий"
+            )
+
+    @classmethod
+    def _begin_existing_listing_writer(cls) -> None:
+        if db.engine.dialect.name != "sqlite":
+            raise MarketplaceDraftConflict(
+                "Атомарная подготовка поддерживается только на SQLite runtime"
+            )
+        session = db.session()
+        if session.new or session.dirty or session.deleted:
+            raise MarketplaceDraftConflict(
+                "Завершите другое локальное изменение перед созданием черновика"
+            )
+        if session.in_transaction():
+            session.rollback()
+        try:
+            connection = session.connection()
+            driver_connection = connection.connection.driver_connection
+            previous_timeout = driver_connection.execute(
+                "PRAGMA busy_timeout"
+            ).fetchone()[0]
+            driver_connection.execute("PRAGMA busy_timeout = 200")
+            try:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            except Exception:
+                driver_connection.execute(
+                    f"PRAGMA busy_timeout = {int(previous_timeout)}"
+                )
+                raise
+            driver_connection.execute(
+                f"PRAGMA busy_timeout = {int(previous_timeout)}"
+            )
+        except Exception as exc:
+            session.rollback()
+            raise MarketplaceDraftConflict(
+                "База занята; черновик не создан. Перечитайте карточку и повторите"
+            ) from exc
+
+    @classmethod
+    def _create_existing_linked_draft(
+        cls,
+        *,
+        seller_id: int,
+        account_id: int,
+        imported_product_id: int,
+        expected: dict,
+    ) -> MarketplaceProductDraft:
+        from services.marketplace_operation_locks import (
+            release_account_operation_lock,
+            try_account_operation_lock,
+        )
+        from services.marketplace_product_links import (
+            MarketplaceProductLinkError,
+            MarketplaceProductLinkService,
+        )
+
+        seller_id = cls._positive_signed_int64(seller_id, "seller_id")
+        account_id = cls._positive_signed_int64(account_id, "account_id")
+        imported_product_id = cls._positive_signed_int64(
+            imported_product_id,
+            "imported_product_id",
+        )
+        session = db.session()
+        if session.new or session.dirty or session.deleted:
+            raise MarketplaceDraftConflict(
+                "Завершите другое локальное изменение перед созданием черновика"
+            )
+        if session.in_transaction():
+            session.rollback()
+        claim = try_account_operation_lock(account_id)
+        if claim is None:
+            raise MarketplaceDraftConflict(
+                "Кабинет Ozon занят другой операцией; перечитайте карточку"
+            )
+
+        created_id = None
+        committed = False
+        try:
+            cls._begin_existing_listing_writer()
+            session.expire_all()
+            account = cls._owned_account(
+                seller_id=seller_id,
+                account_id=account_id,
+            )
+            product = cls._owned_imported_product(
+                seller_id=seller_id,
+                imported_product_id=imported_product_id,
+            )
+            now = datetime.utcnow()
+            listing, product_type, facts_document, provenance, fact_hash = (
+                cls._assert_existing_listing_precondition(
+                    seller_id=seller_id,
+                    account=account,
+                    product=product,
+                    expected=expected,
+                    now=now,
+                )
+            )
+            if active_catalog_listing_operation(
+                seller_id=seller_id,
+                marketplace_id=account.marketplace_id,
+                account_id=account.id,
+                listing_id=listing.id,
+            ) is not None:
+                raise MarketplaceDraftConflict(
+                    "По этой карточке Ozon уже выполняется операция"
+                )
+            cls._assert_no_existing_draft_for_listing(
+                seller_id=seller_id,
+                account_id=account.id,
+                product_id=product.id,
+                listing=listing,
+            )
+
+            try:
+                link_result = MarketplaceProductLinkService._reconcile_account_products_impl(
+                    seller_id=seller_id,
+                    account_id=account.id,
+                    products=[product],
+                    now=now,
+                    commit=False,
+                )
+            except MarketplaceProductLinkError as exc:
+                raise MarketplaceDraftConflict(
+                    "Связь или набор совпадений изменились; перечитайте карточку"
+                ) from exc
+            if (
+                link_result.get("blocked", {}).get(product.id) is not None
+                or link_result.get("resolved_listing_ids", {}).get(product.id)
+                != listing.id
+                or any(
+                    link_result.get(counter) != 0
+                    for counter in (
+                        "linked",
+                        "materialized",
+                        "wb_attached",
+                        "ambiguous",
+                        "busy",
+                    )
+                )
+                or session.new
+                or session.dirty
+                or session.deleted
+            ):
+                raise MarketplaceDraftConflict(
+                    "Сверка связи обнаружила изменение или неоднозначность; черновик не создан"
+                )
+
+            session.expire_all()
+            account = cls._owned_account(
+                seller_id=seller_id,
+                account_id=account_id,
+            )
+            product = cls._owned_imported_product(
+                seller_id=seller_id,
+                imported_product_id=imported_product_id,
+            )
+            listing, product_type, facts_document, provenance, fact_hash = (
+                cls._assert_existing_listing_precondition(
+                    seller_id=seller_id,
+                    account=account,
+                    product=product,
+                    expected=expected,
+                    now=datetime.utcnow(),
+                )
+            )
+            if active_catalog_listing_operation(
+                seller_id=seller_id,
+                marketplace_id=account.marketplace_id,
+                account_id=account.id,
+                listing_id=listing.id,
+            ) is not None:
+                raise MarketplaceDraftConflict(
+                    "По этой карточке Ozon уже выполняется операция"
+                )
+            cls._assert_no_existing_draft_for_listing(
+                seller_id=seller_id,
+                account_id=account.id,
+                product_id=product.id,
+                listing=listing,
+            )
+            if session.new or session.dirty or session.deleted:
+                raise MarketplaceDraftConflict(
+                    "Состояние связи изменилось; черновик не создан"
+                )
+
+            draft = cls._build_new_draft(
+                seller_id=seller_id,
+                account=account,
+                product=product,
+                facts_document=facts_document,
+                provenance=provenance,
+                fact_hash=fact_hash,
+                offer_id=listing.offer_id,
+                linked_listing=listing,
+                duplicate_listing=None,
+                selected_type=product_type,
+                mapping=None,
+                save_mapping=False,
+                corrected_by_user_id=None,
+            )
+            db.session.commit()
+            committed = True
+            created_id = draft.id
+        except (IntegrityError, StaleDataError, OperationalError):
+            db.session.rollback()
+            raise MarketplaceDraftConflict(
+                "Состояние изменилось или база занята; черновик не создан. Перечитайте карточку"
+            ) from None
+        except Exception:
+            if session.in_transaction():
+                db.session.rollback()
+            raise
+        finally:
+            if not committed and session.in_transaction():
+                db.session.rollback()
+            release_account_operation_lock(claim)
+        return cls.get_draft(seller_id=seller_id, draft_id=created_id)
+
+    @classmethod
+    def _build_new_draft(
+        cls,
+        *,
+        seller_id: int,
+        account: SellerMarketplaceAccount,
+        product: ImportedProduct,
+        facts_document: dict,
+        provenance: dict,
+        fact_hash: str,
+        offer_id: str,
+        linked_listing: Optional[MarketplaceListing],
+        duplicate_listing: Optional[MarketplaceListing],
+        selected_type: Optional[MarketplaceProductType],
+        mapping: Optional[MarketplaceCategoryMapping],
+        save_mapping: bool,
+        corrected_by_user_id: Optional[int],
+    ) -> MarketplaceProductDraft:
+        """Build a new draft with the same factory for ordinary and strict creates."""
+        draft = MarketplaceProductDraft(
+            seller_id=seller_id,
+            marketplace_id=account.marketplace_id,
+            account_id=account.id,
+            imported_product_id=product.id,
+            supplier_product_id=product.supplier_product_id,
+            published_listing_id=(
+                linked_listing.id
+                if linked_listing is not None
+                else (
+                    duplicate_listing.id
+                    if duplicate_listing is not None
+                    else None
+                )
+            ),
+            category_mapping_id=mapping.id if mapping else None,
+            offer_id=offer_id,
+            status="needs_category",
+            source_fact_hash=fact_hash,
+            source_facts_json=cls._canonical_json(facts_document, dict),
+            provenance_json=cls._canonical_json(provenance, dict),
+            content_json=cls._canonical_json(
+                cls._content_from_facts(facts_document), dict
+            ),
+            media_json=cls._canonical_json(
+                cls._media_from_facts(facts_document), dict
+            ),
+            dimensions_json=cls._canonical_json(
+                cls._dimensions_from_facts(facts_document), dict
+            ),
+            barcodes_json=cls._canonical_json(
+                cls._barcodes_from_facts(facts_document), list
+            ),
+            commercial_json=cls._canonical_json(
+                cls._commercial_from_facts(facts_document, account=account),
+                dict,
+            ),
+            attributes_json="[]",
+            complex_attributes_json="[]",
+            attribute_removals_json="[]",
+            validation_status="never_validated",
+            validation_result_json="{}",
+        )
+        db.session.add(draft)
+        if selected_type:
+            cls._bind_type(draft, selected_type)
+            auto_attributes, compliance_report = cls._auto_map_attributes(
+                product_type=selected_type,
+                facts_document=facts_document,
+                category_mapping=mapping,
+            )
+            draft.attributes_json = cls._canonical_json(auto_attributes, list)
+            cls._merge_compliance_provenance(draft, compliance_report)
+            if save_mapping:
+                mapping = cls._upsert_mapping(
+                    seller_id=seller_id,
+                    marketplace_id=account.marketplace_id,
+                    product=product,
+                    product_type=selected_type,
+                    corrected_by_user_id=corrected_by_user_id,
+                )
+                draft.category_mapping_id = mapping.id
+        return draft
+
+    @classmethod
     def create_draft(
         cls,
         *,
@@ -5564,7 +6157,28 @@ class MarketplaceDraftService:
         corrected_by_user_id: Optional[int] = None,
         source_link_preflight: bool = True,
         observed_mapping_preflight: bool = True,
+        expected_existing_listing: Optional[dict] = None,
     ) -> MarketplaceProductDraft:
+        if expected_existing_listing is not None:
+            if (
+                product_type_id is not None
+                or offer_id is not None
+                or save_mapping is not False
+                or source_link_preflight is not True
+                or observed_mapping_preflight is not True
+            ):
+                raise MarketplaceDraftValidationError(
+                    "Подготовка по существующей связи не принимает другой тип, offer или обход preflight"
+                )
+            expected = cls._normalize_existing_listing_precondition(
+                expected_existing_listing
+            )
+            return cls._create_existing_linked_draft(
+                seller_id=seller_id,
+                account_id=account_id,
+                imported_product_id=imported_product_id,
+                expected=expected,
+            )
         if not isinstance(save_mapping, bool):
             raise MarketplaceDraftValidationError("save_mapping должен быть boolean")
         if not isinstance(source_link_preflight, bool):
@@ -5743,71 +6357,21 @@ class MarketplaceDraftService:
             )
             selected_type = mapping.product_type if mapping else None
 
-        draft = MarketplaceProductDraft(
+        draft = cls._build_new_draft(
             seller_id=seller_id,
-            marketplace_id=account.marketplace_id,
-            account_id=account.id,
-            imported_product_id=product.id,
-            supplier_product_id=product.supplier_product_id,
-            published_listing_id=(
-                linked_listing.id
-                if linked_listing is not None
-                else (
-                    duplicate_listing.id
-                    if duplicate_listing is not None
-                    else None
-                )
-            ),
-            category_mapping_id=mapping.id if mapping else None,
+            account=account,
+            product=product,
+            facts_document=facts_document,
+            provenance=provenance,
+            fact_hash=fact_hash,
             offer_id=normalized_offer,
-            status="needs_category",
-            source_fact_hash=fact_hash,
-            source_facts_json=cls._canonical_json(facts_document, dict),
-            provenance_json=cls._canonical_json(provenance, dict),
-            content_json=cls._canonical_json(
-                cls._content_from_facts(facts_document), dict
-            ),
-            media_json=cls._canonical_json(
-                cls._media_from_facts(facts_document), dict
-            ),
-            dimensions_json=cls._canonical_json(
-                cls._dimensions_from_facts(facts_document), dict
-            ),
-            barcodes_json=cls._canonical_json(
-                cls._barcodes_from_facts(facts_document), list
-            ),
-            commercial_json=cls._canonical_json(
-                cls._commercial_from_facts(
-                    facts_document,
-                    account=account,
-                ),
-                dict,
-            ),
-            attributes_json='[]',
-            complex_attributes_json='[]',
-            attribute_removals_json='[]',
-            validation_status="never_validated",
-            validation_result_json='{}',
+            linked_listing=linked_listing,
+            duplicate_listing=duplicate_listing,
+            selected_type=selected_type,
+            mapping=mapping,
+            save_mapping=save_mapping,
+            corrected_by_user_id=corrected_by_user_id,
         )
-        db.session.add(draft)
-        if selected_type:
-            cls._bind_type(draft, selected_type)
-            auto_attributes, compliance_report = cls._auto_map_attributes(
-                product_type=selected_type,
-                facts_document=facts_document,
-                category_mapping=mapping,
-            )
-            draft.attributes_json = cls._canonical_json(auto_attributes, list)
-            cls._merge_compliance_provenance(draft, compliance_report)
-            if save_mapping:
-                mapping = cls._upsert_mapping(
-                    seller_id=seller_id,
-                    marketplace_id=account.marketplace_id,
-                    product=product,
-                    product_type=selected_type,
-                    corrected_by_user_id=corrected_by_user_id,
-                )
-                draft.category_mapping_id = mapping.id
         try:
             db.session.commit()
         except IntegrityError:

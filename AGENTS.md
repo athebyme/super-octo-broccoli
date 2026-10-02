@@ -1398,6 +1398,8 @@ Release runner `scripts/check_ozon_release.py` теперь включает sha
 
 Категория/тип уже связанной Ozon-карточки в этом выпуске закреплена за exact последним наблюдённым listing. Для её изменения продавец использует кабинет Ozon и синхронизирует каталог. Legacy mismatch черновика разрешено исправить только до свежего same-account observed типа через подписанный category impact review; чужая, отсутствующая или устаревшая identity блокирует repair. Неизменённый aligned product_type в обычном сохранении допускается как no-op; новые несвязанные source drafts сохраняют выбор категории. `create_draft` также отклоняет явно выбранный тип, конфликтующий с exact linked listing. Это ранняя граница UI/backend, а не реализация Ozon `new_description_category_id`.
 
+Для отдельной подготовки черновика по уже связанной карточке существующий seller-authenticated `POST /marketplaces/drafts/` принимает optional `expected_existing_listing`: точные link tuple, canonical evidence, текущий source-fact hash и полный update-baseline fingerprint/version. Этот путь удерживает account claim и короткий SQLite writer lock, повторно проверяет owner/scope/freshness и выполняет только selected-source reconciliation без commit; любая staged link/event mutation, расхождение или существующий черновик отменяют запрос. Успех создаёт только один обычный draft, сохраняя exact link; обычный create без precondition сохраняет прежний контракт. Валидация/редактирование остаются отдельными seller-действиями, provider I/O здесь нет.
+
 
 ### Передеплой UX-01 от 30.09.2026
 

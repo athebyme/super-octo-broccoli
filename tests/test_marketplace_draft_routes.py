@@ -371,6 +371,66 @@ class MarketplaceDraftRoutesTest(unittest.TestCase):
             corrected_by_user_id=self.user1_id,
         )
 
+    def test_existing_listing_create_precondition_is_forwarded_only_for_strict_json(self):
+        created = SimpleNamespace(
+            id=100,
+            to_public_dict=lambda detail=False: {"id": 100, "detail": detail},
+        )
+        expected = {
+            "listing_id": 1,
+            "link_version": 1,
+            "link_status": "linked",
+            "link_source": None,
+            "link_evidence_sha256": "a" * 64,
+            "linked_at": None,
+            "offer_id": "offer-one",
+            "external_product_id": "123456",
+            "external_category_id": "10",
+            "external_type_id": "777",
+            "source_fact_hash": "b" * 64,
+            "baseline_fingerprint": "c" * 64,
+            "baseline_contract_version": "product-full-state@2026-07-25",
+        }
+        user_patch, login_patch = self._auth(self.seller1_id, self.user1_id)
+        with user_patch, login_patch, patch.object(
+            MarketplaceDraftService,
+            "create_draft",
+            return_value=created,
+        ) as create:
+            accepted = self.client.post(
+                "/marketplaces/drafts/",
+                json={
+                    "account_id": self.account1_id,
+                    "imported_product_id": self.own_source_id,
+                    "save_mapping": False,
+                    "validate": False,
+                    "expected_existing_listing": expected,
+                },
+            )
+            validate = self.client.post(
+                "/marketplaces/drafts/",
+                json={
+                    "account_id": self.account1_id,
+                    "imported_product_id": self.own_source_id,
+                    "save_mapping": False,
+                    "validate": True,
+                    "expected_existing_listing": expected,
+                },
+            )
+
+        self.assertEqual(accepted.status_code, 201)
+        self.assertEqual(validate.status_code, 400)
+        create.assert_called_once_with(
+            seller_id=self.seller1_id,
+            account_id=self.account1_id,
+            imported_product_id=self.own_source_id,
+            product_type_id=None,
+            offer_id=None,
+            save_mapping=False,
+            corrected_by_user_id=self.user1_id,
+            expected_existing_listing=expected,
+        )
+
     def test_create_can_run_local_validation_immediately(self):
         created = SimpleNamespace(
             id=99,

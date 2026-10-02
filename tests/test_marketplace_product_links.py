@@ -331,6 +331,29 @@ class MarketplaceProductLinkServiceTest(unittest.TestCase):
         db.session.refresh(listing)
         self.assertEqual(listing.imported_product_id, canonical.id)
 
+    def test_private_selected_preflight_does_not_commit_staged_link_or_event(self):
+        canonical = self._canonical(offer="caller-owned-no-commit")
+        listing = self._listing(offer="caller-owned-no-commit")
+
+        result = MarketplaceProductLinkService._reconcile_account_products_impl(
+            seller_id=self.seller1.id,
+            account_id=self.account1.id,
+            products=[canonical],
+            commit=False,
+        )
+
+        self.assertEqual(result["linked"], 1)
+        self.assertEqual(
+            result["resolved_listing_ids"],
+            {canonical.id: listing.id},
+        )
+        self.assertEqual(listing.imported_product_id, canonical.id)
+        db.session.rollback()
+        db.session.refresh(listing)
+        self.assertIsNone(listing.imported_product_id)
+        self.assertEqual(listing.canonical_link_status, "unlinked")
+        self.assertEqual(MarketplaceListingLinkEvent.query.count(), 0)
+
     def test_selected_product_preflight_blocks_explicitly_unlinked_offer(self):
         canonical = ImportedProduct(
             seller_id=self.seller1.id,
