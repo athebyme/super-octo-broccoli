@@ -1,0 +1,24 @@
+{
+  "result": "passed",
+  "checked_at_utc": "2026-10-02T05:42:23.383223+00:00",
+  "runtime_image_matches_accepted": true,
+  "runtime_healthy": true,
+  "restarts": 0,
+  "database_observation_read_only": true,
+  "provider_calls": 0,
+  "observation": {
+    "ok": true,
+    "startup_current": true,
+    "plan_steps": 81,
+    "journal_steps": 81,
+    "completed_steps": 81,
+    "running_steps": 0,
+    "active_runs": 0,
+    "scheduler_first": "healthy",
+    "scheduler_first_age_seconds": 12,
+    "scheduler_second": "healthy",
+    "scheduler_second_age_seconds": 13,
+    "scheduler_progressed": true
+  },
+  "initial_diagnostic": "Observer was initially executed under the container default root identity rather than app. Heartbeat evidence correctly rejected a different observer UID; rerun uses the same app UID as the accepted production smoke. No runtime or heartbeat files were changed."
+}
