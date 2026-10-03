@@ -1,0 +1,24 @@
+{
+  "status": "observed_failure",
+  "observed_at_utc": "2026-10-03T22:02:30Z",
+  "public_smoke_static_502": 6,
+  "upstream_read_connection_reset": 5,
+  "upstream_eof": 1,
+  "upstream_duration_seconds_range": [
+    0.000215424,
+    0.007093384
+  ],
+  "app_worker_timeouts": 0,
+  "app_worker_kills": 0,
+  "app_worker_exits": 0,
+  "app_tracebacks": 0,
+  "app_logged_gunicorn_errors": 0,
+  "container_healthy": true,
+  "container_restart_count": 0,
+  "container_oom_killed": false,
+  "caddy_version": "v2.11.1",
+  "caddy_image": "sha256:818bec5261db8072f732f941ed335d7f027b1657230c0f62479a4398683e911f",
+  "actual_source_runtime": "d27fe66a0f9c6a1359e7a263641ee005ef411820",
+  "classification": "public_proxy_transport_failure; precise cause still under investigation",
+  "retries_performed_to_hide_failure": 0
+}

@@ -1,0 +1,9 @@
+{
+  "status": "delivered",
+  "delivered": 2,
+  "unconfirmed": 0,
+  "deferred": 0,
+  "retry_attempted": false,
+  "message_body_persisted_in_registry": false,
+  "message_temp_file_removed": true
+}
