@@ -2123,6 +2123,14 @@
         .sh-confirm-icon--warning { background: var(--warn-bg); color: var(--warn); }
         .sh-confirm-icon--info { background: var(--info-bg); color: var(--info); }
         .sh-confirm-icon--success { background: var(--ok-bg); color: var(--ok); }
+
+        /* Focus feedback must not wait for a transition from the default
+           outline, including the tiny nonzero duration used for reduced motion. */
+        :focus-visible {
+            transition-property: color, background-color, border-color,
+                text-decoration-color, fill, stroke, opacity, box-shadow,
+                transform, filter, backdrop-filter;
+        }
     </style>
     <link rel="stylesheet" href="{{ url_for('static', filename='sh-ui.css', v='20260716-2') }}">
     {% if current_user.is_authenticated and current_user.seller %}

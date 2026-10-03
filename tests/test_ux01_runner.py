@@ -22,6 +22,9 @@ from scripts.check_ux01 import (
     COMMON_CONTENT_NAVIGATOR_CHECK,
     COMMON_CONTENT_REQUIRED_CHECKS,
     COMMON_CONTENT_REQUIRED_FOCUS,
+    OPERATIONS_PRICING_PAGE_LABELS,
+    OPERATIONS_PRICING_LAYOUT_VARIANTS,
+    OPERATIONS_PRICE_INIT_CHECK,
     WB_EDIT_LAYOUT_THEMES,
     WB_EDIT_LAYOUT_WIDTHS,
     WB_EDIT_PAGES,
@@ -37,6 +40,65 @@ from scripts.check_ux01 import (
     verify_snapshot,
 )
 from scripts.check_ozon_release import EXTRA_TESTS as OZON_EXTRA_TESTS
+
+
+def _operations_pricing_browser_report() -> dict:
+    pages = [
+        {"label": label, "theme": theme, "status": 200}
+        for label in sorted(OPERATIONS_PRICING_PAGE_LABELS)
+        for theme in ("light", "dark")
+    ]
+    checks = [
+        {"name": OPERATIONS_PRICE_INIT_CHECK, "status": "passed", "theme": theme}
+        for theme in ("light", "dark")
+    ]
+    price_initialization = [
+        {
+            "theme": theme,
+            "actual_theme": theme,
+            "products_get_count": 1,
+            "http_status": 200,
+            "success": True,
+            "rendered_product_count": 2,
+            "expected_product_count": 2,
+            "loading": False,
+            "selected_count": 0,
+            "synthetic_products_exact": True,
+        }
+        for theme in ("light", "dark")
+    ]
+    return {
+        "status": "completed",
+        "source": "worktree",
+        "provider_attempts": 0,
+        "unexpected_external_requests": [],
+        "unexpected_http": [],
+        "request_failures": [],
+        "javascript_errors": [],
+        "console_errors": [],
+        "blocked_writes": [],
+        "browser_mutations": [],
+        "writes": [],
+        "pages": pages,
+        "layouts": [
+            {
+                "page": label,
+                "requestedTheme": theme,
+                "actualTheme": theme,
+                "width": width,
+                "textScale": text_scale,
+            }
+            for label in sorted(OPERATIONS_PRICING_PAGE_LABELS)
+            for theme in ("light", "dark")
+            for width, text_scale in OPERATIONS_PRICING_LAYOUT_VARIANTS
+        ],
+        "interactions": [
+            {"check": "keyboard_route_focus", "passed": True, "row": index}
+            for index in range(32)
+        ],
+        "checks": checks,
+        "price_initialization": price_initialization,
+    }
 
 
 def _common_content_browser_report() -> dict:
@@ -593,10 +655,204 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertFalse(failed_http["valid"])
             self.assertEqual(failed_http["error_count"], 1)
 
+            report["http_errors"] = []
+            report["request_failures"] = [{"method": "GET", "path": "/synthetic"}]
+            path.write_text(json.dumps(report), encoding="utf-8")
+            failed_request = summarize_browser_report(path, "worktree")
+            self.assertFalse(failed_request["valid"])
+            self.assertEqual(failed_request["error_count"], 1)
+
             path.write_text(json.dumps({"status": "passed", "source": "worktree"}), encoding="utf-8")
             missing_safety = summarize_browser_report(path, "worktree")
             self.assertFalse(missing_safety["valid"])
             self.assertEqual(missing_safety["reason"], "browser_report_safety_telemetry_missing")
+
+    def test_operations_pricing_requires_single_load_receipts_and_original_matrix(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            path = Path(temp_name) / "operations-pricing.json"
+            minimums = BROWSER_MINIMUMS["operations_pricing_browser"]
+            self.assertEqual(minimums, {"layouts": 256, "interactions": 32})
+
+            def summarize(report):
+                path.write_text(json.dumps(report), encoding="utf-8")
+                return summarize_browser_report(
+                    path,
+                    "worktree",
+                    require_operations_pricing=True,
+                    minimum_layout_count=minimums["layouts"],
+                    minimum_interaction_count=minimums["interactions"],
+                    required_interaction_fields=("interactions", "checks"),
+                )
+
+            report = _operations_pricing_browser_report()
+            accepted = summarize(report)
+            self.assertTrue(accepted["valid"], accepted)
+            self.assertEqual(accepted["page_count"], 32)
+            self.assertEqual(accepted["layout_count"], 256)
+            self.assertEqual(accepted["interaction_count"], 32)
+
+            invalid_reports = []
+
+            missing_check = copy.deepcopy(report)
+            missing_check["checks"].pop()
+            invalid_reports.append(("one theme named check missing", missing_check,
+                                    "ops_price_initialization_named_check_incomplete_or_duplicate"))
+
+            duplicate_check = copy.deepcopy(report)
+            duplicate_check["checks"].append(copy.deepcopy(duplicate_check["checks"][0]))
+            invalid_reports.append(("named check duplicated", duplicate_check,
+                                    "ops_price_initialization_named_check_incomplete_or_duplicate"))
+
+            failed_check = copy.deepcopy(report)
+            failed_check["checks"][0]["status"] = "failed"
+            invalid_reports.append(("named check failed", failed_check,
+                                    "ops_price_initialization_named_check_failed"))
+
+            mismatched_check_theme = copy.deepcopy(report)
+            mismatched_check_theme["checks"][1]["theme"] = "light"
+            invalid_reports.append(("named check theme duplicated", mismatched_check_theme,
+                                    "ops_price_initialization_named_check_incomplete_or_duplicate"))
+
+            missing_telemetry = copy.deepcopy(report)
+            missing_telemetry.pop("price_initialization")
+            invalid_reports.append(("price telemetry missing", missing_telemetry,
+                                    "ops_price_initialization_telemetry_incomplete_or_duplicate"))
+
+            duplicate_telemetry = copy.deepcopy(report)
+            duplicate_telemetry["price_initialization"].append(
+                copy.deepcopy(duplicate_telemetry["price_initialization"][0])
+            )
+            invalid_reports.append(("price telemetry duplicated", duplicate_telemetry,
+                                    "ops_price_initialization_telemetry_incomplete_or_duplicate"))
+
+            wrong_telemetry_theme = copy.deepcopy(report)
+            wrong_telemetry_theme["price_initialization"][1]["theme"] = "light"
+            wrong_telemetry_theme["price_initialization"][1]["actual_theme"] = "light"
+            invalid_reports.append(("price telemetry misses dark theme", wrong_telemetry_theme,
+                                    "ops_price_initialization_telemetry_theme_mismatch"))
+
+            actual_theme_mismatch = copy.deepcopy(report)
+            actual_theme_mismatch["price_initialization"][0]["actual_theme"] = "dark"
+            invalid_reports.append(("actual browser theme differs", actual_theme_mismatch,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            repeated_products_get = copy.deepcopy(report)
+            repeated_products_get["price_initialization"][0]["products_get_count"] = 2
+            invalid_reports.append(("products endpoint fetched twice", repeated_products_get,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            failed_get = copy.deepcopy(report)
+            failed_get["price_initialization"][0]["http_status"] = 503
+            invalid_reports.append(("products response failed", failed_get,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            false_success = copy.deepcopy(report)
+            false_success["price_initialization"][0]["success"] = False
+            invalid_reports.append(("products response unsuccessful", false_success,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            not_rendered = copy.deepcopy(report)
+            not_rendered["price_initialization"][0]["rendered_product_count"] = 1
+            invalid_reports.append(("products not rendered", not_rendered,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            busy = copy.deepcopy(report)
+            busy["price_initialization"][0]["loading"] = True
+            invalid_reports.append(("page still loading", busy,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            wrong_count_type = copy.deepcopy(report)
+            wrong_count_type["price_initialization"][0]["products_get_count"] = "1"
+            invalid_reports.append(("count telemetry is not an integer", wrong_count_type,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            nonempty_selection = copy.deepcopy(report)
+            nonempty_selection["price_initialization"][0]["selected_count"] = 1
+            invalid_reports.append(("fixture selection is not empty", nonempty_selection,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            wrong_selection_type = copy.deepcopy(report)
+            wrong_selection_type["price_initialization"][0]["selected_count"] = False
+            invalid_reports.append(("selection count is not an integer", wrong_selection_type,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            wrong_fixture_products = copy.deepcopy(report)
+            wrong_fixture_products["price_initialization"][0]["synthetic_products_exact"] = False
+            invalid_reports.append(("rendered products differ from exact fixture", wrong_fixture_products,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            missing_fixture_proof = copy.deepcopy(report)
+            missing_fixture_proof["price_initialization"][0].pop("synthetic_products_exact")
+            invalid_reports.append(("exact fixture proof missing", missing_fixture_proof,
+                                    "ops_price_initialization_telemetry_invalid"))
+
+            missing_request_failures = copy.deepcopy(report)
+            missing_request_failures.pop("request_failures")
+            invalid_reports.append(("fatal request-failure field missing", missing_request_failures,
+                                    "ops_request_failure_telemetry_missing"))
+
+            failed_request = copy.deepcopy(report)
+            failed_request["request_failures"] = [{
+                "page": "wb_prices_change", "theme": "light", "method": "GET",
+                "path": "/prices/api/products", "resource_type": "fetch",
+                "failure_text": "synthetic network failure",
+            }]
+            invalid_reports.append(("request failure recorded", failed_request,
+                                    "ops_request_failures_present"))
+
+            incomplete_pages = copy.deepcopy(report)
+            incomplete_pages["pages"].pop()
+            invalid_reports.append(("page/theme row missing", incomplete_pages,
+                                    "ops_page_theme_matrix_incomplete_or_duplicate"))
+
+            duplicate_page_theme = copy.deepcopy(report)
+            duplicate_page_theme["pages"][-1]["theme"] = "light"
+            invalid_reports.append(("page/theme row duplicated", duplicate_page_theme,
+                                    "ops_page_theme_matrix_incomplete_or_duplicate"))
+
+            missing_layout = copy.deepcopy(report)
+            missing_layout["layouts"].pop()
+            invalid_reports.append(("layout matrix shortened", missing_layout,
+                                    "ops_layout_matrix_incomplete_or_duplicate_or_invalid"))
+
+            duplicate_layout = copy.deepcopy(report)
+            duplicate_layout["layouts"][-1] = copy.deepcopy(duplicate_layout["layouts"][0])
+            invalid_reports.append(("layout tuple duplicated and omitted", duplicate_layout,
+                                    "ops_layout_matrix_incomplete_or_duplicate_or_invalid"))
+
+            missing_layout_variant = copy.deepcopy(report)
+            missing_layout_variant["layouts"] = [
+                row for row in missing_layout_variant["layouts"]
+                if not (row["page"] == "wb_prices_change"
+                        and row["requestedTheme"] == "light"
+                        and row["width"] == 320
+                        and row["textScale"] == 200)
+            ]
+            invalid_reports.append(("required width/text-scale tuple missing", missing_layout_variant,
+                                    "ops_layout_matrix_incomplete_or_duplicate_or_invalid"))
+
+            wrong_layout_scale = copy.deepcopy(report)
+            wrong_layout_scale["layouts"][0]["textScale"] = 150
+            invalid_reports.append(("unexpected text scale", wrong_layout_scale,
+                                    "ops_layout_matrix_incomplete_or_duplicate_or_invalid"))
+
+            wrong_layout_theme = copy.deepcopy(report)
+            wrong_layout_theme["layouts"][0]["actualTheme"] = (
+                "dark" if wrong_layout_theme["layouts"][0]["requestedTheme"] == "light" else "light"
+            )
+            invalid_reports.append(("measured layout theme differs", wrong_layout_theme,
+                                    "ops_layout_matrix_incomplete_or_duplicate_or_invalid"))
+
+            missing_interaction = copy.deepcopy(report)
+            missing_interaction["interactions"].pop()
+            invalid_reports.append(("interaction matrix shortened", missing_interaction,
+                                    "ops_interaction_matrix_incomplete"))
+
+            for label, invalid, expected_issue in invalid_reports:
+                with self.subTest(case=label):
+                    rejected = summarize(invalid)
+                    self.assertFalse(rejected["valid"], (label, rejected))
+                    self.assertIn(expected_issue, rejected["operations_pricing_protocol_issues"])
 
     def test_browser_report_rejects_noop_and_accepts_analytics_api_evidence(self):
         with tempfile.TemporaryDirectory() as temp_name:

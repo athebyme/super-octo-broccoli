@@ -34,7 +34,7 @@ ERROR_LIST_FIELDS = (
     "unexpected_external_requests", "unexpected_http_requests",
     "unexpected_http", "unexpected_api_calls", "blocked_writes",
     "browser_mutations", "external_provider_requests", "external",
-    "http_errors",
+    "http_errors", "request_failures",
 )
 REQUIRED_TESTS = (
     "tests/test_competitor_routes.py",
@@ -70,11 +70,37 @@ BROWSER_INTERACTION_FIELDS = {
     "common_content_browser": ("checks",),
 }
 BROWSER_MINIMUMS = {
+    # The operations/pricing sweep covers 16 routes in both themes and keeps
+    # its original 32 page/256 layout measurements alongside price-load proof.
+    "operations_pricing_browser": {"layouts": 256, "interactions": 32},
     # Five WB editor pages, each measured at 3 widths in 2 themes; checks
     # include overflow and keyboard-focus evidence plus named safety probes.
     "wb_edit_browser": {"layouts": 30, "interactions": 24},
     "common_content_browser": {"layouts": 28, "interactions": 8},
 }
+OPERATIONS_PRICING_PAGE_LABELS = frozenset({
+    "wb_bulk_history",
+    "wb_bulk_detail",
+    "ozon_operations",
+    "ozon_operation_detail",
+    "wb_prices_dashboard",
+    "wb_prices_change",
+    "wb_prices_settings",
+    "wb_prices_history",
+    "wb_prices_batch",
+    "supplier_formula",
+    "wb_price_monitor",
+    "wb_price_alerts",
+    "ozon_commercial_vue",
+    "ozon_commercial_classic",
+    "ozon_proposal_vue",
+    "ozon_proposal_classic",
+})
+OPERATIONS_PRICE_INIT_CHECK = "wb_price_change_initializes_once_and_renders_products"
+OPERATIONS_PRICING_LAYOUT_VARIANTS = (
+    (320, 100), (390, 100), (768, 100), (1024, 100),
+    (1280, 100), (1440, 100), (320, 200), (390, 200),
+)
 COMMON_CONTENT_LAYOUT_WIDTHS = (320, 360, 390, 768, 1024, 1280, 1440)
 COMMON_CONTENT_LAYOUT_THEMES = ("light", "dark")
 COMMON_CONTENT_MOBILE_WIDTHS = (320, 360, 390)
@@ -1043,10 +1069,132 @@ def _common_content_protocol_issues(data: dict) -> list[str]:
     return issues
 
 
+def _operations_pricing_protocol_issues(data: dict) -> list[str]:
+    """Require exact receipts for the WB prices page's read-only first load."""
+    issues: list[str] = []
+
+    checks = data.get("checks")
+    named_checks = [
+        row for row in checks
+        if isinstance(row, dict) and row.get("name") == OPERATIONS_PRICE_INIT_CHECK
+    ] if isinstance(checks, list) else []
+    named_themes = [row.get("theme") for row in named_checks]
+    if (len(named_checks) != 2
+            or any(type(theme) is not str for theme in named_themes)
+            or set(named_themes) != {"light", "dark"}):
+        issues.append("ops_price_initialization_named_check_incomplete_or_duplicate")
+    elif any(row.get("status") != "passed" for row in named_checks):
+        issues.append("ops_price_initialization_named_check_failed")
+
+    observations = data.get("price_initialization")
+    expected_themes = {"light", "dark"}
+    if not isinstance(observations, list) or len(observations) != 2:
+        issues.append("ops_price_initialization_telemetry_incomplete_or_duplicate")
+    else:
+        themes = [
+            row.get("theme") if isinstance(row, dict) else None
+            for row in observations
+        ]
+        if (any(type(theme) is not str for theme in themes)
+                or set(themes) != expected_themes):
+            issues.append("ops_price_initialization_telemetry_theme_mismatch")
+        required_ints = {
+            "products_get_count": 1,
+            "http_status": 200,
+            "rendered_product_count": 2,
+            "expected_product_count": 2,
+        }
+        invalid_observation = False
+        for row in observations:
+            if not isinstance(row, dict):
+                invalid_observation = True
+                continue
+            if row.get("actual_theme") != row.get("theme"):
+                invalid_observation = True
+            if any(type(row.get(field)) is not int or row[field] != expected
+                   for field, expected in required_ints.items()):
+                invalid_observation = True
+            if type(row.get("selected_count")) is not int or row["selected_count"] != 0:
+                invalid_observation = True
+            if row.get("synthetic_products_exact") is not True:
+                invalid_observation = True
+            if row.get("success") is not True or row.get("loading") is not False:
+                invalid_observation = True
+        if invalid_observation:
+            issues.append("ops_price_initialization_telemetry_invalid")
+
+    request_failures = data.get("request_failures")
+    if not isinstance(request_failures, list):
+        issues.append("ops_request_failure_telemetry_missing")
+    elif request_failures:
+        issues.append("ops_request_failures_present")
+
+    pages = data.get("pages")
+    expected_page_pairs = {
+        (label, theme)
+        for label in OPERATIONS_PRICING_PAGE_LABELS
+        for theme in ("light", "dark")
+    }
+    observed_page_pairs = []
+    page_rows_valid = isinstance(pages, list) and len(pages) == 32
+    if isinstance(pages, list):
+        for row in pages:
+            if not isinstance(row, dict):
+                page_rows_valid = False
+                continue
+            label, theme = row.get("label"), row.get("theme")
+            if (type(label) is not str or type(theme) is not str
+                    or row.get("status") != 200):
+                page_rows_valid = False
+                continue
+            observed_page_pairs.append((label, theme))
+    if (not page_rows_valid or len(observed_page_pairs) != 32
+            or len(set(observed_page_pairs)) != 32
+            or set(observed_page_pairs) != expected_page_pairs):
+        issues.append("ops_page_theme_matrix_incomplete_or_duplicate")
+
+    layouts = data.get("layouts")
+    expected_layout_rows = {
+        (label, theme, width, text_scale)
+        for label in OPERATIONS_PRICING_PAGE_LABELS
+        for theme in ("light", "dark")
+        for width, text_scale in OPERATIONS_PRICING_LAYOUT_VARIANTS
+    }
+    observed_layout_rows = []
+    layout_rows_valid = isinstance(layouts, list) and len(layouts) == 256
+    if isinstance(layouts, list):
+        for row in layouts:
+            if not isinstance(row, dict):
+                layout_rows_valid = False
+                continue
+            label = row.get("page")
+            requested_theme = row.get("requestedTheme")
+            actual_theme = row.get("actualTheme")
+            width = row.get("width")
+            text_scale = row.get("textScale")
+            if (type(label) is not str
+                    or type(requested_theme) is not str
+                    or actual_theme != requested_theme
+                    or type(width) is not int
+                    or type(text_scale) is not int):
+                layout_rows_valid = False
+                continue
+            observed_layout_rows.append((label, requested_theme, width, text_scale))
+    if (not layout_rows_valid or len(observed_layout_rows) != 256
+            or len(set(observed_layout_rows)) != 256
+            or set(observed_layout_rows) != expected_layout_rows):
+        issues.append("ops_layout_matrix_incomplete_or_duplicate_or_invalid")
+    interactions = data.get("interactions")
+    if not isinstance(interactions, list) or len(interactions) != 32:
+        issues.append("ops_interaction_matrix_incomplete")
+    return issues
+
+
 def summarize_browser_report(path: Path, expected_source: str,
                              allow_synthetic_login: bool = False,
                              allow_synthetic_common_content: bool = False,
                              require_synthetic_wb_edit: bool = False,
+                             require_operations_pricing: bool = False,
                              minimum_layout_count: int = 0,
                              minimum_interaction_count: int = 0,
                              required_interaction_fields: tuple[str, ...] = (
@@ -1174,6 +1322,10 @@ def summarize_browser_report(path: Path, expected_source: str,
         _wb_edit_protocol_issues(data) if require_synthetic_wb_edit else []
     )
     missing_evidence.extend(wb_edit_protocol_issues)
+    operations_pricing_protocol_issues = (
+        _operations_pricing_protocol_issues(data) if require_operations_pricing else []
+    )
+    missing_evidence.extend(operations_pricing_protocol_issues)
     error_count += len(missing_evidence)
     valid = (status in PASS_REPORT_STATUSES and source == expected_source
              and error_count == 0 and provider_attempts == 0)
@@ -1198,6 +1350,7 @@ def summarize_browser_report(path: Path, expected_source: str,
         "missing_evidence": missing_evidence,
         "common_content_protocol_issues": common_protocol_issues,
         "wb_edit_protocol_issues": wb_edit_protocol_issues,
+        "operations_pricing_protocol_issues": operations_pricing_protocol_issues,
     }
 
 
@@ -1432,6 +1585,7 @@ def execute_stage(stage: Stage, root: Path, output: Path, chromium: str) -> dict
         allow_synthetic_login=(stage.name == "listing_browser"),
         allow_synthetic_common_content=(stage.name == "common_content_browser"),
         require_synthetic_wb_edit=(stage.name == "wb_edit_browser"),
+        require_operations_pricing=(stage.name == "operations_pricing_browser"),
         minimum_layout_count=BROWSER_MINIMUMS.get(stage.name, {}).get("layouts", 0),
         minimum_interaction_count=BROWSER_MINIMUMS.get(stage.name, {}).get("interactions", 0),
         required_interaction_fields=BROWSER_INTERACTION_FIELDS.get(

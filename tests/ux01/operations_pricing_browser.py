@@ -18,6 +18,7 @@ import json
 import logging
 import os
 from pathlib import Path, PurePosixPath
+import re
 import socket
 import subprocess
 import sys
@@ -98,6 +99,8 @@ REPORT = {
     "checks": [],
     "interactions": [],
     "api_reads": [],
+    "price_initialization": [],
+    "request_failures": [],
     "writes": [],
     "browser_mutations": [],
     "blocked_writes": [],
@@ -674,7 +677,23 @@ def main() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
+    base_origin = urlsplit(base)
     assets = load_pinned_assets()
+
+    def capture_request_failure(request, *, page_label: str, page_theme: str) -> None:
+        parsed = urlsplit(request.url)
+        is_local = parsed.hostname == base_origin.hostname and parsed.port == base_origin.port
+        failure_text = str(request.failure or "unknown")
+        failure_text = re.sub(r"https?://[^\s\"'<>]+", "<url>", failure_text)
+        failure_text = re.sub(r"[?&][^\s\"'<>]*", "?<redacted>", failure_text)
+        REPORT["request_failures"].append({
+            "page": page_label,
+            "theme": page_theme,
+            "method": request.method,
+            "path": parsed.path if is_local else "<external>",
+            "resource_type": request.resource_type,
+            "failure_text": failure_text[:240],
+        })
 
     def bridge(route):
         request = route.request
@@ -688,7 +707,7 @@ def main() -> None:
                 REPORT["unexpected_http"].append(row)
                 route.abort()
                 return
-            if parsed.path.startswith("/api/"):
+            if parsed.path.startswith("/api/") or parsed.path == "/prices/api/products":
                 REPORT["api_reads"].append({"method": request.method, "path": parsed.path})
             if parsed.path.startswith("/static/"):
                 try:
@@ -784,18 +803,43 @@ def main() -> None:
                 for theme in ("light", "dark"):
                     page = context.new_page()
                     page.set_default_timeout(12000)
+                    page.add_init_script(
+                        "if (location.origin === " + json.dumps(base) + ") {"
+                        + "localStorage.setItem('sh-theme', " + json.dumps(theme) + ");"
+                        + "localStorage.setItem('sh-sidebar', 'closed');"
+                        + ("localStorage.removeItem('price_change_selected');" if label == "wb_prices_change" else "")
+                        + "}"
+                    )
                     page.on("pageerror", lambda error: REPORT["javascript_errors"].append(str(error)))
                     page.on("console", lambda message: REPORT["console_errors"].append(message.text)
                             if message.type == "error" else None)
                     page.on("response", observe_response)
-                    response = page.goto(base + path, wait_until="domcontentloaded")
+                    page.on("requestfailed", lambda request, page_label=label, page_theme=theme:
+                            capture_request_failure(request, page_label=page_label, page_theme=page_theme))
+                    price_product_requests = []
+                    if label == "wb_prices_change":
+                        def track_price_request(request):
+                            parsed = urlsplit(request.url)
+                            if (request.method == "GET" and parsed.hostname == base_origin.hostname
+                                    and parsed.port == base_origin.port
+                                    and parsed.path == "/prices/api/products"):
+                                price_product_requests.append(request)
+
+                        page.on("request", track_price_request)
+                        with page.expect_response(
+                            lambda candidate: candidate.request.method == "GET"
+                            and urlsplit(candidate.url).hostname == base_origin.hostname
+                            and urlsplit(candidate.url).port == base_origin.port
+                            and urlsplit(candidate.url).path == "/prices/api/products",
+                            timeout=12000,
+                        ) as price_response_info:
+                            response = page.goto(base + path, wait_until="domcontentloaded")
+                        initial_price_response = price_response_info.value
+                    else:
+                        response = page.goto(base + path, wait_until="domcontentloaded")
+                        initial_price_response = None
                     if not response or response.status != 200:
                         raise AssertionError((label, path, response.status if response else None))
-                    page.evaluate("theme => localStorage.setItem('sh-theme', theme)", theme)
-                    page.evaluate("localStorage.setItem('sh-sidebar', 'closed')")
-                    response = page.reload(wait_until="domcontentloaded")
-                    if not response or response.status != 200:
-                        raise AssertionError((label, "theme reload", response.status if response else None))
                     page.wait_for_function("() => !!document.querySelector('.main-content') && !!document.querySelector('#main-content')")
                     _settle_main_geometry(page)
                     page.evaluate("document.fonts.ready")
@@ -810,6 +854,63 @@ def main() -> None:
                         raise AssertionError({"page": label, "requested_theme": theme, "actual_theme": actual_theme})
                     REPORT["pages"].append({"label": label, "path": urlsplit(path).path,
                                             "status": response.status, "theme": actual_theme})
+
+                    if label == "wb_prices_change":
+                        page.wait_for_function("""() => {
+                            const root = document.querySelector('.pricing-workspace');
+                            const state = root && window.Alpine && Alpine.$data(root);
+                            return !!state && state.loading === false;
+                        }""", timeout=12000)
+                        try:
+                            api_payload = initial_price_response.json()
+                        except Exception:
+                            api_payload = None
+                        api_products = api_payload.get("products") if isinstance(api_payload, dict) else None
+                        api_products = api_products if isinstance(api_products, list) else []
+                        state = page.evaluate("""() => {
+                            const root = document.querySelector('.pricing-workspace');
+                            const data = root && window.Alpine && Alpine.$data(root);
+                            return data ? {
+                                loading: data.loading,
+                                productCount: Array.isArray(data.products) ? data.products.length : null,
+                                selectedCount: Array.isArray(data.selectedIds) ? data.selectedIds.length : null,
+                            } : {loading: null, productCount: null, selectedCount: null};
+                        }""")
+                        rendered_product_count = page.locator(".pricing-workspace tbody tr").count()
+                        synthetic_products_exact = (
+                            {product.get("vendor_code") for product in api_products if isinstance(product, dict)}
+                            == {"UX01-PRICE-101", "UX01-PRICE-102"}
+                            and len(api_products) == 2
+                        )
+                        price_row = {
+                            "theme": theme,
+                            "actual_theme": actual_theme,
+                            "products_get_count": len(price_product_requests),
+                            "http_status": initial_price_response.status,
+                            "success": isinstance(api_payload, dict) and api_payload.get("success") is True,
+                            "rendered_product_count": rendered_product_count,
+                            "expected_product_count": 2,
+                            "loading": state.get("loading"),
+                            "selected_count": state.get("selectedCount"),
+                            "synthetic_products_exact": synthetic_products_exact,
+                        }
+                        price_check_passed = (
+                            actual_theme == theme
+                            and price_row["products_get_count"] == 1
+                            and price_row["http_status"] == 200
+                            and price_row["success"] is True
+                            and len(api_products) == price_row["expected_product_count"]
+                            and rendered_product_count == price_row["expected_product_count"]
+                            and state.get("loading") is False
+                            and state.get("selectedCount") == 0
+                            and synthetic_products_exact
+                        )
+                        REPORT["price_initialization"].append(price_row)
+                        REPORT["checks"].append({
+                            "name": "wb_price_change_initializes_once_and_renders_products",
+                            "status": "passed" if price_check_passed else "failed",
+                            "theme": theme,
+                        })
 
                     if label == "wb_bulk_detail":
                         body = page.locator("body").inner_text()
@@ -984,6 +1085,7 @@ def main() -> None:
         and not REPORT["console_errors"]
         and not REPORT["unexpected_http"]
         and not REPORT["unexpected_external_requests"]
+        and not REPORT["request_failures"]
         and not REPORT["browser_mutations"]
         and not REPORT["blocked_writes"]
         and not REPORT["writes"]
@@ -993,6 +1095,14 @@ def main() -> None:
         and len(REPORT["layouts"]) == expected_layouts
         and len(REPORT["actual_theme_assertions"]) == len(pages) * 2
         and len(REPORT["interactions"]) == len(pages) * 2
+        and (
+            "wb_prices_change" not in {label for label, _path in pages}
+            or (
+                len(REPORT["price_initialization"]) == 2
+                and {row.get("theme") for row in REPORT["price_initialization"]} == {"light", "dark"}
+                and all(row.get("actual_theme") == row.get("theme") for row in REPORT["price_initialization"])
+            )
+        )
     )
     passed = safe_capture and (
         SOURCE == "ba63371"
@@ -1000,6 +1110,8 @@ def main() -> None:
             not REPORT["after_failures"]
             and not failed_checks
             and not failed_interactions
+            and all(row.get("status") == "passed" for row in REPORT["checks"]
+                    if row.get("name") == "wb_price_change_initializes_once_and_renders_products")
         )
     )
     REPORT["status"] = (

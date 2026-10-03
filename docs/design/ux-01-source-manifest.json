@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-03T20:38:01.419947+00:00",
+  "generated_at": "2026-10-03T21:23:20.561766+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -32,7 +32,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "f402bfdc23d1fcf2b7091b00ce639d4c72b65f6d9032674dae45c06ab2752734"
+      "sha256": "f2ef11103382ce6ffe4f471b4dacf14199efb4b531e259ce95e133b61a439b05"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -464,7 +464,7 @@
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
-      "sha256": "8784ef827b7080aa927349d6e8711ea61a3c2ba7da0fc5c2058d198ad8474588"
+      "sha256": "b60c5e885874bf413254e41c1ca625c6cf772d349e2e815596bd46abcbf2d344"
     },
     {
       "path": "docs/design/ozon-vue-linking-and-category-review.md",
@@ -1520,7 +1520,7 @@
     },
     {
       "path": "scripts/check_ux01.py",
-      "sha256": "bde2c88b1168b510dedb1e1b336ba98409ca4866cae1ae7c0ab381b12d7c3c99"
+      "sha256": "5c307d0323d591ae6ac4862236dfaf029deaf999ee7c4e480b67d3d940cbe522"
     },
     {
       "path": "scripts/deploy_safety.py",
@@ -2928,7 +2928,7 @@
     },
     {
       "path": "templates/base.html",
-      "sha256": "f56edc8e2ad7f0774b789ff9ac9fd55e2d4b77bdd0e7dcacd8a739f4d1435428"
+      "sha256": "21e9efbbb5b862e33f750bd9f5db5fd31468566cd89c7192ee27851730e75343"
     },
     {
       "path": "templates/blocked_cards.html",
@@ -3340,7 +3340,7 @@
     },
     {
       "path": "templates/prices_change.html",
-      "sha256": "8b70aa7fee90c8ebfb3aa945b3a3bd041606c4bd8d952c03f2239f619a828d23"
+      "sha256": "1bdfe14ba3cb51028364053bf1a3d82ba1ac044243e1381cd460dc0dbcd75b6b"
     },
     {
       "path": "templates/prices_dashboard.html",
@@ -4864,7 +4864,7 @@
     },
     {
       "path": "tests/test_ux01_runner.py",
-      "sha256": "5db1ef731b3071bc38f38c78d92fcfbffcd714a050e54004321f2b5e490c6ba3"
+      "sha256": "c3cf680c7b8dfd7dc604c29f9d9097d8ab4a67f00a281dff14a610d03e45c02a"
     },
     {
       "path": "tests/test_ux01_settings_quality.py",
@@ -4992,7 +4992,7 @@
     },
     {
       "path": "tests/ux01/operations_pricing_browser.py",
-      "sha256": "b72d12512329d2575067743a20e8a38a81280ac348a764a85dc918d8d59c4845"
+      "sha256": "4560ca54f182a43a784296a8eea68f4aa9fef4e7170a63ef1db0c706db2b09e3"
     },
     {
       "path": "tests/ux01/wb_edit_browser.py",
@@ -5007,5 +5007,5 @@
       "sha256": "0f66c4247703d82fa7043589228f62a20d81fcaefcf9c97e2ac8fefb4723707c"
     }
   ],
-  "aggregate_sha256": "230cc85895b5767211845e780fee71f5e3d0fb34b1cd61e2e02e1076dc2a948e"
+  "aggregate_sha256": "9628787cb01c9559b880ebbaf3273e8eee0d7efca52a6371c9467eb43e72ed32"
 }

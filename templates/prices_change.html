@@ -5,7 +5,7 @@
 {% block extra_head %}<link rel="stylesheet" href="{{ url_for('static', filename='pricing-workspace.css', v='ux01-7-9') }}">{% endblock %}
 
 {% block content %}
-<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="priceChangeApp()" x-init="init()">
+<div class="pricing-workspace max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="priceChangeApp()">
     {% set pricing_workspace_current = 'wb-change' %}
     {% include 'partials/pricing_workspace_nav.html' %}
 
