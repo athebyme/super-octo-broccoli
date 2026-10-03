@@ -23,6 +23,7 @@ EXTRA_TESTS = (
     'test_deploy_telegram.py',
     'test_deploy_safety.py',
     'test_product_selection.py',
+    'test_wb_sync_read_only.py',
     'test_wb_bulk_review_key_migration.py',
     'test_unauthorized_response_shape.py',
     'test_login_next.py',

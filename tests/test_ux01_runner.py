@@ -22,6 +22,10 @@ from scripts.check_ux01 import (
     COMMON_CONTENT_NAVIGATOR_CHECK,
     COMMON_CONTENT_REQUIRED_CHECKS,
     COMMON_CONTENT_REQUIRED_FOCUS,
+    WB_EDIT_LAYOUT_THEMES,
+    WB_EDIT_LAYOUT_WIDTHS,
+    WB_EDIT_PAGES,
+    WB_EDIT_REQUIRED_CHECKS,
     REQUIRED_TESTS,
     _canonical_json,
     _clean_environment,
@@ -83,8 +87,8 @@ def _common_content_browser_report() -> dict:
             })
         focus_observations.append(row)
     writes = [
-        *([{"method": "POST", "path": "/api/my-products/common-content/preview", "kind": "synthetic_preview"}] * 4),
-        *([{"method": "POST", "path": "/api/my-products/common-content/apply", "kind": "synthetic_apply"}] * 2),
+        *([{"method": "POST", "path": "/api/my-products/common-content/preview", "kind": "synthetic_preview"}] * 7),
+        *([{"method": "POST", "path": "/api/my-products/common-content/apply", "kind": "synthetic_apply"}] * 4),
     ]
     mobile_touch_check = {
         "name": "common_mobile_touch_targets_44px",
@@ -147,6 +151,39 @@ def _common_content_browser_report() -> dict:
         for width in COMMON_CONTENT_MOBILE_WIDTHS
         for theme in COMMON_CONTENT_MOBILE_THEMES
     ]
+    selected_ids = list(range(10001, 10051))
+    selected_fingerprint = hashlib.sha256(
+        ",".join(str(value) for value in selected_ids).encode("ascii")
+    ).hexdigest()
+    overflow_fingerprint = hashlib.sha256(
+        ",".join(str(value) for value in [*selected_ids, 10051]).encode("ascii")
+    ).hexdigest()
+    expected_413 = [
+        {
+            "method": "GET", "path": "/my-products/common-content",
+            "status": 413, "code": "too_many_items",
+            "has_query": True, "has_fragment": False,
+        },
+        {
+            "method": "POST", "path": "/api/my-products/common-content/preview",
+            "status": 413, "code": "too_many_items",
+            "has_query": False, "has_fragment": False,
+        },
+    ]
+    expected_413_console = [
+        {
+            **receipt,
+            "message": "Failed to load resource: the server responded with a status of 413 (Payload Too Large)",
+            "location": {
+                "origin": "http://127.0.0.1:40001",
+                "path": receipt["path"],
+                "has_query": receipt["has_query"],
+                "has_fragment": False,
+                "url_too_long": False,
+            },
+        }
+        for receipt in expected_413
+    ]
     check_names = sorted(COMMON_CONTENT_REQUIRED_CHECKS - {
         mobile_touch_check["name"], COMMON_CONTENT_NAVIGATOR_CHECK,
     }) + [
@@ -166,11 +203,57 @@ def _common_content_browser_report() -> dict:
         "focus_observations": focus_observations,
         "mobile_product_navigator_observations": mobile_navigator_observations,
         "writes": writes,
+        "preview_item_counts": [1, 1, 1, 1, 51, 50, 50],
+        "preview_selection_observations": [
+            {"item_count": 1, "unique_product_count": 1,
+             "product_id_fingerprint": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"},
+            {"item_count": 1, "unique_product_count": 1,
+             "product_id_fingerprint": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"},
+            {"item_count": 1, "unique_product_count": 1,
+             "product_id_fingerprint": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"},
+            {"item_count": 1, "unique_product_count": 1,
+             "product_id_fingerprint": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"},
+            {"item_count": 51, "unique_product_count": 51,
+             "product_id_fingerprint": overflow_fingerprint},
+            {"item_count": 50, "unique_product_count": 50,
+             "product_id_fingerprint": selected_fingerprint},
+            {"item_count": 50, "unique_product_count": 50,
+             "product_id_fingerprint": selected_fingerprint},
+        ],
+        "apply_result_counts": [1, 50],
+        "apply_result_observations": [
+            {"item_count": 1, "unique_product_count": 1,
+             "product_id_fingerprint": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"},
+            {"item_count": 50, "unique_product_count": 50,
+             "product_id_fingerprint": selected_fingerprint},
+        ],
+        "expected_http_rejections": expected_413,
+        "expected_rejection_console_errors": expected_413_console,
+        "bulk_50": {
+            "selected_products": 50,
+            "selected_product_id_fingerprint": selected_fingerprint,
+            "page_51_rejected": True,
+            "preview_api_51_rejected": True,
+            "last_product_keyboard_reachable": True,
+            "stale_apply_atomic_rejection": True,
+            "stale_denial_unchanged_selected_products": 50,
+            "stale_denial_new_audits": 0,
+            "first_preview_product_ids_match": True,
+            "recovery_preview_product_ids_match": True,
+            "recovery_apply_product_ids_match": True,
+            "recovery_preview_items": 50,
+            "recovery_apply_items": 50,
+            "persisted_overrides": 50,
+            "audit_rows": 50,
+            "final_content_edit_version_counts": {"2": 49, "3": 1},
+            "channel_records_unchanged": True,
+            "inheritance_and_source_preserved": True,
+        },
         "synthetic_actions": {
-            "preview_requests": 4,
-            "apply_requests": 2,
+            "preview_requests": 7,
+            "apply_requests": 4,
             "expected_preview_conflicts": 1,
-            "expected_apply_conflicts": 1,
+            "expected_apply_conflicts": 2,
             "empty_description_override_requests": 1,
             "provider_attempts": 0,
             "empty_route_api_reads": 0,
@@ -178,6 +261,183 @@ def _common_content_browser_report() -> dict:
             "empty_state_catalog_link_available": True,
             "selected_photo_order_persisted": True,
             "channel_record_unchanged": True,
+        },
+    }
+
+
+def _wb_edit_browser_report() -> dict:
+    layouts = []
+    for page in WB_EDIT_PAGES:
+        for theme in WB_EDIT_LAYOUT_THEMES:
+            for width in WB_EDIT_LAYOUT_WIDTHS:
+                left = 0 if width < 1024 else 260
+                content_width = width - left
+                layouts.append({
+                    "page": page,
+                    "theme": theme,
+                    "viewport_width": width,
+                    "document_width": width,
+                    "body_width": width,
+                    "main_width": width,
+                    "main_content_left": left,
+                    "main_content_width": content_width,
+                    "layout_settle": {
+                        "theme": theme,
+                        "stable_frames": 3,
+                        "fonts_ready": True,
+                        "theme_ready": True,
+                        "transitions_running": False,
+                        "viewport_width": width,
+                        "main_content_left": left,
+                        "main_content_width": content_width,
+                    },
+                })
+    required_checks = []
+    for name in sorted(WB_EDIT_REQUIRED_CHECKS):
+        if name == "single_edit_owner_session_cannot_post_foreign_product":
+            required_checks.append({
+                "name": name, "status": "passed", "http_status": 404,
+                "provider_writes": 1,
+            })
+        elif name == "single_edit_foreign_owner_session_cannot_post_seller_product":
+            required_checks.append({
+                "name": name, "status": "passed", "http_status": 404,
+                "provider_writes": 1, "separate_browser_session": True,
+            })
+        else:
+            required_checks.append({"name": name, "status": "passed"})
+    generic_checks = [
+        {"name": f"fixture_interaction_{index}", "status": "passed"}
+        for index in range(24 - len(required_checks))
+    ]
+    boundary_names = (
+        "wrong_weight_unit", "non_numeric_weight_type", "unlisted_dictionary_value",
+    )
+    write_request = {
+        "nm_id": 900000,
+        "requested_fields": ["characteristics"],
+        "core_fields_requested": [],
+        "core_fields_changed": [],
+        "characteristic_ids": [202, 303, 404],
+        "characteristics": [
+            {"id": 202, "value": ["Россия"]},
+            {"id": 303, "value": 125},
+            {"id": 404, "value": ["Пластик", "Металл"]},
+        ],
+        "full_card_read_before": True,
+        "full_card_patch_merged": True,
+        "full_card_readback": True,
+        "sizes_preserved_in_readback": True,
+        "sku_preserved_in_readback": True,
+    }
+    return {
+        "status": "complete",
+        "source": "worktree",
+        "provider_attempts": 0,
+        "unexpected_external_requests": [],
+        "unexpected_http": [],
+        "javascript_errors": [],
+        "browser_mutations": [],
+        "layouts": layouts,
+        "checks": required_checks + generic_checks,
+        "fake_wb_single_write_calls": 1,
+        "fake_wb_single_write_requests": [write_request],
+        "fake_wb_write_calls": 2,
+        "fake_wb_written_products": [*range(900000, 900050), 910000, 910001],
+        "fake_wb_client_instances": 3,
+        "single_edit_observations": {
+            "form_post": {
+                "http_status": 302,
+                "path": "/products/9876/edit",
+                "normal_html_form": True,
+                "csrf_field_present": True,
+                "fake_write_count": 1,
+                "readback_and_history": {
+                    "characteristic_ids": [101, 202, 303, 404],
+                    "size_count": 1,
+                    "sku": "SYNTHETIC-WB-SKU-000",
+                    "direct_history_count": 1,
+                    "history_changed_fields": ["characteristics"],
+                },
+            },
+            "core_form_alignment": {
+                "persisted_core_values": {
+                    "vendor_code": "SYNTHETIC-VENDOR-000",
+                    "title": "Pipedream Synthetic Product 000",
+                    "description": "Synthetic description",
+                    "brand": "Synthetic reviewed brand",
+                },
+                "initial_form_values": {
+                    "vendor_code": "SYNTHETIC-VENDOR-000",
+                    "title": "Pipedream Synthetic Product 000",
+                    "description": "Synthetic description",
+                    "brand": "Synthetic reviewed brand",
+                },
+                "initial_mismatch_fields": [],
+                "aligned_form_values": {
+                    "vendor_code": "SYNTHETIC-VENDOR-000",
+                    "title": "Pipedream Synthetic Product 000",
+                    "description": "Synthetic description",
+                    "brand": "Synthetic reviewed brand",
+                },
+                "exact_before_characteristic_submit": True,
+            },
+            "reopen": {
+                "country": "Россия",
+                "weight_grams": 125,
+                "materials": ["Пластик", "Металл"],
+                "sku_read_only": True,
+            },
+            "rejections": [
+                {
+                    "name": name,
+                    "http_status": 200,
+                    "provider_writes": 1,
+                    "local_product_preserved": True,
+                    "history_count": 1,
+                }
+                for name in boundary_names
+            ],
+            "seller_scope_denials": [
+                {
+                    "session": "owner", "target": "foreign_product",
+                    "http_status": 404, "fake_writes_unchanged": True,
+                },
+                {
+                    "session": "foreign_owner", "target": "seller_product",
+                    "http_status": 404, "separate_browser_session": True,
+                    "fake_writes_unchanged": True,
+                },
+            ],
+            "no_profile_denial": {
+                "final_path": "/dashboard",
+                "redirected": True,
+                "separate_browser_session": True,
+                "fake_writes_unchanged": True,
+            },
+        },
+        "single_edit_boundary_attempts": [
+            {
+                "name": name,
+                "status": 200,
+                "provider_writes": 1,
+                "fake_client_instances": 1,
+                "history_count": 1,
+                "local_product_preserved": True,
+            }
+            for name in boundary_names
+        ],
+        "mixed_fixture_observations": {
+            "selection": 50,
+            "eligible": 2,
+            "changed": 2,
+            "skipped": 48,
+            "errors": 0,
+            "fake_provider_call_delta": 1,
+            "fake_provider_product_ids": [910000, 910001],
+            "history_id": 123,
+            "history_product_ids": [20000, 20001],
+            "history_success_count": 2,
         },
     }
 
@@ -401,7 +661,7 @@ class Ux01RunnerContractTest(unittest.TestCase):
             )
             self.assertTrue(accepted["valid"])
             self.assertEqual(accepted["layout_count"], 28)
-            self.assertEqual(accepted["synthetic_common_content_writes"], 6)
+            self.assertEqual(accepted["synthetic_common_content_writes"], 11)
 
             unexpected_write = copy.deepcopy(report)
             unexpected_write["writes"].append({
@@ -523,6 +783,13 @@ class Ux01RunnerContractTest(unittest.TestCase):
             })
             invalid_reports.append(("contradictory failed check object", contradictory_check, "common_named_checks_missing_or_duplicate"))
 
+            duplicate_check = copy.deepcopy(report)
+            duplicate_check["checks"].append("common_51_selection_and_csrf_preview_rejected_without_mutation_or_publication")
+            invalid_reports.append((
+                "duplicate named bulk check", duplicate_check,
+                "common_named_checks_missing_or_duplicate",
+            ))
+
             untested_check = copy.deepcopy(report)
             untested_check["checks"].remove("common_photo_boundary_focus_first")
             untested_check["checks"].append({
@@ -551,6 +818,45 @@ class Ux01RunnerContractTest(unittest.TestCase):
             outside_focus = copy.deepcopy(report)
             outside_focus["focus_observations"][0]["rect"]["x"] = 2000
             invalid_reports.append(("focus outside viewport", outside_focus, "common_focus_observation_unconfirmed"))
+
+            missing_bulk_apply_fingerprint = copy.deepcopy(report)
+            missing_bulk_apply_fingerprint["apply_result_observations"][-1][
+                "product_id_fingerprint"
+            ] = "0" * 64
+            invalid_reports.append((
+                "apply IDs differ from selected 50", missing_bulk_apply_fingerprint,
+                "common_bulk_50_apply_fingerprint_incomplete",
+            ))
+
+            missing_stale_receipt = copy.deepcopy(report)
+            missing_stale_receipt["bulk_50"]["stale_denial_new_audits"] = 1
+            invalid_reports.append((
+                "stale denial produced an audit", missing_stale_receipt,
+                "common_bulk_50_persisted_counts_unexpected",
+            ))
+
+            false_version_counts = copy.deepcopy(report)
+            false_version_counts["bulk_50"]["final_content_edit_version_counts"] = {"2": 50}
+            invalid_reports.append((
+                "wrong final version counts", false_version_counts,
+                "common_bulk_50_version_counts_unexpected",
+            ))
+
+            missing_413_receipt = copy.deepcopy(report)
+            missing_413_receipt["expected_http_rejections"].pop()
+            invalid_reports.append((
+                "missing exact 413 route receipt", missing_413_receipt,
+                "common_bulk_50_http_rejections_missing_or_unscoped",
+            ))
+
+            wrong_413_console_endpoint = copy.deepcopy(report)
+            wrong_413_console_endpoint["expected_rejection_console_errors"][0][
+                "location"]["path"
+            ] = "/other/local/path"
+            invalid_reports.append((
+                "console 413 is from a different local endpoint", wrong_413_console_endpoint,
+                "common_bulk_50_413_console_rejections_missing_or_unscoped",
+            ))
 
             for label, invalid, expected_issue in invalid_reports:
                 with self.subTest(case=label):
@@ -603,21 +909,14 @@ class Ux01RunnerContractTest(unittest.TestCase):
             path = Path(temp_name) / "wb-edit.json"
             minimums = BROWSER_MINIMUMS["wb_edit_browser"]
             self.assertEqual(minimums, {"layouts": 30, "interactions": 24})
-            report = {
-                "status": "complete",
-                "source": "worktree",
-                "provider_attempts": 0,
-                "unexpected_external_requests": [],
-                "unexpected_http": [],
-                "javascript_errors": [],
-                "browser_mutations": [],
-                "layouts": [{"width": index} for index in range(minimums["layouts"])],
-                "checks": [{"name": str(index)} for index in range(minimums["interactions"])],
-            }
+            report = _wb_edit_browser_report()
+            self.assertEqual(len(report["layouts"]), 30)
+            self.assertEqual(len(report["checks"]), 24)
             path.write_text(json.dumps(report), encoding="utf-8")
             accepted = summarize_browser_report(
                 path,
                 "worktree",
+                require_synthetic_wb_edit=True,
                 minimum_layout_count=minimums["layouts"],
                 minimum_interaction_count=minimums["interactions"],
                 required_interaction_fields=("checks",),
@@ -626,19 +925,86 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertEqual(accepted["layout_count"], 30)
             self.assertEqual(accepted["interaction_count"], 24)
 
-            report["layouts"].pop()
-            report["checks"].pop()
-            path.write_text(json.dumps(report), encoding="utf-8")
-            rejected = summarize_browser_report(
-                path,
-                "worktree",
-                minimum_layout_count=minimums["layouts"],
-                minimum_interaction_count=minimums["interactions"],
-                required_interaction_fields=("checks",),
-            )
-            self.assertFalse(rejected["valid"])
-            self.assertIn("layout_rows_below_30", rejected["missing_evidence"])
-            self.assertIn("interaction_rows_below_24", rejected["missing_evidence"])
+            invalid_reports = []
+            missing_save = copy.deepcopy(report)
+            missing_save["checks"] = [
+                row for row in missing_save["checks"]
+                if row.get("name") != "single_edit_real_form_submit_reaches_fake_wb_and_persists_exact_history"
+            ]
+            invalid_reports.append(("missing saved single-edit check", missing_save,
+                                    "wb_edit_named_check_missing_or_failed:"))
+
+            failed_permission_check = copy.deepcopy(report)
+            next(row for row in failed_permission_check["checks"]
+                 if row["name"] == "single_edit_foreign_owner_session_cannot_post_seller_product")[
+                     "status"
+                 ] = "failed"
+            invalid_reports.append(("failed seller-boundary check", failed_permission_check,
+                                    "wb_edit_named_check_missing_or_failed:"))
+
+            wrong_characteristic_payload = copy.deepcopy(report)
+            wrong_characteristic_payload["fake_wb_single_write_requests"][0][
+                "characteristics"][1]["value"] = "125"
+            invalid_reports.append(("provider request is not exact", wrong_characteristic_payload,
+                                    "wb_single_edit_fake_request_unexpected"))
+
+            bad_weight_preservation = copy.deepcopy(report)
+            bad_weight_preservation["single_edit_observations"]["rejections"][0][
+                "local_product_preserved"
+            ] = False
+            invalid_reports.append(("invalid weight rejection loses local value", bad_weight_preservation,
+                                    "wb_single_edit_validation_boundaries_incomplete"))
+
+            missing_single_history = copy.deepcopy(report)
+            missing_single_history["single_edit_observations"]["form_post"][
+                "readback_and_history"]["direct_history_count"
+            ] = 0
+            invalid_reports.append(("missing direct history", missing_single_history,
+                                    "wb_single_edit_form_and_history_evidence_incomplete"))
+
+            incorrect_mixed_counts = copy.deepcopy(report)
+            incorrect_mixed_counts["mixed_fixture_observations"]["skipped"] = 47
+            invalid_reports.append(("wrong mixed skipped count", incorrect_mixed_counts,
+                                    "wb_mixed_selection_and_history_counts_unexpected"))
+
+            wrong_mixed_provider_ids = copy.deepcopy(report)
+            wrong_mixed_provider_ids["mixed_fixture_observations"][
+                "fake_provider_product_ids"
+            ] = [910000, 910002]
+            invalid_reports.append(("mixed apply writes another product", wrong_mixed_provider_ids,
+                                    "wb_mixed_provider_or_history_identity_unexpected"))
+
+            extra_fake_write = copy.deepcopy(report)
+            extra_fake_write["fake_wb_write_calls"] += 1
+            invalid_reports.append(("unexpected extra fake write", extra_fake_write,
+                                    "wb_fake_provider_bulk_write_totals_unexpected"))
+
+            incomplete_layout = copy.deepcopy(report)
+            incomplete_layout["layouts"].pop()
+            invalid_reports.append(("missing theme viewport layout", incomplete_layout,
+                                    "wb_edit_layout_matrix_incomplete_or_unmeasured"))
+
+            unmeasured_layout = copy.deepcopy(report)
+            unmeasured_layout["layouts"][0]["layout_settle"]["fonts_ready"] = False
+            invalid_reports.append(("unstable measured layout", unmeasured_layout,
+                                    "wb_edit_layout_matrix_incomplete_or_unmeasured"))
+
+            for label, invalid, expected_issue in invalid_reports:
+                with self.subTest(case=label):
+                    path.write_text(json.dumps(invalid), encoding="utf-8")
+                    rejected = summarize_browser_report(
+                        path,
+                        "worktree",
+                        require_synthetic_wb_edit=True,
+                        minimum_layout_count=minimums["layouts"],
+                        minimum_interaction_count=minimums["interactions"],
+                        required_interaction_fields=("checks",),
+                    )
+                    self.assertFalse(rejected["valid"])
+                    self.assertTrue(any(
+                        issue == expected_issue or issue.startswith(expected_issue)
+                        for issue in rejected["wb_edit_protocol_issues"]
+                    ), rejected["wb_edit_protocol_issues"])
 
     def test_wb_browser_bridge_allows_only_the_seeded_unmapped_edit_post(self):
         root = Path(__file__).resolve().parents[1]
@@ -652,7 +1018,11 @@ spec = importlib.util.spec_from_file_location("wb_edit_browser_fixture", source)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 origin = "http://sellerhub.synthetic"
-allowed_paths = module.local_post_allowlist({"unmapped_product_id": 10002})
+allowed_paths = module.local_post_allowlist({
+    "product_id": 10001,
+    "unmapped_product_id": 10002,
+    "foreign_product_id": 10003,
+})
 
 class FakeRoute:
     def __init__(self, path):

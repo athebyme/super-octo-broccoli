@@ -16,6 +16,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -60,6 +61,10 @@ REPORT = {
     "mobile_product_navigator_observations": [],
     "browser_api_reads": [],
     "writes": [],
+    "preview_item_counts": [],
+    "preview_selection_observations": [],
+    "apply_result_counts": [],
+    "apply_result_observations": [],
     "synthetic_actions": {
         "preview_requests": 0,
         "apply_requests": 0,
@@ -82,10 +87,32 @@ REPORT = {
     "focus_observations": [],
     "unexpected_http_requests": [],
     "unexpected_external_requests": [],
+    "expected_http_rejections": [],
+    "bulk_50": {
+        "selected_products": 0,
+        "selected_product_id_fingerprint": None,
+        "page_51_rejected": False,
+        "preview_api_51_rejected": False,
+        "last_product_keyboard_reachable": False,
+        "stale_apply_atomic_rejection": False,
+        "stale_denial_unchanged_selected_products": 0,
+        "stale_denial_new_audits": None,
+        "first_preview_product_ids_match": False,
+        "recovery_preview_product_ids_match": False,
+        "recovery_apply_product_ids_match": False,
+        "recovery_preview_items": 0,
+        "recovery_apply_items": 0,
+        "persisted_overrides": 0,
+        "audit_rows": 0,
+        "final_content_edit_version_counts": {},
+        "channel_records_unchanged": False,
+        "inheritance_and_source_preserved": False,
+    },
     "javascript_errors": [],
     "console_errors": [],
     "console_error_locations": [],
     "expected_conflict_console_errors": [],
+    "expected_rejection_console_errors": [],
     "provider_attempts": 0,
 }
 EXPECTED_CONFLICTS = {
@@ -94,12 +121,21 @@ EXPECTED_CONFLICTS = {
 }
 EXPECTED_CONFLICT_CONSOLE_COUNTS = {
     "/api/my-products/common-content/preview": 1,
-    "/api/my-products/common-content/apply": 1,
+    "/api/my-products/common-content/apply": 2,
 }
 EXPECTED_CONFLICT_CONSOLE_MESSAGE = (
     "Failed to load resource: the server responded with a status of 409 (Conflict)"
 )
 PENDING_EXPECTED_CONFLICT_CONSOLES = []
+EXPECTED_HTTP_REJECTIONS = {}
+PENDING_EXPECTED_REJECTION_CONSOLES = []
+EXPECTED_REJECTION_CONSOLE_COUNTS = {
+    ("GET", "/my-products/common-content", 413, "too_many_items", True): 1,
+    ("POST", "/api/my-products/common-content/preview", 413, "too_many_items", False): 1,
+}
+EXPECTED_413_RESOURCE_ERROR = re.compile(
+    r"Failed to load resource: the server responded with a status of 413 \([A-Za-z0-9 _-]{1,80}\)"
+)
 SHARED_SHELL_READ_PATH_CATEGORIES = {
     "/api/notifications/unread-count": "notifications_unread_count",
     "/api/tasks/tray": "background_tasks_tray",
@@ -129,7 +165,15 @@ requests.sessions.Session.request = forbid_provider_network
 socket.create_connection = forbid_provider_network
 
 from seller_platform import app
-from models import ImportedProduct, MarketplaceProductDraft, Seller, db
+from models import (
+    AgentChangeSnapshot,
+    ImportedProduct,
+    MarketplaceListing,
+    MarketplaceOperation,
+    MarketplaceProductDraft,
+    Seller,
+    db,
+)
 from routes.common_product_content import register_common_product_content_routes
 from services.common_product_content import CommonProductContentService, MAX_TITLE
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
@@ -325,11 +369,28 @@ def bridge(route):
             REPORT["writes"].append({"method": "POST", "path": parsed.path, "kind": "synthetic_preview"})
             try:
                 preview_body = json.loads(request.post_data or "{}")
+                preview_items = preview_body.get("items", [])
+                REPORT["preview_item_counts"].append(
+                    len(preview_items) if isinstance(preview_items, list) else None
+                )
+                preview_ids = [
+                    item.get("product_id") for item in preview_items
+                    if isinstance(item, dict)
+                ] if isinstance(preview_items, list) else []
+                valid_preview_ids = (
+                    len(preview_ids) == len(preview_items)
+                    and all(isinstance(value, int) and not isinstance(value, bool) for value in preview_ids)
+                ) if isinstance(preview_items, list) else False
+                REPORT["preview_selection_observations"].append({
+                    "item_count": len(preview_items) if isinstance(preview_items, list) else None,
+                    "unique_product_count": len(set(preview_ids)) if valid_preview_ids else None,
+                    "product_id_fingerprint": _id_set_fingerprint(preview_ids) if valid_preview_ids else None,
+                })
                 if any(
                     isinstance(item, dict)
                     and isinstance(item.get("changes"), dict)
                     and item["changes"].get("description") == {"mode": "override", "value": ""}
-                    for item in preview_body.get("items", [])
+                    for item in preview_items
                 ):
                     REPORT["synthetic_actions"]["empty_description_override_requests"] += 1
             except (TypeError, ValueError):
@@ -346,7 +407,42 @@ def bridge(route):
             return
         response = route.fetch(max_redirects=0)
         if response.status >= 400:
-            if (
+            rejection_key = (
+                request.method, parsed.path, response.status, bool(parsed.query),
+            )
+            if EXPECTED_HTTP_REJECTIONS.get(rejection_key, 0) > 0:
+                try:
+                    rejection_body = response.json()
+                    rejection_code = rejection_body.get("code") if isinstance(rejection_body, dict) else None
+                except Exception:
+                    rejection_code = None
+                receipt = {
+                    "method": request.method,
+                    "path": parsed.path,
+                    "status": response.status,
+                    "code": rejection_code,
+                    "has_query": bool(parsed.query),
+                    "has_fragment": bool(parsed.fragment),
+                }
+                expected_receipt_key = (
+                    request.method, parsed.path, response.status,
+                    rejection_code, bool(parsed.query),
+                )
+                if (
+                    rejection_code == "too_many_items"
+                    and not parsed.fragment
+                    and EXPECTED_REJECTION_CONSOLE_COUNTS.get(expected_receipt_key, 0) > 0
+                ):
+                    EXPECTED_HTTP_REJECTIONS[rejection_key] -= 1
+                    REPORT["expected_http_rejections"].append(receipt)
+                    PENDING_EXPECTED_REJECTION_CONSOLES.append(receipt)
+                else:
+                    REPORT["unexpected_http_requests"].append({
+                        "method": request.method,
+                        "path": parsed.path,
+                        "status": response.status,
+                    })
+            elif (
                 request.method == "POST"
                 and response.status == 409
                 and EXPECTED_CONFLICTS.get(parsed.path, [0])[0] > 0
@@ -361,6 +457,28 @@ def bridge(route):
                 })
             else:
                 REPORT["unexpected_http_requests"].append({"method": request.method, "path": parsed.path, "status": response.status})
+        elif request.method == "POST" and parsed.path == "/api/my-products/common-content/apply":
+            try:
+                apply_body = response.json()
+                applied = apply_body.get("applied", []) if isinstance(apply_body, dict) else []
+                REPORT["apply_result_counts"].append(
+                    len(applied) if isinstance(applied, list) else None
+                )
+                applied_ids = [
+                    item.get("product_id") for item in applied
+                    if isinstance(item, dict)
+                ] if isinstance(applied, list) else []
+                valid_applied_ids = (
+                    len(applied_ids) == len(applied)
+                    and all(isinstance(value, int) and not isinstance(value, bool) for value in applied_ids)
+                ) if isinstance(applied, list) else False
+                REPORT["apply_result_observations"].append({
+                    "item_count": len(applied) if isinstance(applied, list) else None,
+                    "unique_product_count": len(set(applied_ids)) if valid_applied_ids else None,
+                    "product_id_fingerprint": _id_set_fingerprint(applied_ids) if valid_applied_ids else None,
+                })
+            except Exception:
+                REPORT["apply_result_counts"].append(None)
         route.fulfill(response=response)
         return
 
@@ -389,6 +507,127 @@ def bridge(route):
 def query_ids(url: str) -> list[int]:
     values = parse_qs(urlsplit(url).query).get("product_id", [])
     return [int(value) for value in values]
+
+
+def _id_set_fingerprint(values: list[int]) -> str:
+    canonical = ",".join(str(value) for value in sorted(values))
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def _model_snapshot(model) -> tuple:
+    """Capture all scalar columns for synthetic no-write assertions."""
+    return tuple(
+        tuple((column.name, getattr(row, column.name)) for column in model.__table__.columns)
+        for row in model.query.order_by(model.id.asc()).all()
+    )
+
+
+def _bulk_product_snapshot(product_ids: list[int]) -> dict[int, dict]:
+    products = ImportedProduct.query.filter(
+        ImportedProduct.id.in_(product_ids),
+    ).order_by(ImportedProduct.id.asc()).all()
+    return {
+        product.id: {
+            column.name: getattr(product, column.name)
+            for column in ImportedProduct.__table__.columns
+        }
+        for product in products
+    }
+
+
+def _bulk_audit_snapshot(product_ids: list[int]) -> tuple:
+    rows = AgentChangeSnapshot.query.filter(
+        AgentChangeSnapshot.imported_product_id.in_(product_ids),
+    ).order_by(AgentChangeSnapshot.id.asc()).all()
+    return tuple(
+        tuple((column.name, getattr(row, column.name)) for column in AgentChangeSnapshot.__table__.columns)
+        for row in rows
+    )
+
+
+def _seed_bulk_fixture() -> list[int]:
+    """Add 51 independent source-backed local products after the main fixture."""
+    with app.app_context():
+        products = []
+        for index in range(1, 52):
+            title = f"Синтетический товар массового теста {index:02d}"
+            description = f"Исходное описание массового товара {index:02d}."
+            characteristics = [{"name": "Материал", "value": "хлопок"}]
+            source = {
+                "title": title,
+                "description": description,
+                "photo_urls": [],
+                "characteristics": characteristics,
+            }
+            products.append(ImportedProduct(
+                seller_id=FIXTURE["seller_id"],
+                external_id=f"COMMON-CONTENT-BULK-{index:02d}",
+                source_type="synthetic_bulk",
+                title=title,
+                description=description,
+                photo_urls="[]",
+                characteristics=json.dumps(characteristics, ensure_ascii=False),
+                original_data=json.dumps(source, ensure_ascii=False, sort_keys=True),
+            ))
+        db.session.add_all(products)
+        db.session.commit()
+        return [product.id for product in products]
+
+
+def _edit_bulk_titles(page, product_ids: list[int]) -> None:
+    """Make an explicit title override for every selected product via the UI."""
+    for index, product_id in enumerate(product_ids, start=1):
+        page.locator(
+            '#common-content-product-list button[data-product-id="{}"]'.format(product_id)
+        ).click()
+        title_section = page.locator('section[data-field-section="title"]')
+        title_section.get_by_role("button", name="Изменить значение", exact=True).click()
+        page.get_by_role("textbox", name="Общее название товара").fill(
+            f"Ручное название массового товара {index:02d}"
+        )
+
+
+def _install_synthetic_manual_drift(product_id: int, user_id: int) -> dict:
+    """Represent one concurrent seller edit after a reviewed 50-item preview."""
+    with app.app_context():
+        product = db.session.get(ImportedProduct, product_id)
+        before = {
+            "title": product.title,
+            "description": product.description,
+            "photo_urls": product.photo_urls,
+            "characteristics": product.characteristics,
+            "original_data": product.original_data,
+            "content_overrides_json": product.content_overrides_json,
+            "content_edit_version": int(product.content_edit_version or 1),
+        }
+        version = before["content_edit_version"] + 1
+        manual_description = "Параллельная ручная правка описания после предпросмотра."
+        inherited_description = json.loads(product.original_data)["description"]
+        overrides = {
+            "schema_version": 1,
+            "fields": {
+                "description": {
+                    "value": manual_description,
+                    "inherited_value": inherited_description,
+                    "inherited_origin": "source",
+                    "edited_by_user_id": user_id,
+                    "edited_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                    "edit_version": version,
+                },
+            },
+        }
+        product.description = manual_description
+        product.content_overrides_json = json.dumps(
+            overrides, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        product.content_edit_version = version
+        db.session.commit()
+        return {
+            "before": before,
+            "description": manual_description,
+            "version": version,
+            "overrides": overrides,
+        }
 
 
 def _console_location_metadata(url) -> dict:
@@ -449,12 +688,52 @@ def record_console_message(message) -> None:
             "location": location,
         })
         return
+    if EXPECTED_413_RESOURCE_ERROR.fullmatch(text):
+        rejection_pending_index = None
+        if (
+            not location["url_too_long"]
+            and location["origin"] == expected_origin
+            and not location["has_fragment"]
+        ):
+            rejection_pending_index = next((
+                index for index, response in enumerate(PENDING_EXPECTED_REJECTION_CONSOLES)
+                if response.get("status") == 413
+                and response.get("code") == "too_many_items"
+                and response.get("path") == location["path"]
+                and response.get("has_query") == location["has_query"]
+                and response.get("has_fragment") is False
+                and EXPECTED_REJECTION_CONSOLE_COUNTS.get((
+                    response.get("method"),
+                    response.get("path"),
+                    response.get("status"),
+                    response.get("code"),
+                    response.get("has_query"),
+                ), 0) > 0
+            ), None)
+        if rejection_pending_index is not None:
+            receipt = PENDING_EXPECTED_REJECTION_CONSOLES.pop(rejection_pending_index)
+            REPORT["expected_rejection_console_errors"].append({
+                **receipt,
+                "message": text,
+                "location": location,
+            })
+            return
     REPORT["console_errors"].append(text)
     REPORT["console_error_locations"].append({
         "message": text,
         "location": location,
         "pending_conflict_endpoints": [
             response.get("path") for response in PENDING_EXPECTED_CONFLICT_CONSOLES
+        ][:4],
+        "pending_rejection_receipts": [
+            {
+                "method": response.get("method"),
+                "path": response.get("path"),
+                "status": response.get("status"),
+                "code": response.get("code"),
+                "has_query": response.get("has_query"),
+            }
+            for response in PENDING_EXPECTED_REJECTION_CONSOLES
         ][:4],
     })
 
@@ -1166,6 +1445,334 @@ def record_keyboard_focus(page, check: str, selector: str, *, photo_url: str | N
     REPORT["focus_observations"].append(row)
 
 
+def _run_bulk_50_case(page) -> None:
+    """Exercise the real editor's 50-item limit, CAS recovery, and local audit."""
+    all_ids = _seed_bulk_fixture()
+    product_ids = all_ids[:50]
+    overflow_id = all_ids[50]
+    query50 = "&".join("product_id=" + str(value) for value in product_ids)
+    query51 = "&".join("product_id=" + str(value) for value in all_ids)
+    editor_path = "/my-products/common-content?" + query50
+    REPORT["bulk_50"]["selected_products"] = len(product_ids)
+    REPORT["bulk_50"]["selected_product_id_fingerprint"] = _id_set_fingerprint(product_ids)
+
+    with app.app_context():
+        db.session.expire_all()
+        initial_products = _bulk_product_snapshot(all_ids)
+        initial_audits = _bulk_audit_snapshot(all_ids)
+        initial_drafts = _model_snapshot(MarketplaceProductDraft)
+        initial_listings = _model_snapshot(MarketplaceListing)
+        initial_operations = _model_snapshot(MarketplaceOperation)
+    assert set(initial_products) == set(all_ids)
+    assert len(product_ids) == 50 and overflow_id not in product_ids
+
+    # The page selection and the preview API each reject 51 before any local or
+    # channel write. Fetch from the authenticated browser so both use real
+    # routes, cookies, and (for the POST) the real CSRF token.
+    page_url_rejection_key = ("GET", "/my-products/common-content", 413, True)
+    EXPECTED_HTTP_REJECTIONS[page_url_rejection_key] = (
+        EXPECTED_HTTP_REJECTIONS.get(page_url_rejection_key, 0) + 1
+    )
+    url_rejection = page.evaluate("""async path => {
+        const response = await fetch(path, {credentials: 'same-origin'});
+        let body = {};
+        try { body = await response.json(); } catch (_) {}
+        return {status: response.status, code: body.code || null};
+    }""", "/my-products/common-content?" + query51)
+    assert url_rejection == {"status": 413, "code": "too_many_items"}, url_rejection
+    REPORT["bulk_50"]["page_51_rejected"] = True
+
+    opened = page.goto(BASE + editor_path, wait_until="domcontentloaded")
+    assert opened and opened.status == 200
+    page.wait_for_load_state("networkidle")
+    assert query_ids(page.url) == product_ids
+    assert page.locator(".cpc-layout").get_attribute("data-product-count") == "50"
+    bootstrap = json.loads(page.locator("#common-content-bootstrap").text_content())
+    invalid_51_items = [{
+        "product_id": product_id,
+        "expected_content_edit_version": initial_products[product_id]["content_edit_version"],
+        "changes": {"title": {"mode": "override", "value": f"Отклонённое название {index:02d}"}},
+        "recipients": [],
+    } for index, product_id in enumerate(all_ids, start=1)]
+    preview_rejection_key = (
+        "POST", "/api/my-products/common-content/preview", 413, False,
+    )
+    EXPECTED_HTTP_REJECTIONS[preview_rejection_key] = (
+        EXPECTED_HTTP_REJECTIONS.get(preview_rejection_key, 0) + 1
+    )
+    api_rejection = page.evaluate("""async ({items, csrfToken}) => {
+        const response = await fetch('/api/my-products/common-content/preview', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+            body: JSON.stringify({items}),
+        });
+        let body = {};
+        try { body = await response.json(); } catch (_) {}
+        return {status: response.status, code: body.code || null};
+    }""", {"items": invalid_51_items, "csrfToken": bootstrap["csrfToken"]})
+    assert api_rejection == {"status": 413, "code": "too_many_items"}, api_rejection
+    REPORT["bulk_50"]["preview_api_51_rejected"] = True
+    api_preview_observation = REPORT["preview_selection_observations"][-1]
+    assert api_preview_observation == {
+        "item_count": 51,
+        "unique_product_count": 51,
+        "product_id_fingerprint": _id_set_fingerprint(all_ids),
+    }, api_preview_observation
+    with app.app_context():
+        db.session.expire_all()
+        assert _bulk_product_snapshot(all_ids) == initial_products
+        assert _bulk_audit_snapshot(all_ids) == initial_audits
+        assert _model_snapshot(MarketplaceProductDraft) == initial_drafts
+        assert _model_snapshot(MarketplaceListing) == initial_listings
+        assert _model_snapshot(MarketplaceOperation) == initial_operations
+    REPORT["checks"].append(
+        "common_51_selection_and_csrf_preview_rejected_without_mutation_or_publication"
+    )
+
+    # The 50th card must remain reachable by ordinary Tab navigation and Enter.
+    choices = page.locator(
+        '#common-content-product-list button[data-action="choose-product"]'
+    )
+    assert choices.count() == 50
+    choices.first.focus()
+    for _ in range(49):
+        page.keyboard.press("Tab")
+    last_is_focused = page.evaluate("""expectedId => {
+        const active = document.activeElement;
+        return active instanceof HTMLButtonElement
+            && active.dataset.action === 'choose-product'
+            && active.dataset.productId === expectedId;
+    }""", str(product_ids[-1]))
+    assert last_is_focused
+    page.keyboard.press("Enter")
+    last_button = choices.nth(49)
+    assert last_button.get_attribute("aria-current") == "true"
+    REPORT["bulk_50"]["last_product_keyboard_reachable"] = True
+    REPORT["checks"].append("common_50_product_navigator_last_card_keyboard_reachable")
+
+    # First review has 50 explicit title changes. Then simulate one valid
+    # concurrent manual description edit with its version/audit metadata.
+    _edit_bulk_titles(page, product_ids)
+    page.get_by_role("button", name="Проверить изменения").click()
+    preview_heading = page.get_by_role("heading", name="Проверьте изменения общего товара")
+    preview_heading.wait_for(state="attached")
+    assert page.locator("#common-content-preview .cpc-diff-product").count() == 50
+    assert REPORT["preview_item_counts"][-1] == 50, REPORT["preview_item_counts"][-5:]
+    first_preview_observation = REPORT["preview_selection_observations"][-1]
+    assert first_preview_observation == {
+        "item_count": 50,
+        "unique_product_count": 50,
+        "product_id_fingerprint": _id_set_fingerprint(product_ids),
+    }, first_preview_observation
+    REPORT["bulk_50"]["first_preview_product_ids_match"] = True
+    REPORT["interactions"].append("review_exact_50_explicit_title_overrides")
+
+    stale_id = product_ids[24]
+    manual_drift = _install_synthetic_manual_drift(stale_id, FIXTURE["user_id"])
+    with app.app_context():
+        db.session.expire_all()
+        after_drift_products = _bulk_product_snapshot(all_ids)
+        audits_before_stale_apply = _bulk_audit_snapshot(all_ids)
+        drafts_before_stale_apply = _model_snapshot(MarketplaceProductDraft)
+        listings_before_stale_apply = _model_snapshot(MarketplaceListing)
+        operations_before_stale_apply = _model_snapshot(MarketplaceOperation)
+    assert after_drift_products[stale_id]["description"] == manual_drift["description"]
+    assert after_drift_products[stale_id]["content_edit_version"] == manual_drift["version"]
+    assert after_drift_products[overflow_id] == initial_products[overflow_id]
+
+    apply_path = "/api/my-products/common-content/apply"
+    EXPECTED_CONFLICTS[apply_path][0] += 1
+    page.locator('input[data-action="acknowledge-preview"]').check()
+    page.get_by_role("button", name="Сохранить общий товар").click()
+    error = page.locator("#common-content-error")
+    error.wait_for(state="visible")
+    assert "Предыдущий diff отменён" in error.inner_text()
+    assert page.locator("#common-content-preview").is_hidden()
+    assert page.locator("#common-content-editor").evaluate("el => !el.inert")
+    with app.app_context():
+        db.session.expire_all()
+        rejected_products = _bulk_product_snapshot(all_ids)
+        rejected_audits = _bulk_audit_snapshot(all_ids)
+        assert rejected_products == after_drift_products
+        assert rejected_audits == audits_before_stale_apply
+        assert _model_snapshot(MarketplaceProductDraft) == drafts_before_stale_apply
+        assert _model_snapshot(MarketplaceListing) == listings_before_stale_apply
+        assert _model_snapshot(MarketplaceOperation) == operations_before_stale_apply
+    REPORT["bulk_50"]["stale_denial_unchanged_selected_products"] = sum(
+        rejected_products[product_id] == after_drift_products[product_id]
+        for product_id in product_ids
+    )
+    REPORT["bulk_50"]["stale_denial_new_audits"] = (
+        len(rejected_audits) - len(initial_audits)
+    )
+    assert REPORT["bulk_50"]["stale_denial_unchanged_selected_products"] == 50
+    assert REPORT["bulk_50"]["stale_denial_new_audits"] == 0
+    REPORT["bulk_50"]["stale_apply_atomic_rejection"] = True
+    REPORT["checks"].append("common_50_stale_manual_member_denied_atomically_without_partial_audit")
+
+    # The stale token is discarded by the real UI. Re-read all 50 records,
+    # explicitly restate the edits, review a fresh diff, then acknowledge it.
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.get_by_role("button", name="Перечитать выбранные").click()
+    page.get_by_text("Данные выбранных товаров перечитаны", exact=False).wait_for(timeout=20000)
+    _edit_bulk_titles(page, product_ids)
+    page.get_by_role("button", name="Проверить изменения").click()
+    preview_heading.wait_for(state="attached")
+    assert page.locator("#common-content-preview .cpc-diff-product").count() == 50
+    assert REPORT["preview_item_counts"][-1] == 50, REPORT["preview_item_counts"][-5:]
+    recovery_preview_observation = REPORT["preview_selection_observations"][-1]
+    assert recovery_preview_observation == {
+        "item_count": 50,
+        "unique_product_count": 50,
+        "product_id_fingerprint": _id_set_fingerprint(product_ids),
+    }, recovery_preview_observation
+    REPORT["bulk_50"]["recovery_preview_product_ids_match"] = True
+    REPORT["bulk_50"]["recovery_preview_items"] = REPORT["preview_item_counts"][-1]
+    save_button = page.get_by_role("button", name="Сохранить общий товар")
+    assert not save_button.is_enabled()
+    page.locator('input[data-action="acknowledge-preview"]').check()
+    assert save_button.is_enabled()
+    save_button.click()
+    page.get_by_text("Общий товар сохранён", exact=False).wait_for(timeout=30000)
+    page.wait_for_function("""() => {
+        const root = document.querySelector('#common-content-editor');
+        return root && root.getAttribute('aria-busy') === 'false' && !root.inert;
+    }""", timeout=30000)
+    assert REPORT["apply_result_counts"][-1] == 50, REPORT["apply_result_counts"]
+    REPORT["bulk_50"]["recovery_apply_items"] = REPORT["apply_result_counts"][-1]
+    recovery_apply_observation = REPORT["apply_result_observations"][-1]
+    assert recovery_apply_observation == {
+        "item_count": 50,
+        "unique_product_count": 50,
+        "product_id_fingerprint": _id_set_fingerprint(product_ids),
+    }, recovery_apply_observation
+    REPORT["bulk_50"]["recovery_apply_product_ids_match"] = True
+
+    with app.app_context():
+        db.session.expire_all()
+        final_products = _bulk_product_snapshot(all_ids)
+        final_audits = _bulk_audit_snapshot(all_ids)
+        final_drafts = _model_snapshot(MarketplaceProductDraft)
+        final_listings = _model_snapshot(MarketplaceListing)
+        final_operations = _model_snapshot(MarketplaceOperation)
+    assert set(final_products) == set(all_ids)
+    assert final_products[overflow_id] == initial_products[overflow_id]
+    assert final_drafts == initial_drafts
+    assert final_listings == initial_listings
+    assert final_operations == initial_operations
+
+    for index, product_id in enumerate(product_ids, start=1):
+        before = initial_products[product_id]
+        after = final_products[product_id]
+        expected_title = f"Ручное название массового товара {index:02d}"
+        expected_version = 3 if product_id == stale_id else 2
+        overrides = json.loads(after["content_overrides_json"])
+        fields = overrides["fields"]
+        assert after["title"] == expected_title
+        assert after["content_edit_version"] == expected_version
+        assert after["original_data"] == before["original_data"]
+        assert after["photo_urls"] == before["photo_urls"]
+        assert after["characteristics"] == before["characteristics"]
+        mutable_columns = {
+            "title", "content_overrides_json", "content_edit_version", "updated_at",
+        }
+        if product_id == stale_id:
+            mutable_columns.add("description")
+        assert all(
+            after[column] == before[column]
+            for column in before if column not in mutable_columns
+        )
+        title_entry = fields["title"]
+        assert set(title_entry) == {
+            "value", "inherited_value", "inherited_origin",
+            "edited_by_user_id", "edited_at", "edit_version",
+        }
+        assert title_entry["value"] == expected_title
+        assert title_entry["inherited_value"] == before["title"]
+        assert title_entry["inherited_origin"] == "source"
+        assert title_entry["edited_by_user_id"] == FIXTURE["user_id"]
+        assert title_entry["edit_version"] == expected_version
+        assert set(fields) == ({"title", "description"} if product_id == stale_id else {"title"})
+        if product_id == stale_id:
+            assert after["description"] == manual_drift["description"]
+            assert fields["description"]["value"] == manual_drift["description"]
+            assert fields["description"]["inherited_value"] == json.loads(before["original_data"])["description"]
+            assert fields["description"]["inherited_origin"] == "source"
+            assert fields["description"]["edit_version"] == manual_drift["version"]
+        else:
+            assert after["description"] == before["description"]
+    REPORT["bulk_50"]["persisted_overrides"] = sum(
+        "title" in json.loads(final_products[product_id]["content_overrides_json"])["fields"]
+        for product_id in product_ids
+    )
+    REPORT["bulk_50"]["final_content_edit_version_counts"] = {
+        str(version): count
+        for version, count in sorted(Counter(
+            final_products[product_id]["content_edit_version"]
+            for product_id in product_ids
+        ).items())
+    }
+    assert REPORT["bulk_50"]["persisted_overrides"] == 50
+    assert REPORT["bulk_50"]["final_content_edit_version_counts"] == {"2": 49, "3": 1}
+
+    old_audit_ids = {dict(row)["id"] for row in initial_audits}
+    new_audits = [dict(row) for row in final_audits if dict(row)["id"] not in old_audit_ids]
+    assert len(new_audits) == 50
+    assert {row["imported_product_id"] for row in new_audits} == set(product_ids)
+    for row in new_audits:
+        product_id = row["imported_product_id"]
+        index = product_ids.index(product_id) + 1
+        previous = json.loads(row["previous_values"])
+        current = json.loads(row["new_values"])
+        metadata = current.pop("__seller_common_content_audit")
+        assert row["task_id"] is None
+        assert row["agent_id"] == "seller-common-content-v1"
+        assert metadata["actor_user_id"] == FIXTURE["user_id"]
+        assert metadata["content_edit_version"] == final_products[product_id]["content_edit_version"]
+        assert current["title"] == f"Ручное название массового товара {index:02d}"
+        expected_prior_description = (
+            manual_drift["description"] if product_id == stale_id
+            else initial_products[product_id]["description"]
+        )
+        assert previous["description"] == expected_prior_description
+    REPORT["bulk_50"]["audit_rows"] = len(new_audits)
+    REPORT["bulk_50"]["channel_records_unchanged"] = (
+        final_drafts == initial_drafts
+        and final_listings == initial_listings
+        and final_operations == initial_operations
+    )
+    REPORT["bulk_50"]["inheritance_and_source_preserved"] = True
+    assert REPORT["bulk_50"]["audit_rows"] == 50
+    assert REPORT["bulk_50"]["channel_records_unchanged"]
+    assert REPORT["bulk_50"]["inheritance_and_source_preserved"]
+    assert REPORT["preview_item_counts"][-3:] == [51, 50, 50]
+    assert REPORT["expected_http_rejections"][-2:] == [
+        {
+            "method": "GET",
+            "path": "/my-products/common-content",
+            "status": 413,
+            "code": "too_many_items",
+            "has_query": True,
+            "has_fragment": False,
+        },
+        {
+            "method": "POST",
+            "path": "/api/my-products/common-content/preview",
+            "status": 413,
+            "code": "too_many_items",
+            "has_query": False,
+            "has_fragment": False,
+        },
+    ]
+    assert not any(EXPECTED_HTTP_REJECTIONS.values())
+    REPORT["checks"].append("common_50_recovery_apply_persists_50_overrides_and_50_server_audits")
+    REPORT["checks"].append("common_50_recovery_preserves_inheritance_source_and_channel_snapshots")
+
+
 def run():
     product_ids = [FIXTURE["source_id"], FIXTURE["second_source_id"]]
     query = "&".join("product_id=" + str(value) for value in product_ids)
@@ -1566,10 +2173,12 @@ def run():
         assert labels_are_readable, label_evidence
         REPORT["checks"].append("seller_facing_labels_replace_raw_json")
 
-        assert REPORT["synthetic_actions"]["preview_requests"] == 4
-        assert REPORT["synthetic_actions"]["apply_requests"] == 2
+        _run_bulk_50_case(page)
+
+        assert REPORT["synthetic_actions"]["preview_requests"] == 7
+        assert REPORT["synthetic_actions"]["apply_requests"] == 4
         assert REPORT["synthetic_actions"]["expected_preview_conflicts"] == 1
-        assert REPORT["synthetic_actions"]["expected_apply_conflicts"] == 1
+        assert REPORT["synthetic_actions"]["expected_apply_conflicts"] == 2
         assert REPORT["synthetic_actions"]["empty_description_override_requests"] == 1
         assert REPORT["provider_attempts"] == 0
         assert REPORT["unexpected_http_requests"] == []
@@ -1600,8 +2209,32 @@ def run():
         }
         assert observed_console_error_counts == expected_console_error_counts, console_evidence
         assert PENDING_EXPECTED_CONFLICT_CONSOLES == [], console_evidence
+        expected_rejection_console_counts = Counter(EXPECTED_REJECTION_CONSOLE_COUNTS)
+        observed_rejection_console_counts = Counter(
+            (
+                row.get("method"), row.get("path"), row.get("status"),
+                row.get("code"), row.get("has_query"),
+            )
+            for row in REPORT["expected_rejection_console_errors"]
+        )
+        rejection_console_evidence = {
+            "expected_by_exact_receipt": {
+                str(key): count for key, count in EXPECTED_REJECTION_CONSOLE_COUNTS.items()
+            },
+            "observed_by_exact_receipt": {
+                str(key): count for key, count in observed_rejection_console_counts.items()
+            },
+            "pending_http_rejections": PENDING_EXPECTED_REJECTION_CONSOLES,
+            "console_errors": REPORT["console_errors"],
+            "console_error_locations": REPORT["console_error_locations"],
+        }
+        assert observed_rejection_console_counts == expected_rejection_console_counts, rejection_console_evidence
+        assert PENDING_EXPECTED_REJECTION_CONSOLES == [], rejection_console_evidence
+        assert not any(EXPECTED_HTTP_REJECTIONS.values())
+        assert len(REPORT["expected_http_rejections"]) == 2
         assert REPORT["console_errors"] == []
         REPORT["checks"].append("expected_conflict_console_errors_scoped_by_endpoint_and_count")
+        REPORT["checks"].append("expected_413_console_rejections_scoped_by_receipt_endpoint_query_code_and_count")
         assert len(REPORT["layouts"]) == 28
         assert len(REPORT["checks"]) >= 8
         REPORT["status"] = "passed"

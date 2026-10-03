@@ -30,31 +30,36 @@
             <div class="flex items-center gap-3 mb-4">
                 <div :class="{
                     'w-3 h-3 rounded-full': true,
-                    'bg-green-500 animate-pulse': status.is_syncing,
-                    'bg-green-500': !status.is_syncing && status.last_sync_status === 'success',
-                    'bg-red-500': !status.is_syncing && (status.last_sync_status === 'error' || status.last_sync_status === 'auth_error'),
-                    'bg-gray-400': !status.is_syncing && !status.last_sync_status
+                    'bg-green-500 animate-pulse': status.sync_execution_confirmed,
+                    'bg-amber-500': status.sync_guard_active && !status.sync_execution_confirmed,
+                    'bg-green-500': !status.sync_guard_active && status.last_sync_status === 'success',
+                    'bg-red-500': !status.sync_guard_active && (status.last_sync_status === 'error' || status.last_sync_status === 'auth_error'),
+                    'bg-gray-400': !status.sync_guard_active && (!status.last_sync_status || status.last_sync_status === 'unknown')
                 }"></div>
                 <span class="text-lg font-medium text-gray-900" x-text="status.status_message"></span>
+            </div>
+
+            <div x-show="status.sync_guard_active" class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+                Обновление было запрошено. Его выполнение и время начала пока не подтверждены. Повторный запуск недоступен до уточнения результата.
             </div>
 
             <!-- Информация о последней синхронизации -->
             <div class="space-y-2 text-sm">
                 <div class="flex justify-between">
-                    <span class="text-gray-600">Последняя синхронизация:</span>
+                    <span class="text-gray-600">Последнее успешное завершение:</span>
                     <span class="font-medium text-gray-900" x-text="formatDateTime(status.last_sync_at)"></span>
                 </div>
-                <div class="flex justify-between" x-show="status.last_sync_duration">
+                <div class="flex justify-between" x-show="status.last_sync_duration !== null && status.last_sync_duration !== undefined">
                     <span class="text-gray-600">Длительность:</span>
                     <span class="font-medium text-gray-900" x-text="formatDuration(status.last_sync_duration)"></span>
                 </div>
                 <div class="flex justify-between">
                     <span class="text-gray-600">Всего товаров:</span>
-                    <span class="font-medium text-gray-900" x-text="status.total_products || 0"></span>
+                    <span class="font-medium text-gray-900" x-text="status.total_products ?? '—'"></span>
                 </div>
                 <div class="flex justify-between">
                     <span class="text-gray-600">Активных:</span>
-                    <span class="font-medium text-gray-900" x-text="status.active_products || 0"></span>
+                    <span class="font-medium text-gray-900" x-text="status.active_products ?? '—'"></span>
                 </div>
             </div>
 
@@ -67,36 +72,38 @@
             <!-- Кнопка ручной синхронизации -->
             <form action="{{ url_for('sync_products') }}" method="POST" class="mt-4">
                 <button type="submit"
-                        :disabled="status.is_syncing"
+                        {% if seller.api_sync_status == 'syncing' %}disabled{% endif %}
+                        :disabled="status.sync_guard_active"
+                        :aria-label="status.sync_guard_active ? 'Повторный запуск недоступен до уточнения результата' : null"
                         :class="{
                             'w-full px-6 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 font-medium text-sm': true,
-                            'bg-[#1a1a1a] text-white hover:bg-[#2a2a2a]': !status.is_syncing,
-                            'bg-gray-300 text-gray-500 cursor-not-allowed': status.is_syncing
+                            'bg-[#1a1a1a] text-white hover:bg-[#2a2a2a]': !status.sync_guard_active,
+                            'bg-gray-300 text-gray-500 cursor-not-allowed': status.sync_guard_active
                         }">
-                    <svg x-show="status.is_syncing" class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <svg x-show="status.sync_execution_confirmed" class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <span x-text="status.is_syncing ? 'Синхронизация...' : 'Запустить синхронизацию'"></span>
+                    <span x-text="status.sync_execution_confirmed ? 'Синхронизация...' : (status.sync_guard_active ? 'Результат уточняется' : 'Запустить синхронизацию')"></span>
                 </button>
             </form>
         </div>
 
         <!-- Статистика последней синхронизации -->
         <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-            <h2 class="text-lg font-semibold text-gray-900 mb-4">Статистика последней синхронизации</h2>
+            <h2 class="text-lg font-semibold text-gray-900 mb-4">Статистика последнего сохранённого результата</h2>
 
             <div class="grid grid-cols-3 gap-4">
                 <div class="text-center">
-                    <div class="text-3xl font-normal text-[#1a1a1a]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_synced || 0"></div>
+                    <div class="text-3xl font-normal text-[#1a1a1a]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_synced ?? '—'"></div>
                     <div class="text-sm text-gray-500 mt-1">Получено</div>
                 </div>
                 <div class="text-center">
-                    <div class="text-3xl font-normal text-[#1a1a1a]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_added || 0"></div>
+                    <div class="text-3xl font-normal text-[#1a1a1a]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_added ?? '—'"></div>
                     <div class="text-sm text-gray-500 mt-1">Добавлено</div>
                 </div>
                 <div class="text-center">
-                    <div class="text-3xl font-normal text-[#c45d3e]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_updated || 0"></div>
+                    <div class="text-3xl font-normal text-[#c45d3e]" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic" x-text="status.products_updated ?? '—'"></div>
                     <div class="text-sm text-gray-500 mt-1">Обновлено</div>
                 </div>
             </div>
@@ -175,7 +182,22 @@
 <script>
 function syncStatusApp() {
     return {
-        status: {},
+        status: {
+            is_syncing: {{ (seller.api_sync_status == 'syncing') | tojson }},
+            sync_guard_active: {{ (seller.api_sync_status == 'syncing') | tojson }},
+            sync_execution_confirmed: false,
+            status_message: {{ ('Обновление было запрошено. Его выполнение и время начала пока не подтверждены.' if seller.api_sync_status == 'syncing' else 'Загружаем статус…') | tojson }},
+            last_sync_status: {{ ('syncing' if seller.api_sync_status == 'syncing' else 'unknown') | tojson }},
+            last_sync_at: null,
+            last_sync_duration: null,
+            last_sync_error: null,
+            next_sync_at: null,
+            total_products: null,
+            active_products: null,
+            products_synced: null,
+            products_added: null,
+            products_updated: null,
+        },
         settings: {{ sync_settings.to_dict() | tojson | safe }},
         saveMessage: '',
 
@@ -237,7 +259,10 @@ function syncStatusApp() {
         },
 
         formatDuration(seconds) {
-            if (!seconds) return '—';
+            if (seconds === null || seconds === undefined
+                || typeof seconds !== 'number'
+                || !Number.isFinite(seconds)
+                || seconds < 0) return '—';
             if (seconds < 60) return `${seconds.toFixed(1)}с`;
             const minutes = Math.floor(seconds / 60);
             const secs = Math.floor(seconds % 60);

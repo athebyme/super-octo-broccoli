@@ -41,11 +41,11 @@
                     <div class="sh-tray-body">
                         <div class="sh-tray-title" x-text="item.title"></div>
                         <div class="sh-tray-meta">
-                            <span class="sh-tray-status" x-text="({running:'Выполняется',pending:'В очереди',queued:'В очереди',remote_running:'Выполняется',finalizing:'Завершение',applying:'Применяется'})[item.status] || item.status"></span>
+                            <span class="sh-tray-status" x-text="({running:'Выполняется',pending:'В очереди',queued:'В очереди',remote_running:'Выполняется',finalizing:'Завершение',applying:'Применяется',unknown:'Результат уточняется'})[item.status] || item.status"></span>
                             <span x-show="item.started_at" x-text="'· ' + $store.tasks.relTime(item.started_at)"></span>
                         </div>
                         <div class="sh-progress" :class="item.progress === null ? 'sh-progress--indeterminate' : ''"
-                             x-show="item.status !== 'pending' && item.status !== 'queued'">
+                             x-show="item.status !== 'pending' && item.status !== 'queued' && item.status !== 'unknown'">
                             <div class="sh-progress-bar" :style="item.progress !== null ? ('width:' + item.progress + '%') : ''"></div>
                         </div>
                     </div>

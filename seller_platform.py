@@ -1569,8 +1569,8 @@ def api_tasks_tray():
     # 9. Синхронизация каталога (флаг на Seller)
     try:
         if current_user.seller.api_sync_status == 'syncing':
-            items.append({'kind': 'sync', 'title': 'Синхронизация каталога', 'status': 'running',
-                          'progress': None, 'started_at': iso(getattr(current_user.seller, 'api_last_sync', None)),
+            items.append({'kind': 'sync', 'title': 'Результат синхронизации уточняется', 'status': 'unknown',
+                          'progress': None, 'started_at': None,
                           'link': '/products'})
     except Exception:
         pass
@@ -1619,6 +1619,37 @@ def api_products_search():
     return jsonify({'items': items})
 
 
+def _product_sync_settings_projection(seller_id: int) -> ProductSyncSettings:
+    """Return an unsaved settings projection with the model's documented defaults.
+
+    SQLAlchemy column defaults are applied on INSERT, so a transient model needs
+    explicit values before it can safely serve a read-only page/API response.
+    Counters stay unknown until a sync has produced a timestamped observation.
+    """
+    return ProductSyncSettings(
+        seller_id=seller_id,
+        is_enabled=False,
+        sync_interval_minutes=60,
+        sync_products=True,
+        sync_stocks=True,
+        products_synced=None,
+        products_added=None,
+        products_updated=None,
+    )
+
+
+def _product_sync_settings_payload(sync_settings: ProductSyncSettings) -> dict:
+    payload = sync_settings.to_dict()
+    if not sync_settings.last_sync_at:
+        payload.update({
+            'last_sync_duration': None,
+            'products_synced': None,
+            'products_added': None,
+            'products_updated': None,
+        })
+    return payload
+
+
 @app.route('/products')
 @login_required
 def products_list():
@@ -1626,21 +1657,6 @@ def products_list():
     if not current_user.seller:
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
-
-    # Проверяем не застрял ли статус синхронизации
-    if current_user.seller.api_sync_status == 'syncing' and current_user.seller.api_last_sync:
-        from datetime import timedelta
-        time_since_sync = datetime.utcnow() - current_user.seller.api_last_sync
-        # Для больших каталогов (8000+ товаров) синхронизация может идти >1 часа
-        # Считаем зависшей только если прошло больше 2 часов
-        if time_since_sync > timedelta(hours=2):
-            app.logger.warning(f"Resetting stuck sync status for seller {current_user.seller.id} (stuck for {time_since_sync})")
-            current_user.seller.api_sync_status = 'error'
-            # Обновляем настройки синхронизации
-            if current_user.seller.product_sync_settings:
-                current_user.seller.product_sync_settings.last_sync_status = 'error'
-                current_user.seller.product_sync_settings.last_sync_error = f'Sync timeout after {time_since_sync}'
-            db.session.commit()
 
     try:
         from services.product_selection import (
@@ -2614,12 +2630,10 @@ def product_sync_status_page():
         flash('У вас нет профиля продавца', 'danger')
         return redirect(url_for('dashboard'))
 
-    # Получаем или создаем настройки синхронизации
+    # A status page is a read: show defaults without creating durable settings.
     sync_settings = current_user.seller.product_sync_settings
     if not sync_settings:
-        sync_settings = ProductSyncSettings(seller_id=current_user.seller.id)
-        db.session.add(sync_settings)
-        db.session.commit()
+        sync_settings = _product_sync_settings_projection(current_user.seller.id)
 
     return render_template(
         'product_sync_status.html',
@@ -5943,16 +5957,22 @@ def api_product_sync_status():
 
     seller = current_user.seller
 
-    # Получаем или создаем настройки синхронизации
+    # A status read must not create settings or commit a read transaction.
     sync_settings = seller.product_sync_settings
     if not sync_settings:
-        sync_settings = ProductSyncSettings(seller_id=seller.id)
-        db.session.add(sync_settings)
-        db.session.commit()
+        sync_settings = _product_sync_settings_projection(seller.id)
+
+    sync_guard_active = seller.api_sync_status == 'syncing'
+    sync_history_known = bool(sync_settings.last_sync_at)
 
     # Базовая информация о статусе
     status_info = {
-        'is_syncing': seller.api_sync_status == 'syncing',
+        # There is no persisted start/worker identity. Keep the raw guard visible
+        # for duplicate-start safety, but do not report it as confirmed progress.
+        # Kept as a raw compatibility guard for existing status pollers.
+        'is_syncing': sync_guard_active,
+        'sync_guard_active': sync_guard_active,
+        'sync_execution_confirmed': False,
         'last_sync_status': seller.api_sync_status,
         'last_sync_at': seller.api_last_sync.isoformat() if seller.api_last_sync else None,
 
@@ -5962,10 +5982,10 @@ def api_product_sync_status():
         'next_sync_at': sync_settings.next_sync_at.isoformat() if sync_settings.next_sync_at else None,
 
         # Статистика последней синхронизации
-        'last_sync_duration': sync_settings.last_sync_duration,
-        'products_synced': sync_settings.products_synced,
-        'products_added': sync_settings.products_added,
-        'products_updated': sync_settings.products_updated,
+        'last_sync_duration': sync_settings.last_sync_duration if sync_history_known else None,
+        'products_synced': sync_settings.products_synced if sync_history_known else None,
+        'products_added': sync_settings.products_added if sync_history_known else None,
+        'products_updated': sync_settings.products_updated if sync_history_known else None,
         'last_sync_error': sync_settings.last_sync_error,
 
         # Общая статистика
@@ -5973,9 +5993,12 @@ def api_product_sync_status():
         'active_products': Product.query.filter_by(seller_id=seller.id, is_active=True).count(),
     }
 
-    # Вычисляем прогресс если синхронизация идет
-    if seller.api_sync_status == 'syncing':
-        status_info['status_message'] = 'Синхронизация выполняется...'
+    # `api_sync_status` is only a persisted start guard, not worker evidence.
+    if sync_guard_active:
+        status_info['status_message'] = (
+            'Обновление было запрошено. Его выполнение и время начала пока не подтверждены. '
+            'Повторный запуск недоступен до уточнения результата.'
+        )
         status_info['can_start_sync'] = False
     elif seller.api_sync_status == 'success':
         status_info['status_message'] = 'Последняя синхронизация завершена успешно'
@@ -5997,53 +6020,83 @@ def api_product_sync_settings():
     if not current_user.seller:
         return {'error': 'Seller profile not found'}, 404
 
-    # Получаем или создаем настройки
-    sync_settings = current_user.seller.product_sync_settings
-    if not sync_settings:
-        sync_settings = ProductSyncSettings(seller_id=current_user.seller.id)
-        db.session.add(sync_settings)
-        db.session.commit()
-
     if request.method == 'GET':
-        return sync_settings.to_dict()
+        sync_settings = current_user.seller.product_sync_settings
+        if not sync_settings:
+            sync_settings = _product_sync_settings_projection(current_user.seller.id)
+        return _product_sync_settings_payload(sync_settings)
 
     # POST - обновление настроек
     try:
-        data = request.get_json() or request.form.to_dict()
+        data = request.get_json() if request.is_json else request.form.to_dict()
+        if not isinstance(data, dict):
+            raise ValueError('Ожидался объект с настройками синхронизации')
 
-        # Обновляем настройки
+        supported_fields = {
+            'is_enabled', 'sync_interval_minutes', 'sync_products', 'sync_stocks',
+        }
+        if not supported_fields.intersection(data):
+            raise ValueError('Не переданы настройки для сохранения')
+
+        existing_settings = current_user.seller.product_sync_settings
+        settings = existing_settings or _product_sync_settings_projection(
+            current_user.seller.id,
+        )
+
+        # Parse every supplied value before mutating the ORM row. A bad field
+        # must not partially alter existing preferences or persist a new row.
+        is_enabled = settings.is_enabled
+        interval = settings.sync_interval_minutes
+        sync_products = settings.sync_products
+        sync_stocks = settings.sync_stocks
         if 'is_enabled' in data:
             is_enabled = str(data['is_enabled']).lower() in ['true', '1', 'on']
-            sync_settings.is_enabled = is_enabled
-
-            # Если включили - устанавливаем время следующей синхронизации
-            if is_enabled and not sync_settings.next_sync_at:
-                from datetime import timedelta
-                sync_settings.next_sync_at = datetime.utcnow() + timedelta(minutes=sync_settings.sync_interval_minutes)
 
         if 'sync_interval_minutes' in data:
             interval = int(data['sync_interval_minutes'])
             # Ограничиваем интервал от 5 минут до 24 часов
             interval = max(5, min(interval, 1440))
-            sync_settings.sync_interval_minutes = interval
-
-            # Пересчитываем время следующей синхронизации
-            if sync_settings.is_enabled:
-                from datetime import timedelta
-                sync_settings.next_sync_at = datetime.utcnow() + timedelta(minutes=interval)
 
         if 'sync_products' in data:
-            sync_settings.sync_products = str(data['sync_products']).lower() in ['true', '1', 'on']
+            sync_products = str(data['sync_products']).lower() in ['true', '1', 'on']
 
         if 'sync_stocks' in data:
-            sync_settings.sync_stocks = str(data['sync_stocks']).lower() in ['true', '1', 'on']
+            sync_stocks = str(data['sync_stocks']).lower() in ['true', '1', 'on']
+
+        next_sync_at = settings.next_sync_at
+        if 'is_enabled' in data and is_enabled and not next_sync_at:
+            from datetime import timedelta
+            next_sync_at = datetime.utcnow() + timedelta(minutes=interval)
+        if 'sync_interval_minutes' in data and is_enabled:
+            from datetime import timedelta
+            next_sync_at = datetime.utcnow() + timedelta(minutes=interval)
+
+        if existing_settings is None:
+            # Keep the database's documented zero defaults for a newly saved
+            # row. The response projection still masks them until there is a
+            # timestamped sync observation.
+            settings = ProductSyncSettings(
+                seller_id=current_user.seller.id,
+                is_enabled=is_enabled,
+                sync_interval_minutes=interval,
+                sync_products=sync_products,
+                sync_stocks=sync_stocks,
+                next_sync_at=next_sync_at,
+            )
+            db.session.add(settings)
+        else:
+            settings.is_enabled = is_enabled
+            settings.sync_interval_minutes = interval
+            settings.sync_products = sync_products
+            settings.sync_stocks = sync_stocks
+            settings.next_sync_at = next_sync_at
 
         db.session.commit()
 
         return {
             'success': True,
             'message': 'Настройки обновлены',
-            'settings': sync_settings.to_dict()
+            'settings': _product_sync_settings_payload(settings)
         }
 
     except Exception as e:

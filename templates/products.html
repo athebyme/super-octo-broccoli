@@ -46,10 +46,11 @@
                     <span class="hidden sm:inline">Создать карточку</span>
                 </a>
                 <form action="{{ url_for('sync_products') }}" method="POST">
-                    <button type="submit" class="sh-btn sh-btn--white-outline sh-btn--md" {% if seller.api_sync_status == 'syncing' %}disabled{% endif %}>
+                    <button type="submit" class="sh-btn sh-btn--white-outline sh-btn--md"
+                            {% if seller.api_sync_status == 'syncing' %}disabled aria-label="Результат синхронизации уточняется" title="Повторный запуск недоступен до уточнения результата"{% endif %}>
                         {% if seller.api_sync_status == 'syncing' %}
-                            <span class="sh-btn-icon"><svg class="animate-spin" width="16" height="16" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></span>
-                            <span class="hidden sm:inline">Синхронизация...</span>
+                            <span class="sh-btn-icon" aria-hidden="true">!</span>
+                            <span class="hidden sm:inline">Результат уточняется</span>
                         {% else %}
                             <span class="sh-btn-icon"><svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></span>
                             <span class="hidden sm:inline">Синхронизировать</span>
@@ -171,14 +172,20 @@
     {% endif %}
     {% endif %}
 
-    <!-- Статус последней синхронизации -->
+    <!-- Текущий флаг и последнее успешное завершение -->
+    {% if seller.api_sync_status == 'syncing' %}
+    <div class="sh-alert sh-alert--warning mb-4" role="status">
+        Обновление было запрошено. Его выполнение и время начала пока не подтверждены. Повторный запуск недоступен до уточнения результата.
+        <a class="underline" href="{{ url_for('product_sync_status_page') }}">Открыть статус</a>
+    </div>
+    {% endif %}
     {% if seller.api_last_sync %}
     <a href="{{ url_for('product_sync_status_page') }}" class="mb-6 p-4 bg-gray-50 rounded-lg flex items-center gap-3 hover:bg-gray-100 transition-colors cursor-pointer block">
         <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
         </svg>
         <span class="text-sm text-gray-700">
-            Последняя синхронизация: {{ seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}
+            Последнее успешное завершение: {{ seller.api_last_sync.strftime('%d.%m.%Y %H:%M') }}
         </span>
         <svg class="w-4 h-4 text-gray-400 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
@@ -728,7 +735,10 @@
             </p>
             {% if not search and seller.has_valid_api_key() %}
             <form action="{{ url_for('sync_products') }}" method="POST" style="margin-top:16px">
-                <button type="submit" class="sh-btn sh-btn--primary sh-btn--md">Синхронизировать товары</button>
+                <button type="submit" class="sh-btn sh-btn--primary sh-btn--md"
+                        {% if seller.api_sync_status == 'syncing' %}disabled title="Повторный запуск недоступен до уточнения результата"{% endif %}>
+                    {% if seller.api_sync_status == 'syncing' %}Результат уточняется{% else %}Синхронизировать товары{% endif %}
+                </button>
             </form>
             {% endif %}
         </div>
@@ -745,13 +755,6 @@
 
 <script type="application/json" id="selection-config">{{ selection_config|tojson }}</script>
 <script>
-// Автообновление при синхронизации
-{% if seller.api_sync_status == 'syncing' %}
-setTimeout(function() {
-    location.reload();
-}, 5000);
-{% endif %}
-
 // === Точный межстраничный выбор товаров ===
 const selectionConfig = JSON.parse(document.getElementById('selection-config').textContent);
 const selectionStorageKey = `wb-product-selection:${selectionConfig.sellerId}:${selectionConfig.marketplace}`;

@@ -75,6 +75,17 @@ REPORT = {
     "fake_wb_write_calls": 0,
     "fake_wb_written_products": [],
     "fake_wb_client_instances": 0,
+    "fake_wb_single_write_calls": 0,
+    "fake_wb_single_write_requests": [],
+    "single_edit_boundary_attempts": [],
+    "single_edit_observations": {
+        "form_post": None,
+        "reopen": None,
+        "rejections": [],
+        "seller_scope_denials": [],
+        "no_profile_denial": None,
+    },
+    "mixed_fixture_observations": None,
     "blocked_reason": None,
 }
 EXPECTED_NEGATIVE_HTTP = {
@@ -91,6 +102,11 @@ OBSERVED_EXPECTED_NEGATIVE_HTTP = set()
 EMPTY_PRODUCT_FORM_FILTERS = frozenset({
     "category", "has_stock", "block_status", "rating_min", "rating_max",
 })
+
+# Keep provider state separate from Product rows. The real single-card route
+# reads the complete WB card, merges the submitted patch, and stores the
+# provider readback; the synthetic client follows that same boundary.
+_FAKE_WB_CARDS: dict[int, dict[str, object]] = {}
 
 os.environ.update({
     "DATABASE_URL": "sqlite:///" + str(TEMP_PATH / "wb-edit.sqlite"),
@@ -168,7 +184,19 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             is_active=True,
         )
         foreign_user.set_password(PASSWORD)
-        db.session.add_all([owner, foreign_user])
+        no_profile_user = User(
+            username="ux01-wb-edit-no-profile",
+            email="ux01-wb-edit-no-profile@example.test",
+            is_active=True,
+        )
+        no_profile_user.set_password(PASSWORD)
+        mixed_user = User(
+            username="ux01-wb-edit-mixed",
+            email="ux01-wb-edit-mixed@example.test",
+            is_active=True,
+        )
+        mixed_user.set_password(PASSWORD)
+        db.session.add_all([owner, foreign_user, no_profile_user, mixed_user])
         db.session.flush()
 
         seller = Seller(
@@ -182,7 +210,13 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             company_name="Foreign synthetic shop",
             wb_seller_id="foreign-wb-account-synthetic",
         )
-        db.session.add_all([seller, foreign_seller])
+        mixed_seller = Seller(
+            user_id=mixed_user.id,
+            company_name="Mixed eligibility synthetic shop",
+            wb_seller_id="mixed-wb-account-synthetic",
+        )
+        mixed_seller.wb_api_key = "synthetic-mixed-provider-key-never-sent"
+        db.session.add_all([seller, foreign_seller, mixed_seller])
         db.session.flush()
 
         marketplace = Marketplace(
@@ -351,13 +385,40 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             photos_json="[]",
             is_active=True,
         )
-        db.session.add_all([*products, foreign, unmapped, male_subject_product])
+        mixed_products = []
+        for index in range(50):
+            mixed_products.append(Product(
+                id=20000 + index,
+                seller_id=mixed_seller.id,
+                # The products table stores nmID as NOT NULL and unique per
+                # seller; distinct negative synthetic sentinels are treated as
+                # "not linked" by the real preview validator.
+                nm_id=(910000 + index if index < 2 else -(index - 1)),
+                vendor_code=f"MIXED-{index:03d}",
+                title=f"Mixed isolated product {index:03d}",
+                brand="Mixed Initial Brand",
+                object_name="Свечи эротик",
+                subject_id=5880,
+                characteristics_json="[]",
+                sizes_json="[]",
+                photos_json="[]",
+                is_active=True,
+            ))
+        db.session.add_all([
+            *products, foreign, unmapped, male_subject_product, *mixed_products,
+        ])
         db.session.commit()
         return {
             "seller_id": int(seller.id),
             "foreign_product_id": int(foreign.id),
             "product_id": int(products[0].id),
             "product_count": len(products),
+            "no_profile_username": no_profile_user.username,
+            "mixed_username": mixed_user.username,
+            "mixed_seller_id": int(mixed_seller.id),
+            "mixed_product_ids": [int(product.id) for product in mixed_products],
+            "mixed_changed_product_ids": [int(product.id) for product in mixed_products[:2]],
+            "mixed_nm_ids": [int(product.nm_id) for product in mixed_products[:2]],
             "male_subject_product_id": int(male_subject_product.id),
             "unmapped_product_id": int(unmapped.id),
         }
@@ -365,6 +426,91 @@ def seed_synthetic_wb(app) -> dict[str, int]:
 
 class FakeWBClient:
     """Provider boundary fake; records simulated writes without HTTP."""
+
+    _UPDATE_FIELDS = frozenset({
+        "vendorCode", "title", "description", "brand", "characteristics",
+    })
+
+    @staticmethod
+    def _copy_card(card: dict[str, object]) -> dict[str, object]:
+        return json.loads(json.dumps(card, ensure_ascii=False))
+
+    @classmethod
+    def _read_full_card(cls, nm_id: int) -> dict[str, object]:
+        """Read the fake provider's current full card, seeding once from fixture DB."""
+        from models import Product
+
+        nm_id = int(nm_id)
+        if nm_id not in _FAKE_WB_CARDS:
+            product = Product.query.filter_by(nm_id=nm_id).one()
+            _FAKE_WB_CARDS[nm_id] = {
+                "nmID": nm_id,
+                "subjectID": int(product.subject_id or 0),
+                "vendorCode": product.vendor_code or "",
+                "title": product.title or "",
+                "brand": product.brand or "",
+                "description": product.description or "",
+                "sizes": json.loads(product.sizes_json or "[]"),
+                "characteristics": json.loads(product.characteristics_json or "[]"),
+            }
+        return cls._copy_card(_FAKE_WB_CARDS[nm_id])
+
+    @staticmethod
+    def _merge_characteristics(
+        full_card: dict[str, object], patch: object,
+    ) -> None:
+        if not isinstance(patch, list):
+            raise AssertionError("fake WB characteristic update must be a list")
+        existing_rows = full_card.get("characteristics")
+        if not isinstance(existing_rows, list):
+            raise AssertionError("fake WB full-card characteristics must be a list")
+        rows = [row for row in existing_rows]
+        positions = {
+            int(row["id"]): index
+            for index, row in enumerate(rows)
+            if isinstance(row, dict)
+            and type(row.get("id")) is int
+        }
+        for item in patch:
+            if not isinstance(item, dict) or type(item.get("id")) is not int:
+                raise AssertionError("fake WB characteristic patch needs an exact integer ID")
+            char_id = int(item["id"])
+            prior_index = positions.get(char_id)
+            prior = rows[prior_index] if prior_index is not None else {}
+            updated = {
+                **(prior if isinstance(prior, dict) else {}),
+                "id": char_id,
+                "name": item.get("name"),
+                "value": item.get("value"),
+            }
+            if prior_index is None:
+                positions[char_id] = len(rows)
+                rows.append(updated)
+            else:
+                rows[prior_index] = updated
+        full_card["characteristics"] = rows
+
+    @classmethod
+    def _merge_updates(
+        cls, full_card: dict[str, object], updates: dict[str, object],
+    ) -> dict[str, object]:
+        if not isinstance(updates, dict) or not updates:
+            raise AssertionError("fake WB write needs a non-empty update mapping")
+        unsupported = set(updates).difference(cls._UPDATE_FIELDS)
+        if unsupported:
+            raise AssertionError(
+                f"fake WB client received unsupported update fields: {sorted(unsupported)}"
+            )
+        after = cls._copy_card(full_card)
+        if "characteristics" in updates:
+            cls._merge_characteristics(after, updates["characteristics"])
+        for field in cls._UPDATE_FIELDS.difference({"characteristics"}):
+            if field in updates:
+                value = updates[field]
+                if not isinstance(value, str):
+                    raise AssertionError(f"fake WB scalar update {field} must be text")
+                after[field] = value
+        return after
 
     def __init__(self, *_args, **_kwargs):
         REPORT["fake_wb_client_instances"] += 1
@@ -380,34 +526,76 @@ class FakeWBClient:
         sent = []
         snapshots = {}
         for nm_id, row in updates.items():
-            before = {
-                "nmID": int(nm_id),
-                "subjectID": 5880,
-                "brand": "Pipedream",
-                "title": f"Pipedream product {nm_id}",
-                "vendorCode": f"PD-{int(nm_id) - 900000:03d}",
-                "description": "Synthetic description",
-                "characteristics": [],
-                "sizes": [],
-            }
+            nm_id = int(nm_id)
+            before = self._read_full_card(nm_id)
             if pre_merge_callback:
-                pre_merge_callback(int(nm_id), before, row)
-            after = dict(before)
-            after.update(row)
-            snapshots[int(nm_id)] = {"before": before, "after": after}
-            sent.append(int(nm_id))
+                pre_merge_callback(nm_id, self._copy_card(before), self._copy_card(row))
+            after = self._merge_updates(before, row)
+            _FAKE_WB_CARDS[nm_id] = self._copy_card(after)
+            snapshots[nm_id] = {
+                "before": before,
+                "after": self._copy_card(after),
+            }
+            sent.append(nm_id)
         REPORT["fake_wb_written_products"].extend(sent)
         return {"sent": sent, "missing": [], "invalid": {}, "failed": {}, "snapshots": snapshots}
+
+    def update_card(
+        self, nm_id, updates, *, snapshot_context, before_send_callback, **_kwargs,
+    ):
+        """Simulate full live read, exact patch merge, write and full readback."""
+        nm_id = int(nm_id)
+        before = self._read_full_card(nm_id)
+        snapshot_context["before"] = self._copy_card(before)
+        if before_send_callback:
+            before_send_callback({"before": self._copy_card(before)})
+
+        after = self._merge_updates(before, updates)
+        _FAKE_WB_CARDS[nm_id] = self._copy_card(after)
+        snapshot_context["after"] = self._copy_card(after)
+        patch = updates.get("characteristics") or []
+        core_fields = ("vendorCode", "title", "description", "brand")
+        requested_fields = sorted(updates)
+        core_fields_requested = sorted(set(requested_fields).intersection(core_fields))
+        core_fields_changed = [
+            field for field in core_fields
+            if before.get(field) != after.get(field)
+        ]
+        REPORT["fake_wb_single_write_calls"] += 1
+        REPORT["fake_wb_single_write_requests"].append({
+            "nm_id": nm_id,
+            "requested_fields": requested_fields,
+            "core_fields_requested": core_fields_requested,
+            "core_fields_changed": core_fields_changed,
+            "characteristic_ids": [int(item["id"]) for item in patch],
+            "characteristics": [
+                {"id": int(item["id"]), "value": item["value"]}
+                for item in patch
+            ],
+            "full_card_read_before": True,
+            "full_card_patch_merged": True,
+            "full_card_readback": True,
+            "sizes_preserved_in_readback": after["sizes"] == before["sizes"],
+            "sku_preserved_in_readback": after["sizes"] == before["sizes"],
+        })
 
 
 def local_post_allowlist(fixture: dict[str, int]) -> frozenset[str]:
     unmapped_product_id = fixture.get("unmapped_product_id")
-    if type(unmapped_product_id) is not int or unmapped_product_id <= 0:
-        raise ValueError("browser fixture needs one exact positive unmapped product ID")
+    product_id = fixture.get("product_id")
+    foreign_product_id = fixture.get("foreign_product_id")
+    if (
+        type(unmapped_product_id) is not int or unmapped_product_id <= 0
+        or type(product_id) is not int or product_id <= 0
+        or type(foreign_product_id) is not int or foreign_product_id <= 0
+    ):
+        raise ValueError("browser fixture needs exact positive product IDs")
     return frozenset({
         "/login",
         "/products/selection/resolve",
         "/products/bulk-edit",
+        f"/products/{product_id}/edit",
+        f"/products/{foreign_product_id}/edit",
         f"/products/{unmapped_product_id}/edit",
     })
 
@@ -507,6 +695,123 @@ def check(name: str, **details) -> None:
 
 def interaction(name: str, **details) -> None:
     REPORT["interactions"].append({"name": name, **details})
+
+
+def assert_single_edit_local_state(
+    seller_app, fixture: dict[str, int], *, expected_history_count: int,
+    expected_changed_fields: list[str] | None = None,
+) -> dict[str, object]:
+    """Read the disposable DB to prove writes and rejected posts preserve facts."""
+    from models import CardEditHistory, Product
+
+    expected_sizes = [{
+        "techSize": "ONE SIZE",
+        "skus": ["SYNTHETIC-WB-SKU-000"],
+        "chrtID": 700000,
+    }]
+    expected_values = {
+        101: ["Existing synthetic value"],
+        202: ["Россия"],
+        303: 125,
+        404: ["Пластик", "Металл"],
+    }
+    with seller_app.app_context():
+        product = Product.query.filter_by(
+            id=fixture["product_id"], seller_id=fixture["seller_id"],
+        ).one()
+        observed_characteristics = json.loads(product.characteristics_json)
+        by_id = {
+            int(row["id"]): row.get("value")
+            for row in observed_characteristics
+            if isinstance(row, dict) and isinstance(row.get("id"), int)
+        }
+        assert by_id == expected_values, by_id
+        assert json.loads(product.sizes_json) == expected_sizes
+        assert product.nm_id == 900000
+        assert product.vendor_code == "PD-000"
+        assert product.title == "Pipedream Synthetic Product 000"
+        assert product.brand == "Synthetic reviewed brand"
+
+        direct_history = CardEditHistory.query.filter_by(
+            product_id=product.id,
+            seller_id=fixture["seller_id"],
+            bulk_edit_id=None,
+            action="update",
+        ).order_by(CardEditHistory.id.asc()).all()
+        assert len(direct_history) == expected_history_count
+        if expected_history_count:
+            assert len(direct_history) == 1
+            history = direct_history[0]
+            assert history.changed_fields == expected_changed_fields
+            assert history.wb_synced is True
+            assert history.wb_sync_status == "success"
+            before = history.snapshot_before["characteristics"]
+            after = history.snapshot_after["characteristics"]
+            before_by_id = {int(row["id"]): row.get("value") for row in before}
+            after_by_id = {int(row["id"]): row.get("value") for row in after}
+            assert before_by_id == {101: ["Existing synthetic value"]}
+            assert after_by_id == expected_values
+        return {
+            "characteristic_ids": sorted(by_id),
+            "size_count": len(expected_sizes),
+            "sku": expected_sizes[0]["skus"][0],
+            "direct_history_count": len(direct_history),
+            "history_changed_fields": (
+                list(direct_history[0].changed_fields)
+                if direct_history else []
+            ),
+        }
+
+
+def post_from_isolated_session(page, *, path: str, value: str = "Россия") -> dict:
+    """Send a CSRF-bearing form POST without sharing the primary browser session."""
+    return page.evaluate("""async ({path, value}) => {
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const body = new URLSearchParams({csrf_token: csrf, char_202: value}).toString();
+        const response = await fetch(path, {
+            method: 'POST', credentials: 'same-origin', redirect: 'follow',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': csrf,
+            },
+            body,
+        });
+        return {
+            status: response.status,
+            path: new URL(response.url).pathname,
+            redirected: response.redirected,
+            body: await response.text(),
+        };
+    }""", {"path": path, "value": value})
+
+
+def authenticate_isolated_browser_session(page, *, username: str, next_path: str) -> dict:
+    """Authenticate a clean browser context through the real CSRF-protected login route."""
+    next_query = "%2Fproducts" if next_path == "/products" else "%2Fdashboard"
+    page.goto(BASE + f"/login?next={next_query}", wait_until="domcontentloaded")
+    return page.evaluate("""async ({username, password, nextPath}) => {
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const body = new URLSearchParams({
+            csrf_token: csrf, username, password,
+        }).toString();
+        const response = await fetch(`/login?next=${encodeURIComponent(nextPath)}`, {
+            method: 'POST', credentials: 'same-origin', redirect: 'follow',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRFToken': csrf,
+            },
+            body,
+        });
+        return {
+            status: response.status,
+            path: new URL(response.url).pathname,
+            redirected: response.redirected,
+        };
+    }""", {
+        "username": username,
+        "password": PASSWORD,
+        "nextPath": next_path,
+    })
 
 
 def assert_bulk_editor_mobile_footer(
@@ -1483,6 +1788,236 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 "fake_wb_write_calls": REPORT["fake_wb_write_calls"],
             })
 
+            # Use the page's normal HTML submit and CSRF field. The fake client
+            # is the only provider boundary; the route performs schema parsing,
+            # subject verification, local persistence and history creation.
+            page.locator("#char_202").select_option("Россия")
+            page.locator("#char_303").fill("125")
+            page.locator("#char_404").select_option(["Пластик", "Металл"])
+            single_form = page.locator("form.space-y-6")
+            assert single_form.locator('input[name="csrf_token"]').count() == 1
+            assert single_form.locator('input[name="schema_revision"]').input_value()
+            with seller_app.app_context():
+                persisted_product = Product.query.filter_by(
+                    id=fixture["product_id"], seller_id=fixture["seller_id"],
+                ).one()
+                persisted_core_values = {
+                    "vendor_code": persisted_product.vendor_code or "",
+                    "title": persisted_product.title or "",
+                    "description": persisted_product.description or "",
+                    "brand": persisted_product.brand or "",
+                }
+            core_form_locators = {
+                "vendor_code": single_form.locator("#vendor_code"),
+                "title": single_form.locator("#title"),
+                "description": single_form.locator("#description"),
+                "brand": single_form.locator("#brand"),
+            }
+            initial_core_form_values = {
+                field: locator.input_value()
+                for field, locator in core_form_locators.items()
+            }
+            initial_core_mismatches = sorted(
+                field for field, value in initial_core_form_values.items()
+                if value != persisted_core_values[field]
+            )
+            # Keep this scenario a characteristic-only save. A previous bulk
+            # review changed the persisted brand, so explicitly align every
+            # visible core field to the current seller-owned readback before
+            # submitting the normal form. This catches stale UI values instead
+            # of allowing them to become accidental provider updates.
+            for field, locator in core_form_locators.items():
+                locator.fill(persisted_core_values[field])
+            aligned_core_form_values = {
+                field: locator.input_value()
+                for field, locator in core_form_locators.items()
+            }
+            assert aligned_core_form_values == persisted_core_values
+            REPORT["single_edit_observations"]["core_form_alignment"] = {
+                "persisted_core_values": persisted_core_values,
+                "initial_form_values": initial_core_form_values,
+                "initial_mismatch_fields": initial_core_mismatches,
+                "aligned_form_values": aligned_core_form_values,
+                "exact_before_characteristic_submit": True,
+            }
+            check(
+                "single_edit_form_core_fields_match_persisted_values_before_targeted_characteristic_save",
+                core_fields=sorted(persisted_core_values),
+                pre_alignment_mismatch_fields=initial_core_mismatches,
+                post_alignment_exact=True,
+            )
+            single_path = f"/products/{fixture['product_id']}/edit"
+            with page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + single_path,
+                timeout=5000,
+            ) as single_post:
+                with page.expect_navigation(wait_until="domcontentloaded"):
+                    single_form.get_by_role(
+                        "button", name="Сохранить изменения", exact=True,
+                    ).click()
+            assert single_post.value.status == 302
+            assert urlsplit(page.url).path == f"/products/{fixture['product_id']}"
+            assert "Карточка успешно обновлена на Wildberries" in page.locator("body").inner_text()
+            assert REPORT["fake_wb_single_write_calls"] == 1
+            assert REPORT["fake_wb_write_calls"] == 1
+            single_fake_write = REPORT["fake_wb_single_write_requests"][0]
+            assert REPORT["fake_wb_single_write_requests"] == [{
+                "nm_id": 900000,
+                "requested_fields": ["characteristics"],
+                "core_fields_requested": [],
+                "core_fields_changed": [],
+                "characteristic_ids": [202, 303, 404],
+                "characteristics": [
+                    {"id": 202, "value": ["Россия"]},
+                    {"id": 303, "value": 125},
+                    {"id": 404, "value": ["Пластик", "Металл"]},
+                ],
+                "full_card_read_before": True,
+                "full_card_patch_merged": True,
+                "full_card_readback": True,
+                "sizes_preserved_in_readback": True,
+                "sku_preserved_in_readback": True,
+            }]
+            route_history_fields = [
+                field_name
+                for provider_field, field_name in (
+                    ("vendorCode", "vendor_code"),
+                    ("title", "title"),
+                    ("description", "description"),
+                    ("brand", "brand"),
+                    ("characteristics", "characteristics"),
+                )
+                if provider_field in single_fake_write["requested_fields"]
+            ]
+            saved_single_state = assert_single_edit_local_state(
+                seller_app, fixture, expected_history_count=1,
+                expected_changed_fields=route_history_fields,
+            )
+            REPORT["single_edit_observations"]["form_post"] = {
+                "http_status": single_post.value.status,
+                "path": single_path,
+                "normal_html_form": True,
+                "csrf_field_present": True,
+                "fake_write_count": REPORT["fake_wb_single_write_calls"],
+                "readback_and_history": saved_single_state,
+            }
+            check(
+                "single_edit_real_form_submit_reaches_fake_wb_and_persists_exact_history",
+                fake_wb_single_write_calls=REPORT["fake_wb_single_write_calls"],
+                requested_fields=single_fake_write["requested_fields"],
+                changed_characteristics=[202, 303, 404],
+                direct_history_count=saved_single_state["direct_history_count"],
+                sizes_and_sku_preserved=True,
+            )
+            check(
+                "single_edit_fake_provider_full_read_merge_readback_preserves_core_fields_sizes_and_sku",
+                full_card_read_before=single_fake_write["full_card_read_before"],
+                full_card_patch_merged=single_fake_write["full_card_patch_merged"],
+                full_card_readback=single_fake_write["full_card_readback"],
+                requested_fields=single_fake_write["requested_fields"],
+                core_fields_changed=single_fake_write["core_fields_changed"],
+                sizes_preserved=single_fake_write["sizes_preserved_in_readback"],
+                sku_preserved=single_fake_write["sku_preserved_in_readback"],
+                history_changed_fields=saved_single_state["history_changed_fields"],
+            )
+            interaction("single_characteristic_edit_uses_real_csrf_form_and_fake_provider_boundary")
+
+            page.goto(BASE + f"/products/{fixture['product_id']}/edit", wait_until="domcontentloaded")
+            assert page.locator("#char_202").input_value() == "Россия"
+            assert page.locator("#char_303").input_value() == "125"
+            assert page.locator("#char_404 option:checked").evaluate_all(
+                "options => options.map(option => option.value)"
+            ) == ["Пластик", "Металл"]
+            assert "SYNTHETIC-WB-SKU-000" in page.locator("body").inner_text()
+            assert page.locator('input[name="sku"], input[name="sizes_json"]').count() == 0
+            REPORT["single_edit_observations"]["reopen"] = {
+                "country": page.locator("#char_202").input_value(),
+                "weight_grams": int(page.locator("#char_303").input_value()),
+                "materials": page.locator("#char_404 option:checked").evaluate_all(
+                    "options => options.map(option => option.value)"
+                ),
+                "sku_read_only": True,
+            }
+            check(
+                "single_edit_reopens_exact_saved_values_with_sizes_and_sku_read_only",
+                reopened_country="Россия",
+                reopened_weight_grams=125,
+                reopened_materials=["Пластик", "Металл"],
+                readback=saved_single_state,
+            )
+            interaction("single_edit_reopened_from_persisted_local_readback")
+
+            # Use the actual form submission for malformed field types/units
+            # and a value that is absent from the cached dictionary. The
+            # hidden duplicate is inserted before its visible control to model
+            # a forged request while keeping normal browser POST + CSRF.
+            boundary_cases = [
+                ("wrong_weight_unit", 303, "125 кг", "требуется число"),
+                ("non_numeric_weight_type", 303, "not-a-number", "требуется число"),
+                ("unlisted_dictionary_value", 404, "Хлопок", "отсутствует в словаре WB"),
+            ]
+            single_client_count_before_boundaries = REPORT["fake_wb_client_instances"]
+            for boundary_name, char_id, bad_value, expected_error in boundary_cases:
+                page.goto(BASE + f"/products/{fixture['product_id']}/edit", wait_until="domcontentloaded")
+                if char_id == 303:
+                    page.locator("#char_303").evaluate("""(control, value) => {
+                        const form = control.form;
+                        form.noValidate = true;
+                        const injected = document.createElement('input');
+                        injected.type = 'hidden';
+                        injected.name = control.name;
+                        injected.value = value;
+                        control.before(injected);
+                    }""", bad_value)
+                else:
+                    page.locator("#char_404").evaluate("""(control, value) => {
+                        const form = control.form;
+                        form.noValidate = true;
+                        for (const option of control.options) option.selected = false;
+                        const injected = document.createElement('input');
+                        injected.type = 'hidden';
+                        injected.name = control.name;
+                        injected.value = value;
+                        control.before(injected);
+                    }""", bad_value)
+                with page.expect_navigation(wait_until="domcontentloaded") as rejected_post:
+                    page.locator('form.space-y-6 button[type="submit"]').click()
+                assert rejected_post.value.status == 200
+                assert urlsplit(page.url).path == f"/products/{fixture['product_id']}/edit"
+                assert expected_error in page.locator("body").inner_text()
+                state_after_rejection = assert_single_edit_local_state(
+                    seller_app, fixture, expected_history_count=1,
+                    expected_changed_fields=route_history_fields,
+                )
+                assert REPORT["fake_wb_single_write_calls"] == 1
+                assert REPORT["fake_wb_write_calls"] == 1
+                assert REPORT["fake_wb_client_instances"] == single_client_count_before_boundaries
+                REPORT["single_edit_boundary_attempts"].append({
+                    "name": boundary_name,
+                    "status": rejected_post.value.status,
+                    "provider_writes": REPORT["fake_wb_single_write_calls"],
+                    "fake_client_instances": REPORT["fake_wb_client_instances"],
+                    "history_count": state_after_rejection["direct_history_count"],
+                    "local_product_preserved": True,
+                })
+                REPORT["single_edit_observations"]["rejections"].append({
+                    "name": boundary_name,
+                    "http_status": rejected_post.value.status,
+                    "provider_writes": REPORT["fake_wb_single_write_calls"],
+                    "local_product_preserved": True,
+                    "history_count": state_after_rejection["direct_history_count"],
+                })
+                check(
+                    f"single_edit_rejects_{boundary_name}_without_local_loss",
+                    http_status=rejected_post.value.status,
+                    provider_writes=REPORT["fake_wb_single_write_calls"],
+                    fake_client_instances=REPORT["fake_wb_client_instances"],
+                    history_count=state_after_rejection["direct_history_count"],
+                    local_product_preserved=True,
+                )
+                interaction(f"invalid_single_edit_{boundary_name}_denied_before_fake_provider")
+
             unmapped_url = BASE + f"/products/{fixture['unmapped_product_id']}/edit"
             page.goto(unmapped_url, wait_until="domcontentloaded")
             assert_keyboard_focus(page, "unmapped_product_edit")
@@ -1517,6 +2052,135 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 status=stale_post["status"],
                 fake_wb_client_instances=REPORT["fake_wb_client_instances"],
             )
+
+            # Both directions of the seller boundary use a distinct product
+            # owner. First the authenticated owner tries the foreign product;
+            # then a clean foreign-owner session tries the authenticated
+            # seller's product. A profile-less account is tested separately.
+            provider_state_before_denials = (
+                REPORT["fake_wb_client_instances"],
+                REPORT["fake_wb_write_calls"],
+                REPORT["fake_wb_single_write_calls"],
+            )
+            owner_to_foreign = post_from_isolated_session(
+                page,
+                path=f"/products/{fixture['foreign_product_id']}/edit",
+            )
+            assert owner_to_foreign["status"] == 404
+            assert owner_to_foreign["path"] == f"/products/{fixture['foreign_product_id']}/edit"
+            assert (
+                REPORT["fake_wb_client_instances"],
+                REPORT["fake_wb_write_calls"],
+                REPORT["fake_wb_single_write_calls"],
+            ) == provider_state_before_denials
+            check(
+                "single_edit_owner_session_cannot_post_foreign_product",
+                http_status=owner_to_foreign["status"],
+                provider_writes=REPORT["fake_wb_single_write_calls"],
+            )
+            REPORT["single_edit_observations"]["seller_scope_denials"].append({
+                "session": "owner",
+                "target": "foreign_product",
+                "http_status": owner_to_foreign["status"],
+                "fake_writes_unchanged": True,
+            })
+
+            foreign_context = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                service_workers="block",
+            )
+            foreign_context.route(
+                "**/*",
+                lambda route: bridge(
+                    route,
+                    assets=assets,
+                    origin=origin,
+                    allowed_local_posts=allowed_local_posts,
+                ),
+            )
+            foreign_page = foreign_context.new_page()
+            foreign_page.set_default_timeout(15000)
+            foreign_page.on("response", record_http_response)
+            foreign_login = authenticate_isolated_browser_session(
+                foreign_page,
+                username="ux01-wb-edit-foreign",
+                next_path="/products",
+            )
+            assert foreign_login["status"] == 200 and foreign_login["redirected"] is True
+            foreign_to_owner = post_from_isolated_session(
+                foreign_page,
+                path=f"/products/{fixture['product_id']}/edit",
+            )
+            assert foreign_to_owner["status"] == 404
+            assert foreign_to_owner["path"] == f"/products/{fixture['product_id']}/edit"
+            assert (
+                REPORT["fake_wb_client_instances"],
+                REPORT["fake_wb_write_calls"],
+                REPORT["fake_wb_single_write_calls"],
+            ) == provider_state_before_denials
+            check(
+                "single_edit_foreign_owner_session_cannot_post_seller_product",
+                http_status=foreign_to_owner["status"],
+                separate_browser_session=True,
+                provider_writes=REPORT["fake_wb_single_write_calls"],
+            )
+            REPORT["single_edit_observations"]["seller_scope_denials"].append({
+                "session": "foreign_owner",
+                "target": "seller_product",
+                "http_status": foreign_to_owner["status"],
+                "separate_browser_session": True,
+                "fake_writes_unchanged": True,
+            })
+            foreign_context.close()
+
+            no_profile_context = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                service_workers="block",
+            )
+            no_profile_context.route(
+                "**/*",
+                lambda route: bridge(
+                    route,
+                    assets=assets,
+                    origin=origin,
+                    allowed_local_posts=allowed_local_posts,
+                ),
+            )
+            no_profile_page = no_profile_context.new_page()
+            no_profile_page.set_default_timeout(15000)
+            no_profile_page.on("response", record_http_response)
+            no_profile_login = authenticate_isolated_browser_session(
+                no_profile_page,
+                username=fixture["no_profile_username"],
+                next_path="/dashboard",
+            )
+            assert no_profile_login["status"] == 200 and no_profile_login["redirected"] is True
+            no_profile_attempt = post_from_isolated_session(
+                no_profile_page,
+                path=f"/products/{fixture['product_id']}/edit",
+            )
+            assert no_profile_attempt["status"] == 200
+            assert no_profile_attempt["redirected"] is True
+            assert no_profile_attempt["path"] == "/dashboard"
+            assert (
+                REPORT["fake_wb_client_instances"],
+                REPORT["fake_wb_write_calls"],
+                REPORT["fake_wb_single_write_calls"],
+            ) == provider_state_before_denials
+            check(
+                "single_edit_no_profile_post_redirects_without_provider_write",
+                final_path=no_profile_attempt["path"],
+                separate_browser_session=True,
+                provider_writes=REPORT["fake_wb_single_write_calls"],
+            )
+            REPORT["single_edit_observations"]["no_profile_denial"] = {
+                "final_path": no_profile_attempt["path"],
+                "redirected": no_profile_attempt["redirected"],
+                "separate_browser_session": True,
+                "fake_writes_unchanged": True,
+            }
+            no_profile_context.close()
+            interaction("isolated_foreign_and_no_profile_sessions_are_denied_before_provider")
 
             # Filter change resets the stored exact set rather than expanding
             # it silently. Then all-filtered is a separate explicit action;
@@ -1595,6 +2259,211 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 timeout=5000,
             )
             assert page.locator("#selectedCount").inner_text().strip() == "0"
+
+            # A second seller owns a separate exact 50-card fixture. Only two
+            # rows have a positive nmID, so the real preview must report
+            # selected=50, eligible=2, changed=2, skipped=48 and only those two
+            # cards may cross the fake WB boundary.
+            mixed_context = browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                service_workers="block",
+            )
+            mixed_context.route(
+                "**/*",
+                lambda route: bridge(
+                    route,
+                    assets=assets,
+                    origin=origin,
+                    allowed_local_posts=allowed_local_posts,
+                ),
+            )
+            mixed_page = mixed_context.new_page()
+            mixed_page.set_default_timeout(15000)
+            mixed_page.on("pageerror", lambda error: REPORT["javascript_errors"].append(str(error)))
+            mixed_page.on("response", record_http_response)
+            mixed_login = authenticate_isolated_browser_session(
+                mixed_page,
+                username=fixture["mixed_username"],
+                next_path="/products",
+            )
+            assert mixed_login["status"] == 200 and mixed_login["redirected"] is True
+            mixed_query = {
+                "search": ["Mixed"],
+                "brand": ["Mixed Initial Brand"],
+                "sort": ["title"],
+                "order": ["asc"],
+                "page": ["1"],
+                "per_page": ["50"],
+            }
+            mixed_list_url = (
+                BASE + "/products?search=Mixed&brand=Mixed%20Initial%20Brand"
+                "&sort=title&order=asc&page=1&per_page=50"
+            )
+            mixed_page.goto(mixed_list_url, wait_until="domcontentloaded")
+            _assert_local_products_url(mixed_page.url, mixed_query)
+            assert mixed_page.locator(".product-checkbox").count() == 50
+            mixed_list_ids = sorted(mixed_page.locator(
+                ".product-checkbox",
+            ).evaluate_all("inputs => inputs.map(input => Number(input.value))"))
+            assert mixed_list_ids == fixture["mixed_product_ids"]
+
+            with mixed_page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + "/products/selection/resolve",
+                timeout=5000,
+            ) as mixed_resolver:
+                mixed_page.get_by_role(
+                    "button", name="Выбрать все отфильтрованные (50)", exact=True,
+                ).click()
+            assert mixed_resolver.value.status == 200
+            assert sorted(mixed_resolver.value.json()["ids"]) == fixture["mixed_product_ids"]
+            mixed_page.wait_for_function(
+                "() => document.querySelector('#selectedCount')?.textContent?.trim() === '50'",
+                timeout=5000,
+            )
+            mixed_page.get_by_role("button", name="Редактировать", exact=True).click()
+            mixed_page.wait_for_url("**/products/bulk-edit")
+            assert "50 товаров" in mixed_page.locator("body").inner_text()
+            mixed_page.locator('input[name="operation"][value="update_brand"]').check()
+            mixed_page.locator("#value_brand").fill("Mixed Reviewed Brand")
+            mixed_fake_baseline = {
+                "instances": REPORT["fake_wb_client_instances"],
+                "write_calls": REPORT["fake_wb_write_calls"],
+                "written_products": len(REPORT["fake_wb_written_products"]),
+            }
+            with mixed_page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + "/products/bulk-edit",
+                timeout=5000,
+            ) as mixed_preview_post:
+                mixed_page.locator(
+                    'form[action="/products/bulk-edit"] button[type="submit"]',
+                ).click()
+            assert mixed_preview_post.value.status == 200
+            mixed_page.wait_for_selector("section[aria-label='Сводка предпросмотра']")
+            assert_review_summary(mixed_page, changed="2", skipped="48")
+            mixed_counts = mixed_page.locator(
+                "section[aria-label='Сводка предпросмотра'] div.sh-card",
+            ).evaluate_all("""cards => Object.fromEntries(cards.map(card => [
+                card.querySelector('p.text-xs').textContent.trim(),
+                Number(card.querySelector('p.text-2xl').textContent.trim()),
+            ]))""")
+            assert mixed_counts == {
+                "Выбрано": 50,
+                "Подходит для операции": 2,
+                "Изменится": 2,
+                "Пропущено": 48,
+                "Ошибки": 0,
+            }, mixed_counts
+            assert mixed_page.locator(
+                'section.sh-card--flush tbody tr',
+            ).count() == 2
+            assert REPORT["fake_wb_client_instances"] == mixed_fake_baseline["instances"]
+            assert REPORT["fake_wb_write_calls"] == mixed_fake_baseline["write_calls"]
+            assert len(REPORT["fake_wb_written_products"]) == mixed_fake_baseline["written_products"]
+            assert mixed_fake_baseline["write_calls"] == 1
+            check(
+                "mixed_fixture_preview_selected50_eligible2_changed2_skipped48",
+                counts=mixed_counts,
+                diff_rows=2,
+                fake_provider_writes_before_confirm=0,
+            )
+            interaction("isolated_mixed_fixture_review_keeps_48_unlinked_products_skipped")
+
+            with mixed_page.expect_response(
+                lambda response: response.request.method == "POST"
+                and response.url == BASE + "/products/bulk-edit",
+                timeout=5000,
+            ) as mixed_apply_post:
+                with mixed_page.expect_navigation(wait_until="domcontentloaded"):
+                    mixed_page.get_by_role(
+                        "button", name="Подтвердить и применить 2 карточек", exact=True,
+                    ).click()
+            assert mixed_apply_post.value.status == 302
+            assert "Успешно обновлено товаров: 2" in mixed_page.locator("body").inner_text()
+            mixed_written = REPORT["fake_wb_written_products"][
+                mixed_fake_baseline["written_products"]:
+            ]
+            assert sorted(mixed_written) == [910000, 910001], mixed_written
+            assert REPORT["fake_wb_write_calls"] - mixed_fake_baseline["write_calls"] == 1
+            assert REPORT["fake_wb_client_instances"] - mixed_fake_baseline["instances"] == 1
+            assert REPORT["provider_attempts"] == 0
+
+            from models import CardEditHistory, BulkEditHistory, Product
+            with seller_app.app_context():
+                mixed_history = BulkEditHistory.query.filter_by(
+                    seller_id=fixture["mixed_seller_id"],
+                    operation_type="update_brand",
+                ).one()
+                assert mixed_history.status == "completed"
+                assert mixed_history.total_products == 50
+                assert mixed_history.success_count == 2
+                assert mixed_history.error_count == 0
+                mixed_summary = (mixed_history.operation_params or {}).get("review_summary") or {}
+                assert mixed_summary == {
+                    "selected": 50,
+                    "eligible": 2,
+                    "changed": 2,
+                    "skipped": 48,
+                    "errors": 0,
+                    "changed_product_ids": fixture["mixed_changed_product_ids"],
+                    "mode": "replace",
+                    "subject_id": None,
+                }, mixed_summary
+                mixed_history_rows = CardEditHistory.query.filter_by(
+                    seller_id=fixture["mixed_seller_id"],
+                    bulk_edit_id=mixed_history.id,
+                ).order_by(CardEditHistory.product_id.asc()).all()
+                assert [row.product_id for row in mixed_history_rows] == fixture[
+                    "mixed_changed_product_ids"
+                ]
+                assert all(
+                    row.changed_fields == ["brand"]
+                    and row.wb_synced is True
+                    and row.wb_sync_status == "success"
+                    and row.snapshot_before["brand"] == "Mixed Initial Brand"
+                    and row.snapshot_after["brand"] == "Mixed Reviewed Brand"
+                    for row in mixed_history_rows
+                )
+                mixed_products = Product.query.filter(
+                    Product.id.in_(fixture["mixed_product_ids"]),
+                ).order_by(Product.id.asc()).all()
+                assert [product.brand for product in mixed_products] == [
+                    "Mixed Reviewed Brand", "Mixed Reviewed Brand",
+                    *(["Mixed Initial Brand"] * 48),
+                ]
+
+            mixed_history_id = int(mixed_history.id)
+            mixed_page.goto(
+                BASE + f"/bulk-history/{mixed_history_id}",
+                wait_until="domcontentloaded",
+            )
+            assert "Изменённые товары (2)" in mixed_page.locator("body").inner_text()
+            mixed_history_product_ids = sorted(mixed_page.locator(
+                "[data-operations-product-id]",
+            ).evaluate_all(
+                "rows => rows.map(row => Number(row.dataset.operationsProductId))",
+            ))
+            assert mixed_history_product_ids == fixture["mixed_changed_product_ids"]
+            assert mixed_page.locator('[data-operations-changed-field="brand"]').count() == 2
+            REPORT["mixed_fixture_observations"] = {
+                "selection": 50,
+                "eligible": 2,
+                "changed": 2,
+                "skipped": 48,
+                "errors": 0,
+                "fake_provider_call_delta": REPORT["fake_wb_write_calls"] - mixed_fake_baseline["write_calls"],
+                "fake_provider_product_ids": sorted(mixed_written),
+                "history_id": mixed_history_id,
+                "history_product_ids": mixed_history_product_ids,
+                "history_success_count": mixed_history.success_count,
+            }
+            check(
+                "mixed_fixture_confirm_writes_exact_two_provider_products_with_history_readback",
+                observation=REPORT["mixed_fixture_observations"],
+            )
+            interaction("mixed_fixture_confirm_writes_only_reviewed_rows_and_history_reads_back")
+            mixed_context.close()
 
             assert REPORT["provider_attempts"] == 0
             assert REPORT["javascript_errors"] == []
@@ -1716,6 +2585,18 @@ def main() -> int:
     app.jinja_env.globals["wb_photo_url"] = lambda *_args, **_kwargs: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs="
     seller_platform.WildberriesAPIClient = FakeWBClient
     fixture = seed_synthetic_wb(app)
+    EXPECTED_NEGATIVE_HTTP[
+        ("POST", f"/products/{fixture['product_id']}/edit")
+    ] = {
+        "status": 404,
+        "name": "foreign_owner_cannot_edit_seller_product",
+    }
+    EXPECTED_NEGATIVE_HTTP[
+        ("POST", f"/products/{fixture['foreign_product_id']}/edit")
+    ] = {
+        "status": 404,
+        "name": "seller_cannot_edit_foreign_owner_product",
+    }
 
     try:
         SERVER = make_server("127.0.0.1", 0, app, threaded=True)
