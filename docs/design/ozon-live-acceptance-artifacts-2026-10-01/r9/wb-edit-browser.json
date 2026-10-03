@@ -1,0 +1,1677 @@
+{
+  "source": "worktree",
+  "status": "complete",
+  "scope": "synthetic_wb_exact_selection_review_and_edit",
+  "database": "disposable_sqlite",
+  "network_policy": "loopback_and_hash_pinned_assets_only",
+  "layouts": [
+    {
+      "page": "products_list",
+      "theme": "light",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 251.9,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "products_list",
+      "theme": "light",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 53.8,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "products_list",
+      "theme": "light",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 250.8,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "products_list",
+      "theme": "dark",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 250.1,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "products_list",
+      "theme": "dark",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 56.3,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "products_list",
+      "theme": "dark",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 250.2,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "bulk_editor",
+      "theme": "light",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 246.8,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "bulk_editor",
+      "theme": "light",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 51.5,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "bulk_editor",
+      "theme": "light",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 251.1,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "bulk_editor",
+      "theme": "dark",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 246.4,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "bulk_editor",
+      "theme": "dark",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 56.1,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "bulk_editor",
+      "theme": "dark",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 251.2,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "bulk_review",
+      "theme": "light",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 241.2,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "bulk_review",
+      "theme": "light",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 59.1,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "bulk_review",
+      "theme": "light",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 246.3,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "bulk_review",
+      "theme": "dark",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 249.9,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "bulk_review",
+      "theme": "dark",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 59.8,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "bulk_review",
+      "theme": "dark",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 242.8,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "single_product_edit",
+      "theme": "light",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 249.4,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "single_product_edit",
+      "theme": "light",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 61.1,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "single_product_edit",
+      "theme": "light",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 242.1,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "single_product_edit",
+      "theme": "dark",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 248.2,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "single_product_edit",
+      "theme": "dark",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 59.9,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "single_product_edit",
+      "theme": "dark",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 246.4,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "unmapped_product_edit",
+      "theme": "light",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 252.3,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "unmapped_product_edit",
+      "theme": "light",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 59.6,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "unmapped_product_edit",
+      "theme": "light",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "light",
+        "elapsed_ms": 251.3,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    },
+    {
+      "page": "unmapped_product_edit",
+      "theme": "dark",
+      "viewport_width": 390,
+      "document_width": 390,
+      "body_width": 390,
+      "main_width": 390,
+      "main_content_left": 0,
+      "main_content_width": 390,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 247.3,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 390,
+        "main_content_left": 0,
+        "main_content_width": 390,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "unmapped_product_edit",
+      "theme": "dark",
+      "viewport_width": 768,
+      "document_width": 768,
+      "body_width": 768,
+      "main_width": 768,
+      "main_content_left": 0,
+      "main_content_width": 768,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 63.4,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 768,
+        "main_content_left": 0,
+        "main_content_width": 768,
+        "sidebar_right": 0
+      }
+    },
+    {
+      "page": "unmapped_product_edit",
+      "theme": "dark",
+      "viewport_width": 1280,
+      "document_width": 1280,
+      "body_width": 1280,
+      "main_width": 1020,
+      "main_content_left": 260,
+      "main_content_width": 1020,
+      "layout_settle": {
+        "theme": "dark",
+        "elapsed_ms": 247,
+        "stable_frames": 3,
+        "fonts_ready": true,
+        "theme_ready": true,
+        "transitions_running": false,
+        "viewport_width": 1280,
+        "main_content_left": 260,
+        "main_content_width": 1020,
+        "sidebar_right": 260
+      }
+    }
+  ],
+  "footer_mobile_layouts": [
+    {
+      "theme": "light",
+      "viewport_width": 320,
+      "document_width": 320,
+      "controls_in_viewport": true,
+      "touch_targets_at_least_44px": true,
+      "long_label_fits": true,
+      "layout_direction": "column"
+    },
+    {
+      "theme": "light",
+      "viewport_width": 360,
+      "document_width": 360,
+      "controls_in_viewport": true,
+      "touch_targets_at_least_44px": true,
+      "long_label_fits": true,
+      "layout_direction": "column"
+    },
+    {
+      "theme": "light",
+      "viewport_width": 390,
+      "document_width": 390,
+      "controls_in_viewport": true,
+      "touch_targets_at_least_44px": true,
+      "long_label_fits": true,
+      "layout_direction": "column"
+    },
+    {
+      "theme": "dark",
+      "viewport_width": 320,
+      "document_width": 320,
+      "controls_in_viewport": true,
+      "touch_targets_at_least_44px": true,
+      "long_label_fits": true,
+      "layout_direction": "column"
+    },
+    {
+      "theme": "dark",
+      "viewport_width": 360,
+      "document_width": 360,
+      "controls_in_viewport": true,
+      "touch_targets_at_least_44px": true,
+      "long_label_fits": true,
+      "layout_direction": "column"
+    },
+    {
+      "theme": "dark",
+      "viewport_width": 390,
+      "document_width": 390,
+      "controls_in_viewport": true,
+      "touch_targets_at_least_44px": true,
+      "long_label_fits": true,
+      "layout_direction": "column"
+    }
+  ],
+  "overflow_diagnostics": [],
+  "checks": [
+    {
+      "name": "keyboard_focus_visible_products_list",
+      "status": "passed",
+      "tag": "A",
+      "id": null,
+      "role": null,
+      "text": "Перейти к содержимому",
+      "keyboard_visible": true,
+      "rendered": true
+    },
+    {
+      "name": "foreign_product_selection_rejected",
+      "status": 403,
+      "method": "POST"
+    },
+    {
+      "name": "foreign_product_id_rejected_before_provider",
+      "status": "passed",
+      "http_status": 403,
+      "code": "selection_unavailable"
+    },
+    {
+      "name": "pagination_anchor_preserves_exact_filter_sort_and_page",
+      "status": "passed",
+      "expected_page": 2,
+      "sort": "vendor_code"
+    },
+    {
+      "name": "pagination_anchor_preserves_exact_filter_sort_and_page",
+      "status": "passed",
+      "expected_page": 2,
+      "sort": "title"
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_products_list_light",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_products_list_dark",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "unmapped_category_rejected",
+      "status": 409,
+      "method": "GET"
+    },
+    {
+      "name": "exact_subject_cache_and_unmapped_category_fail_closed",
+      "status": "passed",
+      "subject_id": 5880,
+      "working_subject_id": 5070,
+      "unmapped_status": 409
+    },
+    {
+      "name": "keyboard_focus_visible_bulk_editor",
+      "status": "passed",
+      "tag": "A",
+      "id": null,
+      "role": null,
+      "text": "Перейти к содержимому",
+      "keyboard_visible": true,
+      "rendered": true
+    },
+    {
+      "name": "sticky_footer_mobile_long_label_and_exact_cancel_return",
+      "status": "passed",
+      "widths": [
+        320,
+        360,
+        390
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "layouts": 6,
+      "minimum_touch_target_px": 44,
+      "exact_return_context": true
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_bulk_editor_light",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_bulk_editor_dark",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "mixed_manual_and_ai_operations_blocked_before_write",
+      "status": "passed"
+    },
+    {
+      "name": "no_op_bulk_preview_has_no_apply_token_or_provider_client",
+      "status": "passed"
+    },
+    {
+      "name": "keyboard_focus_visible_bulk_review",
+      "status": "passed",
+      "tag": "A",
+      "id": null,
+      "role": null,
+      "text": "Перейти к содержимому",
+      "keyboard_visible": true,
+      "rendered": true
+    },
+    {
+      "name": "manual_preview_reports_exact_selection_diff_before_fake_apply",
+      "status": "passed",
+      "selected": 50,
+      "changed": 50,
+      "skipped": 0,
+      "fake_wb_client_instances": 0
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_bulk_review_light",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_bulk_review_dark",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "filter_drift_returns_to_signed_context_and_preserves_exact_selection",
+      "status": "passed",
+      "selected": 50,
+      "safe_return_query": {
+        "search": [
+          "Pipedream"
+        ],
+        "brand": [
+          "Pipedream"
+        ],
+        "sort": [
+          "title"
+        ],
+        "order": [
+          "asc"
+        ],
+        "page": [
+          "2"
+        ],
+        "per_page": [
+          "50"
+        ]
+      },
+      "fake_wb_client_instances": 0
+    },
+    {
+      "name": "restored_filter_allows_exact_50_to_reopen_through_ui",
+      "status": "passed",
+      "selected": 50
+    },
+    {
+      "name": "description_fingerprint_drift_rejected_before_provider",
+      "status": "passed",
+      "selected": 50
+    },
+    {
+      "name": "fresh_preview_after_description_restore_reports_exact_selection",
+      "status": "passed",
+      "selected": 50
+    },
+    {
+      "name": "successful_exact_50_apply_is_seller_scoped_and_readable_in_history",
+      "status": "passed",
+      "selected": 50,
+      "history_rows": 50,
+      "fake_wb_write_calls": 1
+    },
+    {
+      "name": "reviewed_apply_reaches_only_fake_provider_with_exact_50_products",
+      "status": "passed",
+      "fake_wb_write_calls": 1,
+      "exact_product_count": 50
+    },
+    {
+      "name": "keyboard_focus_visible_single_product_edit",
+      "status": "passed",
+      "tag": "A",
+      "id": null,
+      "role": null,
+      "text": "Перейти к содержимому",
+      "keyboard_visible": true,
+      "rendered": true
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_single_product_edit_light",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_single_product_edit_dark",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "single_edit_uses_cached_country_weight_multi_schema_and_read_only_sku",
+      "status": "passed",
+      "subject_id": 5880,
+      "schema_fields": 32,
+      "fake_wb_write_calls": 1
+    },
+    {
+      "name": "single_edit_form_core_fields_match_persisted_values_before_targeted_characteristic_save",
+      "status": "passed",
+      "core_fields": [
+        "brand",
+        "description",
+        "title",
+        "vendor_code"
+      ],
+      "pre_alignment_mismatch_fields": [
+        "description"
+      ],
+      "post_alignment_exact": true
+    },
+    {
+      "name": "single_edit_real_form_submit_reaches_fake_wb_and_persists_exact_history",
+      "status": "passed",
+      "fake_wb_single_write_calls": 1,
+      "requested_fields": [
+        "characteristics"
+      ],
+      "changed_characteristics": [
+        202,
+        303,
+        404
+      ],
+      "direct_history_count": 1,
+      "sizes_and_sku_preserved": true
+    },
+    {
+      "name": "single_edit_fake_provider_full_read_merge_readback_preserves_core_fields_sizes_and_sku",
+      "status": "passed",
+      "full_card_read_before": true,
+      "full_card_patch_merged": true,
+      "full_card_readback": true,
+      "requested_fields": [
+        "characteristics"
+      ],
+      "core_fields_changed": [],
+      "sizes_preserved": true,
+      "sku_preserved": true,
+      "history_changed_fields": [
+        "characteristics"
+      ]
+    },
+    {
+      "name": "single_edit_reopens_exact_saved_values_with_sizes_and_sku_read_only",
+      "status": "passed",
+      "reopened_country": "Россия",
+      "reopened_weight_grams": 125,
+      "reopened_materials": [
+        "Пластик",
+        "Металл"
+      ],
+      "readback": {
+        "characteristic_ids": [
+          101,
+          202,
+          303,
+          404
+        ],
+        "size_count": 1,
+        "sku": "SYNTHETIC-WB-SKU-000",
+        "direct_history_count": 1,
+        "history_changed_fields": [
+          "characteristics"
+        ]
+      }
+    },
+    {
+      "name": "single_edit_rejects_wrong_weight_unit_without_local_loss",
+      "status": "passed",
+      "http_status": 200,
+      "provider_writes": 1,
+      "fake_client_instances": 2,
+      "history_count": 1,
+      "local_product_preserved": true
+    },
+    {
+      "name": "single_edit_rejects_non_numeric_weight_type_without_local_loss",
+      "status": "passed",
+      "http_status": 200,
+      "provider_writes": 1,
+      "fake_client_instances": 2,
+      "history_count": 1,
+      "local_product_preserved": true
+    },
+    {
+      "name": "single_edit_rejects_unlisted_dictionary_value_without_local_loss",
+      "status": "passed",
+      "http_status": 200,
+      "provider_writes": 1,
+      "fake_client_instances": 2,
+      "history_count": 1,
+      "local_product_preserved": true
+    },
+    {
+      "name": "keyboard_focus_visible_unmapped_product_edit",
+      "status": "passed",
+      "tag": "A",
+      "id": null,
+      "role": null,
+      "text": "Перейти к содержимому",
+      "keyboard_visible": true,
+      "rendered": true
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_unmapped_product_edit_light",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "responsive_no_horizontal_overflow_unmapped_product_edit_dark",
+      "status": "passed",
+      "widths": [
+        390,
+        768,
+        1280
+      ]
+    },
+    {
+      "name": "unmapped_subject_keeps_old_characteristics_read_only_and_rejects_clear_post",
+      "status": 200,
+      "fake_wb_client_instances": 2
+    },
+    {
+      "name": "seller_cannot_edit_foreign_owner_product",
+      "status": 404,
+      "method": "POST"
+    },
+    {
+      "name": "single_edit_owner_session_cannot_post_foreign_product",
+      "status": "passed",
+      "http_status": 404,
+      "provider_writes": 1
+    },
+    {
+      "name": "foreign_owner_cannot_edit_seller_product",
+      "status": 404,
+      "method": "POST"
+    },
+    {
+      "name": "single_edit_foreign_owner_session_cannot_post_seller_product",
+      "status": "passed",
+      "http_status": 404,
+      "separate_browser_session": true,
+      "provider_writes": 1
+    },
+    {
+      "name": "single_edit_no_profile_post_redirects_without_provider_write",
+      "status": "passed",
+      "final_path": "/dashboard",
+      "separate_browser_session": true,
+      "provider_writes": 1
+    },
+    {
+      "name": "all_filtered_resolver_returns_exact_current_filter_ids",
+      "status": "passed",
+      "resolver_status": 200,
+      "selected": 50
+    },
+    {
+      "name": "mixed_fixture_preview_selected50_eligible2_changed2_skipped48",
+      "status": "passed",
+      "counts": {
+        "Выбрано": 50,
+        "Подходит для операции": 2,
+        "Изменится": 2,
+        "Пропущено": 48,
+        "Ошибки": 0
+      },
+      "diff_rows": 2,
+      "fake_provider_writes_before_confirm": 0
+    },
+    {
+      "name": "mixed_fixture_confirm_writes_exact_two_provider_products_with_history_readback",
+      "status": "passed",
+      "observation": {
+        "selection": 50,
+        "eligible": 2,
+        "changed": 2,
+        "skipped": 48,
+        "errors": 0,
+        "fake_provider_call_delta": 1,
+        "fake_provider_product_ids": [
+          910000,
+          910001
+        ],
+        "history_id": 2,
+        "history_product_ids": [
+          20000,
+          20001
+        ],
+        "history_success_count": 2
+      }
+    }
+  ],
+  "interactions": [
+    {
+      "name": "authenticated_login_with_csrf_enabled"
+    },
+    {
+      "name": "sort_form_preserves_nondefault_per_page_100_and_filters"
+    },
+    {
+      "name": "select_exact_first_page_50"
+    },
+    {
+      "name": "selection_survives_cross_page_navigation"
+    },
+    {
+      "name": "selection_survives_sort_and_second_page"
+    },
+    {
+      "name": "sticky_cancel_restores_exact_filter_sort_page_selection"
+    },
+    {
+      "name": "bulk_editor_names_wb_account_channel_and_safe_return_context"
+    },
+    {
+      "name": "safe_return_link_restores_filter_sort_page_selection"
+    },
+    {
+      "name": "mixed_manual_ai_post_gets_actionable_no_write_notice"
+    },
+    {
+      "name": "no_op_preview_has_no_apply_token_or_provider_client"
+    },
+    {
+      "name": "manual_bulk_preview_shows_exact_50_row_diff_without_provider_io"
+    },
+    {
+      "name": "filter_drift_notice_keeps_safe_context_and_exact_50_id_set"
+    },
+    {
+      "name": "restored_filter_reopens_exact_50_product_selection_through_ui"
+    },
+    {
+      "name": "non_filter_description_drift_rejected_without_provider_io"
+    },
+    {
+      "name": "fresh_review_created_after_restoring_local_description"
+    },
+    {
+      "name": "successful_apply_returns_to_context_then_opens_own_history_detail"
+    },
+    {
+      "name": "single_review_confirm_reaches_only_fake_provider_boundary"
+    },
+    {
+      "name": "single_characteristic_edit_uses_real_csrf_form_and_fake_provider_boundary"
+    },
+    {
+      "name": "single_edit_reopened_from_persisted_local_readback"
+    },
+    {
+      "name": "invalid_single_edit_wrong_weight_unit_denied_before_fake_provider"
+    },
+    {
+      "name": "invalid_single_edit_non_numeric_weight_type_denied_before_fake_provider"
+    },
+    {
+      "name": "invalid_single_edit_unlisted_dictionary_value_denied_before_fake_provider"
+    },
+    {
+      "name": "isolated_foreign_and_no_profile_sessions_are_denied_before_provider"
+    },
+    {
+      "name": "changing_filter_clears_prior_selection_without_expansion"
+    },
+    {
+      "name": "all_filtered_is_explicit_and_manual_uncheck_is_an_exact_exclusion"
+    },
+    {
+      "name": "isolated_mixed_fixture_review_keeps_48_unlinked_products_skipped"
+    },
+    {
+      "name": "mixed_fixture_confirm_writes_only_reviewed_rows_and_history_reads_back"
+    }
+  ],
+  "artifacts": [
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-products-list-light-390.png",
+      "page": "products_list",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-products-list-light-1280.png",
+      "page": "products_list",
+      "theme": "light",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-products-list-dark-390.png",
+      "page": "products_list",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-products-list-dark-1280.png",
+      "page": "products_list",
+      "theme": "dark",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-bulk-editor-light-390.png",
+      "page": "bulk_editor",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-bulk-editor-light-1280.png",
+      "page": "bulk_editor",
+      "theme": "light",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-bulk-editor-dark-390.png",
+      "page": "bulk_editor",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-bulk-editor-dark-1280.png",
+      "page": "bulk_editor",
+      "theme": "dark",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-bulk-review-light-390.png",
+      "page": "bulk_review",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-bulk-review-light-1280.png",
+      "page": "bulk_review",
+      "theme": "light",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-bulk-review-dark-390.png",
+      "page": "bulk_review",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-bulk-review-dark-1280.png",
+      "page": "bulk_review",
+      "theme": "dark",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-single-product-edit-light-390.png",
+      "page": "single_product_edit",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-single-product-edit-light-1280.png",
+      "page": "single_product_edit",
+      "theme": "light",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-single-product-edit-dark-390.png",
+      "page": "single_product_edit",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-single-product-edit-dark-1280.png",
+      "page": "single_product_edit",
+      "theme": "dark",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-unmapped-product-edit-light-390.png",
+      "page": "unmapped_product_edit",
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-unmapped-product-edit-light-1280.png",
+      "page": "unmapped_product_edit",
+      "theme": "light",
+      "width": 1280
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-unmapped-product-edit-dark-390.png",
+      "page": "unmapped_product_edit",
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "kind": "layout_screenshot",
+      "path": "wb-edit-unmapped-product-edit-dark-1280.png",
+      "page": "unmapped_product_edit",
+      "theme": "dark",
+      "width": 1280
+    }
+  ],
+  "artifact_errors": [],
+  "failure_context": null,
+  "javascript_errors": [],
+  "browser_mutations": [],
+  "unexpected_external_requests": [],
+  "unexpected_http": [],
+  "expected_negative_http": [
+    {
+      "name": "foreign_product_selection_rejected",
+      "method": "POST",
+      "path": "/products/selection/resolve",
+      "status": 403
+    },
+    {
+      "name": "unmapped_category_rejected",
+      "method": "GET",
+      "path": "/api/characteristics/Unmapped%20synthetic%20category",
+      "status": 409
+    },
+    {
+      "name": "seller_cannot_edit_foreign_owner_product",
+      "method": "POST",
+      "path": "/products/10001/edit",
+      "status": 404
+    },
+    {
+      "name": "foreign_owner_cannot_edit_seller_product",
+      "method": "POST",
+      "path": "/products/9741/edit",
+      "status": 404
+    }
+  ],
+  "provider_attempts": 0,
+  "fake_wb_write_calls": 2,
+  "fake_wb_written_products": [
+    900000,
+    900001,
+    900002,
+    900003,
+    900004,
+    900005,
+    900006,
+    900007,
+    900008,
+    900009,
+    900010,
+    900011,
+    900012,
+    900013,
+    900014,
+    900015,
+    900016,
+    900017,
+    900018,
+    900019,
+    900020,
+    900021,
+    900022,
+    900023,
+    900024,
+    900025,
+    900026,
+    900027,
+    900028,
+    900029,
+    900030,
+    900031,
+    900032,
+    900033,
+    900034,
+    900035,
+    900036,
+    900037,
+    900038,
+    900039,
+    900040,
+    900041,
+    900042,
+    900043,
+    900044,
+    900045,
+    900046,
+    900047,
+    900048,
+    900049,
+    910000,
+    910001
+  ],
+  "fake_wb_client_instances": 3,
+  "fake_wb_single_write_calls": 1,
+  "fake_wb_single_write_requests": [
+    {
+      "nm_id": 900000,
+      "requested_fields": [
+        "characteristics"
+      ],
+      "core_fields_requested": [],
+      "core_fields_changed": [],
+      "characteristic_ids": [
+        202,
+        303,
+        404
+      ],
+      "characteristics": [
+        {
+          "id": 202,
+          "value": [
+            "Россия"
+          ]
+        },
+        {
+          "id": 303,
+          "value": 125
+        },
+        {
+          "id": 404,
+          "value": [
+            "Пластик",
+            "Металл"
+          ]
+        }
+      ],
+      "full_card_read_before": true,
+      "full_card_patch_merged": true,
+      "full_card_readback": true,
+      "sizes_preserved_in_readback": true,
+      "sku_preserved_in_readback": true
+    }
+  ],
+  "single_edit_boundary_attempts": [
+    {
+      "name": "wrong_weight_unit",
+      "status": 200,
+      "provider_writes": 1,
+      "fake_client_instances": 2,
+      "history_count": 1,
+      "local_product_preserved": true
+    },
+    {
+      "name": "non_numeric_weight_type",
+      "status": 200,
+      "provider_writes": 1,
+      "fake_client_instances": 2,
+      "history_count": 1,
+      "local_product_preserved": true
+    },
+    {
+      "name": "unlisted_dictionary_value",
+      "status": 200,
+      "provider_writes": 1,
+      "fake_client_instances": 2,
+      "history_count": 1,
+      "local_product_preserved": true
+    }
+  ],
+  "single_edit_observations": {
+    "form_post": {
+      "http_status": 302,
+      "path": "/products/9741/edit",
+      "normal_html_form": true,
+      "csrf_field_present": true,
+      "fake_write_count": 1,
+      "readback_and_history": {
+        "characteristic_ids": [
+          101,
+          202,
+          303,
+          404
+        ],
+        "size_count": 1,
+        "sku": "SYNTHETIC-WB-SKU-000",
+        "direct_history_count": 1,
+        "history_changed_fields": [
+          "characteristics"
+        ]
+      }
+    },
+    "reopen": {
+      "country": "Россия",
+      "weight_grams": 125,
+      "materials": [
+        "Пластик",
+        "Металл"
+      ],
+      "sku_read_only": true
+    },
+    "rejections": [
+      {
+        "name": "wrong_weight_unit",
+        "http_status": 200,
+        "provider_writes": 1,
+        "local_product_preserved": true,
+        "history_count": 1
+      },
+      {
+        "name": "non_numeric_weight_type",
+        "http_status": 200,
+        "provider_writes": 1,
+        "local_product_preserved": true,
+        "history_count": 1
+      },
+      {
+        "name": "unlisted_dictionary_value",
+        "http_status": 200,
+        "provider_writes": 1,
+        "local_product_preserved": true,
+        "history_count": 1
+      }
+    ],
+    "seller_scope_denials": [
+      {
+        "session": "owner",
+        "target": "foreign_product",
+        "http_status": 404,
+        "fake_writes_unchanged": true
+      },
+      {
+        "session": "foreign_owner",
+        "target": "seller_product",
+        "http_status": 404,
+        "separate_browser_session": true,
+        "fake_writes_unchanged": true
+      }
+    ],
+    "no_profile_denial": {
+      "final_path": "/dashboard",
+      "redirected": true,
+      "separate_browser_session": true,
+      "fake_writes_unchanged": true
+    },
+    "core_form_alignment": {
+      "persisted_core_values": {
+        "vendor_code": "PD-000",
+        "title": "Pipedream Synthetic Product 000",
+        "description": "",
+        "brand": "Synthetic reviewed brand"
+      },
+      "initial_form_values": {
+        "vendor_code": "PD-000",
+        "title": "Pipedream Synthetic Product 000",
+        "description": "None",
+        "brand": "Synthetic reviewed brand"
+      },
+      "initial_mismatch_fields": [
+        "description"
+      ],
+      "aligned_form_values": {
+        "vendor_code": "PD-000",
+        "title": "Pipedream Synthetic Product 000",
+        "description": "",
+        "brand": "Synthetic reviewed brand"
+      },
+      "exact_before_characteristic_submit": true
+    }
+  },
+  "mixed_fixture_observations": {
+    "selection": 50,
+    "eligible": 2,
+    "changed": 2,
+    "skipped": 48,
+    "errors": 0,
+    "fake_provider_call_delta": 1,
+    "fake_provider_product_ids": [
+      910000,
+      910001
+    ],
+    "history_id": 2,
+    "history_product_ids": [
+      20000,
+      20001
+    ],
+    "history_success_count": 2
+  },
+  "blocked_reason": null,
+  "source_hashes": {
+    "seller_platform.py": "05862981e0058b5b0c625c3007094985bed8a7ae9fa67e50e4a7eecf9b3df790",
+    "services/product_selection.py": "7da6febe2f49233afa229782c7781a19cc24caeb0ba9975bcfe403b128d4c687",
+    "services/wb_edit_review.py": "7e4ceab200ac30c4b8b48c06ffe3bc078fd2d4ed3f48bd78f391b8613b8baaed",
+    "templates/products.html": "1888564b3c2babe69c4a3577072e85262ed0666f1c8dda15b47086065b697ed1",
+    "templates/products_bulk_edit.html": "f39cf43db77200f3f0f03f9b5af66c1c0f7437ba13907c7b935572be5dca452e",
+    "templates/products_bulk_edit_review.html": "71bbe2c97ceb73b6cff864c457157b7cbf92839c9853893bd2111687d8e94930",
+    "templates/product_edit.html": "d91f7a746124797f442646044955c75a4d285609ff50a4d67541a3ef0bb170bc",
+    "tests/ux01/wb_edit_browser.py": "93f85ca55879e561d187ecd01568b77e95e91e968336d40742d3830395b342d4"
+  }
+}

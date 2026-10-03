@@ -1,0 +1,13 @@
+{
+  "source_head": "d27fe66a0f9c6a1359e7a263641ee005ef411820",
+  "source_manifest": "9628787cb01c9559b880ebbaf3273e8eee0d7efca52a6371c9467eb43e72ed32",
+  "source_file_count": 1246,
+  "runtime_image": "sha256:6aabfed527b6c98bda502e223b571d4eae0b903d72332887091edc99732e39b8",
+  "runtime_tag": "seller-hub-completion-r9-runtime:20261003-g2",
+  "network_none": true,
+  "scheduler_disabled": true,
+  "provider_credentials_passed": false,
+  "provider_attempts": 0,
+  "status": "failed",
+  "startup_exit_code": 1
+}

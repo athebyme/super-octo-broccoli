@@ -1,0 +1,24 @@
+{
+  "source_head": "d27fe66a0f9c6a1359e7a263641ee005ef411820",
+  "source_manifest_aggregate": "9628787cb01c9559b880ebbaf3273e8eee0d7efca52a6371c9467eb43e72ed32",
+  "manifest_file_sha256": "6ac122db34e80fe80b66c1899945de20c95ff7296e41065d31880e61024c4729",
+  "source_file_count": 1246,
+  "check_image": "sha256:81dbf57a910883811c875d759d5ba83a713455d93db92aa41636e8c84e96ced8",
+  "check_tag": "seller-hub-completion-r9-check:20261003-g2",
+  "stages": [
+    {
+      "name": "ux",
+      "exit_code": 0,
+      "docker_cli_exit": 0,
+      "container": "completion-r9-frozen-ux-20261003-g2"
+    },
+    {
+      "name": "ozon",
+      "exit_code": 0,
+      "docker_cli_exit": 0,
+      "container": "completion-r9-frozen-ozon-20261003-g2"
+    }
+  ],
+  "source_verified_after": true,
+  "status": "passed"
+}

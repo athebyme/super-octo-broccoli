@@ -1,0 +1,64 @@
+{
+  "status": "failed",
+  "scope": "wb_pipedream_exact_50_read_only_selection_persistence",
+  "preflight_expected": 487,
+  "preflight_observed": null,
+  "selection": {
+    "expected": 50,
+    "page_1_selected": null,
+    "page_2_selected": null,
+    "distinct_selected": null,
+    "resolver_count": null,
+    "resolver_exact_ids_match": false,
+    "resolver_filter_fingerprint_matches": false,
+    "selection_fingerprint_consistent": false,
+    "filter_expansion_used": false
+  },
+  "persistence": {
+    "page_2": false,
+    "back_to_products": false,
+    "reload": false,
+    "filter_page_sort_preserved": false,
+    "identity_preserved": false
+  },
+  "identity": {
+    "seller_matches": false,
+    "wb_account_matches": false,
+    "marketplace_wb": false,
+    "channel_wildberries": false,
+    "editor_header_semantics": false
+  },
+  "filter_change": {
+    "query_changed": false,
+    "selection_cleared": false,
+    "selected_count_after_change": null,
+    "matched_count_after_change": null,
+    "expanded_selection": false
+  },
+  "traffic": {
+    "products_get_count": 0,
+    "products_pages_seen": [],
+    "resolver_post_count": 0,
+    "resolver_status": null,
+    "bulk_entry_post_count": 0,
+    "bulk_entry_status": null,
+    "other_post_count": 0,
+    "pinned_asset_responses": 0,
+    "synthetic_shell_counts": {},
+    "photo_placeholder_count": 0,
+    "blocked_request_counts": {},
+    "unexpected_request_count": 0,
+    "request_failed_count": 1,
+    "page_error_count": 0,
+    "console_error_count": 0,
+    "live_provider_requests": 0,
+    "live_writes": 0
+  },
+  "failure_code": "operator_internal_error",
+  "observed_at_utc": "2026-10-03T21:54:09.689229+00:00",
+  "runtime_image_verified": "sha256:6aabfed527b6c98bda502e223b571d4eae0b903d72332887091edc99732e39b8",
+  "source_head": "d27fe66a0f9c6a1359e7a263641ee005ef411820",
+  "auth_scope": "ephemeral_seller_browser_session_not_admin_not_normal_login",
+  "cookies_or_real_ids_persisted": false,
+  "operator_exit_code": 2
+}

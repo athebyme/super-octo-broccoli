@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "observer_uid_is_app": true,
+  "scheduler_first": {
+    "state": "healthy",
+    "age_seconds": 10,
+    "checked_at": 1791064487.3244054
+  },
+  "scheduler_second": {
+    "state": "healthy",
+    "age_seconds": 11,
+    "checked_at": 1791064518.3248658
+  },
+  "heartbeat_advanced": true,
+  "startup_completed": 81,
+  "startup_running": 0,
+  "observer_writes": 0,
+  "provider_attempts": 0,
+  "exit_code": 0
+}

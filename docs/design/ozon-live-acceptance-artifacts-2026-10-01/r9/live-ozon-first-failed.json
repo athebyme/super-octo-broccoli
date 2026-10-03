@@ -1,0 +1,458 @@
+{
+  "api_identity_checks": {
+    "common_content_read_api": {
+      "product_id_matches": true,
+      "save_effect_common_only": true
+    },
+    "draft_classic": {
+      "account_id_matches": true,
+      "draft_id_matches": true,
+      "imported_product_id_matches": true,
+      "marketplace_is_ozon": true
+    },
+    "draft_vue": {
+      "account_id_matches": true,
+      "draft_id_matches": true,
+      "imported_product_id_matches": true,
+      "marketplace_is_ozon": true
+    },
+    "listing_classic": {
+      "account_id_matches": true,
+      "imported_product_id_matches": true,
+      "listing_id_matches": true,
+      "marketplace_is_ozon": true
+    },
+    "listing_vue": {
+      "account_id_matches": true,
+      "imported_product_id_matches": true,
+      "listing_id_matches": true,
+      "marketplace_is_ozon": true
+    }
+  },
+  "checks": [
+    {
+      "name": "ozon_listing_vue_exact_identity",
+      "status": "passed"
+    },
+    {
+      "name": "ozon_listing_classic_exact_identity",
+      "status": "passed"
+    },
+    {
+      "name": "ozon_draft_vue_exact_identity",
+      "status": "passed"
+    },
+    {
+      "name": "ozon_draft_classic_exact_identity",
+      "status": "passed"
+    },
+    {
+      "name": "seller_common_content_selected_exact_and_channel_isolated",
+      "status": "passed"
+    },
+    {
+      "name": "ozon_five_pages_theme_preinitialized_without_reload",
+      "status": "passed"
+    },
+    {
+      "name": "ozon_five_pages_60_layout_theme_focus_touch_matrix",
+      "status": "failed"
+    },
+    {
+      "name": "ozon_exact_read_apis_only_no_browser_errors_or_writes",
+      "status": "failed"
+    }
+  ],
+  "context_checks": {
+    "common_content_selected": {
+      "dark": true,
+      "light": true
+    },
+    "draft_classic": {
+      "dark": true,
+      "light": true
+    },
+    "draft_vue": {
+      "dark": true,
+      "light": true
+    },
+    "listing_classic": {
+      "dark": true,
+      "light": true
+    },
+    "listing_vue": {
+      "dark": true,
+      "light": true
+    }
+  },
+  "expected_layout_samples": 60,
+  "failure_code": "required_check_failed",
+  "http_status_counts": {
+    "common_content_read_api:200": 2,
+    "common_content_selected_page:200": 2,
+    "draft_classic_page:200": 2,
+    "draft_classic_read_api:200": 2,
+    "draft_editor_read_api:200": 2,
+    "draft_vue_page:200": 2,
+    "listing_classic_page:200": 2,
+    "listing_classic_read_api:200": 2,
+    "listing_vue_page:200": 2,
+    "listing_vue_read_api:200": 2,
+    "local_static_asset:200": 94,
+    "local_static_asset:502": 6,
+    "notifications_shell_synthetic:200": 10,
+    "pinned_asset:200": 96,
+    "refresh_status_synthetic:200": 2,
+    "tasks_shell_synthetic:200": 10
+  },
+  "identity_checks": {
+    "common_content_selected": {
+      "dark": true,
+      "light": true
+    },
+    "draft_classic": {
+      "dark": true,
+      "light": true
+    },
+    "draft_vue": {
+      "dark": true,
+      "light": true
+    },
+    "listing_classic": {
+      "dark": true,
+      "light": true
+    },
+    "listing_vue": {
+      "dark": true,
+      "light": true
+    }
+  },
+  "layout_samples": 60,
+  "navigations": 10,
+  "network_policy": "exact_same_origin_read_gets_pinned_assets_synthetic_shell_stubs",
+  "restrictions": [
+    "All image requests, including actual product photos, are replaced in-browser with a transparent 1x1 GIF; photo delivery and pixels are not verified.",
+    "Notification unread-count and background-task tray GETs are fulfilled with empty synthetic data; their production contents are not read.",
+    "The classic-listing warehouse refresh-status GET is fulfilled with a synthetic no-refresh response; refresh state is not read.",
+    "Third-party framework/font assets are fulfilled only from the hash-verified local release manifest.",
+    "No screenshots, response bodies, product names, account labels, cookies, or actual IDs are emitted or persisted.",
+    "The page contracts do not expose a seller ID for direct comparison; seller ownership is verified through successful exact-object reads on seller-scoped routes plus the expected Ozon account, not a separate public identity endpoint.",
+    "This checks rendered structure, computed focus/layout metrics, and exact identity booleans; it does not replace a human visual review or prove provider/image delivery."
+  ],
+  "route_counts": {
+    "common_content_page": 2,
+    "common_content_read_api": 2,
+    "draft_classic_page": 2,
+    "draft_classic_read_api": 2,
+    "draft_editor_read_api": 2,
+    "draft_vue_page": 2,
+    "listing_classic_page": 2,
+    "listing_classic_read_api": 2,
+    "listing_vue_page": 2,
+    "listing_vue_read_api": 2,
+    "local_static_asset": 100,
+    "notifications_shell_synthetic": 10,
+    "pinned_asset": 96,
+    "refresh_status_synthetic": 2,
+    "tasks_shell_synthetic": 10
+  },
+  "scope": "ozon_five_page_read_only_production_smoke",
+  "seller_scope": {
+    "direct_seller_id_echo_available": false,
+    "exact_seller_scoped_object_reads_match": true,
+    "expected_seller_id_input_validated": true,
+    "verification_basis": "exact seller-scoped reads of the supplied Ozon listing, account, draft and common product"
+  },
+  "status": "failed",
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "traffic": {
+    "blocked_non_get_requests": 0,
+    "console_errors": 8,
+    "external_nonpinned_blocks": 0,
+    "external_photo_placeholders": 14,
+    "forwarded_non_get_requests": 0,
+    "forwarded_provider_requests": 0,
+    "intercepted_external_provider_images": 14,
+    "live_writes": 0,
+    "page_errors": 0,
+    "photo_placeholders": 18,
+    "pinned_asset_fulfills": 96,
+    "refresh_status_synthetic_fulfills": 2,
+    "request_failures": 8,
+    "synthetic_shell_fulfills": {
+      "background_tasks_tray": 10,
+      "notifications_unread_count": 10
+    },
+    "unexpected_requests": 2
+  },
+  "views": {
+    "common_content_selected": {
+      "dark": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 0,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 1.02,
+        "focus_outline_min_px": 1,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 0,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 0,
+        "main_overflow_samples": 0,
+        "max_document_overflow_px": 0,
+        "max_main_overflow_px": 0,
+        "table_count": 0,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 0,
+        "touch_min_height_px": 42,
+        "touch_min_width_px": 309.98,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      },
+      "light": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 0,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 4.58,
+        "focus_outline_min_px": 2,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 6,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 0,
+        "main_overflow_samples": 0,
+        "max_document_overflow_px": 0,
+        "max_main_overflow_px": 0,
+        "table_count": 0,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 2,
+        "touch_min_height_px": 93.86,
+        "touch_min_width_px": 230.39,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      }
+    },
+    "draft_classic": {
+      "dark": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 1,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 6.73,
+        "focus_outline_min_px": 2,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 6,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 3,
+        "main_overflow_samples": 1,
+        "max_document_overflow_px": 55,
+        "max_main_overflow_px": 55,
+        "table_count": 48,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 2,
+        "touch_min_height_px": 44,
+        "touch_min_width_px": 296,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      },
+      "light": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 1,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 18.08,
+        "focus_outline_min_px": 1,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 0,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 3,
+        "main_overflow_samples": 1,
+        "max_document_overflow_px": 55,
+        "max_main_overflow_px": 55,
+        "table_count": 48,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 0,
+        "touch_min_height_px": 21,
+        "touch_min_width_px": 320,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      }
+    },
+    "draft_vue": {
+      "dark": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 0,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 6.73,
+        "focus_outline_min_px": 2,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 6,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 0,
+        "main_overflow_samples": 0,
+        "max_document_overflow_px": 0,
+        "max_main_overflow_px": 0,
+        "table_count": 0,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 2,
+        "touch_min_height_px": 44,
+        "touch_min_width_px": 292.53,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      },
+      "light": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 0,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 5.87,
+        "focus_outline_min_px": 2,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 6,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 2,
+        "main_overflow_samples": 0,
+        "max_document_overflow_px": 0,
+        "max_main_overflow_px": 0,
+        "table_count": 0,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 2,
+        "touch_min_height_px": 44,
+        "touch_min_width_px": 296,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      }
+    },
+    "listing_classic": {
+      "dark": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 0,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 7.26,
+        "focus_outline_min_px": 2,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 6,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 10,
+        "main_overflow_samples": 0,
+        "max_document_overflow_px": 0,
+        "max_main_overflow_px": 0,
+        "table_count": 0,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 2,
+        "touch_min_height_px": 44,
+        "touch_min_width_px": 255.73,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      },
+      "light": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 0,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 5.58,
+        "focus_outline_min_px": 2,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 6,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 10,
+        "main_overflow_samples": 0,
+        "max_document_overflow_px": 0,
+        "max_main_overflow_px": 0,
+        "table_count": 0,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 2,
+        "touch_min_height_px": 44,
+        "touch_min_width_px": 255.73,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      }
+    },
+    "listing_vue": {
+      "dark": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 0,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 7.26,
+        "focus_outline_min_px": 2,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 6,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 0,
+        "main_overflow_samples": 0,
+        "max_document_overflow_px": 0,
+        "max_main_overflow_px": 0,
+        "table_count": 0,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 2,
+        "touch_min_height_px": 44,
+        "touch_min_width_px": 255.73,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      },
+      "light": {
+        "actual_theme_matches": 6,
+        "context_label_matches": 6,
+        "document_overflow_samples": 0,
+        "focus_accessible_name_samples": 6,
+        "focus_contrast_min": 5.58,
+        "focus_outline_min_px": 2,
+        "focus_samples": 6,
+        "focus_target_found": 6,
+        "focus_visible_samples": 6,
+        "identity_samples": 6,
+        "layout_samples": 6,
+        "local_scroll_regions": 0,
+        "main_overflow_samples": 0,
+        "max_document_overflow_px": 0,
+        "max_main_overflow_px": 0,
+        "table_count": 0,
+        "table_overflow_count": 0,
+        "touch_44px_passes": 2,
+        "touch_min_height_px": 44,
+        "touch_min_width_px": 255.73,
+        "touch_samples": 2,
+        "uncontained_table_overflow_count": 0
+      }
+    }
+  },
+  "widths": [
+    320,
+    390,
+    768,
+    1024,
+    1280,
+    1440
+  ],
+  "observed_at_utc": "2026-10-03T22:02:30.579876+00:00",
+  "source_head": "d27fe66a0f9c6a1359e7a263641ee005ef411820",
+  "runtime_image_verified": "sha256:6aabfed527b6c98bda502e223b571d4eae0b903d72332887091edc99732e39b8",
+  "operator_exit_code": 1,
+  "auth_scope": "ephemeral_seller_browser_session_not_admin_not_normal_login",
+  "exact_seller_owned_identity_verified_by_private_read": true,
+  "cookies_or_real_ids_persisted": false
+}

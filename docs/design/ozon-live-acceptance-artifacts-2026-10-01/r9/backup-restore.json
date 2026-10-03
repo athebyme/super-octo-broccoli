@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "snapshot_utc": "2026-10-03T19:56:29.486676+00:00",
+  "backup_completed_at_utc": "2026-10-03T20:06:00.383016+00:00",
+  "staged_restore_completed_at_utc": "2026-10-03T20:14:35.548951+00:00",
+  "database_bytes": 14031929344,
+  "archive_bytes": 1837291253,
+  "database_sha256": "3fe74b5c26094bb1544418ba7866d27e68701f5a25c273d3ece4f18f578ba863",
+  "archive_sha256": "0906af0b8cdfb4d16fcb94ddd1067875afdabbad3e3247f92a0d5ed41502e121",
+  "round_trip_verified": true,
+  "actual_restored_quick_check": "ok",
+  "production_cutover": false,
+  "provider_replay_authorized": false,
+  "credentials_restored": false
+}

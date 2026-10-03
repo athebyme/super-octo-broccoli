@@ -1,0 +1,87 @@
+# Ozon / UX: выпуск r9, проверенные результаты и остаток
+
+**r9 слит в main, отправлен в origin и развёрнут через deploy_safety. Контейнер healthy. Полная задача остаётся открытой.** Реальное обновление собственной существующей карточки Ozon уже подтверждено отдельным пилотом 02.10; новая публикация, витринная модерация и внешние функции не объявляются проверенными по synthetic gates.
+
+Принятый runtime source — `d27fe66a0f9c6a1359e7a263641ee005ef411820`. Manifest: 1246 файлов, aggregate `9628787cb01c9559b880ebbaf3273e8eee0d7efca52a6371c9467eb43e72ed32`, SHA файла manifest `6ac122db34e80fe80b66c1899945de20c95ff7296e41065d31880e61024c4729`. Проверочный image: `sha256:81dbf57a910883811c875d759d5ba83a713455d93db92aa41636e8c84e96ced8`. Runtime image: `sha256:6aabfed527b6c98bda502e223b571d4eae0b903d72332887091edc99732e39b8`.
+
+## Что изменено
+
+- GET каталога WB и sync-status больше не сбрасывает `is_syncing` по возрасту последней успешной синхронизации. GET sync-settings не создаёт настройки. Неизвестное выполнение отделено от сохранённого защитного флага: UI не придумывает начало, длительность или прогресс. Scheduler сохраняет прежний контракт запуска; его штатный startup reset не является доказательством выполнения синхронизации.
+- Keyboard focus получает outline сразу: из общей transition исключена анимация outline. Старый baseline с тем же Chromium также воспроизводил задержку. Проверки не ослаблялись. Дополнительная диагностическая матрица покрыла обе темы и reduced/no-preference motion; это дополнительная диагностика, не замена release gate.
+- Страница изменения цен WB вызывает инициализацию Alpine один раз: удалён лишний `x-init`. Browser receipt требует один успешный GET, два фактически отображённых fixture-товара, `loading=false`, пустой выбор и полную матрицу 256 уникальных комбинаций страниц/тем/ширин/масштаба. Причинная связь прежних двух `Failed to fetch` с этим дефектом не доказана.
+- WB single editor проверен через реальные production handlers на изолированной fixture-БД: допустимое недостающее поле, словарь страны, вес в граммах, множественность, сохранение через fake WB full-read/merge/readback, локальная история и повторное открытие. Неверные значения и чужие права не пишут. Для mixed bulk exact 50 selected → 2 eligible/changed → 48 skipped записаны только два fake-provider товара.
+- Общий редактор проверен на exact 50: UI preview/apply, 50 ручных overrides и audit, конфликт одного участника отменяет всю устаревшую запись; 51 ID отклоняется без изменений. Исходные значения и channel snapshots не меняются. Ожидаемые 413 и 409 учитываются только по точным подтверждённым запросам.
+
+Это дополнения к существующим формам и контрактам, а не повторная реализация уже принятых изменений. [Карта действий](../design/ux-01-action-map.md), [матрица](../design/ux-01-verification-matrix.md) и [план Ozon/UX](../design/ozon-ux-completion-plan-2026-10-01.md) сохраняются.
+
+## Release, восстановление и production
+
+Frozen G2: **UX 8/8, Ozon 13/13 — PASSED**. UX pytest: 230 passed и 118 subtests; Ozon contracts: 2223 passed и 538 subtests. Failures/errors/skips — 0. Предупреждения: UX 78, Ozon 296. Наборы пересекаются; суммы не означают число уникальных сценариев. Source verification до и после прошла на одном manifest. Это локальные gates, не hosted CI и не реальные provider writes.
+
+Первая полная попытка G1 на `b6faaf1` завершилась **FAILED, 5/8 UX stages passed**: исходные строгие focus checks обнаружили задержку outline, operations fixture зарегистрировала две ошибки fetch. G1 не был слит или развёрнут. После scoped исправлений и обновлённого manifest весь G2 прошёл. Неудачная диагностическая попытка, запущенная без focus-only флага, не включается в число успешных focus-only проверок.
+
+Свежий стандартный SQLite backup создан из snapshot 03.10.2026 19:56:29 UTC; roundtrip verification и отдельное staged restore прошли. Восстановление не переключало production DB и не воспроизводило публикации. Startup rehearsal на этой восстановленной копии: 81 receipts, 7 защищённых таблиц, два no-op запуска, counts/receipts без изменений; сеть отключена, credentials не передавались. Первая команда rehearsal не передала штатный `PYTHONPATH=/app` и остановилась с import error до миграций; исправленная команда прошла. Это ошибка диагностического запуска, не ошибочно принятая миграция.
+
+Guarded cutover завершён 03.10.2026 21:53:37 UTC. Новый runtime стартовал в 21:53:26 UTC, healthy/restarts=0. Сохранены все 77 environment values, mounts, network и flags Ozon `enabled=1/publication=1/auto=0/commercial=1`; значения секретов в receipts отсутствуют. Caddy и agent-orchestrator сохранили container identity. Observer от `app` подтвердил healthy heartbeat, его продвижение за 31 секунду, 81 completed startup steps и running=0; observer не пишет и не запускает jobs.
+
+Исторический r8 container был создан 02.10, но перед r9 его последний `StartedAt` был 03.10.2026 19:35:25 UTC. Поэтому возраст контейнера не является доказательством непрерывного uptime с 02.10.
+
+Первый WB operator остановился до GET каталога: inherited proxy дал `proxy_connection_failed`; отдельный anonymous `/login` Chrome comparison показал direct HTTPS 200 и отсутствие request failures. Исправлен private operator, приложение из-за этой диагностической ошибки не менялось. Второй WB прогон подтвердил 487 результатов, exact 25+25 выбранных между страницами, собственные seller/account/channel. На переходе в mass editor operator заблокировал resolver POST из-за несовпадения ожидаемого request contract: resolver response и полный возврат не проверены. Оба failed receipts сохранены; частичная проверка не объявляется успешным полным сценарием выбора 50.
+
+Первый отдельный Ozon production smoke — **FAILED**, 6/8 named checks прошли. Выполнены 10 page opens и 60 layouts (пять exact собственных views × две темы × шесть ширин). API identity/context проверки всех пяти страниц прошли. Layout/focus/traffic checks не прошли: Caddy зарегистрировал шесть static GET 502 (пять upstream connection resets и один EOF), два запроса были отклонены закрытой политикой operator; JS page errors — 0, console errors/request failures — по 8. Ни одного non-GET/provider запроса не переслано. Фотографии, фоновые notifications/tray/refresh state подменялись явно указанными fixture-ответами; фото delivery/pixels этим smoke не проверены.
+
+На classic draft зарегистрировано переполнение root/main 55px на одном узком размере в каждой теме. Неполученные stylesheet assets делают часть focus/touch метрик непригодными для вывода о CSS самого приложения. Нужны отдельная транспортная диагностика, исправление доказанной причины и новый строгий прогон с telemetry реально загруженных stylesheet; failed evidence не удаляется. Healthy container не объявляется доказательством успешного public UI smoke.
+
+## Статус 19 кодов
+
+Зависимости — исходные зависимости экспорта владельца. PASSED относится только к явно перечисленному scope. Дочерние остатки не закрываются статусом общего gate.
+
+| Код | Уже реализовано и проверено | Осталось / ограничения | Зависимости |
+| --- | --- | --- | --- |
+| UX-01 | **PARTIAL**. r9 принят и развёрнут; 8/8 UX и 13/13 Ozon gates. | Полный охват дочерних задач, новая Ozon публикация, внешние write/rollback сценарии. | — |
+| UX-01.1 | **PASSED, bounded synthetic**: существующая карта, responsive/theme/focus/error/empty matrices; immediate keyboard outline. | Независимая полная WCAG AA приёмка всех live страниц не доказана. | — |
+| UX-01.2 | **PASSED synthetic**: safe return, exact selection, account/filter/sort bounds. | Production Pipedream exact 50 между страницами — отдельная проверка; WB live apply не проверен. | — |
+| UX-01.3 | **PASSED synthetic**: аналитика, длинные значения, empty/error и локальный table scroll. | Точность всех live периодов и freshness всего аккаунта не доказаны. | — |
+| UX-01.4 | Приняты существующие menu/palette/legacy route checks. | **PARTIAL**: 37 workspace page opens — только 12 уникальных путей. Полный actual Enter переход по legacy/deep links дополняется в отдельном r10. | UX-01.1 |
+| UX-01.5 | **PASSED synthetic**: понятная moderation-причина, следующий шаг, вторичные diagnostics, контекст/галерея. | Текущий live moderation sample и все CDN-кейсы не проверены. | UX-01.1, UX-01.2 |
+| UX-01.6 | **PARTIAL**: synthetic цепочка; один реальный Ozon existing-update imported/0 errors/full readback. | Новый product create, витринная модерация, исправление и rollback live не проверены. | UX-01.1 |
+| UX-01.7 | Приняты existing operation/history fixtures, mixed 50/2/48 и single save/history/reopen. | **PARTIAL**: actual history fix-link activation, foreign-link absence и success/partial/pending/submitted/uncertain/conflict matrix дополняются в r10. Live rollback не проверен. | UX-01.1 |
+| UX-01.8 | Приняты catalog/photo provenance/common/channel contracts; две Ozon JPEG source/delivery проверки пилота. | **PARTIAL**: actual legacy action activation и Image Lab gallery fixtures дополняются в r10. WB merge и social live effects не проверены. | UX-01.1 |
+| UX-01.9 | **PASSED, seller lanes/UI**: цены не смешиваются, single initialization и точная 256-layout matrix. | Buyer price/скидка Ozon **UNKNOWN** после 403; WB/Ozon commercial live effects этим UI gate не доказаны. | UX-01.1 |
+| UX-01.10 | **PASSED bounded UI/rights**; GET WB settings/status без скрытой записи, unknown execution/counters, scheduler guard сохранён. | Live reconnect/settings writes отдельно не проверены. W9 replies/P10 shipment-label writes **NOT IMPLEMENTED**. | UX-01.1 |
+| UX-01.11 | **PASSED, r9 frozen synthetic**: 8/8 UX и 13/13 Ozon; stricter typed receipts/negative runner cases. | Live gates имеют отдельные ограничения; полный external regression и rollback не доказаны. | UX-01.1 |
+| UX-01.12 | **PASSED synthetic**: доказанный effective cap и legacy value без silent truncation. | Пользовательские production settings не менялись для проверки. | — |
+| WB-EDIT-01 | **PASSED synthetic**: exact IDs, межстраничный выбор, all-filtered/exclusions, предел приложения и безопасный return. | Production exact 50 — отдельный результат; этот предел не заявлен как лимит WB API. | — |
+| WB-EDIT-02 | **PASSED bounded reference/UI**: exact schema identity, cached dictionary, working/problematic category fixtures. | Прежняя причина subject-not-found не установлена; actual WB card write не проверен. | — |
+| WB-EDIT-03 | **PASSED synthetic save/readback**: страны, граммы, множественность, missing field, denial/invalid/no-loss, history/reopen, sizes/SKU read-only. | Provider в save fixture — fake; реальная WB запись не доказана. Mobile all-missing-fields композиция исследуется отдельно. | — |
+| WB-EDIT-04 | **PASSED synthetic**: selected/eligible/changed/skipped/errors, exact signed preview/confirm, drift/one-use/empty guards; fake writes только допустимым двум из 50. | Реальный WB effect и неизвестный transport outcome live не проверены. | — |
+| CAT-EDIT-01 | **PASSED bounded synthetic**: происхождение, overrides/version, non-editor CAS, local/channel separation, source/manual conflict. | Не является полной PIM и не подтверждает все live источники. | — |
+| CAT-EDIT-02 | **PASSED actual UI on fixture**: exact 50 preview/apply/audit, one-member drift атомарно без записи, 51 rejection, cancel/reopen/focus/photo order/channel isolation. | Общий save не публикует; реальное channel apply — отдельный пилот/проверка. | CAT-EDIT-01, UX-01.1 |
+
+## Новая Ozon карточка и внешние зависимости
+
+По прямому разрешению владельца кандидат выбирается из собственных WB/DB товаров. Read-only исследование первых двух seller-indexed страниц по 100 ImportedProduct строк не является полным scan каталога. На первой странице найдено 41 подходящее свежее WB package observation; шесть из них содержат observed ТН ВЭД. Только один из этих шести имел применимое активное category mapping со свежей схемой; нормализованный исходный код не совпал ни с одной строкой его свежего Ozon dictionary. Остальные пять не имеют подходящего mapping; тип им не подменялся.
+
+На второй странице 24 товара одновременно имеют собственную точную уникальную WB-связь, свежую валидную положительную упаковку и не имеют локального Ozon draft/listing. В их доступных WB characteristics нет exact descriptor ТН ВЭД. У 12 есть активное точное mapping и свежие схемы; все требуют 22232 и 23536. Активных TNVED defaults и marking registry нет. Ни один из проверенных кандидатов не доказан готовым к новой публикации; глобальная пригодность или непригодность каталога не выводится.
+
+Отсутствие source RUB/VAT само по себе **не** названо blocker: ordinary draft defaults задают account VAT и RUB, положительная calculated price может быть предусмотренным источником. Требование observed RUB для content-factory рекламы не переносится на обычный draft create. Непроецируемые WB TNVED facts и legal marking choice остаются отдельными неизвестными. Подготовлен, но не запущен helper обычной native create/validate на dedicated disposable DB; полный актуальный список ошибок этого helper ещё не получен. Он не предназначен для скрытого заполнения юридических сведений или публикации.
+
+Официальное исследование W9/P10 подтвердило существование отдельных объявленных маршрутов, но доступный first-party материал не дал полный current payload/status/error/access/idempotency контракт. Retrieval документации остановился на redirect loop; это не доказательство причины Seller API 403. Расхождение мартовского review v1 announcement с локальным review v2 не объявлено bug без current specification. Никаких blind probes, платных подписок, support send или writes ради исследования не было.
+
+Buyer-visible Ozon price/marketplace discount остаются неизвестными после прежнего exact own-SKU `/v1/product/prices/details` 403. Existing-update imported и full readback не доказывают новую карточку, витринные pixels или разрешение всех методов. [Предыдущий реальный пилот и подробные границы](2026-10-01-ozon-live-acceptance.md).
+
+## Секреты
+
+Свежий audit frozen d27 после origin fetch: 32 supplied private records, 26 distinct известных значений; 10299 достижимых Git objects, **0 matches**. В RAM проверены локальные env/credentials, фактический container env и сохранённые собственные Ozon/WB credentials; буквальные, JSON-escaped, base64/base64url и URL-encoded формы проверены в blobs, commit/tree/tag objects. Значения, их hashes, реальные IDs и raw API bodies не сохранены в публичный отчёт.
+
+Это bounded known-secret scan: неизвестные секреты, unreachable/unfetched objects, LFS external content, submodules и внешние копии не охвачены. Local env/credential files — 0600, private directories — 0700. Test Ozon key не заменял production account key. Result-only commits требуют отдельного финального audit; receipt последнего commit хранится вне Git, чтобы не заявлять циклическую проверку самого себя.
+
+## Квитанции
+
+Публичные обезличенные квитанции r9 находятся в `docs/design/ozon-live-acceptance-artifacts-2026-10-01/r9/`. [Build](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/build-receipt.json), [UX G2](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/ux-report.json), [Ozon G2](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/ozon-summary.json), [G1 failed](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/ux-g1-failed.json), [startup](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/startup-passed.json), [backup/restore](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/backup-restore.json), [deploy](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/deployment.json), [runtime observer](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/runtime-observation.json) опубликованы отдельно.
+
+[WB save/readback fixture](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/wb-edit-browser.json), [common exact 50 fixture](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/common-content-browser.json), [pricing 256-layout fixture](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/operations-pricing-browser.json) не являются live writes. [Первый WB transport failure](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/live-wb-first-transport-failed.json), [второй WB contract failure](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/live-wb-second-contract-failed.json), [первый Ozon live smoke failure](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/live-ozon-first-failed.json) сохраняют ограничения и отрицательные результаты.
+
+Synthetic screenshots: [WB single 390px](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/screenshots/wb-single-edit-light-390.png), [WB preview 390px](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/screenshots/wb-bulk-review-dark-390.png), [common selected 390px](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/screenshots/common-selected-dark-390.png), [common empty 390px](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/screenshots/common-empty-light-390.png), [Ozon listing 390px](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/screenshots/ozon-listing-light-390.png). Это fixture после r9, не production screenshots и не новая пара before/after.
+
+[Source known-secret audit](../design/ozon-live-acceptance-artifacts-2026-10-01/r9/known-secrets-source.json) относится к frozen d27 до result-only commits. Private credentials, cookies, database копии и реальные object identities в artifacts не входят. Result-only commits не меняют frozen runtime inputs и не требуют повторного cutover.

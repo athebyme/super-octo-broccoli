@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "observed_at": "2026-10-03T21:53:37.644269+00:00",
+  "source_head": "d27fe66a0f9c6a1359e7a263641ee005ef411820",
+  "source_manifest": "9628787cb01c9559b880ebbaf3273e8eee0d7efca52a6371c9467eb43e72ed32",
+  "runtime_image": "sha256:6aabfed527b6c98bda502e223b571d4eae0b903d72332887091edc99732e39b8",
+  "previous_image": "sha256:ddb316f8b3966f26ff727f24034b5f8f13d25ea7cf9704268c61e84a6835107a",
+  "healthy": true,
+  "restart_count": 0,
+  "environment_preserved": true,
+  "environment_count": 77,
+  "mounts_preserved": true,
+  "network_preserved": true,
+  "caddy_and_orchestrator_preserved": true,
+  "database_gate": "deploy_safety._run_compose_restart",
+  "guarded_stop_confirmed": true,
+  "provider_api_probes": 0
+}
