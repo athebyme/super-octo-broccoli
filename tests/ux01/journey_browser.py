@@ -52,6 +52,9 @@ REPORT = {
     "pages": [],
     "layouts": [],
     "geometry": [],
+    "classic_draft_content_layouts": [],
+    "classic_draft_layout_diagnostics": [],
+    "classic_content_navigation": None,
     "checks": [],
     "interactions": [],
     "screenshots": [],
@@ -86,7 +89,7 @@ requests.sessions.Session.request = forbid_network
 socket.create_connection = forbid_network
 
 from seller_platform import app
-from models import SellerSupplier, Supplier, SupplierProduct, db
+from models import MarketplaceProductDraft, SellerSupplier, Supplier, SupplierProduct, db
 from services.ozon_bulk_upload import OzonBulkUploadService
 from tests.ozon_release.seed import PASSWORD, PHOTO, USERNAME, seed
 
@@ -124,6 +127,37 @@ with app.app_context():
     db.session.commit()
     FIXTURE["supplier_id"] = supplier.id
     FIXTURE["supplier_product_id"] = supplier_product.id
+
+    if SOURCE == "worktree":
+        # Long but harmless synthetic facts make the classic draft's local
+        # table-scroll boundary observable without changing provider state.
+        draft = db.session.get(MarketplaceProductDraft, FIXTURE["draft_id"])
+        assert draft is not None, "Synthetic marketplace draft was not seeded"
+        long_value = "UX01FACTPROBE-" + "W" * 220 + "-UX01FACTTAIL"
+        facts_document = {
+            "version": 1,
+            "facts": {
+                "attributes": {"ux01_browser_facts_probe": long_value},
+                "physical": {
+                    "UX01-long-dimensions-label-" + "L" * 72: long_value,
+                },
+            },
+            "unverified_suggestions": {"ux01_suggestion_probe": long_value},
+        }
+        provenance_document = {
+            "attributes.ux01_browser_facts_probe": {"trust": "observed"},
+            "physical.UX01-long-dimensions-label-" + "L" * 72: {"trust": "observed"},
+        }
+        draft.source_facts_json = json.dumps(
+            facts_document, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        draft.source_fact_hash = hashlib.sha256(
+            draft.source_facts_json.encode("utf-8"),
+        ).hexdigest()
+        draft.provenance_json = json.dumps(
+            provenance_document, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        db.session.commit()
 
     # This is a local-only synthetic row used to exercise the existing result
     # page. Scheduler is disabled; no Ozon/provider operation is created.
@@ -408,6 +442,278 @@ def geometry(page, name: str, width: int, theme: str):
     return row
 
 
+def classic_draft_fact_layouts(page):
+    """Prove long classic-draft facts stay in accessible local scroll regions."""
+    page.set_default_timeout(15000)
+    for theme in ("light", "dark"):
+        for width in (320, 360):
+            page.set_viewport_size({"width": width, "height": 1000})
+            actual_theme = set_theme(page, theme)
+            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+
+            # Reach the scroll region using real sequential keyboard navigation;
+            # do not focus it with script or manufacture :focus-visible state.
+            page_scroll_before_keyboard = page.evaluate(
+                "() => ({x: window.scrollX, y: window.scrollY})",
+            )
+            page.evaluate("""() => {
+                const region = document.querySelector('.ozon-classic-draft .ozon-draft-facts-region');
+                if (region) region.scrollLeft = 0;
+                document.activeElement?.blur();
+            }""")
+            page_scroll_before_tab = page.evaluate(
+                "() => ({x: window.scrollX, y: window.scrollY})",
+            )
+            focus_reached = False
+            tab_scroll_steps = []
+            for _ in range(120):
+                page.keyboard.press("Tab")
+                page_scroll = page.evaluate(
+                    "() => ({x: window.scrollX, y: window.scrollY})",
+                )
+                tab_scroll_steps.append(page_scroll)
+                focus_reached = page.evaluate(
+                    "() => document.activeElement === document.querySelector('.ozon-classic-draft .ozon-draft-facts-region')",
+                )
+                if focus_reached:
+                    break
+            page_scroll_after_tab = page.evaluate(
+                "() => ({x: window.scrollX, y: window.scrollY})",
+            )
+            page_scroll_before_arrows = page.evaluate(
+                "() => ({x: window.scrollX, y: window.scrollY})",
+            )
+            arrow_scroll_steps = []
+            if focus_reached:
+                for _ in range(8):
+                    page.keyboard.press("ArrowRight")
+                    arrow_scroll_steps.append(page.evaluate(
+                        "() => ({x: window.scrollX, y: window.scrollY})",
+                    ))
+                page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            page_scroll_after_arrows = page.evaluate(
+                "() => ({x: window.scrollX, y: window.scrollY})",
+            )
+
+            row = page.evaluate("""() => {
+                const rounded = value => Math.round(value * 100) / 100;
+                const root = document.documentElement;
+                const main = document.querySelector('#main-content');
+                const content = document.querySelector('.ozon-classic-draft');
+                const form = content?.querySelector(':scope > form');
+                const summaries = Array.from(content?.querySelectorAll('details > summary') || []);
+                const regions = Array.from(content?.querySelectorAll('.ozon-draft-facts-region') || []);
+                const visible = el => {
+                    if (!el.getClientRects().length || getComputedStyle(el).visibility === 'hidden') return false;
+                    for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                        if (ancestor.tagName !== 'DETAILS' || ancestor.open) continue;
+                        const summary = Array.from(ancestor.children).find(child => child.tagName === 'SUMMARY');
+                        if (!summary || !(summary === el || summary.contains(el))) return false;
+                    }
+                    return true;
+                };
+                const structuralPath = el => {
+                    const pieces = [];
+                    for (let node = el; node && node !== main; node = node.parentElement) {
+                        const parent = node.parentElement;
+                        if (!parent) break;
+                        const siblings = Array.from(parent.children).filter(item => item.tagName === node.tagName);
+                        pieces.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf(node) + 1})`);
+                    }
+                    return `#main-content > ${pieces.join(' > ')}`;
+                };
+                const structuralOverflowCandidates = main
+                    ? [main, ...main.querySelectorAll('*')]
+                        .filter(el => visible(el))
+                        .map(el => {
+                            const rect = el.getBoundingClientRect();
+                            const style = getComputedStyle(el);
+                            const leftOutside = Math.max(0, -rect.left);
+                            const rightOutside = Math.max(0, rect.right - root.clientWidth);
+                            const ownOverflow = Math.max(0, el.scrollWidth - el.clientWidth);
+                            const propagatesOverflow = ownOverflow > 1
+                                && !['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowX);
+                            return {
+                                path: structuralPath(el),
+                                tag: el.tagName.toLowerCase(),
+                                left_px: rounded(rect.left),
+                                right_px: rounded(rect.right),
+                                width_px: rounded(rect.width),
+                                client_width_px: el.clientWidth,
+                                scroll_width_px: el.scrollWidth,
+                                overflow_x: style.overflowX,
+                                left_outside_px: rounded(leftOutside),
+                                right_outside_px: rounded(rightOutside),
+                                inside_fact_scroll_region: !!el.closest('.ozon-draft-facts-region'),
+                                candidate: leftOutside > 1 || rightOutside > 1 || propagatesOverflow,
+                            };
+                        })
+                        .filter(item => item.candidate)
+                        .sort((left, right) =>
+                            (right.left_outside_px + right.right_outside_px) - (left.left_outside_px + left.right_outside_px)
+                            || right.scroll_width_px - right.client_width_px - (left.scroll_width_px - left.client_width_px)
+                        )
+                        .slice(0, 20)
+                    : [];
+                const regionRows = regions.map(el => {
+                    const rect = el.getBoundingClientRect();
+                    const table = el.querySelector('table');
+                    const tableRect = table?.getBoundingClientRect();
+                    const valueCell = el.querySelector('.ozon-draft-facts-value');
+                    const valueCellStyle = valueCell ? getComputedStyle(valueCell) : null;
+                    const lineHeight = valueCellStyle ? parseFloat(valueCellStyle.lineHeight) || 16 : 0;
+                    const style = getComputedStyle(el);
+                    return {
+                        visible: visible(el),
+                        left_px: rounded(rect.left),
+                        right_px: rounded(rect.right),
+                        client_width_px: el.clientWidth,
+                        scroll_width_px: el.scrollWidth,
+                        scrolls_horizontally: el.scrollWidth > el.clientWidth + 1,
+                        overflow_x_auto: style.overflowX === 'auto',
+                        role_region: el.getAttribute('role') === 'region',
+                        has_accessible_name: !!el.getAttribute('aria-label')?.trim(),
+                        tabindex: el.tabIndex,
+                        min_height_px: rounded(rect.height),
+                        table_width_px: tableRect ? rounded(tableRect.width) : 0,
+                        table_min_width_px: table ? rounded(parseFloat(getComputedStyle(table).minWidth) || 0) : 0,
+                        table_within_bounded_width: !!tableRect && tableRect.width <= Math.max(el.clientWidth, 352) + 1,
+                        row_count: table?.querySelectorAll('tbody > tr').length ?? 0,
+                        value_wraps: !!valueCell && valueCell.clientHeight > lineHeight * 1.5,
+                    };
+                });
+                const mainRect = main?.getBoundingClientRect();
+                const active = document.activeElement;
+                const focusedStyle = active?.matches('.ozon-draft-facts-region:focus-visible')
+                    ? getComputedStyle(active)
+                    : null;
+                const focusedRegion = active?.matches('.ozon-draft-facts-region') ? active : null;
+                const outlineWidth = focusedStyle ? parseFloat(focusedStyle.outlineWidth) || 0 : 0;
+                const outlineOffset = focusedStyle ? parseFloat(focusedStyle.outlineOffset) || 0 : 0;
+                const outlineColor = focusedStyle?.outlineColor || 'transparent';
+                const outlineVisible = !!focusedStyle && focusedStyle.outlineStyle !== 'none'
+                    && outlineWidth >= 2 && outlineColor !== 'transparent'
+                    && !/^rgba\\([^)]*,\\s*0(?:\\.0+)?\\)$/.test(outlineColor);
+                return {
+                    document_overflow_px: Math.max(0, root.scrollWidth - root.clientWidth),
+                    body_overflow_px: Math.max(0, document.body.scrollWidth - root.clientWidth),
+                    main_overflow_px: main ? Math.max(0, main.scrollWidth - main.clientWidth) : null,
+                    main_left_px: mainRect ? rounded(mainRect.left) : null,
+                    main_right_px: mainRect ? rounded(mainRect.right) : null,
+                    content_overflow_px: content ? Math.max(0, content.scrollWidth - content.clientWidth) : null,
+                    form_overflow_px: form ? Math.max(0, form.scrollWidth - form.clientWidth) : null,
+                    summary_count: summaries.length,
+                    summaries_fit_viewport: summaries.every(el => {
+                        const rect = el.getBoundingClientRect();
+                        return rect.left >= -1 && rect.right <= root.clientWidth + 1;
+                    }),
+                    details_summary_bounds_px: summaries.map(el => {
+                        const rect = el.getBoundingClientRect();
+                        return {
+                            visible: visible(el),
+                            details_open: el.parentElement?.open === true,
+                            left: rounded(rect.left),
+                            right: rounded(rect.right),
+                            inside_viewport: rect.left >= -1 && rect.right <= root.clientWidth + 1,
+                        };
+                    }),
+                    fact_region_count: regions.length,
+                    visible_fact_region_count: regionRows.filter(item => item.visible).length,
+                    local_scroll_region_count: regionRows.filter(item => item.visible && item.scrolls_horizontally && item.overflow_x_auto).length,
+                    all_regions_accessible: regionRows.length > 0 && regionRows.every(item =>
+                        item.role_region && item.has_accessible_name && item.tabindex === 0 && item.row_count > 0
+                    ),
+                    all_visible_tables_within_bounded_width: regionRows.filter(item => item.visible).every(item => item.table_within_bounded_width),
+                    all_visible_values_wrap: regionRows.filter(item => item.visible).every(item => item.value_wraps),
+                    all_regions_fit_viewport: regionRows.filter(item => item.visible).every(item =>
+                        item.left_px >= -1 && item.right_px <= root.clientWidth + 1
+                    ),
+                    all_visible_regions_have_touch_height: regionRows.filter(item => item.visible).every(item => item.min_height_px >= 44),
+                    synthetic_fact_marker_visible: Array.from(content?.querySelectorAll('.ozon-draft-facts-region') || [])
+                        .some(el => el.textContent.includes('UX01FACTPROBE')),
+                    full_snapshot_retains_synthetic_fact: Array.from(content?.querySelectorAll('pre') || [])
+                        .some(el => el.textContent.includes('UX01FACTTAIL')),
+                    keyboard_focus_visible: !!focusedStyle,
+                    focus_outline_px: outlineWidth,
+                    focus_outline_offset_px: outlineOffset,
+                    focus_outline_visible: outlineVisible,
+                    keyboard_scroll_delta_px: focusedRegion ? Math.round(focusedRegion.scrollLeft) : 0,
+                    focus_outline_inside_viewport: !!focusedRegion && (() => {
+                        const rect = focusedRegion.getBoundingClientRect();
+                        const extent = outlineWidth + Math.max(outlineOffset, 0);
+                        return rect.left - extent >= 0 && rect.right + extent <= root.clientWidth;
+                    })(),
+                    structural_overflow_candidates: structuralOverflowCandidates,
+                    classic_update_form_preserved: !!form && form.method.toLowerCase() === 'post'
+                        && !!form.querySelector('[name="attributes_json"]')
+                        && !!form.querySelector('[name="csrf_token"]')
+                        && !!form.querySelector('[name="expected_version"]'),
+                    classic_validate_form_preserved: !!content?.querySelector('form[action*="validate"]'),
+                    classic_refresh_form_preserved: !!content?.querySelector('form[action*="refresh-facts"]'),
+                    region_rows: regionRows,
+                };
+            }""")
+            structural_overflow_candidates = row.pop("structural_overflow_candidates")
+            row.update({
+                "page": "draft_detail_classic",
+                "navigation_receipt": "classic_content_navigation",
+                "width": width,
+                "theme": theme,
+                "actual_theme": actual_theme,
+                "keyboard_focus_reached": focus_reached,
+            })
+            REPORT["classic_draft_layout_diagnostics"].append({
+                "page": "draft_detail_classic",
+                "navigation_receipt": "classic_content_navigation",
+                "width": width,
+                "theme": theme,
+                "actual_theme": actual_theme,
+                "keyboard_focus_reached": focus_reached,
+                "page_scroll_before_keyboard": page_scroll_before_keyboard,
+                "page_scroll_before_tab": page_scroll_before_tab,
+                "page_scroll_after_tab": page_scroll_after_tab,
+                "page_scroll_before_arrows": page_scroll_before_arrows,
+                "page_scroll_after_arrows": page_scroll_after_arrows,
+                "page_scroll_after_tab_steps": tab_scroll_steps,
+                "page_scroll_after_arrow_right_steps": arrow_scroll_steps,
+                "structural_overflow_candidates": structural_overflow_candidates,
+            })
+
+            # Keep the measured row even when one of the strict facts-layout
+            # assertions fails, so root can diagnose the actual geometry.
+            REPORT["classic_draft_content_layouts"].append(row)
+            page.evaluate("""() => {
+                document.querySelectorAll('.ozon-draft-facts-region').forEach(region => region.scrollLeft = 0);
+                window.scrollTo({left: 0, top: 0});
+                document.activeElement?.blur();
+            }""")
+            screenshot(page, "draft_detail_classic_facts", width, theme)
+
+            assert actual_theme == theme, row
+            assert row["document_overflow_px"] == 0 and row["body_overflow_px"] == 0, row
+            assert row["main_overflow_px"] == 0 and row["content_overflow_px"] == 0, row
+            assert row["form_overflow_px"] == 0, row
+            assert row["main_left_px"] >= -1 and row["main_right_px"] <= width + 1, row
+            assert row["summary_count"] > 0 and row["summaries_fit_viewport"], row
+            assert all(item["visible"] and item["inside_viewport"] for item in row["details_summary_bounds_px"]), row
+            assert row["fact_region_count"] == 3 and row["visible_fact_region_count"] == 2, row
+            assert row["local_scroll_region_count"] == row["visible_fact_region_count"], row
+            assert row["all_regions_accessible"] and row["all_regions_fit_viewport"], row
+            assert row["all_visible_tables_within_bounded_width"] and row["all_visible_values_wrap"], row
+            assert row["all_visible_regions_have_touch_height"], row
+            assert row["synthetic_fact_marker_visible"], row
+            assert row["full_snapshot_retains_synthetic_fact"], row
+            assert row["keyboard_focus_reached"] and row["keyboard_focus_visible"], row
+            assert row["focus_outline_px"] >= 2 and row["focus_outline_visible"], row
+            assert row["focus_outline_inside_viewport"], row
+            assert row["keyboard_scroll_delta_px"] > 0, row
+            assert row["classic_update_form_preserved"] and row["classic_validate_form_preserved"] and row["classic_refresh_form_preserved"], row
+
+    check_name = "classic_draft_facts_scroll_regions_fit_320_360_light_dark"
+    REPORT["checks"].append(check_name)
+    REPORT["interactions"].append(check_name)
+
+
 def screenshot(page, name: str, width: int, theme: str):
     # Interaction assertions open the disclosure and move focus into its first
     # link. Snapshots should show the page's default compact composition.
@@ -675,6 +981,41 @@ def run():
                         for width in (390, 1024):
                             text_200(page, name, width, theme)
             assert all(row["actual_theme"] == row["theme"] for row in REPORT["geometry"]), REPORT["geometry"]
+
+            # A separate four-case receipt keeps this new classic content
+            # probe distinct from the established journey layout matrix.
+            response = page.goto(BASE + PAGE_PATHS["draft_detail_classic"], wait_until="domcontentloaded")
+            assert response and response.status == 200, (
+                "draft_detail_classic_content_layouts", response.status if response else None,
+            )
+            actual_request_url = urlsplit(response.url)
+            expected_request_url = urlsplit(BASE + PAGE_PATHS["draft_detail_classic"])
+            base_url = urlsplit(BASE)
+            navigation_receipt = {
+                "method": response.request.method,
+                "status": response.status,
+                "same_loopback_origin": (
+                    actual_request_url.scheme == base_url.scheme
+                    and actual_request_url.netloc == base_url.netloc
+                    and actual_request_url.hostname == "127.0.0.1"
+                    and actual_request_url.port == server.server_port
+                ),
+                "exact_fixture_classic_path_match": (
+                    actual_request_url.path == expected_request_url.path
+                ),
+                "route_kind": "classic_draft_detail",
+            }
+            assert navigation_receipt == {
+                "method": "GET",
+                "status": 200,
+                "same_loopback_origin": True,
+                "exact_fixture_classic_path_match": True,
+                "route_kind": "classic_draft_detail",
+            }, navigation_receipt
+            REPORT["classic_content_navigation"] = navigation_receipt
+            page.wait_for_load_state("networkidle")
+            page.locator(".ozon-classic-draft .ozon-draft-facts-region").first.wait_for()
+            classic_draft_fact_layouts(page)
 
         assert REPORT["provider_attempts"] == 0, REPORT
         assert REPORT["unexpected_external_requests"] == [], REPORT["unexpected_external_requests"]

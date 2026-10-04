@@ -157,8 +157,50 @@
     outline: 2px solid var(--accent-strong);
     outline-offset: 2px;
 }
+.ozon-classic-draft,
+.ozon-classic-draft form,
+.ozon-classic-draft details,
+.ozon-classic-draft summary,
+.ozon-classic-draft .grid > *,
+.ozon-classic-draft dl.grid > div {
+    min-width: 0;
+}
+.ozon-classic-draft h1,
+.ozon-classic-draft details > summary,
+.ozon-classic-draft dl.grid dt,
+.ozon-classic-draft dl.grid dd {
+    overflow-wrap: anywhere;
+}
+.ozon-classic-draft p code {
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+.ozon-classic-draft textarea,
+.ozon-classic-draft input,
+.ozon-classic-draft select {
+    min-width: 0;
+    max-width: 100%;
+}
+.ozon-classic-draft .ozon-draft-facts-region {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+}
+.ozon-classic-draft .ozon-draft-facts-region > table {
+    width: 100%;
+    min-width: 22rem;
+    table-layout: fixed;
+}
+.ozon-classic-draft .ozon-draft-facts-region:focus-visible {
+    outline: 2px solid var(--accent-strong);
+    outline-offset: 2px;
+}
 @media (max-width: 620px) {
     .preparation-journey { padding: 10px 11px; }
     .preparation-journey-head { flex-direction: column; }
     .preparation-listing-end-state { align-items: flex-start; flex-direction: column; }
+    .ozon-classic-draft dl.grid > div { min-width: 0; }
 }

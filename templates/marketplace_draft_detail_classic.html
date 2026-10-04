@@ -18,7 +18,7 @@
     'price_rollback': 'Откат цены', 'stock_rollback': 'Откат остатков'
 } %}
 {{ preparation_journey('draft', draft.account.label, 'черновик №' ~ draft.id ~ ' · внутренний товар №' ~ draft.imported_product_id, 'Сохраните изменения локально и проверьте точную версию. Локальная проверка не публикует карточку; отправка подтверждается отдельной формой.', internal_url=url_for('seller_my_products', account_id=draft.account_id), draft_url=url_for('marketplace_drafts.index', account_id=draft.account_id), review_url=url_for('ozon_bulk_uploads.review', account_id=draft.account_id, draft_ids=draft.id), result_url=url_for('ozon_bulk_uploads.index', account_id=draft.account_id), listing_url=url_for('marketplace_listings.classic', marketplace='ozon', account_id=draft.account_id), channel='Ozon') }}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+<div class="ozon-classic-draft max-w-7xl mx-auto px-4 sm:px-6 py-6 min-w-0">
     <a href="{{ url_for('marketplace_drafts.index', account_id=draft.account_id) }}" class="text-sm" style="color:var(--accent-text)">← Черновики Ozon</a>
     <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div class="min-w-0">
@@ -29,7 +29,7 @@
                 <span>{{ validation_status_labels.get(draft.validation_status, draft.validation_status) }}</span>
                 <span>версия {{ draft.version }}</span>
             </div>
-            <h1 class="mt-2 text-2xl font-semibold" style="color:var(--text)">{{ draft.imported_product.title or draft.offer_id }}</h1>
+            <h1 class="mt-2 text-2xl font-semibold break-words" style="color:var(--text)">{{ draft.imported_product.title or draft.offer_id }}</h1>
             <p class="mt-1 text-sm break-all" style="color:var(--text-secondary)">артикул (offer_id): {{ draft.offer_id }} · товар-источник #{{ draft.imported_product_id }}</p>
             <p class="mt-1 text-xs" style="color:var(--text-muted)">
                 {{ draft.product_type.category.full_path ~ ' / ' ~ draft.product_type.name if draft.product_type else 'Точные категория и тип Ozon ещё не выбраны' }}
@@ -273,7 +273,7 @@
         {%- endif -%}
     {%- endmacro %}
 
-    <form method="post" action="{{ url_for('marketplace_drafts.update', draft_id=draft.id, view='classic') }}" class="mt-5 space-y-4">
+    <form method="post" action="{{ url_for('marketplace_drafts.update', draft_id=draft.id, view='classic') }}" class="mt-5 space-y-4 min-w-0">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="expected_version" value="{{ draft.version }}">
 
@@ -301,8 +301,8 @@
             </details>
         </section>
 
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <section class="sh-card p-4">
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 min-w-0">
+            <section class="sh-card p-4 min-w-0">
                 <h2 class="font-semibold" style="color:var(--text)">Атрибуты Ozon {% if draft_data.attributes %}<span class="text-xs font-normal" style="color:var(--text-muted)">· {{ draft_data.attributes | length }}</span>{% endif %}</h2>
                 {% if draft_data.attributes %}
                 <div class="mt-3 overflow-x-auto">
@@ -333,7 +333,7 @@
                               style="border-color:var(--border);color:var(--text)">{{ draft_data.attributes | tojson(indent=2) }}</textarea>
                 </details>
             </section>
-            <section class="sh-card p-4">
+            <section class="sh-card p-4 min-w-0">
                 <h2 class="font-semibold" style="color:var(--text)">Составные атрибуты {% if draft_data.complex_attributes %}<span class="text-xs font-normal" style="color:var(--text-muted)">· {{ draft_data.complex_attributes | length }}</span>{% endif %}</h2>
                 {% if draft_data.complex_attributes %}
                 <div class="mt-3 flex flex-col gap-2 text-sm" style="color:var(--text)">
@@ -357,8 +357,8 @@
             </section>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <section class="sh-card p-4">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
+            <section class="sh-card p-4 min-w-0">
                 <h2 class="font-semibold" style="color:var(--text)">Габариты и вес</h2>
                 {% set dims = draft_data.dimensions or {} %}
                 {% if dims %}
@@ -381,7 +381,7 @@
             </section>
 
             {% if draft.published_listing_id or draft_data.attribute_removals %}
-            <section class="sh-card p-4">
+            <section class="sh-card p-4 min-w-0">
                 <h2 class="font-semibold" style="color:var(--text)">
                     Явная очистка атрибутов Ozon
                     {% if draft_data.attribute_removals %}
@@ -480,7 +480,7 @@
         {% endif %}
     </form>
 
-    <section class="sh-card p-4 mt-5">
+    <section class="sh-card p-4 mt-5 min-w-0">
         <h2 class="font-semibold" style="color:var(--text)">Снимок фактов и происхождение данных</h2>
         <p class="mt-1 text-xs" style="color:var(--text-muted)">Проверенные факты из вашей карточки и данных поставщика. Предложения ИИ видны для проверки, но никогда не подставляются автоматически.</p>
         {% set facts = draft_data.source_facts or {} %}
@@ -492,17 +492,19 @@
             {% for section, values in fact_sections.items() if values is mapping and values %}
             <div>
                 <h3 class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:var(--text-muted)">{{ section_labels.get(section, section) }}</h3>
-                <table class="w-full text-sm">
-                    <tbody>
-                    {% for name, value in values.items() %}
-                    <tr style="border-top:1px solid var(--border)">
-                        <td class="py-1 pr-3 align-top" style="color:var(--text-secondary);min-width:140px;white-space:nowrap">{{ name }}</td>
-                        <td class="py-1 pr-3 align-top" style="color:var(--text);word-break:break-word">{{ fact_value(value) }}</td>
-                        <td class="py-1 align-top text-right" style="white-space:nowrap">{{ trust_badge((provenance.get(section ~ '.' ~ name) or {}).get('trust')) }}</td>
-                    </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
+                <div class="ozon-draft-facts-region" role="region" aria-label="Факты: {{ section_labels.get(section, section) }}" tabindex="0">
+                    <table class="text-sm">
+                        <tbody>
+                        {% for name, value in values.items() %}
+                        <tr style="border-top:1px solid var(--border)">
+                            <td class="py-1 pr-3 align-top" style="color:var(--text-secondary);min-width:140px;overflow-wrap:anywhere">{{ name }}</td>
+                            <td class="ozon-draft-facts-value py-1 pr-3 align-top" style="color:var(--text);word-break:break-word">{{ fact_value(value) }}</td>
+                            <td class="py-1 align-top text-right" style="white-space:nowrap">{{ trust_badge((provenance.get(section ~ '.' ~ name) or {}).get('trust')) }}</td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
             {% endfor %}
         </div>
@@ -513,16 +515,18 @@
         {% if suggestions %}
         <details class="mt-4">
             <summary class="text-xs cursor-pointer" style="color:var(--warn)">Непроверенные предложения ({{ suggestions | length }}) — не применяются автоматически</summary>
-            <table class="mt-2 w-full text-sm">
-                <tbody>
-                {% for name, value in suggestions.items() %}
-                <tr style="border-top:1px solid var(--border)">
-                    <td class="py-1 pr-3 align-top" style="color:var(--text-secondary);min-width:140px">{{ name }}</td>
-                    <td class="py-1 align-top" style="color:var(--text);word-break:break-word">{{ fact_value(value) }}</td>
-                </tr>
-                {% endfor %}
-                </tbody>
-            </table>
+            <div class="ozon-draft-facts-region mt-2" role="region" aria-label="Непроверенные предложения" tabindex="0">
+                <table class="text-sm">
+                    <tbody>
+                    {% for name, value in suggestions.items() %}
+                    <tr style="border-top:1px solid var(--border)">
+                        <td class="py-1 pr-3 align-top" style="color:var(--text-secondary);min-width:140px;overflow-wrap:anywhere">{{ name }}</td>
+                        <td class="ozon-draft-facts-value py-1 align-top" style="color:var(--text);word-break:break-word">{{ fact_value(value) }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </details>
         {% endif %}
         <details class="mt-3">
