@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import base64
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 import hashlib
 from html.parser import HTMLParser
 from io import BytesIO
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -1853,7 +1854,34 @@ def _run_bulk_50_case(page) -> None:
 
 
 def _photo_fingerprint(value) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    def canonical(item):
+        if item is None:
+            return ["none"]
+        if type(item) is bool:
+            return ["bool", item]
+        if type(item) is int:
+            return ["int", str(item)]
+        if type(item) is float:
+            if not math.isfinite(item):
+                raise TypeError("Non-finite float in photo fingerprint")
+            return ["float", item.hex()]
+        if type(item) is str:
+            return ["str", item]
+        if type(item) is datetime:
+            return ["datetime", item.isoformat(timespec="microseconds"), item.fold]
+        if type(item) is date:
+            return ["date", item.isoformat()]
+        if type(item) is list:
+            return ["list", [canonical(value) for value in item]]
+        if type(item) is tuple:
+            return ["tuple", [canonical(value) for value in item]]
+        if type(item) is dict:
+            if any(type(key) is not str for key in item):
+                raise TypeError("Non-string key in photo fingerprint")
+            return ["dict", [[key, canonical(item[key])] for key in sorted(item)]]
+        raise TypeError(f"Unsupported photo fingerprint value type: {type(item).__name__}")
+
+    encoded = json.dumps(canonical(value), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
