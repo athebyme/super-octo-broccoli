@@ -16,11 +16,13 @@ import queue
 import logging
 import time
 import shutil
+import copy
 from dataclasses import dataclass
 from typing import Callable, Optional, Dict, List, Tuple
 from io import BytesIO
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 import requests
+from requests.cookies import RequestsCookieJar
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,100 @@ DOWNLOAD_CONNECT_TIMEOUT = 3
 DOWNLOAD_READ_TIMEOUT = 5
 DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024
 DOWNLOAD_MAX_PIXELS = 50_000_000
+
+_SUPPLIER_AUTH_HOST = 'sexoptovik.ru'
+_SUPPLIER_AUTH_REFERER = 'https://sexoptovik.ru/admin/'
+
+
+def _is_supplier_auth_origin(url: str) -> bool:
+    """Whether a URL is the exact HTTPS origin that issued supplier auth."""
+    try:
+        parsed = urlsplit(url)
+        return (
+            parsed.scheme.lower() == 'https'
+            and (parsed.hostname or '').lower() == _SUPPLIER_AUTH_HOST
+            and parsed.port in (None, 443)
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_supplier_auth_cookie(cookie) -> bool:
+    """Whether a cookie belongs to the supplier host or its subdomains."""
+    try:
+        domain = (cookie.domain or '').lower().lstrip('.').rstrip('.')
+    except (AttributeError, TypeError):
+        return False
+    return (
+        domain == _SUPPLIER_AUTH_HOST
+        or domain.endswith('.' + _SUPPLIER_AUTH_HOST)
+    )
+
+
+def _supplier_cookie_snapshot(session):
+    """Return a validated Session cookie snapshot, or None on invalid jars."""
+    cookie_jar = getattr(session, 'cookies', None)
+    if not isinstance(cookie_jar, RequestsCookieJar):
+        return None
+    try:
+        cookies = tuple(cookie_jar)
+    except Exception:
+        return None
+    return cookie_jar, cookies
+
+
+def _send_without_supplier_jar_cookies(
+    session,
+    url: str,
+    headers: dict,
+    cookies: dict,
+    timeout,
+    cookie_snapshot,
+):
+    """Send with a request-local filtered jar while keeping Session semantics.
+
+    Requests automatically merges Session.cookies even when ``cookies={}`` is
+    passed. Preparing on a shallow Session copy with a filtered jar prevents a
+    host-only, non-Secure supplier cookie from leaking to an untrusted hop.
+    The original Session still sends the prepared request, so it retains normal
+    adapter/TLS/environment handling and extracts response cookies into its
+    original, correctly scoped jar.
+    """
+    if cookie_snapshot is None:
+        return None
+
+    cookie_jar, cookie_values = cookie_snapshot
+    try:
+        filtered_jar = RequestsCookieJar()
+        filtered_jar.set_policy(copy.copy(cookie_jar.get_policy()))
+        for cookie in cookie_values:
+            if not _is_supplier_auth_cookie(cookie):
+                filtered_jar.set_cookie(copy.copy(cookie))
+
+        request_session = copy.copy(session)
+        request_session.cookies = filtered_jar
+        prepared = request_session.prepare_request(requests.Request(
+            method='GET',
+            url=url,
+            headers=headers,
+            cookies=cookies,
+        ))
+        settings = session.merge_environment_settings(
+            prepared.url, {}, True, None, None,
+        )
+        return session.send(
+            prepared,
+            timeout=timeout,
+            allow_redirects=False,
+            **settings,
+        )
+    except Exception:
+        # The filtered request must fail closed if the cookie jar cannot be
+        # copied/prepared or Requests cannot send it with Session settings.
+        logger.debug('Unable to prepare filtered supplier-cookie request')
+        return None
 
 # Дисковый кэш восстанавливаем из source URL, поэтому он обязан иметь cap.
 # При достижении cap старые JPEG удаляются до low-water mark в отдельном
@@ -429,8 +525,8 @@ class PhotoCacheManager:
             'Accept': 'image/*,*/*;q=0.8',
         }
 
-        if 'sexoptovik.ru' in url:
-            headers['Referer'] = 'https://sexoptovik.ru/admin/'
+        if _is_supplier_auth_origin(url):
+            headers['Referer'] = _SUPPLIER_AUTH_REFERER
 
         deadline = time.monotonic() + DOWNLOAD_TOTAL_BUDGET
         with requests.Session() as session:
@@ -485,7 +581,7 @@ class PhotoCacheManager:
         auth_cookies: dict,
         deadline: float,
     ) -> Optional[bytes]:
-        """SSRF-safe download с ручными redirect и bounded body."""
+        """Bounded manual-redirect download with exact-origin supplier auth."""
         from services.url_security import validate_external_url
 
         current_url = url
@@ -496,17 +592,60 @@ class PhotoCacheManager:
             if remaining <= 0.5:
                 return None
 
-            response = session.get(
-                current_url,
-                headers=headers,
-                cookies=auth_cookies,
-                timeout=(
-                    min(DOWNLOAD_CONNECT_TIMEOUT, remaining),
-                    min(DOWNLOAD_READ_TIMEOUT, remaining),
-                ),
-                allow_redirects=False,
-                stream=True,
+            trusted_supplier_origin = _is_supplier_auth_origin(current_url)
+            request_cookies = (auth_cookies or {}) if trusted_supplier_origin else {}
+            request_headers = headers
+            if not trusted_supplier_origin and any(
+                str(name).lower() == 'referer'
+                and value == _SUPPLIER_AUTH_REFERER
+                for name, value in headers.items()
+            ):
+                request_headers = {
+                    name: value for name, value in headers.items()
+                    if not (
+                        str(name).lower() == 'referer'
+                        and value == _SUPPLIER_AUTH_REFERER
+                    )
+                }
+
+            timeout = (
+                min(DOWNLOAD_CONNECT_TIMEOUT, remaining),
+                min(DOWNLOAD_READ_TIMEOUT, remaining),
             )
+            if trusted_supplier_origin:
+                response = session.get(
+                    current_url,
+                    headers=request_headers,
+                    cookies=request_cookies,
+                    timeout=timeout,
+                    allow_redirects=False,
+                    stream=True,
+                )
+            else:
+                cookie_snapshot = _supplier_cookie_snapshot(session)
+                if cookie_snapshot is None:
+                    return None
+                _cookie_jar, cookie_values = cookie_snapshot
+                if any(_is_supplier_auth_cookie(cookie) for cookie in cookie_values):
+                    response = _send_without_supplier_jar_cookies(
+                        session,
+                        current_url,
+                        request_headers,
+                        request_cookies,
+                        timeout,
+                        cookie_snapshot,
+                    )
+                    if response is None:
+                        return None
+                else:
+                    response = session.get(
+                        current_url,
+                        headers=request_headers,
+                        cookies=request_cookies,
+                        timeout=timeout,
+                        allow_redirects=False,
+                        stream=True,
+                    )
             try:
                 if response.status_code in (301, 302, 303, 307, 308):
                     location = response.headers.get('Location')
