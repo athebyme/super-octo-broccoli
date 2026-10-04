@@ -249,6 +249,7 @@ WB_EDIT_REQUIRED_CHECKS = frozenset({
     "single_edit_no_profile_post_redirects_without_provider_write",
     "single_edit_uses_cached_country_weight_multi_schema_and_read_only_sku",
     "single_edit_enabled_controls_contrast_aa_light_dark",
+    "single_edit_footer_assistant_clearance_320_360_390_light_dark",
     "mixed_fixture_preview_selected50_eligible2_changed2_skipped48",
     "mixed_fixture_confirm_writes_exact_two_provider_products_with_history_readback",
 })
@@ -264,6 +265,14 @@ WB_EDIT_CONTRAST_SELECTORS = (
     "#wb-add-optional-characteristic",
     "form.space-y-6 button[type=\"submit\"]",
 )
+WB_EDIT_FOOTER_CLEARANCE_CHECK = "single_edit_footer_assistant_clearance_320_360_390_light_dark"
+WB_EDIT_FOOTER_CLEARANCE_WIDTHS = (320, 360, 390)
+WB_EDIT_FOOTER_CLEARANCE_THEMES = ("light", "dark")
+WB_EDIT_FOOTER_CLEARANCE_CONTROLS = ("save", "cancel")
+WB_EDIT_FOOTER_CLEARANCE_LABELS = {
+    "save": "Сохранить в WB",
+    "cancel": "Отмена",
+}
 WB_EDIT_PAGES = frozenset({
     "products_list", "bulk_editor", "bulk_review",
     "single_product_edit", "unmapped_product_edit",
@@ -683,6 +692,329 @@ def _wb_edit_contrast_protocol_issues(data: dict, checks: object) -> list[str]:
     return issues
 
 
+def _wb_edit_footer_clearance_protocol_issues(data: dict, checks: object) -> list[str]:
+    """Require measured mobile clearance, pointer delivery and keyboard focus."""
+    issue = "wb_edit_footer_assistant_clearance_incomplete_or_invalid"
+    issues: list[str] = []
+    named = [
+        row for row in checks
+        if isinstance(row, dict) and row.get("name") == WB_EDIT_FOOTER_CLEARANCE_CHECK
+    ] if isinstance(checks, list) else []
+    summary_ok = (
+        len(named) == 1
+        and named[0].get("status") == "passed"
+        and named[0].get("viewports") == list(WB_EDIT_FOOTER_CLEARANCE_WIDTHS)
+        and named[0].get("themes") == list(WB_EDIT_FOOTER_CLEARANCE_THEMES)
+        and type(named[0].get("row_count")) is int
+        and named[0]["row_count"] == 6
+        and named[0].get("all_controls_clear") is True
+        and named[0].get("all_keyboard_focus_visible") is True
+        and named[0].get("no_side_effects") is True
+        and named[0].get("failures") == []
+    )
+    if not summary_ok:
+        issues.append(issue)
+
+    rows = data.get("single_edit_footer_clearance")
+    expected = [
+        (width, theme)
+        for width in WB_EDIT_FOOTER_CLEARANCE_WIDTHS
+        for theme in WB_EDIT_FOOTER_CLEARANCE_THEMES
+    ]
+    if not isinstance(rows, list) or len(rows) != len(expected):
+        issues.append(issue)
+        return issues
+
+    def rect(value: object, viewport: dict) -> dict | None:
+        if not isinstance(value, dict) or set(value) != {"x", "y", "width", "height"}:
+            return None
+        if any(not _finite_json_number(value.get(key)) for key in ("x", "y", "width", "height")):
+            return None
+        if value["x"] < 0 or value["y"] < 0 or value["width"] <= 0 or value["height"] <= 0:
+            return None
+        if value["x"] + value["width"] > viewport["width"] + 0.75:
+            return None
+        if value["y"] + value["height"] > viewport["height"] + 0.75:
+            return None
+        return value
+
+    def inside(inner: dict, outer: dict) -> bool:
+        return (
+            inner["x"] >= outer["x"] - 0.75
+            and inner["y"] >= outer["y"] - 0.75
+            and inner["x"] + inner["width"] <= outer["x"] + outer["width"] + 0.75
+            and inner["y"] + inner["height"] <= outer["y"] + outer["height"] + 0.75
+        )
+
+    def intersection_area(first: dict, second: dict) -> float:
+        width = max(0.0, min(first["x"] + first["width"], second["x"] + second["width"])
+                    - max(first["x"], second["x"]))
+        height = max(0.0, min(first["y"] + first["height"], second["y"] + second["height"])
+                     - max(first["y"], second["y"]))
+        return width * height
+
+    def near_point(point: dict, target: dict) -> bool:
+        return (
+            abs(point["x"] - (target["x"] + target["width"] / 2)) <= 1.0
+            and abs(point["y"] - (target["y"] + target["height"] / 2)) <= 1.0
+        )
+
+    observed: list[tuple[int, str]] = []
+    heights: set[int] = set()
+    valid = True
+    for row in rows:
+        if not isinstance(row, dict):
+            valid = False
+            continue
+        requested_theme = row.get("requested_theme")
+        actual_theme = row.get("actual_theme")
+        viewport = row.get("viewport")
+        width = viewport.get("width") if isinstance(viewport, dict) else None
+        height = viewport.get("height") if isinstance(viewport, dict) else None
+        if (
+            type(width) is not int or width not in WB_EDIT_FOOTER_CLEARANCE_WIDTHS
+            or requested_theme not in WB_EDIT_FOOTER_CLEARANCE_THEMES
+            or actual_theme != requested_theme
+            or type(height) is not int or height < 600 or height > 1600
+            or set(viewport) != {"width", "height"}
+        ):
+            valid = False
+            continue
+        observed.append((width, requested_theme))
+        heights.add(height)
+        if row.get("actual_theme") != requested_theme:
+            valid = False
+
+        for selector in ("root", "body"):
+            widths = row.get(selector)
+            if not (
+                isinstance(widths, dict)
+                and type(widths.get("client_width")) is int
+                and widths["client_width"] == width
+                and type(widths.get("scroll_width")) is int
+                and widths["scroll_width"] <= width
+                and type(widths.get("overflow_px")) is int
+                and widths["overflow_px"] == 0
+                and max(0, widths["scroll_width"] - widths["client_width"]) == 0
+            ):
+                valid = False
+
+        heading = row.get("heading")
+        heading_box = rect(heading.get("rect"), viewport) if isinstance(heading, dict) else None
+        heading_container = rect(heading.get("container_rect"), viewport) if isinstance(heading, dict) else None
+        line_rects_raw = heading.get("line_rects") if isinstance(heading, dict) else None
+        if (
+            heading_box is None or heading_container is None
+            or not isinstance(line_rects_raw, list) or not line_rects_raw
+            or len(line_rects_raw) > 4
+            or not inside(heading_box, heading_container)
+            or type(heading.get("window_scroll_y")) is not int
+            or heading["window_scroll_y"] != 0
+            or heading.get("fully_inside_container") is not True
+        ):
+            valid = False
+            heading_lines = []
+        else:
+            heading_lines = [rect(value, viewport) for value in line_rects_raw]
+            if any(value is None or not inside(value, heading_container) or not inside(value, heading_box)
+                   for value in heading_lines):
+                valid = False
+
+        assistant = row.get("assistant")
+        open_trigger = rect(assistant.get("open_rect"), viewport) if isinstance(assistant, dict) else None
+        closed_trigger = rect(assistant.get("closed_trigger_rect"), viewport) if isinstance(assistant, dict) else None
+        open_panel = rect(assistant.get("open_panel_rect"), viewport) if isinstance(assistant, dict) else None
+        message_region = assistant.get("message_scroll_region") if isinstance(assistant, dict) else None
+        message_region_rect = (
+            rect(message_region.get("rect"), viewport)
+            if isinstance(message_region, dict) else None
+        )
+        composer_rect = rect(assistant.get("composer_rect"), viewport) if isinstance(assistant, dict) else None
+        close_control_rect = rect(assistant.get("close_control_rect"), viewport) if isinstance(assistant, dict) else None
+        if not (
+            isinstance(assistant, dict)
+            and assistant.get("opened_via_trigger") is True
+            and assistant.get("closed_via_trigger") is True
+            and assistant.get("closed_panel_hidden") is True
+            and assistant.get("open_panel_inside_viewport") is True
+            and open_trigger is not None and closed_trigger is not None and open_panel is not None
+            and message_region_rect is not None
+            and isinstance(message_region, dict)
+            and message_region.get("inside_panel") is True
+            and inside(message_region_rect, open_panel)
+            and message_region.get("overflow_y") in {"auto", "scroll"}
+            and type(message_region.get("client_height")) is int
+            and message_region["client_height"] > 0
+            and type(message_region.get("scroll_height")) is int
+            and message_region["scroll_height"] >= message_region["client_height"]
+            and composer_rect is not None
+            and assistant.get("composer_inside_panel") is True
+            and inside(composer_rect, open_panel)
+            and close_control_rect is not None
+            and assistant.get("close_control_inside_panel") is True
+            and inside(close_control_rect, open_panel)
+        ):
+            valid = False
+            continue
+
+        controls = row.get("controls")
+        if not isinstance(controls, list) or len(controls) != len(WB_EDIT_FOOTER_CLEARANCE_CONTROLS):
+            valid = False
+            controls = []
+        names = [control.get("name") if isinstance(control, dict) else None for control in controls]
+        if names != list(WB_EDIT_FOOTER_CLEARANCE_CONTROLS):
+            valid = False
+
+        overlap_open = assistant.get("open_intersection_area_px") if isinstance(assistant, dict) else None
+        overlap_closed = assistant.get("closed_intersection_area_px") if isinstance(assistant, dict) else None
+        overlap_panel = assistant.get("open_panel_intersection_area_px") if isinstance(assistant, dict) else None
+        if not (
+            isinstance(overlap_open, dict) and set(overlap_open) == set(WB_EDIT_FOOTER_CLEARANCE_CONTROLS)
+            and isinstance(overlap_closed, dict) and set(overlap_closed) == set(WB_EDIT_FOOTER_CLEARANCE_CONTROLS)
+            and isinstance(overlap_panel, dict) and set(overlap_panel) == set(WB_EDIT_FOOTER_CLEARANCE_CONTROLS)
+        ):
+            valid = False
+
+        button_rectangles = []
+        for control in controls:
+            if not isinstance(control, dict):
+                valid = False
+                continue
+            name = control.get("name")
+            button = rect(control.get("button_rect"), viewport)
+            label = rect(control.get("label_rect"), viewport)
+            label_parts_raw = control.get("label_rects")
+            label_parts = (
+                [rect(value, viewport) for value in label_parts_raw]
+                if isinstance(label_parts_raw, list) else []
+            )
+            label_text = control.get("label_text")
+            if not (
+                name in WB_EDIT_FOOTER_CLEARANCE_CONTROLS
+                and control.get("visible") is True
+                and control.get("enabled") is True
+                and button is not None and button["width"] >= 44 and button["height"] >= 44
+                and label is not None and inside(label, button)
+                and bool(label_parts) and len(label_parts) <= 4
+                and all(part is not None and inside(part, button) for part in label_parts)
+                and isinstance(label_text, str)
+                and label_text.strip() == WB_EDIT_FOOTER_CLEARANCE_LABELS.get(name)
+                and control.get("label_fully_inside_button") is True
+            ):
+                valid = False
+                continue
+            button_rectangles.append(button)
+
+            # Compare telemetry with the actual measured geometry; a zero boolean alone is not proof.
+            open_area = intersection_area(button, open_trigger) if open_trigger is not None else None
+            closed_area = intersection_area(button, closed_trigger) if closed_trigger is not None else None
+            panel_area = intersection_area(button, open_panel) if open_panel is not None else None
+            if not (
+                _finite_json_number(control.get("assistant_open_intersection_area_px"))
+                and abs(control["assistant_open_intersection_area_px"] - open_area) <= 0.1
+                and control["assistant_open_intersection_area_px"] <= 0.1
+                and _finite_json_number(control.get("assistant_closed_intersection_area_px"))
+                and abs(control["assistant_closed_intersection_area_px"] - closed_area) <= 0.1
+                and control["assistant_closed_intersection_area_px"] <= 0.1
+                and panel_area is not None and panel_area <= 0.1
+                and _finite_json_number(control.get("open_panel_intersection_area_px"))
+                and abs(control["open_panel_intersection_area_px"] - panel_area) <= 0.1
+                and control["open_panel_intersection_area_px"] <= 0.1
+                and isinstance(overlap_open, dict)
+                and _finite_json_number(overlap_open.get(name))
+                and abs(overlap_open[name] - open_area) <= 0.1
+                and overlap_open[name] <= 0.1
+                and isinstance(overlap_closed, dict)
+                and _finite_json_number(overlap_closed.get(name))
+                and abs(overlap_closed[name] - closed_area) <= 0.1
+                and overlap_closed[name] <= 0.1
+                and isinstance(overlap_panel, dict)
+                and _finite_json_number(overlap_panel.get(name))
+                and abs(overlap_panel[name] - panel_area) <= 0.1
+                and overlap_panel[name] <= 0.1
+            ):
+                valid = False
+
+            hits = control.get("hit_tests")
+            expected_hits_per_state = 1 + len(label_parts)
+            if not isinstance(hits, list) or len(hits) != 2 * expected_hits_per_state:
+                valid = False
+                hits = []
+            for state in ("closed", "open"):
+                state_hits = [hit for hit in hits if isinstance(hit, dict) and hit.get("state") == state]
+                if len(state_hits) != expected_hits_per_state:
+                    valid = False
+                    continue
+                points = [hit.get("point") for hit in state_hits]
+                if any(
+                    not isinstance(hit.get("point"), dict)
+                    or set(hit["point"]) != {"x", "y"}
+                    or any(not _finite_json_number(hit["point"].get(axis)) for axis in ("x", "y"))
+                    or hit.get("topmost_is_control") is not True
+                    or hit.get("topmost_is_assistant") is not False
+                    for hit in state_hits
+                ):
+                    valid = False
+                good_points = [
+                    point for point in points
+                    if isinstance(point, dict)
+                    and set(point) == {"x", "y"}
+                    and _finite_json_number(point.get("x"))
+                    and _finite_json_number(point.get("y"))
+                ]
+                if len({(p.get("x"), p.get("y")) for p in good_points}) != len(good_points):
+                    valid = False
+                if button is not None and any(
+                    point["x"] < button["x"] - 0.75
+                    or point["y"] < button["y"] - 0.75
+                    or point["x"] > button["x"] + button["width"] + 0.75
+                    or point["y"] > button["y"] + button["height"] + 0.75
+                    for point in good_points
+                ):
+                    valid = False
+                if button is not None and not any(near_point(p, button) for p in good_points):
+                    valid = False
+                for label_part in label_parts:
+                    if label_part is not None and not any(near_point(p, label_part) for p in good_points):
+                        valid = False
+
+            focus = control.get("keyboard_focus")
+            if not (
+                isinstance(focus, dict)
+                and focus.get("reached") is True
+                and focus.get("visible") is True
+                and focus.get("inside_viewport") is True
+                and _finite_json_number(focus.get("outline_width_px"))
+                and focus["outline_width_px"] >= 2
+                and _finite_json_number(focus.get("outline_offset_px"))
+                and focus["outline_offset_px"] >= 2
+                and focus.get("outline_style") == "solid"
+            ):
+                valid = False
+
+        if (
+            len(button_rectangles) == 2
+            and intersection_area(button_rectangles[0], button_rectangles[1]) > 0.1
+        ):
+            valid = False
+
+        effects = row.get("side_effects")
+        if not (
+            isinstance(effects, dict)
+            and all(type(effects.get(field)) is int and effects[field] == 0 for field in (
+                "generation_requests", "form_post_count", "provider_attempts", "browser_mutations",
+            ))
+            and effects.get("form_unchanged") is True
+        ):
+            valid = False
+
+    if observed != expected or len(set(observed)) != len(expected) or len(heights) != 1:
+        valid = False
+    if not valid:
+        issues.append(issue)
+    return issues
+
+
 def _wb_edit_protocol_issues(data: dict) -> list[str]:
     """Require real single-edit and mixed-selection fixture evidence."""
     issues: list[str] = []
@@ -715,6 +1047,7 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
         if not expected_details:
             issues.append("wb_edit_named_check_missing_or_failed:" + name)
     issues.extend(_wb_edit_contrast_protocol_issues(data, checks))
+    issues.extend(_wb_edit_footer_clearance_protocol_issues(data, checks))
 
     expected_layouts = {
         (page, theme, width)

@@ -38,6 +38,11 @@ from scripts.check_ux01 import (
     WB_EDIT_CONTRAST_CHECK,
     WB_EDIT_CONTRAST_THEMES,
     WB_EDIT_CONTRAST_CONTROL_NAMES,
+    WB_EDIT_FOOTER_CLEARANCE_CHECK,
+    WB_EDIT_FOOTER_CLEARANCE_WIDTHS,
+    WB_EDIT_FOOTER_CLEARANCE_THEMES,
+    WB_EDIT_FOOTER_CLEARANCE_CONTROLS,
+    WB_EDIT_FOOTER_CLEARANCE_LABELS,
     REQUIRED_TESTS,
     Stage,
     _canonical_json,
@@ -717,6 +722,115 @@ def _wb_contrast_diagnostic() -> list[dict]:
     ]
 
 
+def _wb_footer_clearance_diagnostic() -> list[dict]:
+    rows = []
+    for width in WB_EDIT_FOOTER_CLEARANCE_WIDTHS:
+        for theme in WB_EDIT_FOOTER_CLEARANCE_THEMES:
+            viewport = {"width": width, "height": 900}
+            heading = {
+                "rect": {"x": 16, "y": 14, "width": 120, "height": 22},
+                "container_rect": {"x": 8, "y": 8, "width": width - 16, "height": 36},
+                "line_rects": [{"x": 16, "y": 14, "width": 120, "height": 22}],
+                "window_scroll_y": 0,
+                "fully_inside_container": True,
+            }
+            open_trigger = {"x": width - 62, "y": 748, "width": 44, "height": 44}
+            closed_trigger = {"x": width - 62, "y": 748, "width": 44, "height": 44}
+            open_panel = {"x": 8, "y": 118, "width": width - 16, "height": 600}
+            controls = []
+            for name in WB_EDIT_FOOTER_CLEARANCE_CONTROLS:
+                if name == "cancel":
+                    button = {"x": 12, "y": 832, "width": 92, "height": 48}
+                    part = {"x": 30, "y": 846, "width": 56, "height": 18}
+                    label_parts = [part]
+                else:
+                    button = {"x": width - 148, "y": 832, "width": 136, "height": 48}
+                    if width == 320:
+                        label_parts = [
+                            {"x": width - 138, "y": 837, "width": 116, "height": 16},
+                            {"x": width - 138, "y": 856, "width": 52, "height": 16},
+                        ]
+                    else:
+                        label_parts = [{"x": width - 138, "y": 846, "width": 116, "height": 18}]
+                label = {
+                    "x": min(part["x"] for part in label_parts),
+                    "y": min(part["y"] for part in label_parts),
+                    "width": max(part["x"] + part["width"] for part in label_parts)
+                            - min(part["x"] for part in label_parts),
+                    "height": max(part["y"] + part["height"] for part in label_parts)
+                             - min(part["y"] for part in label_parts),
+                }
+                points = [
+                    {"x": button["x"] + button["width"] / 2,
+                     "y": button["y"] + button["height"] / 2},
+                    *[{"x": part["x"] + part["width"] / 2,
+                       "y": part["y"] + part["height"] / 2} for part in label_parts],
+                ]
+                controls.append({
+                    "name": name,
+                    "visible": True,
+                    "enabled": True,
+                    "button_rect": button,
+                    "label_rect": label,
+                    "label_rects": label_parts,
+                    "label_text": WB_EDIT_FOOTER_CLEARANCE_LABELS[name],
+                    "label_fully_inside_button": True,
+                    "assistant_open_intersection_area_px": 0,
+                    "assistant_closed_intersection_area_px": 0,
+                    "open_panel_intersection_area_px": 0,
+                    "hit_tests": [
+                        {"state": state, "point": point,
+                         "topmost_is_control": True, "topmost_is_assistant": False}
+                        for state in ("closed", "open") for point in points
+                    ],
+                    "keyboard_focus": {
+                        "reached": True, "visible": True, "inside_viewport": True,
+                        "outline_width_px": 2, "outline_offset_px": 2,
+                        "outline_style": "solid",
+                    },
+                })
+            rows.append({
+                "requested_theme": theme,
+                "actual_theme": theme,
+                "viewport": viewport,
+                "root": {"client_width": width, "scroll_width": width, "overflow_px": 0},
+                "body": {"client_width": width, "scroll_width": width, "overflow_px": 0},
+                "heading": heading,
+                "assistant": {
+                    "opened_via_trigger": True,
+                    "closed_via_trigger": True,
+                    "open_rect": open_trigger,
+                    "closed_trigger_rect": closed_trigger,
+                    "open_panel_rect": open_panel,
+                    "open_panel_inside_viewport": True,
+                    "closed_panel_hidden": True,
+                    "open_intersection_area_px": {"save": 0, "cancel": 0},
+                    "closed_intersection_area_px": {"save": 0, "cancel": 0},
+                    "open_panel_intersection_area_px": {"save": 0, "cancel": 0},
+                    "message_scroll_region": {
+                        "rect": {"x": 16, "y": 200, "width": width - 32, "height": 340},
+                        "overflow_y": "auto",
+                        "client_height": 340,
+                        "scroll_height": 660,
+                        "inside_panel": True,
+                    },
+                    "composer_rect": {"x": 16, "y": 660, "width": width - 32, "height": 44},
+                    "composer_inside_panel": True,
+                    "close_control_rect": {"x": width - 58, "y": 126, "width": 32, "height": 32},
+                    "close_control_inside_panel": True,
+                },
+                "controls": controls,
+                "side_effects": {
+                    "generation_requests": 0,
+                    "form_post_count": 0,
+                    "provider_attempts": 0,
+                    "browser_mutations": 0,
+                    "form_unchanged": True,
+                },
+            })
+    return rows
+
+
 def _wb_edit_browser_report() -> dict:
     layouts = []
     for page in WB_EDIT_PAGES:
@@ -764,6 +878,17 @@ def _wb_edit_browser_report() -> dict:
                 "control_count": 10, "minimum_contrast_ratio": 4.5,
                 "all_enabled_visible": True, "all_settled": True,
                 "all_contrast_aa": True, "failures": [],
+            })
+        elif name == WB_EDIT_FOOTER_CLEARANCE_CHECK:
+            required_checks.append({
+                "name": name, "status": "passed",
+                "viewports": list(WB_EDIT_FOOTER_CLEARANCE_WIDTHS),
+                "themes": list(WB_EDIT_FOOTER_CLEARANCE_THEMES),
+                "row_count": 6,
+                "all_controls_clear": True,
+                "all_keyboard_focus_visible": True,
+                "no_side_effects": True,
+                "failures": [],
             })
         else:
             required_checks.append({"name": name, "status": "passed"})
@@ -831,6 +956,7 @@ def _wb_edit_browser_report() -> dict:
         "layouts": layouts,
         "checks": checks,
         "single_edit_contrast_diagnostic": _wb_contrast_diagnostic(),
+        "single_edit_footer_clearance": _wb_footer_clearance_diagnostic(),
         "fake_wb_single_write_calls": 1,
         "fake_wb_single_write_requests": [write_request],
         "fake_wb_write_calls": 2,
@@ -2436,6 +2562,129 @@ class Ux01RunnerContractTest(unittest.TestCase):
             duplicate_styles[-1] = copy.deepcopy(duplicate_styles[0])
             invalid_reports.append(("duplicate settled computed style selector", duplicate_final_style,
                                     "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"))
+
+            footer_issue = "wb_edit_footer_assistant_clearance_incomplete_or_invalid"
+            missing_footer_row = copy.deepcopy(report)
+            missing_footer_row["single_edit_footer_clearance"].pop()
+            invalid_reports.append(("missing mobile footer/theme row", missing_footer_row, footer_issue))
+
+            missing_footer_check = copy.deepcopy(report)
+            missing_footer_check["checks"] = [
+                check for check in missing_footer_check["checks"]
+                if check.get("name") != WB_EDIT_FOOTER_CLEARANCE_CHECK
+            ]
+            invalid_reports.append(("missing footer named check", missing_footer_check,
+                                    "wb_edit_named_check_missing_or_failed:" + WB_EDIT_FOOTER_CLEARANCE_CHECK))
+
+            failed_footer_check = copy.deepcopy(report)
+            next(check for check in failed_footer_check["checks"]
+                 if check.get("name") == WB_EDIT_FOOTER_CLEARANCE_CHECK)["status"] = "failed"
+            invalid_reports.append(("failed footer named check", failed_footer_check,
+                                    "wb_edit_named_check_missing_or_failed:" + WB_EDIT_FOOTER_CLEARANCE_CHECK))
+
+            duplicate_footer_pair = copy.deepcopy(report)
+            duplicate_footer_pair["single_edit_footer_clearance"][1] = copy.deepcopy(
+                duplicate_footer_pair["single_edit_footer_clearance"][0]
+            )
+            invalid_reports.append(("duplicate mobile footer width/theme pair", duplicate_footer_pair, footer_issue))
+
+            mismatched_footer_theme = copy.deepcopy(report)
+            mismatched_footer_theme["single_edit_footer_clearance"][0]["actual_theme"] = "dark"
+            invalid_reports.append(("footer rendered in wrong theme", mismatched_footer_theme, footer_issue))
+
+            footer_root_overflow = copy.deepcopy(report)
+            footer_root_overflow["single_edit_footer_clearance"][0]["root"]["scroll_width"] = 321
+            footer_root_overflow["single_edit_footer_clearance"][0]["root"]["overflow_px"] = 1
+            invalid_reports.append(("root overflows at narrow viewport", footer_root_overflow, footer_issue))
+
+            footer_button_too_small = copy.deepcopy(report)
+            footer_button_too_small["single_edit_footer_clearance"][0]["controls"][0][
+                "button_rect"
+            ]["height"] = 43
+            invalid_reports.append(("footer action below 44px minimum", footer_button_too_small, footer_issue))
+
+            footer_wrapped_label_clipped = copy.deepcopy(report)
+            footer_wrapped_label_clipped["single_edit_footer_clearance"][0]["controls"][0][
+                "label_rects"][1]["x"] = 320
+            invalid_reports.append(("wrapped save label clipped outside button", footer_wrapped_label_clipped, footer_issue))
+
+            footer_assistant_overlap = copy.deepcopy(report)
+            footer_row = footer_assistant_overlap["single_edit_footer_clearance"][0]
+            footer_row["assistant"]["open_rect"] = {"x": 250, "y": 832, "width": 44, "height": 44}
+            footer_row["assistant"]["open_intersection_area_px"]["save"] = 44 * 44
+            footer_row["controls"][0]["assistant_open_intersection_area_px"] = 44 * 44
+            invalid_reports.append(("assistant trigger overlaps save action", footer_assistant_overlap, footer_issue))
+
+            footer_panel_overlap = copy.deepcopy(report)
+            footer_row = footer_panel_overlap["single_edit_footer_clearance"][0]
+            footer_row["assistant"]["open_panel_rect"] = {
+                "x": 180, "y": 832, "width": 132, "height": 48,
+            }
+            invalid_reports.append(("open assistant panel covers save action", footer_panel_overlap, footer_issue))
+
+            footer_assistant_hit = copy.deepcopy(report)
+            footer_row = footer_assistant_hit["single_edit_footer_clearance"][0]
+            footer_row["controls"][1]["hit_tests"][0]["topmost_is_control"] = False
+            footer_row["controls"][1]["hit_tests"][0]["topmost_is_assistant"] = True
+            invalid_reports.append(("assistant intercepts cancel hit-test", footer_assistant_hit, footer_issue))
+
+            footer_focus_hidden = copy.deepcopy(report)
+            footer_focus_hidden["single_edit_footer_clearance"][0]["controls"][1][
+                "keyboard_focus"]["visible"] = False
+            invalid_reports.append(("cancel keyboard focus is not visible", footer_focus_hidden, footer_issue))
+
+            footer_assistant_not_closed = copy.deepcopy(report)
+            footer_assistant_not_closed["single_edit_footer_clearance"][0][
+                "assistant"]["closed_panel_hidden"] = False
+            invalid_reports.append(("assistant remains open after close action", footer_assistant_not_closed, footer_issue))
+
+            footer_form_post = copy.deepcopy(report)
+            footer_form_post["single_edit_footer_clearance"][0]["side_effects"]["form_post_count"] = 1
+            invalid_reports.append(("assistant probe submits the WB form", footer_form_post, footer_issue))
+
+            footer_generation = copy.deepcopy(report)
+            footer_generation["single_edit_footer_clearance"][0]["side_effects"]["generation_requests"] = 1
+            invalid_reports.append(("assistant probe starts generation", footer_generation, footer_issue))
+
+            footer_wrong_page_scroll = copy.deepcopy(report)
+            footer_wrong_page_scroll["single_edit_footer_clearance"][0]["heading"][
+                "window_scroll_y"] = 200
+            invalid_reports.append(("heading was not measured at scroll top", footer_wrong_page_scroll, footer_issue))
+
+            footer_panel_outside_viewport = copy.deepcopy(report)
+            footer_panel_outside_viewport["single_edit_footer_clearance"][0]["assistant"][
+                "open_panel_inside_viewport"] = False
+            invalid_reports.append(("assistant panel outside viewport", footer_panel_outside_viewport, footer_issue))
+
+            footer_message_region_not_scrollable = copy.deepcopy(report)
+            footer_message_region_not_scrollable["single_edit_footer_clearance"][0]["assistant"][
+                "message_scroll_region"]["overflow_y"] = "hidden"
+            invalid_reports.append(("assistant messages lack local scrolling", footer_message_region_not_scrollable, footer_issue))
+
+            footer_message_region_no_overflow = copy.deepcopy(report)
+            footer_message_region_no_overflow["single_edit_footer_clearance"][0]["assistant"][
+                "message_scroll_region"]["scroll_height"] = 339
+            invalid_reports.append(("assistant scroll telemetry has no content extent", footer_message_region_no_overflow, footer_issue))
+
+            footer_composer_outside_panel = copy.deepcopy(report)
+            footer_composer_outside_panel["single_edit_footer_clearance"][0]["assistant"][
+                "composer_rect"]["x"] = 280
+            invalid_reports.append(("assistant composer outside panel", footer_composer_outside_panel, footer_issue))
+
+            footer_close_outside_panel = copy.deepcopy(report)
+            footer_close_outside_panel["single_edit_footer_clearance"][0]["assistant"][
+                "close_control_rect"]["x"] = 282
+            invalid_reports.append(("assistant close control outside panel", footer_close_outside_panel, footer_issue))
+
+            footer_focus_without_offset = copy.deepcopy(report)
+            footer_focus_without_offset["single_edit_footer_clearance"][0]["controls"][0][
+                "keyboard_focus"]["outline_offset_px"] = 1
+            invalid_reports.append(("footer keyboard focus outline offset too small", footer_focus_without_offset, footer_issue))
+
+            footer_focus_not_solid = copy.deepcopy(report)
+            footer_focus_not_solid["single_edit_footer_clearance"][0]["controls"][0][
+                "keyboard_focus"]["outline_style"] = "none"
+            invalid_reports.append(("footer keyboard outline is not rendered", footer_focus_not_solid, footer_issue))
 
             for label, invalid, expected_issue in invalid_reports:
                 with self.subTest(case=label):
