@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-04T06:34:41.081021+00:00",
+  "generated_at": "2026-10-04T11:12:23.422227+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "1a17dbabbb4cc1e0dddab260376afa534428e42f769d46989f0373cb9f17bba6"
+      "sha256": "c87d410045d3e9ba784b808fc3708390857a6b73dfba33a4869b9e01a55de933"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -469,7 +469,7 @@
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
-      "sha256": "c21746a7326836585888668e5674f93f044b0da20e93da79e5c0b8ea60f74e66"
+      "sha256": "9ec0654b834c27696a8b381f71907fc92c49d10e00b3d3c5dfe0479ebd0fd4c2"
     },
     {
       "path": "docs/design/ozon-vue-linking-and-category-review.md",
@@ -2641,7 +2641,7 @@
     },
     {
       "path": "static/ozon-draft-editor.css",
-      "sha256": "5d8ab54cfb1c894d7f435f7fccbac7446c835a11c25e8d7ae56615e6237b7216"
+      "sha256": "946ff0e126912ae1b0af259eb9dd3eee69bcb0b5ff2fd9ea6ba96be0e989dbe3"
     },
     {
       "path": "static/ozon-draft-editor.js",
@@ -3633,7 +3633,7 @@
     },
     {
       "path": "tests/ozon_release/ozon_complete_journey_browser.py",
-      "sha256": "ea40622950e4ad050ee60df57c401cc45f54df5d7c78e33985cb4e6fcf151271"
+      "sha256": "ffacf87b77a02f8c69afd3454e9ac72b386665e1d8b877131b08b28d0390099f"
     },
     {
       "path": "tests/ozon_release/quarantine_browser.py",
@@ -5016,5 +5016,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "2c3494a3f23bb9accb87dba453e1913b1a6500106c07fdcd6c7e8df7ef69e009"
+  "aggregate_sha256": "f00c2adb53531119af540a345b48115f88513522d8d40ab59048a765c7a0b4d5"
 }
