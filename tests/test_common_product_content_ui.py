@@ -166,4 +166,9 @@ def test_production_editor_handlers_restore_native_focus_after_dom_replacement()
         "mode_photo_characteristic_product_reset_focus_restored",
         "refresh_success_and_error_focus_restored_after_busy",
         "refresh_completion_does_not_steal_external_focus",
+        "common_photo_pending_recovery_is_bounded_and_write_free",
+        "common_photo_exhaustion_offers_keyboard_manual_retry_in_inherit_mode",
+        "common_photo_ready_state_survives_preview_cancel_and_refresh",
+        "common_photo_lazy_deadline_waits_for_intersection",
+        "common_photo_visibility_rerender_product_switch_and_pagehide_cancel_stale_work",
     }

@@ -54,12 +54,23 @@
         return hasPreviewUrl ? 'Предпросмотр недоступен' : 'Нет предпросмотра';
     }
 
+    function importedPhotoPreviewSlot(previewUrl, productId) {
+        if (typeof previewUrl !== 'string' || previewUrl.length > 200) return null;
+        var match = previewUrl.match(/^\/api\/photos\/imported-product\/([1-9]\d*)\/(0|[1-9]\d*)\?deferred=1$/);
+        if (!match || String(productId) !== match[1]) return null;
+        var product = Number(match[1]);
+        var slot = Number(match[2]);
+        if (!Number.isSafeInteger(product) || !Number.isSafeInteger(slot)) return null;
+        return slot;
+    }
+
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
             selectionUrl: selectionUrl,
             serializeFieldChange: serializeFieldChange,
             readablePhotoOrder: readablePhotoOrder,
             photoPreviewFallbackLabel: photoPreviewFallbackLabel,
+            importedPhotoPreviewSlot: importedPhotoPreviewSlot,
         };
     }
     if (global) {
@@ -68,6 +79,7 @@
         global.SellerHubCommonContent.serializeFieldChange = serializeFieldChange;
         global.SellerHubCommonContent.readablePhotoOrder = readablePhotoOrder;
         global.SellerHubCommonContent.photoPreviewFallbackLabel = photoPreviewFallbackLabel;
+        global.SellerHubCommonContent.importedPhotoPreviewSlot = importedPhotoPreviewSlot;
     }
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null));
 
@@ -126,6 +138,12 @@
         requiresRefresh: false,
     };
 
+    var photoPreviewStates = new Map();
+    var activePhotoPreviewControllers = new Set();
+    var nextPhotoPreviewControllerId = 1;
+    var photoPreviewRetryDelays = [2000, 4000, 6000];
+    var photoPreviewDeadlineMs = 12000;
+
     var listNode = document.getElementById('common-content-product-list');
     var fieldsNode = document.getElementById('common-content-fields');
     var previewNode = document.getElementById('common-content-preview');
@@ -161,6 +179,319 @@
         item.type = 'button';
         item.dataset.action = action;
         return item;
+    }
+
+    var photoPreviewMessages = {
+        loading: 'Загружаем предпросмотр фото…',
+        pending: 'Фото пока не загрузилось. Повторим через несколько секунд.',
+        paused: 'Предпросмотр на паузе. Можно повторить вручную.',
+        failed: 'Предпросмотр не удалось загрузить.',
+        ready: 'Предпросмотр загружен.',
+        unavailable: 'Предпросмотр недоступен для этого фото.',
+    };
+
+    function photoPreviewStateKey(productId, slot, sourceUrl, previewUrl) {
+        return JSON.stringify([String(productId), String(slot), String(sourceUrl), String(previewUrl)]);
+    }
+
+    function photoTimerSet(callback, delay) {
+        return window.setTimeout(callback, delay);
+    }
+
+    function photoTimerClear(timer) {
+        if (timer === null || timer === undefined) return;
+        window.clearTimeout(timer);
+    }
+
+    function clearPhotoPreviewTimer(controller, name) {
+        photoTimerClear(controller[name]);
+        controller[name] = null;
+    }
+
+    function stopPhotoPreviewObserver(controller) {
+        if (controller.observer && typeof controller.observer.disconnect === 'function') {
+            controller.observer.disconnect();
+        }
+        controller.observer = null;
+    }
+
+    function removePhotoPreviewImage(controller) {
+        var image = controller.image;
+        if (!image) return;
+        if (controller.loadHandler) image.removeEventListener('load', controller.loadHandler);
+        if (controller.errorHandler) image.removeEventListener('error', controller.errorHandler);
+        controller.loadHandler = null;
+        controller.errorHandler = null;
+        stopPhotoPreviewObserver(controller);
+        image.removeAttribute('src');
+        controller.image = null;
+        controller.requestGeneration += 1;
+    }
+
+    function updatePhotoPreviewDom(controller) {
+        if (!controller.statusNode) return;
+        controller.statusNode.dataset.photoPreviewState = controller.state;
+        controller.statusNode.textContent = photoPreviewMessages[controller.state] || photoPreviewMessages.unavailable;
+        if (controller.retryButton) {
+            controller.retryButton.hidden = !controller.retryVisible || controller.state === 'unavailable';
+            var canRetry = !state.busy && !document.hidden
+                && (controller.state === 'failed' || controller.state === 'paused' || controller.state === 'ready');
+            controller.retryButton.setAttribute('aria-disabled', canRetry ? 'false' : 'true');
+        }
+    }
+
+    function photoPreviewIsCurrent(controller, image, requestGeneration) {
+        return controller.active
+            && controller.image === image
+            && controller.requestGeneration === requestGeneration
+            && state.currentId === controller.productId
+            && fieldsNode && fieldsNode.contains(controller.card)
+            && image && controller.imageBox && controller.imageBox.contains(image);
+    }
+
+    function photoPreviewFallback(controller) {
+        if (!controller.imageBox) return;
+        var text = controller.state === 'unavailable'
+            ? helpers.photoPreviewFallbackLabel(controller.selected, false)
+            : helpers.photoPreviewFallbackLabel(controller.selected, true);
+        controller.imageBox.replaceChildren(node('span', '', text));
+    }
+
+    function schedulePhotoPreviewRetry(controller) {
+        if (controller.automaticRetries >= photoPreviewRetryDelays.length) {
+            controller.state = 'failed';
+            controller.pauseReason = null;
+            updatePhotoPreviewDom(controller);
+            return;
+        }
+        controller.state = 'pending';
+        controller.pauseReason = null;
+        updatePhotoPreviewDom(controller);
+        controller.retryTimer = photoTimerSet(function () {
+            controller.retryTimer = null;
+            if (!controller.active || state.currentId !== controller.productId) return;
+            if (document.hidden || state.busy || (controller.hasIntersectionObservation && !controller.inViewport)) {
+                controller.state = 'paused';
+                controller.pauseReason = document.hidden ? 'hidden' : (state.busy ? 'busy' : 'offscreen');
+                controller.retryVisible = true;
+                updatePhotoPreviewDom(controller);
+                return;
+            }
+            controller.automaticRetries += 1;
+            startPhotoPreviewRequest(controller, 'automatic_retry');
+        }, photoPreviewRetryDelays[controller.automaticRetries]);
+    }
+
+    function finishPhotoPreview(controller, image, requestGeneration, loaded) {
+        if (!photoPreviewIsCurrent(controller, image, requestGeneration)) return;
+        clearPhotoPreviewTimer(controller, 'deadlineTimer');
+        clearPhotoPreviewTimer(controller, 'retryTimer');
+        if (loaded && Number(image.naturalWidth) > 0) {
+            controller.state = 'ready';
+            controller.pauseReason = null;
+            stopPhotoPreviewObserver(controller);
+            updatePhotoPreviewDom(controller);
+            return;
+        }
+        removePhotoPreviewImage(controller);
+        photoPreviewFallback(controller);
+        controller.retryVisible = true;
+        if (document.hidden || state.busy) {
+            controller.state = 'paused';
+            controller.pauseReason = document.hidden ? 'hidden' : 'busy';
+            updatePhotoPreviewDom(controller);
+            return;
+        }
+        if (controller.hasIntersectionObservation && !controller.inViewport) {
+            controller.state = 'paused';
+            controller.pauseReason = 'offscreen';
+            updatePhotoPreviewDom(controller);
+            return;
+        }
+        schedulePhotoPreviewRetry(controller);
+    }
+
+    function startPhotoPreviewDeadline(controller, image, requestGeneration) {
+        if (!photoPreviewIsCurrent(controller, image, requestGeneration)
+                || controller.deadlineTimer !== null || document.hidden || state.busy) return;
+        controller.deadlineTimer = photoTimerSet(function () {
+            controller.deadlineTimer = null;
+            if (!photoPreviewIsCurrent(controller, image, requestGeneration)) return;
+            if (image.complete && Number(image.naturalWidth) > 0) {
+                finishPhotoPreview(controller, image, requestGeneration, true);
+                return;
+            }
+            finishPhotoPreview(controller, image, requestGeneration, false);
+        }, photoPreviewDeadlineMs);
+    }
+
+    function observePhotoPreview(controller, image, requestGeneration) {
+        var Observer = window.IntersectionObserver;
+        if (typeof Observer === 'function') {
+            controller.hasIntersectionObservation = false;
+            controller.inViewport = false;
+            controller.observer = new Observer(function (entries) {
+                if (!photoPreviewIsCurrent(controller, image, requestGeneration)) return;
+                var visible = entries.some(function (entry) { return entry.isIntersecting; });
+                controller.hasIntersectionObservation = true;
+                controller.inViewport = visible;
+                if (!visible) {
+                    clearPhotoPreviewTimer(controller, 'deadlineTimer');
+                    if (controller.state === 'pending') {
+                        clearPhotoPreviewTimer(controller, 'retryTimer');
+                        controller.state = 'paused';
+                        controller.pauseReason = 'offscreen';
+                        controller.retryVisible = true;
+                        updatePhotoPreviewDom(controller);
+                    }
+                    return;
+                }
+                if (document.hidden || state.busy) return;
+                if (controller.state === 'paused' && controller.pauseReason === 'offscreen') {
+                    controller.pauseReason = null;
+                    schedulePhotoPreviewRetry(controller);
+                    return;
+                }
+                if (controller.state === 'loading') startPhotoPreviewDeadline(controller, image, requestGeneration);
+            }, {rootMargin: '300px'});
+            controller.observer.observe(image);
+            return;
+        }
+        controller.hasIntersectionObservation = false;
+        controller.inViewport = true;
+        startPhotoPreviewDeadline(controller, image, requestGeneration);
+    }
+
+    function startPhotoPreviewRequest(controller, trigger) {
+        if (!controller.active || state.currentId !== controller.productId || !controller.previewUrl) return;
+        clearPhotoPreviewTimer(controller, 'retryTimer');
+        clearPhotoPreviewTimer(controller, 'deadlineTimer');
+        removePhotoPreviewImage(controller);
+        controller.state = 'loading';
+        controller.pauseReason = null;
+        controller.retryVisible = controller.retryVisible || trigger !== 'initial';
+        controller.requestCounter += 1;
+        controller.requestGeneration += 1;
+        var requestGeneration = controller.requestGeneration;
+        var image = document.createElement('img');
+        controller.image = image;
+        image.alt = '';
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.referrerPolicy = 'no-referrer';
+        image.dataset.photoPreviewImage = 'true';
+        image.dataset.photoPreviewAttempt = String(controller.requestCounter);
+        controller.loadHandler = function () {
+            finishPhotoPreview(controller, image, requestGeneration, true);
+        };
+        controller.errorHandler = function () {
+            finishPhotoPreview(controller, image, requestGeneration, false);
+        };
+        image.addEventListener('load', controller.loadHandler);
+        image.addEventListener('error', controller.errorHandler);
+        controller.imageBox.replaceChildren(image);
+        updatePhotoPreviewDom(controller);
+        observePhotoPreview(controller, image, requestGeneration);
+        image.src = controller.previewUrl + (controller.requestCounter > 1 ? '&retry=' + controller.requestCounter : '');
+    }
+
+    function makePhotoPreviewController(record, option, slot, card, imageBox, statusNode, retryButton, selected) {
+        var productId = record.state.product_id;
+        var previewUrl = option.preview_url;
+        var key = photoPreviewStateKey(productId, slot, option.url, previewUrl);
+        var controller = photoPreviewStates.get(key);
+        if (!controller) {
+            controller = {
+                id: nextPhotoPreviewControllerId++,
+                key: key,
+                productId: productId,
+                slot: slot,
+                sourceUrl: option.url,
+                previewUrl: previewUrl,
+                state: 'loading',
+                automaticRetries: 0,
+                requestCounter: 0,
+                retryVisible: false,
+                pauseReason: null,
+                active: false,
+                image: null,
+                observer: null,
+                hasIntersectionObservation: false,
+                inViewport: false,
+                retryTimer: null,
+                deadlineTimer: null,
+                requestGeneration: 0,
+                selected: selected,
+            };
+            photoPreviewStates.set(key, controller);
+        }
+        controller.card = card;
+        controller.imageBox = imageBox;
+        controller.statusNode = statusNode;
+        controller.retryButton = retryButton;
+        controller.selected = selected;
+        controller.active = true;
+        activePhotoPreviewControllers.add(controller);
+        if (controller.state === 'ready') controller.state = 'loading';
+        updatePhotoPreviewDom(controller);
+        photoPreviewFallback(controller);
+        return controller;
+    }
+
+    function startQueuedPhotoPreviewRequests() {
+        activePhotoPreviewControllers.forEach(function (controller) {
+            if (!state.busy && controller.state === 'loading' && !controller.image
+                    && controller.card && controller.card.isConnected
+                    && state.currentId === controller.productId) {
+                startPhotoPreviewRequest(controller, controller.requestCounter ? 'render_resume' : 'initial');
+            }
+        });
+    }
+
+    function pausePhotoPreviewControllers(reason) {
+        activePhotoPreviewControllers.forEach(function (controller) {
+            if (reason === 'busy' && controller.state === 'ready') return;
+            clearPhotoPreviewTimer(controller, 'retryTimer');
+            clearPhotoPreviewTimer(controller, 'deadlineTimer');
+            if (controller.state === 'loading' || controller.state === 'pending'
+                    || (controller.state === 'ready' && reason !== 'rerender')) {
+                controller.state = 'paused';
+                controller.pauseReason = reason;
+                controller.retryVisible = true;
+                photoPreviewFallback(controller);
+                updatePhotoPreviewDom(controller);
+            }
+            removePhotoPreviewImage(controller);
+            if (reason !== 'busy') controller.active = false;
+        });
+        if (reason !== 'busy') activePhotoPreviewControllers.clear();
+    }
+
+    function retryPhotoPreview(controller) {
+        if (!controller || !controller.active || state.busy || document.hidden
+                || state.currentId !== controller.productId
+                || (controller.state !== 'failed' && controller.state !== 'paused' && controller.state !== 'ready')) return;
+        controller.automaticRetries = 0;
+        controller.retryVisible = true;
+        startPhotoPreviewRequest(controller, 'manual_retry');
+    }
+
+    function onPhotoPreviewVisibilityChange() {
+        if (!document.hidden) {
+            activePhotoPreviewControllers.forEach(updatePhotoPreviewDom);
+            return;
+        }
+        activePhotoPreviewControllers.forEach(function (controller) {
+            if (controller.state !== 'loading' && controller.state !== 'pending') return;
+            clearPhotoPreviewTimer(controller, 'retryTimer');
+            clearPhotoPreviewTimer(controller, 'deadlineTimer');
+            controller.state = 'paused';
+            controller.pauseReason = 'hidden';
+            controller.retryVisible = true;
+            photoPreviewFallback(controller);
+            removePhotoPreviewImage(controller);
+            updatePhotoPreviewDom(controller);
+        });
     }
 
     function focusIfAvailable(item) {
@@ -447,6 +778,7 @@
         options.forEach(function (option, index) {
             var selected = currentPhotos.indexOf(option.url) !== -1;
             var available = !!option.available_for_selection || selected;
+            var card = node('div', 'cpc-photo-card');
             var item = node('button', 'cpc-photo-option' + (selected ? ' is-selected' : ''));
             item.type = 'button';
             item.dataset.action = 'toggle-photo';
@@ -458,24 +790,39 @@
             item.setAttribute('aria-label', photoName(option.url, record) + ', ' + (selected ? 'выбрано' : 'не выбрано') + ', источник: ' + (option.source || 'общий товар'));
 
             var image = node('span', 'cpc-photo-preview');
-            if (option.preview_url) {
-                var img = document.createElement('img');
-                img.src = option.preview_url;
-                img.alt = '';
-                img.loading = 'lazy';
-                img.decoding = 'async';
-                img.addEventListener('error', function () {
-                    image.replaceChildren(node('span', '', helpers.photoPreviewFallbackLabel(selected, true)));
-                }, { once: true });
-                image.appendChild(img);
-            } else {
-                image.appendChild(node('span', '', helpers.photoPreviewFallbackLabel(selected, false)));
-            }
+            image.appendChild(node('span', '', helpers.photoPreviewFallbackLabel(selected, !!option.preview_url)));
             item.appendChild(image);
             item.appendChild(node('span', 'cpc-photo-name', photoName(option.url, record)));
             item.appendChild(node('span', 'cpc-photo-source', option.source || 'общий товар'));
             if (!available && !selected) item.appendChild(node('span', 'cpc-photo-source', 'Недоступно для выбора'));
-            grid.appendChild(item);
+            card.dataset.photoPreviewCard = 'true';
+            card.appendChild(item);
+            var previewStatus = node('span', 'cpc-photo-preview-status');
+            previewStatus.setAttribute('role', 'status');
+            previewStatus.setAttribute('aria-live', 'polite');
+            var retry = button('Повторить предпросмотр', 'retry-photo-preview', 'cpc-photo-preview-retry cpc-quiet-button');
+            retry.hidden = true;
+            retry.setAttribute('aria-label', 'Повторить предпросмотр ' + photoName(option.url, record));
+            card.append(previewStatus, retry);
+            var slot = option.preview_url
+                ? helpers.importedPhotoPreviewSlot(option.preview_url, record.state.product_id)
+                : null;
+            if (slot !== null) {
+                card.dataset.photoPreviewProduct = String(record.state.product_id);
+                card.dataset.photoPreviewSlot = String(slot);
+                var controller = makePhotoPreviewController(
+                    record, option, slot, card, image, previewStatus, retry, selected,
+                );
+                card.dataset.photoPreviewController = String(controller.id);
+            } else {
+                var validButWrong = !!option.preview_url;
+                previewStatus.dataset.photoPreviewState = 'unavailable';
+                previewStatus.textContent = photoPreviewMessages.unavailable;
+                if (validButWrong) {
+                    image.replaceChildren(node('span', '', helpers.photoPreviewFallbackLabel(selected, false)));
+                }
+            }
+            grid.appendChild(card);
         });
         wrap.appendChild(grid);
 
@@ -629,6 +976,7 @@
         clearError();
         var record = state.byId.get(state.currentId);
         if (!record) return;
+        pausePhotoPreviewControllers('rerender');
         fieldsNode.replaceChildren();
         var heading = node('header', 'cpc-product-heading');
         var name = node('div');
@@ -643,6 +991,7 @@
         fieldsNode.appendChild(renderRecipients(record));
         fieldsNode.appendChild(renderActions(record));
         renderProductList();
+        startQueuedPhotoPreviewRequests();
     }
 
     function renderProductList() {
@@ -950,6 +1299,11 @@
 
     function setBusy(value) {
         state.busy = !!value;
+        if (state.busy) pausePhotoPreviewControllers('busy');
+        else {
+            activePhotoPreviewControllers.forEach(updatePhotoPreviewDom);
+            startQueuedPhotoPreviewRequests();
+        }
         if (root) {
             root.setAttribute('aria-busy', state.busy ? 'true' : 'false');
             root.inert = state.busy;
@@ -1118,6 +1472,16 @@
         var target = event.target.closest('[data-action]');
         if (!target) return;
         var action = target.dataset.action;
+        if (action === 'retry-photo-preview') {
+            var card = target.closest('[data-photo-preview-card="true"]');
+            var controller = card && card.dataset.photoPreviewController
+                ? Array.from(activePhotoPreviewControllers).find(function (item) {
+                    return String(item.id) === card.dataset.photoPreviewController;
+                })
+                : null;
+            retryPhotoPreview(controller);
+            return;
+        }
         if (action === 'choose-product') {
             state.currentId = Number(target.dataset.productId);
             discardPreview();
@@ -1254,6 +1618,15 @@
             target.scrollIntoView({block: 'nearest', inline: 'nearest'});
         });
     }
+    if (document && typeof document.addEventListener === 'function') {
+        document.addEventListener('visibilitychange', onPhotoPreviewVisibilityChange);
+    }
+    window.addEventListener('pagehide', function () {
+        pausePhotoPreviewControllers('pagehide');
+    });
+    window.addEventListener('pageshow', function (event) {
+        if (event && event.persisted) renderCurrent();
+    });
     window.addEventListener('beforeunload', function (event) {
         if (!state.busy && !state.records.some(isDirty)) return;
         event.preventDefault();

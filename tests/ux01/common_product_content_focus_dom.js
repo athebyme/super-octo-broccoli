@@ -43,6 +43,19 @@ class MiniElement {
         this.value = '';
         this.type = '';
         this.tabIndex = -1;
+        this.naturalWidth = 0;
+        this.naturalHeight = 0;
+        this.complete = false;
+        this.loading = '';
+        this.decoding = '';
+        this.referrerPolicy = '';
+        this._src = '';
+    }
+
+    get src() { return this._src; }
+    set src(value) {
+        this._src = String(value);
+        this.attributes.set('src', this._src);
     }
 
     get hidden() { return this._hidden; }
@@ -115,6 +128,16 @@ class MiniElement {
         this.listeners.get(type).push(callback);
     }
 
+    removeEventListener(type, callback) {
+        const rows = this.listeners.get(type) || [];
+        this.listeners.set(type, rows.filter((row) => row !== callback));
+    }
+
+    removeAttribute(name) {
+        this.attributes.delete(name);
+        if (name === 'src') this._src = '';
+    }
+
     dispatchEvent(event) {
         if (!event.target) event.target = this;
         if (!event.preventDefault) event.preventDefault = function () { this.defaultPrevented = true; };
@@ -182,6 +205,18 @@ class MiniDocument {
         this.body = new MiniElement(this, 'body');
         this.activeElement = this.body;
         this.nodes = new Map();
+        this.hidden = false;
+        this.listeners = new Map();
+    }
+
+    addEventListener(type, callback) {
+        if (!this.listeners.has(type)) this.listeners.set(type, []);
+        this.listeners.get(type).push(callback);
+    }
+
+    dispatchEvent(event) {
+        event.target = this;
+        (this.listeners.get(event.type) || []).forEach((callback) => callback(event));
     }
 
     createElement(tagName) { return new MiniElement(this, tagName); }
@@ -199,6 +234,34 @@ class MiniDocument {
         this.nodes.set(id, item);
         parent.appendChild(item);
         return item;
+    }
+}
+
+class FakeClock {
+    constructor() {
+        this.now = 0;
+        this.nextId = 1;
+        this.tasks = new Map();
+    }
+
+    setTimeout(callback, delay) {
+        const id = this.nextId++;
+        this.tasks.set(id, {id, at: this.now + Number(delay), callback});
+        return id;
+    }
+
+    clearTimeout(id) { this.tasks.delete(id); }
+
+    advance(milliseconds) {
+        const end = this.now + milliseconds;
+        while (true) {
+            const next = [...this.tasks.values()].sort((a, b) => a.at - b.at || a.id - b.id)[0];
+            if (!next || next.at > end) break;
+            this.tasks.delete(next.id);
+            this.now = next.at;
+            next.callback();
+        }
+        this.now = end;
     }
 }
 
@@ -234,6 +297,8 @@ function response(payload, status = 200) {
 
 function makeApp(options = {}) {
     const document = new MiniDocument();
+    const clock = options.photoPreview ? new FakeClock() : null;
+    const intersectionObservers = [];
     const root = document.mount('common-content-editor', document.body);
     const bootstrapNode = document.mount('common-content-bootstrap', root, 'script');
     const selection = document.mount('selection', root);
@@ -247,6 +312,20 @@ function makeApp(options = {}) {
     const previewNode = document.mount('common-content-preview', workspace);
     previewNode.hidden = true;
     const products = [fixtureProduct(11, 'Product One'), fixtureProduct(22, 'Product Two')];
+    if (options.photoPreview) {
+        products.forEach((product) => {
+            product.fields.photos.effective = ['photo-' + product.product_id];
+            product.fields.photos.inherited = ['photo-' + product.product_id];
+            product.photo_options = [{
+                url: 'photo-' + product.product_id,
+                preview_url: '/api/photos/imported-product/' + product.product_id + '/0?deferred=1',
+                source: 'synthetic fixture',
+                available_for_selection: true,
+                index: 0,
+            }];
+        });
+        if (options.photoModeInherit) products[0].fields.photos.is_overridden = false;
+    }
     const bootstrap = {
         products,
         selectedProductIds: [11, 22],
@@ -289,15 +368,34 @@ function makeApp(options = {}) {
         return response({ success: false, error: 'unrecognized synthetic request' }, 404);
     };
     const windowListeners = new Map();
+    class MiniIntersectionObserver {
+        constructor(callback, observerOptions) {
+            this.callback = callback;
+            this.options = observerOptions;
+            this.targets = new Set();
+            intersectionObservers.push(this);
+        }
+
+        observe(target) { this.targets.add(target); }
+        disconnect() { this.targets.clear(); }
+        trigger(target, isIntersecting) {
+            if (this.targets.has(target)) this.callback([{target, isIntersecting}]);
+        }
+    }
     const window = {
         SellerHubCommonContent: {},
+        IntersectionObserver: options.photoPreview ? MiniIntersectionObserver : undefined,
         confirm: () => true,
         addEventListener(type, callback) {
             if (!windowListeners.has(type)) windowListeners.set(type, []);
             windowListeners.get(type).push(callback);
         },
-        setTimeout,
-        clearTimeout,
+        dispatchEvent(event) {
+            (windowListeners.get(event.type) || []).forEach((callback) => callback(event));
+        },
+        setTimeout: clock ? clock.setTimeout.bind(clock) : setTimeout,
+        clearTimeout: clock ? clock.clearTimeout.bind(clock) : clearTimeout,
+        innerHeight: 800,
     };
     const module = { exports: {} };
     const context = {
@@ -308,13 +406,21 @@ function makeApp(options = {}) {
         fetch: fakeFetch,
         AbortController,
         URLSearchParams,
+        IntersectionObserver: options.photoPreview ? MiniIntersectionObserver : undefined,
         CSS: { escape: (value) => String(value) },
         console,
-        setTimeout,
-        clearTimeout,
+        setTimeout: clock ? clock.setTimeout.bind(clock) : setTimeout,
+        clearTimeout: clock ? clock.clearTimeout.bind(clock) : clearTimeout,
     };
     vm.runInNewContext(fs.readFileSync(productionPath, 'utf8'), context, { filename: productionPath });
-    return { document, root, listNode, fieldsNode, previewNode, errorNode, statusNode, products, calls };
+    return {
+        document, window, root, listNode, fieldsNode, previewNode, errorNode, statusNode, products, calls,
+        clock,
+        intersectionObservers,
+        intersect(image, visible = true) {
+            intersectionObservers.forEach((observer) => observer.trigger(image, visible));
+        },
+    };
 }
 
 function find(node, action, predicate = () => true) {
@@ -484,11 +590,234 @@ async function localReplacementFocusInventory() {
     assertFocused(app, app.errorNode, 'refresh error');
 }
 
+function photoCard(app, productId = '11') {
+    return app.fieldsNode.querySelectorAll('[data-photo-preview-card="true"]')
+        .find((item) => item.dataset.photoPreviewProduct === productId);
+}
+
+function photoImage(card) {
+    return card && card.querySelector('img[data-photo-preview-image]');
+}
+
+function photoState(card) {
+    const status = card && card.querySelector('[data-photo-preview-state]');
+    return status && status.dataset.photoPreviewState;
+}
+
+function photoRetry(card) {
+    return card && card.querySelector('[data-action="retry-photo-preview"]');
+}
+
+function selectedPhotoLabels(app) {
+    return app.fieldsNode.querySelectorAll('[data-action="toggle-photo"]')
+        .map((item) => [item.dataset.photoUrl, item.getAttribute('aria-pressed')]);
+}
+
+async function coldPhotoPendingRecoveryAndBoundedManualRetry() {
+    const helper = require(productionPath);
+    assert.equal(helper.importedPhotoPreviewSlot('/api/photos/imported-product/11/0?deferred=1', 11), 0);
+    assert.equal(helper.importedPhotoPreviewSlot('/api/photos/imported-product/12/0?deferred=1', 11), null);
+    assert.equal(helper.importedPhotoPreviewSlot('https://outside.test/api/photos/imported-product/11/0?deferred=1', 11), null);
+    assert.equal(helper.importedPhotoPreviewSlot('/api/photos/imported-product/11/0?deferred=1&retry=1', 11), null);
+
+    const fastError = makeApp({photoPreview: true});
+    const fastCard = photoCard(fastError);
+    const fastImage = photoImage(fastCard);
+    fastImage.dispatchEvent({type: 'error'}); // Native 202 can beat the observer's first callback.
+    assert.equal(photoState(fastCard), 'pending', 'an actual native error before IntersectionObserver still recovers');
+    fastError.clock.advance(2000);
+    assert.equal(photoImage(fastCard).src, '/api/photos/imported-product/11/0?deferred=1&retry=2');
+
+    const recovery = makeApp({photoPreview: true});
+    const recoveryCard = photoCard(recovery);
+    const recoverySelection = selectedPhotoLabels(recovery);
+    let image = photoImage(recoveryCard);
+    assert.ok(image, 'exact server preview route should create a native image');
+    assert.equal(image.src, '/api/photos/imported-product/11/0?deferred=1');
+    recovery.intersect(image, true);
+    image.dispatchEvent({type: 'error'}); // Synthetic native image error after the fixture's cold 202.
+    assert.equal(photoState(recoveryCard), 'pending');
+    assert.equal(photoRetry(recoveryCard).hidden, false);
+    recovery.clock.advance(1999);
+    assert.equal(photoImage(recoveryCard), null, 'bounded retry must respect its 2-second delay');
+    recovery.clock.advance(1);
+    image = photoImage(recoveryCard);
+    assert.ok(image);
+    assert.equal(image.src, '/api/photos/imported-product/11/0?deferred=1&retry=2');
+    recovery.intersect(image, true);
+    image.naturalWidth = 120;
+    image.naturalHeight = 80;
+    image.complete = true;
+    image.dispatchEvent({type: 'load'}); // Synthetic successful JPEG decode event.
+    assert.equal(photoState(recoveryCard), 'ready');
+    assert.deepEqual(selectedPhotoLabels(recovery), recoverySelection);
+    assert.equal(recovery.calls.preview, 0);
+    assert.deepEqual(recovery.calls.apply, []);
+    assert.equal(recovery.calls.get, 0);
+
+    const exhausted = makeApp({photoPreview: true, photoModeInherit: true});
+    const exhaustedCard = photoCard(exhausted);
+    const unchangedSelection = selectedPhotoLabels(exhausted);
+    const selectionButton = find(exhaustedCard, 'toggle-photo');
+    assert.equal(selectionButton.disabled, true, 'inherited photo selection remains disabled');
+    const states = [];
+    const failCurrentImage = () => {
+        const current = photoImage(exhaustedCard);
+        assert.ok(current, 'automatic/manual attempt should use a real image element');
+        exhausted.intersect(current, true);
+        current.dispatchEvent({type: 'error'}); // Synthetic response failure from test-only photo route.
+        states.push(photoState(exhaustedCard));
+    };
+    failCurrentImage();
+    exhausted.clock.advance(2000);
+    failCurrentImage();
+    exhausted.clock.advance(4000);
+    failCurrentImage();
+    exhausted.clock.advance(6000);
+    failCurrentImage();
+    assert.equal(photoState(exhaustedCard), 'failed');
+    assert.deepEqual(states, ['pending', 'pending', 'pending', 'failed']);
+    const retry = photoRetry(exhaustedCard);
+    assert.ok(retry && !retry.hidden && !retry.disabled);
+    assert.equal(retry.closest('button[data-action="toggle-photo"]'), null, 'retry is a sibling, never a nested selector');
+    retry.focus();
+    dispatchClick(retry);
+    assert.equal(photoState(exhaustedCard), 'loading');
+    assert.equal(photoImage(exhaustedCard).src, '/api/photos/imported-product/11/0?deferred=1&retry=5');
+    assert.equal(exhausted.document.activeElement, retry, 'manual retry keeps keyboard focus on its stable control');
+    states.push(photoState(exhaustedCard));
+    const recoveredImage = photoImage(exhaustedCard);
+    exhausted.intersect(recoveredImage, true);
+    recoveredImage.naturalWidth = 120;
+    recoveredImage.naturalHeight = 80;
+    recoveredImage.complete = true;
+    recoveredImage.dispatchEvent({type: 'load'});
+    states.push(photoState(exhaustedCard));
+    assert.equal(photoState(exhaustedCard), 'ready');
+    assert.equal(retry.hidden, false, 'the retry control stays mounted after success so focus is not lost');
+    assert.equal(exhausted.document.activeElement, retry);
+    assert.deepEqual(states, ['pending', 'pending', 'pending', 'failed', 'loading', 'ready']);
+    assert.deepEqual(selectedPhotoLabels(exhausted), unchangedSelection);
+    assert.equal(exhausted.calls.preview, 0);
+    assert.deepEqual(exhausted.calls.apply, []);
+    assert.equal(exhausted.calls.get, 0);
+}
+
+async function readyPreviewSurvivesPreviewCancelAndRefresh() {
+    const app = makeApp({photoPreview: true});
+    const originalImage = photoImage(photoCard(app));
+    app.intersect(originalImage, true);
+    originalImage.naturalWidth = 120;
+    originalImage.naturalHeight = 80;
+    originalImage.complete = true;
+    originalImage.dispatchEvent({type: 'load'});
+    assert.equal(photoState(photoCard(app)), 'ready');
+
+    dispatchInput(app.fieldsNode.querySelector('[data-field-input="title"]'), 'Reviewed title');
+    dispatchClick(find(app.fieldsNode, 'preview'));
+    await drain();
+    assert.equal(photoState(photoCard(app)), 'ready', 'a successful preview remains ready while the review overlay is open');
+    dispatchClick(find(app.previewNode, 'back-to-fields'));
+    let card = photoCard(app);
+    assert.notEqual(photoState(card), 'paused', 'canceling review re-reads the cached image instead of losing readiness');
+    let image = photoImage(card);
+    assert.ok(image);
+    app.intersect(image, true);
+    image.naturalWidth = 120;
+    image.naturalHeight = 80;
+    image.complete = true;
+    image.dispatchEvent({type: 'load'});
+    assert.equal(photoState(card), 'ready');
+
+    dispatchClick(find(app.fieldsNode, 'refresh-product'));
+    await drain();
+    card = photoCard(app);
+    assert.notEqual(photoState(card), 'paused', 'refresh re-reads the local cached photo after the ordinary GET');
+    image = photoImage(card);
+    assert.ok(image);
+    app.intersect(image, true);
+    image.naturalWidth = 120;
+    image.naturalHeight = 80;
+    image.complete = true;
+    image.dispatchEvent({type: 'load'});
+    assert.equal(photoState(card), 'ready');
+    assert.equal(app.calls.preview, 1);
+    assert.deepEqual(app.calls.apply, []);
+    assert.equal(app.calls.get, 2, 'the explicitly requested fixture refresh reads both selected products');
+}
+
+async function photoPreviewViewportPauseAndStaleLifecycle() {
+    const offscreen = makeApp({photoPreview: true});
+    const card = photoCard(offscreen);
+    const originalImage = photoImage(card);
+    assert.equal(photoState(card), 'loading');
+    offscreen.clock.advance(30000);
+    assert.equal(photoState(card), 'loading', 'lazy image outside the observer margin does not consume retry budget');
+    assert.equal(photoImage(card), originalImage);
+    offscreen.intersect(originalImage, true);
+    offscreen.clock.advance(12000);
+    assert.equal(photoState(card), 'pending', 'visible native image deadline enters bounded recovery');
+    assert.equal(photoImage(card), null);
+
+    offscreen.document.hidden = true;
+    offscreen.document.dispatchEvent({type: 'visibilitychange'});
+    assert.equal(photoState(card), 'paused');
+    offscreen.document.hidden = false;
+    offscreen.document.dispatchEvent({type: 'visibilitychange'});
+    const retry = photoRetry(card);
+    assert.equal(retry.getAttribute('aria-disabled'), 'false');
+    offscreen.clock.advance(10000);
+    assert.equal(photoState(card), 'paused', 'visibility change cancels automatic retry timers');
+    retry.focus();
+    dispatchClick(retry);
+    assert.equal(photoState(card), 'loading', 'retry remains available independently of the photo-selection mode');
+
+    const switching = makeApp({photoPreview: true});
+    const sourceCard = photoCard(switching);
+    const sourceImage = photoImage(sourceCard);
+    switching.intersect(sourceImage, true);
+    sourceImage.dispatchEvent({type: 'error'});
+    assert.equal(photoState(sourceCard), 'pending');
+    dispatchClick(find(switching.listNode, 'choose-product', (item) => item.dataset.productId === '22'));
+    assert.equal(sourceCard.isConnected, false);
+    assert.equal(sourceImage.listeners.get('load').length, 0);
+    assert.equal(sourceImage.listeners.get('error').length, 0);
+    sourceImage.naturalWidth = 120;
+    sourceImage.dispatchEvent({type: 'load'}); // Detached stale event cannot update the current card.
+    switching.clock.advance(3000);
+    assert.equal(switching.fieldsNode.querySelectorAll('[data-photo-preview-product="22"]').length, 1);
+    assert.equal(switching.fieldsNode.querySelectorAll('[data-photo-preview-product="11"]').length, 0);
+    assert.equal(switching.calls.preview, 0);
+    assert.deepEqual(switching.calls.apply, []);
+    assert.equal(switching.calls.get, 0);
+
+    const pageHidden = makeApp({photoPreview: true});
+    const pageCard = photoCard(pageHidden);
+    const pageImage = photoImage(pageCard);
+    pageHidden.intersect(pageImage, true);
+    pageImage.dispatchEvent({type: 'error'});
+    pageHidden.window.dispatchEvent({type: 'pagehide'});
+    assert.equal(photoState(pageCard), 'paused');
+    assert.equal(pageImage.listeners.get('load').length, 0);
+    assert.equal(pageImage.listeners.get('error').length, 0);
+    pageHidden.clock.advance(10000);
+    assert.equal(photoState(pageCard), 'paused', 'pagehide cancels all pending image/timer callbacks');
+    pageHidden.window.dispatchEvent({type: 'pageshow', persisted: true});
+    const restoredCard = photoCard(pageHidden);
+    const restoredRetry = photoRetry(restoredCard);
+    assert.ok(restoredRetry && !restoredRetry.hidden && !restoredRetry.disabled, 'BFCache restoration rebinds the safe manual retry');
+    dispatchClick(restoredRetry);
+    assert.equal(photoState(restoredCard), 'loading');
+}
+
 async function run() {
     productNavigatorKeyboardFocusScrollsLocally();
     await photoBoundaryFocus();
     await previewReturnDoesNotReuseToken();
     await localReplacementFocusInventory();
+    await coldPhotoPendingRecoveryAndBoundedManualRetry();
+    await readyPreviewSurvivesPreviewCancelAndRefresh();
+    await photoPreviewViewportPauseAndStaleLifecycle();
     process.stdout.write(JSON.stringify({
         status: 'passed',
         checks: [
@@ -502,6 +831,11 @@ async function run() {
             'mode_photo_characteristic_product_reset_focus_restored',
             'refresh_success_and_error_focus_restored_after_busy',
             'refresh_completion_does_not_steal_external_focus',
+            'common_photo_pending_recovery_is_bounded_and_write_free',
+            'common_photo_exhaustion_offers_keyboard_manual_retry_in_inherit_mode',
+            'common_photo_ready_state_survives_preview_cancel_and_refresh',
+            'common_photo_lazy_deadline_waits_for_intersection',
+            'common_photo_visibility_rerender_product_switch_and_pagehide_cancel_stale_work',
         ],
         source: path.relative(process.cwd(), productionPath),
     }) + '\n');
