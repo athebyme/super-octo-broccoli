@@ -12,7 +12,7 @@ UX01_OPERATIONS_PRICING_ARTIFACTS / UX01_OPERATIONS_PRICING_REPORT.
 from __future__ import annotations
 
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import logging
@@ -100,6 +100,9 @@ REPORT = {
     "interactions": [],
     "api_reads": [],
     "price_initialization": [],
+    "history_scenario_checks": [],
+    "history_domain_sql_writes": [],
+    "history_domain_state": {},
     "request_failures": [],
     "writes": [],
     "browser_mutations": [],
@@ -178,6 +181,7 @@ def add_source_overrides(app) -> None:
 def seed_synthetic_rows(app) -> dict:
     from models import (
         BulkEditHistory,
+        CardEditHistory,
         Marketplace,
         MarketplaceCommercialProposal,
         MarketplaceOperation,
@@ -186,9 +190,12 @@ def seed_synthetic_rows(app) -> dict:
         PriceHistory,
         PriceMonitorSettings,
         Product,
+        Seller,
+        SellerMarketplaceAccount,
         SuspiciousPriceChange,
         db,
     )
+    from services.wb_enrichment_reconciliation import schedule_history_reconciliation
     from tests.ozon_release.seed import seed
 
     fixture = seed(app)
@@ -389,6 +396,171 @@ def seed_synthetic_rows(app) -> dict:
             created_at=now,
         )
         db.session.add(proposal)
+
+        history_batch = None
+        history_row_ids = []
+        history_product_ids = []
+        history_owned_product_ids = []
+        foreign_history_product_id = None
+        rollback_history_batch = None
+        rollback_history_product = None
+        rollback_history_row = None
+        if SOURCE == "worktree":
+            foreign_account = db.session.get(
+                SellerMarketplaceAccount, fixture["foreign_account_id"],
+            )
+            foreign_seller = db.session.get(Seller, foreign_account.seller_id)
+            history_batch = BulkEditHistory(
+                seller_id=seller_id,
+                operation_type="update_quantity",
+                operation_params={"field": "quantity"},
+                description="R10 synthetic batch31 mixed WB row outcomes",
+                total_products=31,
+                success_count=29,
+                error_count=1,
+                errors_details=None,
+                status="in_progress",
+                wb_synced=False,
+                created_at=now + timedelta(seconds=1),
+                completed_at=None,
+                duration_seconds=None,
+            )
+            db.session.add(history_batch)
+            db.session.flush()
+            for index in range(31):
+                # The current unprocessed pending marker is last in the
+                # durable row order; the foreign conflict is a deliberately
+                # mismatched legacy-history boundary immediately before it.
+                is_foreign = index == 29
+                owner_id = foreign_seller.id if is_foreign else seller_id
+                history_product = Product(
+                    seller_id=owner_id,
+                    nm_id=990001000 + index,
+                    vendor_code=(
+                        "R10-FOREIGN-HISTORY-SECRET"
+                        if is_foreign else f"R10-HISTORY-{index:02d}"
+                    ),
+                    title=(
+                        "Private foreign history product title"
+                        if is_foreign else f"Синтетический товар истории {index + 1:02d}"
+                    ),
+                    brand="R10 Synthetic",
+                    object_name="Read-only fixture",
+                    quantity=201 + index,
+                    is_active=False,
+                    photos_json="[]",
+                    sizes_json="[]",
+                    characteristics_json="[]",
+                )
+                db.session.add(history_product)
+                db.session.flush()
+                if is_foreign:
+                    foreign_history_product_id = history_product.id
+                else:
+                    history_owned_product_ids.append(history_product.id)
+                history_product_ids.append(history_product.id)
+
+                status = (
+                    "success" if index < 25 else
+                    "failed" if index == 25 else
+                    "submitted" if index == 26 else
+                    "uncertain" if index == 27 else
+                    "partial" if index == 28 else
+                    "conflict" if index == 29 else
+                    "pending"
+                )
+                history_row = CardEditHistory(
+                    product_id=history_product.id,
+                    # Legacy history can outlive or contradict its linked
+                    # product tenant. The owning batch's seller scope is the
+                    # tested boundary; the current route hides foreign details.
+                    seller_id=seller_id,
+                    bulk_edit_id=history_batch.id,
+                    action="update",
+                    changed_fields=["quantity"],
+                    snapshot_before={"quantity": 200 + index},
+                    snapshot_after={"quantity": 201 + index},
+                    wb_synced=status == "success",
+                    wb_sync_status=status,
+                    created_at=now + timedelta(seconds=3, microseconds=index),
+                    user_comment=(
+                        "Private conflict details must remain hidden"
+                        if is_foreign else "Synthetic local history fixture; no WB request."
+                    ),
+                    wb_error_message=(
+                        "Private foreign conflict detail"
+                        if is_foreign else
+                        "Synthetic failure; no request was sent."
+                        if status == "failed" else None
+                    ),
+                )
+                if status in {"pending", "submitted", "uncertain", "partial"}:
+                    schedule_history_reconciliation(
+                        history_row,
+                        status=status,
+                        now=now + timedelta(seconds=3, microseconds=index),
+                    )
+                elif status == "conflict":
+                    history_row.wb_synced = False
+                    history_row.wb_reconcile_code = "synthetic_history_conflict"
+                    history_row.wb_reconciled_at = now + timedelta(seconds=3)
+                db.session.add(history_row)
+                db.session.flush()
+                history_row_ids.append(history_row.id)
+
+            history_batch.errors_details = [{
+                "product_id": int(history_product_ids[25]),
+                "error": "Synthetic failed row; no WB request was made.",
+            }]
+
+            rollback_history_product = Product(
+                seller_id=seller_id,
+                nm_id=990002001,
+                vendor_code="R10-QUANTITY-ROLLBACK",
+                title="Синтетический quantity-only rollback",
+                brand="R10 Synthetic",
+                object_name="Read-only fixture",
+                quantity=8,
+                is_active=False,
+                photos_json="[]",
+                sizes_json="[]",
+                characteristics_json="[]",
+            )
+            db.session.add(rollback_history_product)
+            db.session.flush()
+            rollback_history_batch = BulkEditHistory(
+                seller_id=seller_id,
+                operation_type="update_quantity",
+                operation_params={"field": "quantity"},
+                description="R10 completed quantity-only rollback fixture",
+                total_products=1,
+                success_count=1,
+                error_count=0,
+                errors_details=None,
+                status="completed",
+                wb_synced=True,
+                created_at=now + timedelta(seconds=4),
+                completed_at=now + timedelta(seconds=5),
+                duration_seconds=1.0,
+            )
+            db.session.add(rollback_history_batch)
+            db.session.flush()
+            rollback_history_row = CardEditHistory(
+                product_id=rollback_history_product.id,
+                seller_id=seller_id,
+                bulk_edit_id=rollback_history_batch.id,
+                action="update",
+                changed_fields=["quantity"],
+                snapshot_before={"quantity": 7},
+                snapshot_after={"quantity": 8},
+                wb_synced=True,
+                wb_sync_status="success",
+                created_at=now + timedelta(seconds=6),
+                user_comment="Synthetic quantity-only snapshot; no WB request.",
+            )
+            db.session.add(rollback_history_row)
+            db.session.flush()
+
         db.session.commit()
         return {
             **fixture,
@@ -398,6 +570,16 @@ def seed_synthetic_rows(app) -> dict:
             "proposal_id": proposal.id,
             "product_id": product.id,
             "listing_id": listing.id,
+            **({
+                "history_batch31_id": history_batch.id,
+                "history_batch31_row_ids": history_row_ids,
+                "history_batch31_product_ids": history_product_ids,
+                "history_batch31_owned_product_ids": history_owned_product_ids,
+                "history_batch31_foreign_product_id": foreign_history_product_id,
+                "quantity_rollback_batch_id": rollback_history_batch.id,
+                "quantity_rollback_product_id": rollback_history_product.id,
+                "quantity_rollback_history_id": rollback_history_row.id,
+            } if history_batch is not None else {}),
         }
 
 
@@ -659,6 +841,8 @@ def _keyboard_nav_check(page, selector: str) -> dict:
 
 def main() -> None:
     from seller_platform import app
+    from sqlalchemy import event
+    from models import BulkEditHistory, CardEditHistory, Product, Seller, db
     from tests.ozon_release.seed import USERNAME
 
     app.config.update(
@@ -672,6 +856,20 @@ def main() -> None:
     )
     add_source_overrides(app)
     fixture = seed_synthetic_rows(app)
+    history_sql = {"active": False, "writes": []}
+    if SOURCE == "worktree":
+        def observe_history_sql_write(
+            _connection, _cursor, statement, _parameters, _context,
+            _executemany,
+        ):
+            if not history_sql["active"]:
+                return
+            verb = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else ""
+            if verb in {"INSERT", "UPDATE", "DELETE", "REPLACE"}:
+                history_sql["writes"].append({"verb": verb})
+
+        with app.app_context():
+            event.listen(db.engine, "before_cursor_execute", observe_history_sql_write)
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
     server = make_server("127.0.0.1", 0, app, threaded=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1062,6 +1260,534 @@ def main() -> None:
                         "result": focus,
                     })
                     page.close()
+            if SOURCE == "worktree":
+                from collections import Counter
+
+                bulk_id = int(fixture["history_batch31_id"])
+                expected_product_ids = [
+                    int(value) for value in fixture["history_batch31_product_ids"]
+                ]
+                owned_product_ids = [
+                    int(value) for value in fixture["history_batch31_owned_product_ids"]
+                ]
+                foreign_product_id = int(fixture["history_batch31_foreign_product_id"])
+                rollback_batch_id = int(fixture["quantity_rollback_batch_id"])
+                rollback_product_id = int(fixture["quantity_rollback_product_id"])
+                rollback_history_id = int(fixture["quantity_rollback_history_id"])
+                history_url = f"/bulk-history/{bulk_id}"
+                rollback_history_url = f"/bulk-history/{rollback_batch_id}"
+
+                def history_domain_counts():
+                    return {
+                        "bulk_edit_history": BulkEditHistory.query.filter(
+                            BulkEditHistory.id.in_((bulk_id, rollback_batch_id)),
+                            BulkEditHistory.seller_id == fixture["seller_id"],
+                        ).count(),
+                        "card_edit_history": CardEditHistory.query.filter(
+                            CardEditHistory.bulk_edit_id.in_((bulk_id, rollback_batch_id)),
+                            CardEditHistory.seller_id == fixture["seller_id"],
+                        ).count(),
+                        "products": Product.query.filter(
+                            Product.id.in_(expected_product_ids + [rollback_product_id]),
+                        ).count(),
+                    }
+
+                with app.app_context():
+                    stored_history_rows = CardEditHistory.query.filter_by(
+                        bulk_edit_id=bulk_id, seller_id=fixture["seller_id"],
+                    ).order_by(CardEditHistory.created_at.asc(), CardEditHistory.id.asc()).all()
+                    assert len(stored_history_rows) == 31
+                    product_statuses = [
+                        {
+                            "product_id": int(row.product_id),
+                            "wb_sync_status": row.wb_sync_status or "unknown",
+                        }
+                        for row in stored_history_rows
+                    ]
+                    status_counts = dict(sorted(Counter(
+                        row["wb_sync_status"] for row in product_statuses
+                    ).items()))
+                    before_values = {
+                        int(row.product_id): {
+                            "before": int(row.snapshot_before["quantity"]),
+                            "after": int(row.snapshot_after["quantity"]),
+                            "status": row.wb_sync_status or "unknown",
+                        }
+                        for row in stored_history_rows
+                    }
+                    history_before = history_domain_counts()
+                    batch = db.session.get(BulkEditHistory, bulk_id)
+                    assert batch is not None
+                    assert batch.total_products == 31
+                    assert batch.status == "in_progress"
+                    assert batch.success_count == 29
+                    assert batch.error_count == 1
+                    assert batch.completed_at is None
+                    assert batch.can_revert() is False
+                    operation_status = batch.status
+                    operation_total_products = int(batch.total_products)
+                    operation_success_count = int(batch.success_count)
+                    operation_error_count = int(batch.error_count)
+                    operation_completed_at = (
+                        batch.completed_at.isoformat() if batch.completed_at else None
+                    )
+                    operation_duration_seconds = batch.duration_seconds
+                    assert operation_success_count + operation_error_count == 30
+                    assert operation_completed_at is None
+                    assert operation_duration_seconds is None
+                    pending_history_rows = [
+                        row for row in stored_history_rows
+                        if row.wb_sync_status == "pending"
+                    ]
+                    assert len(pending_history_rows) == 1
+                    pending_unprocessed_product_id = int(
+                        pending_history_rows[0].product_id,
+                    )
+                    assert pending_unprocessed_product_id == expected_product_ids[-1]
+                    assert stored_history_rows[-1].id == pending_history_rows[0].id
+                    quantity_rollback_contract_supported = any(
+                        row.supports_safe_revert()
+                        for row in stored_history_rows
+                    )
+                    assert quantity_rollback_contract_supported is False
+                    assert before_values[expected_product_ids[-1]]["status"] == "pending"
+
+                history_sql["active"] = True
+                history_page = context.new_page()
+                history_page.set_default_timeout(12000)
+                history_page.on("pageerror", lambda error: REPORT["javascript_errors"].append(str(error)))
+                history_page.on("console", lambda message: REPORT["console_errors"].append(message.text)
+                                if message.type == "error" else None)
+                history_page.on("response", observe_response)
+                history_page.on("requestfailed", lambda request, page_label="r10_history", page_theme="light":
+                                capture_request_failure(request, page_label=page_label, page_theme=page_theme))
+                history_response = history_page.goto(
+                    base + history_url, wait_until="domcontentloaded",
+                )
+                assert history_response and history_response.status == 200
+                assert history_response.request.method == "GET"
+                history_page.wait_for_function(
+                    "() => !!document.querySelector('#main-content h1')",
+                )
+                history_heading = history_page.locator("#main-content h1").inner_text().strip()
+                assert history_heading == "R10 synthetic batch31 mixed WB row outcomes"
+                aggregate_cards = history_page.locator(
+                    ".operations-stats-grid > div",
+                ).evaluate_all("""cards => cards.map(card => {
+                    const paragraphs = Array.from(card.querySelectorAll('p'));
+                    return {
+                        label: paragraphs[0]?.innerText.trim() || '',
+                        value: paragraphs[1]?.innerText.trim() || '',
+                    };
+                })""")
+                aggregate_by_label = {
+                    row["label"]: row["value"] for row in aggregate_cards
+                }
+                assert aggregate_by_label == {
+                    "Всего товаров": "31",
+                    "Обработано без ошибки": "29",
+                    "Ошибок": "1",
+                    "Без общей ошибки": "94%",
+                }, aggregate_cards
+                aggregate_map = {
+                    "total_products": int(aggregate_by_label["Всего товаров"]),
+                    "success_count": int(aggregate_by_label["Обработано без ошибки"]),
+                    "error_count": int(aggregate_by_label["Ошибок"]),
+                }
+
+                rendered_rows = history_page.evaluate("""() => {
+                    const textAfter = (diff, label) => {
+                        const line = Array.from(diff?.children || []).find(node =>
+                            node.querySelector('span')?.textContent.trim() === label);
+                        if (!line) return null;
+                        return line.textContent.trim().slice(label.length).trim();
+                    };
+                    return Array.from(document.querySelectorAll('[data-operations-product-id]')).map(row => {
+                        const productId = Number(row.getAttribute('data-operations-product-id'));
+                        const result = row.querySelector('.operations-row-result');
+                        const diff = row.querySelector('[data-operations-changed-field="quantity"]');
+                        const fix = row.querySelector('[data-operations-change-fix-link]');
+                        const history = Array.from(row.querySelectorAll('a')).find(a =>
+                            (a.textContent || '').includes('История'));
+                        return {
+                            product_id: productId,
+                            title: row.querySelector('h4')?.textContent.trim() || '',
+                            wb_sync_status: result?.getAttribute('data-wb-sync-status') || null,
+                            readable_outcome: result?.innerText.trim() || null,
+                            quantity: diff ? {
+                                before: textAfter(diff, 'До:'),
+                                after: textAfter(diff, 'После:'),
+                            } : null,
+                            fix_href: fix?.getAttribute('href') || null,
+                            history_href: history?.getAttribute('href') || null,
+                            private_row_text: row.textContent,
+                            retry_affordance_count: Array.from(row.querySelectorAll('a,button,input[type="submit"]'))
+                                .filter(control => /повторить|повтор|retry/i.test(
+                                    `${control.textContent || ''} ${control.getAttribute('aria-label') || ''} ${control.getAttribute('href') || ''}`
+                                )).length,
+                        };
+                    });
+                }""")
+                rendered_product_ids = [int(row["product_id"]) for row in rendered_rows]
+                owned_set = set(owned_product_ids)
+                foreign_rows = [row for row in rendered_rows if row["product_id"] == foreign_product_id]
+                assert len(rendered_rows) == 31
+                assert rendered_product_ids == expected_product_ids
+                assert len(owned_set) == 30 and foreign_product_id not in owned_set
+                assert len(foreign_rows) == 1
+                visible_rows = [row for row in rendered_rows if row["product_id"] in owned_set]
+                visible_statuses = [
+                    {
+                        "product_id": row["product_id"],
+                        "wb_sync_status": row["wb_sync_status"],
+                        "readable_outcome": row["readable_outcome"],
+                    }
+                    for row in visible_rows
+                ]
+                assert all(
+                    isinstance(row["readable_outcome"], str)
+                    and row["readable_outcome"]
+                    for row in visible_statuses
+                )
+                rendered_status_counts = dict(sorted(Counter(
+                    row["wb_sync_status"] for row in visible_statuses
+                ).items()))
+                owned_quantity_values = []
+                for row in visible_rows:
+                    expected = before_values[row["product_id"]]
+                    actual = row["quantity"]
+                    assert actual is not None
+                    owned_quantity_values.append({
+                        "product_id": row["product_id"],
+                        "before": expected["before"],
+                        "after": expected["after"],
+                        "rendered_before": actual["before"],
+                        "rendered_after": actual["after"],
+                    })
+                values_exact = len(owned_quantity_values) == 30 and all(
+                    row["rendered_before"] == str(row["before"])
+                    and row["rendered_after"] == str(row["after"])
+                    for row in owned_quantity_values
+                )
+                exact_owned_product_ids = (
+                    len(rendered_product_ids) == len(set(rendered_product_ids))
+                    and set(rendered_product_ids) == set(expected_product_ids)
+                    and len([row for row in rendered_rows if row["product_id"] in owned_set]) == 30
+                    and len([row for row in rendered_rows if row["product_id"] == foreign_product_id]) == 1
+                )
+                foreign_row = foreign_rows[0]
+                foreign_text = foreign_row["private_row_text"]
+                private_text_absent = all(value not in foreign_text for value in (
+                    "Private foreign history product title",
+                    "R10-FOREIGN-HISTORY-SECRET",
+                    "Private foreign conflict detail",
+                    "9999",
+                    "10000",
+                ))
+                assert private_text_absent
+                assert foreign_row["fix_href"] is None and foreign_row["history_href"] is None
+                assert foreign_row["wb_sync_status"] is None
+                assert status_counts == {
+                    "conflict": 1,
+                    "failed": 1,
+                    "partial": 1,
+                    "pending": 1,
+                    "submitted": 1,
+                    "success": 25,
+                    "uncertain": 1,
+                }
+                assert rendered_status_counts == {
+                    "failed": 1,
+                    "partial": 1,
+                    "pending": 1,
+                    "submitted": 1,
+                    "success": 25,
+                    "uncertain": 1,
+                }
+                assert values_exact and exact_owned_product_ids
+                REPORT["history_scenario_checks"].append({
+                    "name": "wb_history_batch31_exact_rows_values_and_outcomes",
+                    "status": "passed",
+                    "origin": base,
+                    "method": history_response.request.method,
+                    "path": history_url,
+                    "http_status": history_response.status,
+                    "page_heading": history_heading,
+                    "bulk_id": bulk_id,
+                    "total_products": operation_total_products,
+                    "operation_status": operation_status,
+                    "operation_success_count": operation_success_count,
+                    "operation_error_count": operation_error_count,
+                    "operation_completed_at": operation_completed_at,
+                    "operation_duration_seconds": operation_duration_seconds,
+                    "pending_unprocessed_product_id": pending_unprocessed_product_id,
+                    "rendered_rows": len(rendered_rows),
+                    "owned_visible_rows": len(visible_rows),
+                    "foreign_hidden_rows": len(foreign_rows),
+                    "product_ids": rendered_product_ids,
+                    "owned_product_ids": owned_product_ids,
+                    "foreign_product_id": foreign_product_id,
+                    "status_counts": status_counts,
+                    "product_statuses": product_statuses,
+                    "rendered_product_statuses": visible_statuses,
+                    "rendered_status_counts": rendered_status_counts,
+                    "owned_quantity_values": owned_quantity_values,
+                    "values_exact": values_exact,
+                    "exact_owned_product_ids": exact_owned_product_ids,
+                    "aggregates": {
+                        **aggregate_map,
+                    },
+                    "aggregate_cards": aggregate_cards,
+                })
+
+                # The row-level repair link must navigate to the actual owned
+                # card route. No status-changing or rollback form is submitted.
+                owned_row = history_page.locator(
+                    f'[data-operations-product-id="{owned_product_ids[0]}"]',
+                )
+                owned_fix_link = owned_row.locator("[data-operations-change-fix-link]")
+                assert owned_fix_link.count() == 1
+                clicked_label = owned_fix_link.inner_text().strip()
+                assert clicked_label == "Карточка WB", clicked_label
+                expected_product_path = f"/products/{owned_product_ids[0]}"
+                with history_page.expect_navigation(wait_until="domcontentloaded") as navigation:
+                    owned_fix_link.click()
+                product_response = navigation.value
+                assert product_response and product_response.status == 200
+                assert product_response.request.method == "GET"
+                history_page.wait_for_url(base + expected_product_path)
+                product_heading = history_page.locator("#main-content h1").inner_text().strip()
+                product_text = history_page.locator("#main-content").inner_text()
+                with app.app_context():
+                    exact_product = db.session.get(Product, owned_product_ids[0])
+                    exact_product_data = {
+                        "title": exact_product.title,
+                        "vendor_code": exact_product.vendor_code,
+                        "nm_id": int(exact_product.nm_id),
+                    }
+                title_matches = exact_product_data["title"] in product_text
+                vendor_code_matches = exact_product_data["vendor_code"] in product_text
+                nm_id_matches = str(exact_product_data["nm_id"]) in product_text
+                assert title_matches and vendor_code_matches and nm_id_matches
+                REPORT["history_scenario_checks"].append({
+                    "name": "wb_history_owned_fix_link_opens_exact_product",
+                    "status": "passed",
+                    "origin": base,
+                    "method": product_response.request.method,
+                    "path": expected_product_path,
+                    "http_status": product_response.status,
+                    "product_id": owned_product_ids[0],
+                    "clicked_label": clicked_label,
+                    "page_heading": product_heading,
+                    "title_matches": title_matches,
+                    "vendor_code_matches": vendor_code_matches,
+                    "nm_id_matches": nm_id_matches,
+                })
+
+                unresolved_statuses = {"pending", "submitted", "uncertain", "partial"}
+                unresolved_rows = [
+                    row for row in visible_rows
+                    if row["wb_sync_status"] in unresolved_statuses
+                ]
+                retry_free = len(unresolved_rows) == 4 and all(
+                    row["retry_affordance_count"] == 0 for row in unresolved_rows
+                )
+                main_history_refresh = history_page.goto(
+                    base + history_url, wait_until="domcontentloaded",
+                )
+                assert main_history_refresh and main_history_refresh.status == 200
+                revert_form_count = history_page.locator(
+                    f'form[action="/bulk-history/{bulk_id}/revert"]',
+                ).count()
+                unsupported_note_rendered = history_page.locator(
+                    ".operations-revert-note",
+                ).count() > 0
+                assert retry_free
+                assert revert_form_count == 0
+                assert not unsupported_note_rendered
+                assert not REPORT["browser_mutations"]
+                REPORT["history_scenario_checks"].append({
+                    "name": "wb_history_foreign_fix_link_absent",
+                    "status": "passed",
+                    "foreign_product_id": foreign_product_id,
+                    "fix_link_count": 0,
+                    "history_link_count": 0,
+                    "private_text_absent": private_text_absent,
+                })
+                REPORT["history_scenario_checks"].append({
+                    "name": "wb_history_unresolved_rows_no_retry_or_revert",
+                    "status": "passed",
+                    "unresolved_product_statuses": [
+                        {
+                            "product_id": row["product_id"],
+                            "wb_sync_status": row["wb_sync_status"],
+                        }
+                        for row in unresolved_rows
+                    ],
+                    "retry_affordances_absent": retry_free,
+                    "revert_form_count": revert_form_count,
+                    "mutation_count": len(REPORT["browser_mutations"]),
+                    "post_count": len([
+                        row for row in REPORT["browser_mutations"]
+                        if row.get("method") == "POST"
+                    ]),
+                    "quantity_rollback_contract_supported": quantity_rollback_contract_supported,
+                    "unsupported_rollback_note_rendered": unsupported_note_rendered,
+                })
+
+                # Separately visit a completed one-row quantity-only fixture
+                # to verify the existing explanatory copy without submitting
+                # any revert or provider write request.
+                rollback_response = history_page.goto(
+                    base + rollback_history_url, wait_until="domcontentloaded",
+                )
+                assert rollback_response and rollback_response.status == 200
+                assert rollback_response.request.method == "GET"
+                rollback_heading = history_page.locator(
+                    "#main-content h1",
+                ).inner_text().strip()
+                assert rollback_heading == "R10 completed quantity-only rollback fixture"
+                rollback_row_locator = history_page.locator(
+                    f'[data-operations-product-id="{rollback_product_id}"]',
+                )
+                assert rollback_row_locator.count() == 1
+                rollback_rendered = history_page.evaluate("""productId => {
+                    const row = document.querySelector(
+                        `[data-operations-product-id="${productId}"]`);
+                    const diff = row?.querySelector('[data-operations-changed-field="quantity"]');
+                    const textAfter = (node, label) => {
+                        const line = Array.from(node?.children || []).find(child =>
+                            child.querySelector('span')?.textContent.trim() === label);
+                        return line ? line.textContent.trim().slice(label.length).trim() : null;
+                    };
+                    const identityText = Array.from(row?.querySelectorAll('p') || [])
+                        .map(node => node.innerText.trim())
+                        .find(text => text.includes('Артикул:') && text.includes('NM ID:')) || '';
+                    const identityMatch = identityText.match(/Артикул:\s*(.*?)\s*\|\s*NM ID:\s*(\d+)/);
+                    return {
+                        product_id: Number(row?.getAttribute('data-operations-product-id')),
+                        title: row?.querySelector('h4')?.innerText.trim() || '',
+                        vendor_code: identityMatch?.[1] || null,
+                        nm_id: identityMatch ? Number(identityMatch[2]) : null,
+                        quantity: diff ? {
+                            before: textAfter(diff, 'До:'),
+                            after: textAfter(diff, 'После:'),
+                        } : null,
+                    };
+                }""", rollback_product_id)
+                rollback_note = history_page.locator(".operations-revert-note")
+                assert rollback_note.count() == 1
+                rollback_note_text = rollback_note.inner_text().strip()
+                assert rollback_note_text == (
+                    "Безопасный откат для этой операции недоступен. Проверьте результаты строк выше."
+                )
+                rollback_form_count = history_page.locator(
+                    f'form[action="{rollback_history_url}/revert"]',
+                ).count()
+                with app.app_context():
+                    rollback_batch = db.session.get(BulkEditHistory, rollback_batch_id)
+                    rollback_history = db.session.get(CardEditHistory, rollback_history_id)
+                    assert rollback_batch is not None and rollback_history is not None
+                    rollback_operation_status = rollback_batch.status
+                    rollback_total_products = int(rollback_batch.total_products)
+                    rollback_success_count = int(rollback_batch.success_count)
+                    rollback_error_count = int(rollback_batch.error_count)
+                    operation_seller_id = int(rollback_batch.seller_id)
+                    rollback_changed_fields = list(rollback_history.changed_fields or [])
+                    rollback_before = (rollback_history.snapshot_before or {}).get("quantity")
+                    rollback_after = (rollback_history.snapshot_after or {}).get("quantity")
+                    product_seller_id = int(rollback_history.product.seller_id)
+                    rollback_product_title = rollback_history.product.title
+                    rollback_product_vendor_code = rollback_history.product.vendor_code
+                    rollback_product_nm_id = int(rollback_history.product.nm_id)
+                    rollback_card_history_count = CardEditHistory.query.filter_by(
+                        bulk_edit_id=rollback_batch_id,
+                        seller_id=fixture["seller_id"],
+                    ).count()
+                    rollback_safe_revert = rollback_history.supports_safe_revert()
+                    assert rollback_batch.can_revert() is False
+                assert rollback_operation_status == "completed"
+                assert rollback_total_products == 1
+                assert rollback_success_count == 1 and rollback_error_count == 0
+                assert operation_seller_id == int(fixture["seller_id"])
+                assert product_seller_id == operation_seller_id
+                assert rollback_card_history_count == 1
+                assert rollback_changed_fields == ["quantity"]
+                assert rollback_safe_revert is False
+                assert rollback_rendered == {
+                    "product_id": rollback_product_id,
+                    "title": rollback_product_title,
+                    "vendor_code": rollback_product_vendor_code,
+                    "nm_id": rollback_product_nm_id,
+                    "quantity": {
+                        "before": str(rollback_before),
+                        "after": str(rollback_after),
+                    },
+                }
+                assert rollback_form_count == 0
+                assert not REPORT["browser_mutations"]
+                completed_rollback_view = {
+                    "operation_id": rollback_batch_id,
+                    "origin": base,
+                    "method": rollback_response.request.method,
+                    "path": rollback_history_url,
+                    "http_status": rollback_response.status,
+                    "page_heading": rollback_heading,
+                    "operation_status": rollback_operation_status,
+                    "operation_seller_id": operation_seller_id,
+                    "product_seller_id": product_seller_id,
+                    "owned_identity_matches": product_seller_id == operation_seller_id,
+                    "total_products": rollback_total_products,
+                    "success_count": rollback_success_count,
+                    "error_count": rollback_error_count,
+                    "product_id": rollback_product_id,
+                    "product_title": rollback_product_title,
+                    "vendor_code": rollback_product_vendor_code,
+                    "nm_id": rollback_product_nm_id,
+                    "title_matches": rollback_rendered["title"] == rollback_product_title,
+                    "vendor_code_matches": rollback_rendered["vendor_code"] == rollback_product_vendor_code,
+                    "nm_id_matches": rollback_rendered["nm_id"] == rollback_product_nm_id,
+                    "card_edit_history_count": rollback_card_history_count,
+                    "changed_fields": rollback_changed_fields,
+                    "snapshot_before": {"quantity": rollback_before},
+                    "snapshot_after": {"quantity": rollback_after},
+                    "rendered_before": rollback_rendered["quantity"]["before"],
+                    "rendered_after": rollback_rendered["quantity"]["after"],
+                    "safe_revert_supported": rollback_safe_revert,
+                    "revert_form_count": rollback_form_count,
+                    "unsupported_note_visible": True,
+                    "unsupported_note_text": rollback_note_text,
+                    "post_count": len([
+                        row for row in REPORT["browser_mutations"]
+                        if row.get("method") == "POST"
+                    ]),
+                }
+                REPORT["history_scenario_checks"][-1][
+                    "completed_quantity_rollback_view"
+                ] = completed_rollback_view
+
+                history_page.close()
+                history_sql["active"] = False
+                REPORT["history_domain_sql_writes"] = history_sql["writes"]
+                with app.app_context():
+                    history_after = history_domain_counts()
+                REPORT["history_domain_state"] = {
+                    "before": history_before,
+                    "after": history_after,
+                    "unchanged": history_before == history_after,
+                }
+                assert REPORT["history_domain_sql_writes"] == []
+                assert REPORT["history_domain_state"]["unchanged"] is True
+                assert not REPORT["browser_mutations"]
+                expected_history_names = {
+                    "wb_history_batch31_exact_rows_values_and_outcomes",
+                    "wb_history_owned_fix_link_opens_exact_product",
+                    "wb_history_foreign_fix_link_absent",
+                    "wb_history_unresolved_rows_no_retry_or_revert",
+                }
+                assert {row["name"] for row in REPORT["history_scenario_checks"]} == expected_history_names
+                assert all(row.get("status") == "passed" for row in REPORT["history_scenario_checks"])
+
             context.close()
             browser.close()
     except Exception as exc:

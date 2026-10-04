@@ -345,11 +345,12 @@
                         {% if schema_synced_at %} · локальный справочник обновлён {{ schema_synced_at }}{% endif %}
                     </p>
                 </div>
-                <span class="rounded bg-gray-100 px-2 py-1 text-xs text-gray-600">
-                    {{ characteristic_fields|selectattr('present')|list|length }} заполнено · {{ characteristic_fields|length }} в схеме
+                <span class="wb-characteristics-filled-count rounded bg-gray-100 px-2 py-1 text-xs text-gray-600">
+                    {{ characteristic_fields|selectattr('current_values')|list|length }} заполнено · {{ characteristic_fields|length }} в схеме
                 </span>
             </div>
 
+            <script type="application/json" id="wb-characteristic-schema">{{ characteristic_fields|tojson }}</script>
             <input type="hidden" name="schema_revision" value="{{ schema_revision }}">
             <div class="p-6">
                 {% if not schema_usable %}
@@ -359,16 +360,62 @@
                 </div>
                 {% endif %}
 
+                {% if schema_usable and characteristic_fields %}
+                <div class="mb-6 grid grid-cols-1 gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                    <div class="min-w-0">
+                        <label for="wb-optional-characteristic-picker" class="mb-1 block text-sm font-medium text-gray-800">
+                            Добавить необязательное поле
+                        </label>
+                        <select id="wb-optional-characteristic-picker"
+                                x-model="selectedOptionalCharacteristicId"
+                                @change.stop="optionalPickerMessage = ''"
+                                class="min-h-[44px] w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20">
+                            <option value="">Выберите характеристику…</option>
+                            <template x-for="field in availableOptionalCharacteristics()" :key="field.id">
+                                <option :value="String(field.id)"
+                                        x-text="field.unit_name ? `${field.name} (${field.unit_name})` : field.name"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <button type="button"
+                            id="wb-add-optional-characteristic"
+                            @click.prevent.stop="addOptionalCharacteristic()"
+                            :disabled="!selectedOptionalCharacteristicId"
+                            class="min-h-[44px] rounded-lg border border-indigo-300 bg-white px-4 py-2 text-sm font-medium text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50">
+                        Добавить поле
+                    </button>
+                    <p x-show="optionalPickerMessage"
+                       x-text="optionalPickerMessage"
+                       role="status"
+                       aria-live="polite"
+                       class="text-sm text-amber-800 sm:col-span-2"></p>
+                    <noscript>
+                        <p class="text-sm text-gray-600 sm:col-span-2">
+                            Необязательные поля можно добавлять при включённом JavaScript; сохранённые и обязательные поля доступны выше.
+                        </p>
+                    </noscript>
+                </div>
+                {% endif %}
+
                 {% if characteristic_fields %}
-                <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+                <div class="grid grid-cols-1 gap-6 md:grid-cols-2" id="wb-characteristic-fields">
                     {% for field in characteristic_fields %}
-                    <div class="min-w-0 rounded-lg border border-gray-100 p-4">
+                    {% if field.present or field.required or not field.editable or not schema_usable %}
+                    <div class="min-w-0 rounded-lg border border-gray-100 p-4"
+                         data-wb-characteristic-field-id="{{ field.id }}"
+                         data-wb-characteristic-source="saved-or-required">
                         <label for="char_{{ field.id }}" class="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium text-gray-800">
                             <span>{{ field.name }}</span>
                             <span class="text-xs text-gray-400">#{{ field.id }}</span>
                             {% if field.required %}<span class="text-xs font-semibold text-red-600">обязательное</span>{% endif %}
                             {% if field.unit_name %}<span class="text-xs text-gray-500">({{ field.unit_name }})</span>{% endif %}
-                            {% if not field.present %}<span class="rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-700">можно добавить</span>{% endif %}
+                            {% if field.required and not field.current_values %}
+                            <span class="rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700">Не заполнено · обязательное</span>
+                            {% elif field.present %}
+                            <span class="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">Сохранено</span>
+                            {% elif not field.editable or not schema_usable %}
+                            <span class="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">Только просмотр</span>
+                            {% endif %}
                         </label>
 
                         {% if field.present and field.current_text %}
@@ -415,7 +462,71 @@
                                class="w-full rounded-lg border border-gray-300 px-4 py-2.5 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20">
                         {% endif %}
                     </div>
+                    {% endif %}
                     {% endfor %}
+
+                    <template x-for="field in selectedOptionalCharacteristics()" :key="field.id">
+                        <div class="min-w-0 rounded-lg border border-indigo-100 p-4"
+                             :data-wb-characteristic-field-id="String(field.id)"
+                             data-wb-characteristic-source="optional-picker">
+                            <label :for="'char_' + field.id" class="mb-2 flex flex-wrap items-center gap-2 text-sm font-medium text-gray-800">
+                                <span x-text="field.name"></span>
+                                <span class="text-xs text-gray-400" x-text="'#' + field.id"></span>
+                                <template x-if="field.unit_name">
+                                    <span class="text-xs text-gray-500" x-text="'(' + field.unit_name + ')' "></span>
+                                </template>
+                                <span class="rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-700">Добавлено в форму</span>
+                            </label>
+
+                            <template x-if="Number(field.charc_type) === 4">
+                                <input type="number" step="any" inputmode="decimal"
+                                       :name="'char_' + field.id" :id="'char_' + field.id"
+                                       :placeholder="field.unit_name ? 'Введите число в ' + field.unit_name : 'Введите число'"
+                                       class="w-full rounded-lg border border-gray-300 px-4 py-2.5 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20">
+                            </template>
+                            <template x-if="Number(field.charc_type) !== 4 && field.dictionary_values?.length && Number(field.max_count) > 1">
+                                <div>
+                                    <select multiple :name="'char_' + field.id" :id="'char_' + field.id"
+                                            :size="Math.min(Number(field.max_count) || 1, 6)"
+                                            class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20">
+                                        <template x-for="option in field.dictionary_values" :key="option">
+                                            <option :value="option" x-text="option"></option>
+                                        </template>
+                                    </select>
+                                    <p class="mt-1 text-xs text-gray-500" x-text="'Можно выбрать до ' + field.max_count + ' значений'"></p>
+                                </div>
+                            </template>
+                            <template x-if="Number(field.charc_type) !== 4 && field.dictionary_values?.length && Number(field.max_count) <= 1">
+                                <select :name="'char_' + field.id" :id="'char_' + field.id"
+                                        class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20">
+                                    <option value="">Оставить без изменения</option>
+                                    <template x-for="option in field.dictionary_values" :key="option">
+                                        <option :value="option" x-text="option"></option>
+                                    </template>
+                                </select>
+                            </template>
+                            <template x-if="Number(field.charc_type) !== 4 && !field.dictionary_values?.length && Number(field.max_count) > 1">
+                                <div>
+                                    <textarea :name="'char_' + field.id" :id="'char_' + field.id" rows="3"
+                                              :placeholder="'По одному значению на строку; до ' + field.max_count + ' значений"
+                                              class="w-full rounded-lg border border-gray-300 px-4 py-2.5 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"></textarea>
+                                    <p class="mt-1 text-xs text-gray-500" x-text="'До ' + field.max_count + ' значений, по одному на строку'"></p>
+                                </div>
+                            </template>
+                            <template x-if="Number(field.charc_type) !== 4 && !field.dictionary_values?.length && Number(field.max_count) <= 1">
+                                <input type="text" :name="'char_' + field.id" :id="'char_' + field.id"
+                                       placeholder="Введите значение"
+                                       class="w-full rounded-lg border border-gray-300 px-4 py-2.5 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20">
+                            </template>
+
+                            <button type="button"
+                                    @click.prevent.stop="removeOptionalCharacteristic(field.id)"
+                                    :aria-label="'Убрать пустое поле «' + field.name + '»'"
+                                    class="mt-3 min-h-[44px] rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                                Убрать пустое поле
+                            </button>
+                        </div>
+                    </template>
                 </div>
                 {% elif not schema_usable %}
                 <p class="text-sm text-gray-500">Локальная схема не содержит редактируемых полей.</p>
@@ -545,7 +656,7 @@
         </div>
 
         <!-- Sticky кнопки действий -->
-        <div class="sticky bottom-0 bg-white/95 backdrop-blur-sm border-t border-gray-200 -mx-4 px-4 py-4 mt-8 shadow-lg rounded-t-xl z-40">
+        <div class="sticky bottom-0 bg-white backdrop-blur-sm border-t border-gray-200 -mx-4 px-4 py-4 mt-8 shadow-lg rounded-t-xl z-40">
             <div class="max-w-7xl mx-auto flex items-center justify-between">
                 <a href="{{ url_for('product_detail', product_id=product.id) }}"
                    class="px-5 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition font-medium flex items-center">
@@ -563,14 +674,14 @@
                     </span>
 
                     <button type="submit"
-                            :disabled="isSubmitting"
+                            :disabled="isSubmitting || !hasChanges"
                             class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium flex items-center disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md">
                         <template x-if="!isSubmitting">
                             <span class="flex items-center">
                                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                                 </svg>
-                                Сохранить изменения
+                                Сохранить в WB
                             </span>
                         </template>
                         <template x-if="isSubmitting">
@@ -599,13 +710,30 @@ function productEditApp() {
         isSubmitting: false,
         submitStatus: 'Отправка данных в Wildberries API...',
         initialFormData: null,
+        componentRoot: null,
+        characteristicSchema: [],
+        selectedOptionalCharacteristicId: '',
+        selectedOptionalCharacteristicIds: [],
+        optionalPickerMessage: '',
 
         init() {
-            // Сохраняем начальное состояние формы
+            // `$el` is the element carrying the current Alpine expression.
+            // Capture the x-data root once so event handlers on inputs/buttons
+            // always query the same form and characteristic cards.
+            this.componentRoot = this.$el;
+            const schemaNode = this.componentRoot?.querySelector('#wb-characteristic-schema');
+            try {
+                this.characteristicSchema = JSON.parse(schemaNode?.textContent || '[]');
+            } catch (_error) {
+                this.characteristicSchema = [];
+            }
+
+            // Сохраняем только изменения, которые сервер действительно примет.
             this.$nextTick(() => {
-                const form = this.$el.querySelector('form');
+                const form = this.componentRoot?.querySelector('form');
                 if (form) {
-                    this.initialFormData = new FormData(form);
+                    this.initialFormData = this.normalizedFormState(new FormData(form));
+                    this.hasChanges = false;
                 }
             });
 
@@ -618,12 +746,137 @@ function productEditApp() {
             });
         },
 
+        normalizedFormState(formData, fallback = null) {
+            const state = new Map();
+            for (const name of ['vendor_code', 'title', 'description', 'brand']) {
+                const value = String(formData.get(name) ?? '').trim();
+                if (value) {
+                    state.set(name, value);
+                } else if (fallback?.has(name)) {
+                    state.set(name, fallback.get(name));
+                }
+            }
+
+            for (const field of this.characteristicSchema) {
+                const name = `char_${field.id}`;
+                const values = formData.getAll(name)
+                    .map(value => String(value).trim())
+                    .filter(value => value !== '');
+                if (!values.length) {
+                    if (fallback?.has(name)) state.set(name, fallback.get(name));
+                    continue;
+                }
+
+                let normalized;
+                if (Number(field.charc_type) === 4) {
+                    const numeric = Number(values[0]);
+                    normalized = Number.isFinite(numeric) ? numeric : `invalid:${values[0]}`;
+                } else if (field.dictionary_values?.length && Number(field.max_count) > 1) {
+                    normalized = values;
+                } else if (Number(field.max_count) > 1) {
+                    normalized = values.flatMap(value => value.split(/\r?\n/)
+                        .map(item => item.trim()).filter(Boolean));
+                } else {
+                    normalized = values[0];
+                }
+                state.set(name, normalized);
+            }
+            return state;
+        },
+
+        formHasMeaningfulChanges() {
+            const form = this.componentRoot?.querySelector('form');
+            if (!form || !this.initialFormData) return false;
+            const current = this.normalizedFormState(
+                new FormData(form),
+                this.initialFormData,
+            );
+            const names = new Set([
+                ...this.initialFormData.keys(),
+                ...current.keys(),
+            ]);
+            return Array.from(names).some(name => (
+                JSON.stringify(this.initialFormData.get(name))
+                !== JSON.stringify(current.get(name))
+            ));
+        },
+
+        availableOptionalCharacteristics() {
+            return this.characteristicSchema.filter(field => (
+                !field.present
+                && !field.required
+                && field.editable
+                && !this.selectedOptionalCharacteristicIds.includes(Number(field.id))
+            ));
+        },
+
+        selectedOptionalCharacteristics() {
+            return this.selectedOptionalCharacteristicIds
+                .map(id => this.characteristicSchema.find(field => Number(field.id) === Number(id)))
+                .filter(Boolean);
+        },
+
+        addOptionalCharacteristic() {
+            const id = Number(this.selectedOptionalCharacteristicId);
+            const field = this.characteristicSchema.find(row => Number(row.id) === id);
+            if (
+                !Number.isSafeInteger(id)
+                || !field
+                || field.present
+                || field.required
+                || !field.editable
+                || this.selectedOptionalCharacteristicIds.includes(id)
+            ) {
+                this.optionalPickerMessage = 'Это поле нельзя добавить по текущей локальной схеме.';
+                return;
+            }
+            this.selectedOptionalCharacteristicIds.push(id);
+            this.selectedOptionalCharacteristicId = '';
+            this.optionalPickerMessage = '';
+            this.$nextTick(() => {
+                document.getElementById(`char_${id}`)?.focus();
+            });
+        },
+
+        removeOptionalCharacteristic(id) {
+            const numericId = Number(id);
+            const card = this.componentRoot?.querySelector(
+                `[data-wb-characteristic-source="optional-picker"]`
+                + `[data-wb-characteristic-field-id="${numericId}"]`,
+            );
+            const control = card?.querySelector(`[name="char_${numericId}"]`);
+            if (!control) {
+                this.optionalPickerMessage = 'Поле формы больше недоступно.';
+                return;
+            }
+            const selectedValues = control.multiple
+                ? Array.from(control.selectedOptions).map(option => option.value.trim()).filter(Boolean)
+                : [String(control.value ?? '').trim()].filter(Boolean);
+            if (selectedValues.length) {
+                this.optionalPickerMessage = 'Сначала очистите введённые значения, затем уберите поле.';
+                control.focus();
+                return;
+            }
+            this.selectedOptionalCharacteristicIds = this.selectedOptionalCharacteristicIds
+                .filter(value => Number(value) !== numericId);
+            this.optionalPickerMessage = '';
+            this.markAsChanged();
+            this.$nextTick(() => {
+                document.getElementById('wb-optional-characteristic-picker')?.focus();
+            });
+        },
+
         markAsChanged() {
-            this.hasChanges = true;
+            this.hasChanges = this.formHasMeaningfulChanges();
         },
 
         handleSubmit(e) {
             this.validationErrors = [];
+            this.markAsChanged();
+            if (!this.hasChanges) {
+                e.preventDefault();
+                return false;
+            }
 
             // Валидация описания
             const desc = document.getElementById('description').value;

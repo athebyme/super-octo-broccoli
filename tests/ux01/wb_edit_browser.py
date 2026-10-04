@@ -77,10 +77,12 @@ REPORT = {
     "fake_wb_client_instances": 0,
     "fake_wb_single_write_calls": 0,
     "fake_wb_single_write_requests": [],
+    "single_edit_contrast_diagnostic": [],
     "single_edit_boundary_attempts": [],
     "single_edit_observations": {
         "form_post": None,
         "reopen": None,
+        "progressive_ui": None,
         "rejections": [],
         "seller_scope_denials": [],
         "no_profile_denial": None,
@@ -240,7 +242,7 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             characteristics_sync_status="success",
             characteristics_schema_hash="a" * 64,
             characteristics_version=1,
-            characteristics_count=32,
+            characteristics_count=31,
         )
         db.session.add(category)
         db.session.flush()
@@ -268,8 +270,16 @@ def seed_synthetic_wb(app) -> dict[str, int]:
             (404, "Материал", 1, 3, None, '["Силикон", "Пластик", "Металл"]'),
         ]
         definitions.extend(
-            (500 + index, f"Synthetic field {index + 1}", 1, 1, None, "[]")
+            (
+                500 + index,
+                f"Synthetic field {index + 1}",
+                2 if index == 1 else 1,
+                3 if index == 2 else 1,
+                None,
+                "[]",
+            )
             for index in range(28)
+            if index != 1
         )
         db.session.add_all([
             MarketplaceCategoryCharacteristic(
@@ -278,7 +288,7 @@ def seed_synthetic_wb(app) -> dict[str, int]:
                 charc_id=char_id,
                 name=name,
                 charc_type=char_type,
-                required=False,
+                required=char_id == 500,
                 unit_name=unit,
                 max_count=max_count,
                 dictionary_json=dictionary,
@@ -329,7 +339,14 @@ def seed_synthetic_wb(app) -> dict[str, int]:
                 subject_id=5880,
                 characteristics_json=(
                     '[{"id":101,"name":"Synthetic free-text field",'
-                    '"value":["Existing synthetic value"]}]'
+                    '"value":["Existing synthetic value"]},'
+                    '{"id":303,"name":"Вес товара","value":125},'
+                    '{"id":404,"name":"Материал","value":["Пластик","Металл"]},'
+                    '{"id":502,"name":"Synthetic field 3",'
+                    '"value":["Existing line one","Existing line two"]},'
+                    '{"id":501,"name":"Stale prior-subject field",'
+                    '"value":["Preserve read-only historical value"]},'
+                    '{"id":506,"name":"Synthetic field 7","value":[]}]'
                     if index == 0 else "[]"
                 ),
                 sizes_json=json.dumps([{
@@ -714,6 +731,9 @@ def assert_single_edit_local_state(
         202: ["Россия"],
         303: 125,
         404: ["Пластик", "Металл"],
+        502: ["Existing line one", "Existing line two"],
+        501: ["Preserve read-only historical value"],
+        506: [],
     }
     with seller_app.app_context():
         product = Product.query.filter_by(
@@ -749,7 +769,14 @@ def assert_single_edit_local_state(
             after = history.snapshot_after["characteristics"]
             before_by_id = {int(row["id"]): row.get("value") for row in before}
             after_by_id = {int(row["id"]): row.get("value") for row in after}
-            assert before_by_id == {101: ["Existing synthetic value"]}
+            assert before_by_id == {
+                101: ["Existing synthetic value"],
+                303: 125,
+                404: ["Пластик", "Металл"],
+                502: ["Existing line one", "Existing line two"],
+                501: ["Preserve read-only historical value"],
+                506: [],
+            }
             assert after_by_id == expected_values
         return {
             "characteristic_ids": sorted(by_id),
@@ -1044,6 +1071,231 @@ def wait_for_layout_settle(page, *, width: int, theme: str) -> dict:
         "stableFrames": 3,
     })
     return result
+
+
+def capture_wb_editor_control_contrast(page, *, theme: str) -> dict:
+    """Capture computed color/opacity contrast for enabled WB edit controls.
+
+    This is diagnostic telemetry only; it does not add a layout or interaction
+    receipt and does not change the existing browser gate matrix.
+    """
+    return page.evaluate("""expectedTheme => {
+        const selectors = {
+            cancel: '.sticky.bottom-0 a[href^="/products/"]',
+            optional_picker_label: 'label[for="wb-optional-characteristic-picker"]',
+            optional_picker: '#wb-optional-characteristic-picker',
+            optional_add: '#wb-add-optional-characteristic',
+            save: 'form.space-y-6 button[type="submit"]',
+        };
+        const parseColor = value => {
+            const match = String(value || '').match(
+                /^rgba?\\(\\s*([\\d.]+)[, ]+([\\d.]+)[, ]+([\\d.]+)(?:\\s*[,/]+\\s*([\\d.]+%?))?\\s*\\)$/i
+            );
+            if (!match) return null;
+            const alpha = match[4] == null ? 1 : (
+                match[4].endsWith('%') ? Number(match[4].slice(0, -1)) / 100 : Number(match[4])
+            );
+            return [Number(match[1]), Number(match[2]), Number(match[3]), alpha];
+        };
+        const over = (front, back) => {
+            const alpha = Math.max(0, Math.min(1, front[3]));
+            return [0, 1, 2].map(index => front[index] * alpha + back[index] * (1 - alpha));
+        };
+        const mix = (front, back, alpha) => [0, 1, 2].map(index =>
+            front[index] * alpha + back[index] * (1 - alpha)
+        );
+        const luminance = rgb => {
+            const channel = value => {
+                const normalized = value / 255;
+                return normalized <= 0.04045
+                    ? normalized / 12.92
+                    : Math.pow((normalized + 0.055) / 1.055, 2.4);
+            };
+            const [r, g, b] = rgb.map(channel);
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const ratio = (first, second) => {
+            const values = [luminance(first), luminance(second)].sort((a, b) => b - a);
+            return Math.round(((values[0] + 0.05) / (values[1] + 0.05)) * 1000) / 1000;
+        };
+        const roundedRgb = value => value.map(channel => Math.round(channel * 1000) / 1000);
+        const canvas = [255, 255, 255];
+        const records = Object.entries(selectors).map(([name, selector]) => {
+            const element = document.querySelector(selector);
+            if (!element) return {name, selector, missing: true};
+            const ancestors = [];
+            for (let node = element; node; node = node.parentElement) ancestors.push(node);
+            ancestors.reverse();
+            let parentBackground = [...canvas];
+            const layers = ancestors.map(node => {
+                const style = getComputedStyle(node);
+                const parsed = parseColor(style.backgroundColor);
+                const before = [...parentBackground];
+                if (parsed && parsed[3] > 0) parentBackground = over(parsed, parentBackground);
+                return {
+                    tag: node.tagName,
+                    id: node.id || '',
+                    background_color: style.backgroundColor,
+                    background_rgb_after_compositing: roundedRgb(parentBackground),
+                    background_image: style.backgroundImage,
+                    opacity: Number(style.opacity),
+                    filter: style.filter,
+                    backdrop_filter: style.backdropFilter || style.webkitBackdropFilter || 'none',
+                    mix_blend_mode: style.mixBlendMode,
+                    has_background_image: style.backgroundImage !== 'none',
+                    background_changed: before.some((value, index) => value !== parentBackground[index]),
+                };
+            });
+            const style = getComputedStyle(element);
+            const effectiveBackgroundBeforeOpacity = parentBackground;
+            const ownForeground = parseColor(style.color);
+            const localForeground = ownForeground
+                ? over(ownForeground, effectiveBackgroundBeforeOpacity)
+                : null;
+            const opacityChain = ancestors.map(node => ({
+                tag: node.tagName,
+                id: node.id || '',
+                opacity: Number(getComputedStyle(node).opacity),
+            }));
+            const opacityProduct = opacityChain.reduce((product, item) => product * item.opacity, 1);
+            const effectiveBackground = mix(effectiveBackgroundBeforeOpacity, canvas, opacityProduct);
+            const effectiveForeground = localForeground
+                ? mix(localForeground, canvas, opacityProduct)
+                : null;
+            const rect = element.getBoundingClientRect();
+            const enabled = !('disabled' in element) || !element.disabled;
+            return {
+                name,
+                selector,
+                text: (element.innerText || element.getAttribute('aria-label') || '').trim(),
+                visible: !!element.getClientRects().length
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden',
+                in_viewport: rect.bottom > 0 && rect.right > 0
+                    && rect.top < innerHeight && rect.left < innerWidth,
+                enabled,
+                disabled: 'disabled' in element ? !!element.disabled : false,
+                computed_color: style.color,
+                computed_background_color: style.backgroundColor,
+                computed_opacity: style.opacity,
+                opacity_product: Math.round(opacityProduct * 10000) / 10000,
+                opacity_chain: opacityChain,
+                effective_background_rgb: roundedRgb(effectiveBackground),
+                effective_foreground_rgb: effectiveForeground ? roundedRgb(effectiveForeground) : null,
+                contrast_ratio_estimate: effectiveForeground
+                    ? ratio(effectiveForeground, effectiveBackground)
+                    : null,
+                normal_text_wcag_aa: effectiveForeground
+                    ? ratio(effectiveForeground, effectiveBackground) >= 4.5
+                    : null,
+                background_layers: layers,
+                ancestor_effects: {
+                    has_background_image: layers.some(layer => layer.has_background_image),
+                    has_filter: layers.some(layer => layer.filter !== 'none'),
+                    has_backdrop_filter: layers.some(layer => layer.backdrop_filter !== 'none'),
+                    has_non_normal_blend: layers.some(layer => layer.mix_blend_mode !== 'normal'),
+                },
+            };
+        });
+        return {
+            requested_theme: expectedTheme,
+            actual_theme: document.documentElement.getAttribute('data-theme') || '',
+            viewport: {width: innerWidth, height: innerHeight},
+            measurement: 'computed CSS colors composited from ancestor background colors; opacity product applied against white canvas; background images/filters reported separately',
+            controls: records,
+        };
+    }""", theme)
+
+
+def wait_for_wb_editor_appearance_settle(page) -> dict:
+    """Wait for actual color/background/opacity transitions to finish."""
+    return page.evaluate("""async () => {
+        const selectors = [
+            '.sticky.bottom-0 a[href^="/products/"]',
+            'label[for="wb-optional-characteristic-picker"]',
+            '#wb-optional-characteristic-picker',
+            '#wb-add-optional-characteristic',
+            'form.space-y-6 button[type="submit"]',
+        ];
+        const relevant = new Set([
+            'color', 'background', 'background-color', 'border-color', 'opacity',
+            'box-shadow', 'outline-color', 'all',
+        ]);
+        const nodes = new Set();
+        for (const selector of selectors) {
+            for (let node = document.querySelector(selector); node; node = node.parentElement) {
+                nodes.add(node);
+            }
+        }
+        const activeTransitions = () => {
+            const results = [];
+            for (const node of nodes) {
+                const animations = typeof node.getAnimations === 'function'
+                    ? node.getAnimations({subtree: false}) : [];
+                for (const animation of animations) {
+                    const property = animation.transitionProperty || '';
+                    if (animation.playState === 'running' && relevant.has(property)) {
+                        results.push({
+                            tag: node.tagName,
+                            id: node.id || '',
+                            transition_property: property,
+                            play_state: animation.playState,
+                        });
+                    }
+                }
+            }
+            return results;
+        };
+        const sample = () => selectors.map(selector => {
+            const element = document.querySelector(selector);
+            if (!element) return {selector, missing: true};
+            const style = getComputedStyle(element);
+            return {
+                selector,
+                color: style.color,
+                background_color: style.backgroundColor,
+                border_color: style.borderColor,
+                opacity: style.opacity,
+                box_shadow: style.boxShadow,
+                outline_color: style.outlineColor,
+            };
+        });
+        const started = performance.now();
+        const deadline = started + 3500;
+        let previous = null;
+        let stableFrames = 0;
+        let samples = 0;
+        let finalSample = null;
+        let active = [];
+        while (performance.now() < deadline) {
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            finalSample = sample();
+            active = activeTransitions();
+            samples += 1;
+            const same = previous !== null
+                && JSON.stringify(previous) === JSON.stringify(finalSample);
+            stableFrames = !active.length && same ? stableFrames + 1 : 0;
+            previous = finalSample;
+            if (!active.length && stableFrames >= 3) {
+                return {
+                    settled: true,
+                    samples,
+                    stable_frames: stableFrames,
+                    elapsed_ms: Math.round((performance.now() - started) * 10) / 10,
+                    active_relevant_transitions: [],
+                    final_computed_styles: finalSample,
+                };
+            }
+        }
+        return {
+            settled: false,
+            samples,
+            stable_frames: stableFrames,
+            elapsed_ms: Math.round((performance.now() - started) * 10) / 10,
+            active_relevant_transitions: active,
+            final_computed_styles: finalSample,
+        };
+    }""")
 
 
 def collect_overflow_diagnostics(
@@ -1348,6 +1600,22 @@ def run_browser(app, fixture: dict[str, int]) -> None:
         page.set_default_timeout(15000)
         page.on("pageerror", lambda error: REPORT["javascript_errors"].append(str(error)))
         page.on("response", record_http_response)
+        single_edit_post_requests = []
+
+        def record_single_edit_post(request):
+            parsed = urlsplit(request.url)
+            if (
+                request.method == "POST"
+                and BASE
+                and f"{parsed.scheme}://{parsed.netloc}" == BASE
+                and parsed.path == f"/products/{fixture['product_id']}/edit"
+            ):
+                single_edit_post_requests.append({
+                    "method": request.method,
+                    "path": parsed.path,
+                })
+
+        page.on("request", record_single_edit_post)
 
         try:
             # Avoid the legacy dashboard's automatic WB analytics/finance reads;
@@ -1483,8 +1751,8 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert category_probe["Свечи эротик"] == {
                 "status": 200,
                 "subject_id": 5880,
-                "count": 32,
-                "characteristic_count": 32,
+                "count": 31,
+                "characteristic_count": 31,
                 "schema_source": "local_authoritative_cache",
                 "provider_io": False,
             }, category_probe
@@ -1764,27 +2032,336 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             )
             interaction("single_review_confirm_reaches_only_fake_provider_boundary")
 
-            page.goto(BASE + f"/products/{fixture['product_id']}/edit", wait_until="domcontentloaded")
+            single_edit_path = f"/products/{fixture['product_id']}/edit"
+            page.goto(BASE + single_edit_path, wait_until="domcontentloaded")
             assert_keyboard_focus(page, "single_product_edit")
             characteristics_panel = page.locator("section[aria-labelledby='wb-characteristics-title']")
             assert "subjectID 5880" in characteristics_panel.inner_text()
-            assert "1 заполнено · 32 в схеме" in characteristics_panel.inner_text()
-            assert page.locator("#char_202").evaluate("el => el.tagName === 'SELECT'")
-            assert ["Россия", "Китай"] == page.locator("#char_202 option").evaluate_all(
-                "items => items.map(option => option.value).filter(Boolean)"
-            )
+            assert "4 заполнено · 31 в схеме" in characteristics_panel.inner_text()
+            assert page.locator("#char_202").count() == 0
             assert page.locator("#char_303").get_attribute("type") == "number"
             assert "(г)" in page.locator('label[for="char_303"]').inner_text()
             assert page.locator("#char_404").get_attribute("multiple") is not None
             assert page.locator("#char_404 option").count() == 3
+            assert page.locator("#char_303").input_value() == "125"
+            assert page.locator("#char_404 option:checked").evaluate_all(
+                "options => options.map(option => option.value)"
+            ) == ["Пластик", "Металл"]
+            assert page.locator("#char_502").evaluate("el => el.tagName === 'TEXTAREA'")
+            assert page.locator("#char_502").input_value() == "Existing line one\nExisting line two"
+            assert page.locator("#char_506").input_value() == ""
+            assert "Сохранено" in page.locator('label[for="char_506"]').inner_text()
             assert "SYNTHETIC-WB-SKU-000" in page.locator("body").inner_text()
             assert page.locator('input[name="sku"], input[name="sizes_json"]').count() == 0
+
+            legacy_details = characteristics_panel.locator("details")
+            assert legacy_details.count() == 1
+            legacy_summary = legacy_details.locator("summary")
+            assert "только просмотр" in legacy_summary.inner_text().lower()
+            legacy_summary.focus()
+            page.keyboard.press("Enter")
+            page.wait_for_function("document.querySelector('section[aria-labelledby=\\\"wb-characteristics-title\\\"] details')?.open === true")
+            legacy_details_text = legacy_details.inner_text()
+            stale_read_only_observation = {
+                "field_id": 501,
+                "disclosure_opened_by_keyboard": True,
+                "field_text_present": "Stale prior-subject field" in legacy_details_text,
+                "saved_value_present": "Preserve read-only historical value" in legacy_details_text,
+                "form_control_count": legacy_details.locator("input,select,textarea").count(),
+            }
+            assert stale_read_only_observation == {
+                "field_id": 501,
+                "disclosure_opened_by_keyboard": True,
+                "field_text_present": True,
+                "saved_value_present": True,
+                "form_control_count": 0,
+            }, stale_read_only_observation
+            page.keyboard.press("Enter")
+            page.wait_for_function("document.querySelector('section[aria-labelledby=\\\"wb-characteristics-title\\\"] details')?.open === false")
+
+            page.set_viewport_size({"width": 390, "height": 900})
+            page.evaluate("document.documentElement.setAttribute('data-theme', 'light')")
+            wait_for_layout_settle(page, width=390, theme="light")
+            initial_progressive_view = page.evaluate("""() => {
+                const root = document.querySelector('[x-data^="productEditApp"]');
+                const form = root?.querySelector('form.space-y-6');
+                const cards = Array.from(root?.querySelectorAll('[data-wb-characteristic-field-id]') || []);
+                const picker = root?.querySelector('#wb-optional-characteristic-picker');
+                const rect = element => {
+                    const box = element?.getBoundingClientRect();
+                    return box ? {width: Math.round(box.width), height: Math.round(box.height)} : null;
+                };
+                const schema = JSON.parse(root?.querySelector('#wb-characteristic-schema')?.textContent || '[]');
+                const byId = id => cards.find(card => Number(card.dataset.wbCharacteristicFieldId) === id);
+                const requiredCard = byId(500);
+                const label = root?.querySelector('.wb-characteristics-filled-count')?.innerText || '';
+                return {
+                    viewport_width: innerWidth,
+                    document_width: document.documentElement.scrollWidth,
+                    schema_field_count: schema.length,
+                    visible_field_ids: cards.map(card => Number(card.dataset.wbCharacteristicFieldId)).sort((a,b) => a-b),
+                    saved_text_input: root?.querySelector('#char_101')?.tagName === 'INPUT',
+                    numeric_grams_input: root?.querySelector('#char_303')?.type === 'number'
+                        && root?.querySelector('#char_303')?.value === '125',
+                    dictionary_multiple_select: root?.querySelector('#char_404')?.multiple === true,
+                    bounded_textarea: root?.querySelector('#char_502')?.tagName === 'TEXTAREA'
+                        && root?.querySelector('#char_502')?.value === 'Existing line one\\nExisting line two',
+                    present_empty_visible: !!byId(506)
+                        && byId(506).innerText.includes('Сохранено')
+                        && root?.querySelector('#char_506')?.value === '',
+                    present_empty_excluded_from_picker: !Array.from(picker?.options || [])
+                        .some(option => option.value === '506'),
+                    filled_summary: label,
+                    country_hidden_until_chosen: !root?.querySelector('#char_202'),
+                    picker_country_label: Array.from(picker?.options || [])
+                        .find(option => option.value === '202')?.textContent.trim() || '',
+                    optional_choice_count: Array.from(picker?.options || []).filter(option => option.value).length,
+                    required_missing_visible: !!requiredCard
+                        && requiredCard.innerText.includes('Не заполнено · обязательное'),
+                    required_missing_input_visible: !!requiredCard?.querySelector('#char_500'),
+                    has_changes: !!window.Alpine?.$data(root).hasChanges,
+                    save_disabled: !!form?.querySelector('button[type="submit"]')?.disabled,
+                    picker_box: rect(picker),
+                    add_button_box: rect(root?.querySelector('#wb-add-optional-characteristic')),
+                };
+            }""")
+            assert initial_progressive_view["viewport_width"] == 390, initial_progressive_view
+            assert initial_progressive_view["document_width"] <= 390, initial_progressive_view
+            assert initial_progressive_view["schema_field_count"] == 31, initial_progressive_view
+            assert initial_progressive_view["visible_field_ids"] == [101, 303, 404, 500, 502, 506], initial_progressive_view
+            assert len(initial_progressive_view["visible_field_ids"]) < initial_progressive_view["schema_field_count"], initial_progressive_view
+            assert initial_progressive_view["saved_text_input"] is True, initial_progressive_view
+            assert initial_progressive_view["numeric_grams_input"] is True, initial_progressive_view
+            assert initial_progressive_view["dictionary_multiple_select"] is True, initial_progressive_view
+            assert initial_progressive_view["bounded_textarea"] is True, initial_progressive_view
+            assert initial_progressive_view["present_empty_visible"] is True, initial_progressive_view
+            assert initial_progressive_view["present_empty_excluded_from_picker"] is True, initial_progressive_view
+            assert initial_progressive_view["filled_summary"] == "4 заполнено · 31 в схеме", initial_progressive_view
+            assert initial_progressive_view["country_hidden_until_chosen"] is True, initial_progressive_view
+            assert initial_progressive_view["picker_country_label"] == "Страна производства", initial_progressive_view
+            assert initial_progressive_view["optional_choice_count"] == 25, initial_progressive_view
+            assert initial_progressive_view["required_missing_visible"] is True, initial_progressive_view
+            assert initial_progressive_view["required_missing_input_visible"] is True, initial_progressive_view
+            assert stale_read_only_observation["disclosure_opened_by_keyboard"] is True, stale_read_only_observation
+            assert initial_progressive_view["has_changes"] is False, initial_progressive_view
+            assert initial_progressive_view["save_disabled"] is True, initial_progressive_view
+            assert initial_progressive_view["picker_box"]["height"] >= 44, initial_progressive_view
+            assert initial_progressive_view["add_button_box"]["height"] >= 44, initial_progressive_view
+
+            def add_optional_field_with_keyboard(field_id: int) -> dict:
+                picker = page.locator("#wb-optional-characteristic-picker")
+                picker.focus()
+                page.keyboard.press("ArrowDown")
+                page.wait_for_function(
+                    "id => document.querySelector('#wb-optional-characteristic-picker')?.value === String(id)",
+                    arg=field_id,
+                )
+                picker_keyboard_focus = page.evaluate("""() => ({
+                    id: document.activeElement?.id || '',
+                    focus_visible: !!document.activeElement?.matches(':focus-visible'),
+                    selected_value: document.querySelector('#wb-optional-characteristic-picker')?.value || '',
+                })""")
+                assert picker_keyboard_focus["id"] == "wb-optional-characteristic-picker", picker_keyboard_focus
+                assert picker_keyboard_focus["selected_value"] == str(field_id), picker_keyboard_focus
+                # Keep the native select closed. Enter opens Chromium's native
+                # option popup; Tab can then remain inside that popup instead
+                # of moving to the page's Add button.
+                page.keyboard.press("Tab")
+                add_button_focus = page.evaluate("""() => ({
+                    text: document.activeElement?.innerText?.trim() || '',
+                    focus_visible: !!document.activeElement?.matches(':focus-visible'),
+                    box_height: document.activeElement?.getBoundingClientRect().height || 0,
+                })""")
+                assert add_button_focus["text"] == "Добавить поле", add_button_focus
+                assert add_button_focus["focus_visible"] is True, add_button_focus
+                assert add_button_focus["box_height"] >= 44, add_button_focus
+                page.keyboard.press("Enter")
+                page.wait_for_function(
+                    "id => !!document.getElementById('char_' + id)",
+                    arg=field_id,
+                )
+                added_focus = page.evaluate("""id => ({
+                    active_id: document.activeElement?.id || '',
+                    field_tag: document.getElementById('char_' + id)?.tagName || '',
+                    focus_visible: !!document.activeElement?.matches(':focus-visible'),
+                })""", field_id)
+                assert added_focus["active_id"] == f"char_{field_id}", added_focus
+                return {
+                    "picker_focus": picker_keyboard_focus,
+                    "add_button_focus": add_button_focus,
+                    "added_control_focus": added_focus,
+                }
+
+            empty_attempt_before = {
+                "post_count": len(single_edit_post_requests),
+                "fake_client_instances": REPORT["fake_wb_client_instances"],
+                "fake_single_write_calls": REPORT["fake_wb_single_write_calls"],
+                "provider_attempts": REPORT["provider_attempts"],
+            }
+            empty_add_keyboard = add_optional_field_with_keyboard(202)
+            assert page.locator("#char_202").evaluate("el => el.tagName === 'SELECT'")
+            empty_field_tag = page.locator("#char_202").evaluate("el => el.tagName")
+            assert empty_field_tag == "SELECT", empty_field_tag
+            page.locator("#title").focus()
+            page.keyboard.press("Enter")
+            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            empty_attempt_after_enter = {
+                "still_on_edit_route": urlsplit(page.url).path == single_edit_path,
+                "has_changes": page.evaluate(
+                    "root => Alpine.$data(root).hasChanges",
+                    arg=page.locator('[x-data^="productEditApp"]').element_handle(),
+                ),
+                "save_disabled": page.locator('form.space-y-6 button[type="submit"]').is_disabled(),
+                "post_count": len(single_edit_post_requests),
+                "fake_client_instances": REPORT["fake_wb_client_instances"],
+                "fake_single_write_calls": REPORT["fake_wb_single_write_calls"],
+                "provider_attempts": REPORT["provider_attempts"],
+            }
+            assert empty_attempt_after_enter["still_on_edit_route"] is True, empty_attempt_after_enter
+            assert empty_attempt_after_enter["has_changes"] is False, empty_attempt_after_enter
+            assert empty_attempt_after_enter["save_disabled"] is True, empty_attempt_after_enter
+            assert empty_attempt_after_enter["post_count"] == empty_attempt_before["post_count"], empty_attempt_after_enter
+            assert empty_attempt_after_enter["fake_client_instances"] == empty_attempt_before["fake_client_instances"], empty_attempt_after_enter
+            assert empty_attempt_after_enter["fake_single_write_calls"] == empty_attempt_before["fake_single_write_calls"], empty_attempt_after_enter
+            assert empty_attempt_after_enter["provider_attempts"] == empty_attempt_before["provider_attempts"] == 0, empty_attempt_after_enter
+
+            empty_request_submit = page.evaluate("""() => {
+                const form = document.querySelector('form.space-y-6');
+                let observed = {seen: false, default_prevented: false};
+                form.addEventListener('submit', event => {
+                    observed = {seen: true, default_prevented: event.defaultPrevented};
+                }, {once: true});
+                form.requestSubmit();
+                return observed;
+            }""")
+            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            empty_attempt_after_request_submit = {
+                "submit_event": empty_request_submit,
+                "still_on_edit_route": urlsplit(page.url).path == single_edit_path,
+                "post_count": len(single_edit_post_requests),
+                "fake_client_instances": REPORT["fake_wb_client_instances"],
+                "fake_single_write_calls": REPORT["fake_wb_single_write_calls"],
+                "provider_attempts": REPORT["provider_attempts"],
+            }
+            assert empty_attempt_after_request_submit["submit_event"] == {
+                "seen": True,
+                "default_prevented": True,
+            }, empty_attempt_after_request_submit
+            assert empty_attempt_after_request_submit["still_on_edit_route"] is True, empty_attempt_after_request_submit
+            assert empty_attempt_after_request_submit["post_count"] == empty_attempt_before["post_count"], empty_attempt_after_request_submit
+            assert empty_attempt_after_request_submit["fake_client_instances"] == empty_attempt_before["fake_client_instances"], empty_attempt_after_request_submit
+            assert empty_attempt_after_request_submit["fake_single_write_calls"] == empty_attempt_before["fake_single_write_calls"], empty_attempt_after_request_submit
+            assert empty_attempt_after_request_submit["provider_attempts"] == empty_attempt_before["provider_attempts"] == 0, empty_attempt_after_request_submit
+
+            page.locator("#char_202").focus()
+            page.keyboard.press("Tab")
+            remove_button_focus = page.evaluate("""() => ({
+                label: document.activeElement?.getAttribute('aria-label') || '',
+                focus_visible: !!document.activeElement?.matches(':focus-visible'),
+                box_height: document.activeElement?.getBoundingClientRect().height || 0,
+            })""")
+            assert remove_button_focus["label"] == "Убрать пустое поле «Страна производства»", remove_button_focus
+            assert remove_button_focus["focus_visible"] is True, remove_button_focus
+            assert remove_button_focus["box_height"] >= 44, remove_button_focus
+            page.keyboard.press("Enter")
+            page.wait_for_function("!document.getElementById('char_202')")
+            empty_remove_state = page.evaluate("""() => {
+                const root = document.querySelector('[x-data^="productEditApp"]');
+                return {
+                    has_changes: Alpine.$data(root).hasChanges,
+                    picker_focused: document.activeElement?.id === 'wb-optional-characteristic-picker',
+                };
+            }""")
+            assert empty_remove_state == {"has_changes": False, "picker_focused": True}, empty_remove_state
+            empty_attempt_after_remove = {
+                "post_count": len(single_edit_post_requests),
+                "fake_client_instances": REPORT["fake_wb_client_instances"],
+                "fake_single_write_calls": REPORT["fake_wb_single_write_calls"],
+                "provider_attempts": REPORT["provider_attempts"],
+            }
+            assert empty_attempt_after_remove == empty_attempt_before, empty_attempt_after_remove
+
+            page.set_viewport_size({"width": 1280, "height": 900})
+            wait_for_layout_settle(page, width=1280, theme="light")
             capture_layout(page, "single_product_edit")
+            country_picker_keyboard = add_optional_field_with_keyboard(202)
+            assert page.locator("#char_202").evaluate("el => el.tagName === 'SELECT'")
+            assert ["Россия", "Китай"] == page.locator("#char_202 option").evaluate_all(
+                "items => items.map(option => option.value).filter(Boolean)"
+            )
+            country_control_after_add = {
+                "tag": page.locator("#char_202").evaluate("el => el.tagName"),
+                "selected_value_before_edit": page.locator("#char_202").input_value(),
+            }
+            assert country_control_after_add == {
+                "tag": "SELECT",
+                "selected_value_before_edit": "",
+            }, country_control_after_add
+            REPORT["single_edit_observations"]["progressive_ui"] = {
+                "initial_view": initial_progressive_view,
+                "stale_legacy_field_read_only": stale_read_only_observation,
+                "empty_optional_add_keyboard": empty_add_keyboard,
+                "empty_add_enter_attempt": {
+                    **empty_attempt_after_enter,
+                    "post_count_delta": (
+                        empty_attempt_after_enter["post_count"] - empty_attempt_before["post_count"]
+                    ),
+                    "fake_client_delta": (
+                        empty_attempt_after_enter["fake_client_instances"]
+                        - empty_attempt_before["fake_client_instances"]
+                    ),
+                    "fake_write_delta": (
+                        empty_attempt_after_enter["fake_single_write_calls"]
+                        - empty_attempt_before["fake_single_write_calls"]
+                    ),
+                },
+                "empty_add_request_submit_attempt": {
+                    **empty_attempt_after_request_submit,
+                    "post_count_delta": (
+                        empty_attempt_after_request_submit["post_count"] - empty_attempt_before["post_count"]
+                    ),
+                    "fake_client_delta": (
+                        empty_attempt_after_request_submit["fake_client_instances"]
+                        - empty_attempt_before["fake_client_instances"]
+                    ),
+                    "fake_write_delta": (
+                        empty_attempt_after_request_submit["fake_single_write_calls"]
+                        - empty_attempt_before["fake_single_write_calls"]
+                    ),
+                },
+                "empty_optional_remove_keyboard": {
+                    **empty_remove_state,
+                    "focus": remove_button_focus,
+                    "post_count_delta": 0,
+                    "fake_client_delta": 0,
+                    "fake_write_delta": 0,
+                },
+                "country_picker_add_keyboard": country_picker_keyboard,
+                "country_control_after_add": country_control_after_add,
+            }
             REPORT["checks"].append({
                 "name": "single_edit_uses_cached_country_weight_multi_schema_and_read_only_sku",
                 "status": "passed",
                 "subject_id": 5880,
-                "schema_fields": 32,
+                "schema_fields": 31,
+                "initial_visible_field_ids": initial_progressive_view["visible_field_ids"],
+                "required_missing_id": 500,
+                "stale_read_only_id": 501,
+                "stale_read_only_disclosure_keyboard": stale_read_only_observation["disclosure_opened_by_keyboard"],
+                "stale_read_only_displayed": (
+                    stale_read_only_observation["field_text_present"]
+                    and stale_read_only_observation["saved_value_present"]
+                ),
+                "stale_read_only_control_count": stale_read_only_observation["form_control_count"],
+                "optional_country_picker_label": initial_progressive_view["picker_country_label"],
+                "picker_keyboard_selection": 202,
+                "present_empty_id": 506,
+                "present_empty_visible": initial_progressive_view["present_empty_visible"],
+                "present_empty_excluded_from_picker": initial_progressive_view["present_empty_excluded_from_picker"],
+                "empty_add_remove_dirty": False,
+                "empty_add_no_post_or_provider": empty_attempt_after_enter["post_count"] == empty_attempt_before["post_count"]
+                    and empty_attempt_after_enter["fake_client_instances"] == empty_attempt_before["fake_client_instances"]
+                    and empty_attempt_after_enter["fake_single_write_calls"] == empty_attempt_before["fake_single_write_calls"],
                 "fake_wb_write_calls": REPORT["fake_wb_write_calls"],
             })
 
@@ -1792,11 +2369,154 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             # is the only provider boundary; the route performs schema parsing,
             # subject verification, local persistence and history creation.
             page.locator("#char_202").select_option("Россия")
-            page.locator("#char_303").fill("125")
-            page.locator("#char_404").select_option(["Пластик", "Металл"])
+            country_change_state = page.evaluate("""() => {
+                const root = document.querySelector('[x-data^="productEditApp"]');
+                const form = root?.querySelector('form.space-y-6');
+                const app = Alpine.$data(root);
+                return {
+                    country: root?.querySelector('#char_202')?.value || '',
+                    grams: root?.querySelector('#char_303')?.value || '',
+                    materials: Array.from(root?.querySelectorAll('#char_404 option:checked') || [])
+                        .map(option => option.value),
+                    textarea: root?.querySelector('#char_502')?.value || '',
+                    has_changes: app.hasChanges,
+                    save_disabled: !!form?.querySelector('button[type="submit"]')?.disabled,
+                };
+            }""")
+            assert country_change_state == {
+                "country": "Россия",
+                "grams": "125",
+                "materials": ["Пластик", "Металл"],
+                "textarea": "Existing line one\nExisting line two",
+                "has_changes": True,
+                "save_disabled": False,
+            }, country_change_state
+
+            # Measure the enabled form controls under both supported themes.
+            # Choosing an optional field only enables the Add control; it is
+            # deliberately not added, so the real form payload remains the
+            # country-only change exercised below.
+            optional_picker = page.locator("#wb-optional-characteristic-picker")
+            optional_values = optional_picker.locator("option").evaluate_all(
+                "options => options.map(option => option.value).filter(Boolean)"
+            )
+            assert optional_values, "synthetic schema must expose an optional field for contrast measurement"
+            contrast_picker_value = optional_values[0]
+            optional_picker.select_option(contrast_picker_value)
+            assert page.locator("#wb-add-optional-characteristic").is_enabled()
+            page.set_viewport_size({"width": 390, "height": 900})
+            page.locator('label[for="wb-optional-characteristic-picker"]').scroll_into_view_if_needed()
+            for contrast_theme in ("light", "dark"):
+                page.evaluate(
+                    "theme => document.documentElement.setAttribute('data-theme', theme)",
+                    contrast_theme,
+                )
+                wait_for_layout_settle(page, width=390, theme=contrast_theme)
+                appearance_stability = wait_for_wb_editor_appearance_settle(page)
+                contrast_row = capture_wb_editor_control_contrast(page, theme=contrast_theme)
+                contrast_row["picker_option_value"] = contrast_picker_value
+                contrast_row["appearance_stability"] = appearance_stability
+                contrast_row["measurement_valid"] = appearance_stability["settled"]
+                if not appearance_stability["settled"]:
+                    for control in contrast_row["controls"]:
+                        control["contrast_ratio_estimate"] = None
+                        control["normal_text_wcag_aa"] = None
+                REPORT["single_edit_contrast_diagnostic"].append(contrast_row)
+            optional_picker.select_option("")
+            page.evaluate("document.documentElement.setAttribute('data-theme', 'light')")
+            page.set_viewport_size({"width": 1280, "height": 900})
+            wait_for_layout_settle(page, width=1280, theme="light")
+            post_contrast_state = page.evaluate("""() => {
+                const root = document.querySelector('[x-data^="productEditApp"]');
+                const app = Alpine.$data(root);
+                return {
+                    country: root?.querySelector('#char_202')?.value || '',
+                    selected_optional_id: root?.querySelector('#wb-optional-characteristic-picker')?.value || '',
+                    has_changes: app.hasChanges,
+                    save_disabled: !!root?.querySelector('form.space-y-6 button[type="submit"]')?.disabled,
+                };
+            }""")
+            assert post_contrast_state == {
+                "country": "Россия",
+                "selected_optional_id": "",
+                "has_changes": True,
+                "save_disabled": False,
+            }, post_contrast_state
+            expected_contrast_controls = [
+                "cancel",
+                "optional_picker_label",
+                "optional_picker",
+                "optional_add",
+                "save",
+            ]
+            contrast_rows = REPORT["single_edit_contrast_diagnostic"]
+            theme_rows_valid = (
+                len(contrast_rows) == 2
+                and [row.get("requested_theme") for row in contrast_rows] == ["light", "dark"]
+                and [row.get("actual_theme") for row in contrast_rows] == ["light", "dark"]
+            )
+            contrast_failures = []
+            for row in contrast_rows:
+                stability = row.get("appearance_stability") or {}
+                controls = row.get("controls") or []
+                if (
+                    row.get("measurement_valid") is not True
+                    or stability.get("settled") is not True
+                    or stability.get("stable_frames", 0) < 3
+                    or stability.get("active_relevant_transitions") != []
+                    or row.get("viewport", {}).get("width") != 390
+                ):
+                    contrast_failures.append({"theme": row.get("requested_theme"), "reason": "appearance_not_settled"})
+                if [control.get("name") for control in controls] != expected_contrast_controls:
+                    contrast_failures.append({"theme": row.get("requested_theme"), "reason": "control_set_mismatch"})
+                    continue
+                for control in controls:
+                    ratio = control.get("contrast_ratio_estimate")
+                    if (
+                        not control.get("visible")
+                        or not control.get("enabled")
+                        or control.get("disabled")
+                        or not isinstance(control.get("text"), str)
+                        or not control["text"].strip()
+                        or not isinstance(ratio, (int, float))
+                        or isinstance(ratio, bool)
+                        or ratio < 4.5
+                        or control.get("normal_text_wcag_aa") is not True
+                    ):
+                        contrast_failures.append({
+                            "theme": row.get("requested_theme"),
+                            "control": control.get("name"),
+                            "ratio": ratio,
+                        })
+            contrast_aa_passed = theme_rows_valid and not contrast_failures
+            REPORT["checks"].append({
+                "name": "single_edit_enabled_controls_contrast_aa_light_dark",
+                "status": "passed" if contrast_aa_passed else "failed",
+                "themes": ["light", "dark"],
+                "control_names": expected_contrast_controls,
+                "control_count": len(contrast_rows) * len(expected_contrast_controls),
+                "minimum_contrast_ratio": 4.5,
+                "all_enabled_visible": contrast_aa_passed,
+                "all_settled": all(
+                    (row.get("appearance_stability") or {}).get("settled") is True
+                    and row.get("measurement_valid") is True
+                    for row in contrast_rows
+                ),
+                "all_contrast_aa": not contrast_failures,
+                "failures": contrast_failures,
+            })
+            assert contrast_aa_passed, contrast_failures
+
             single_form = page.locator("form.space-y-6")
             assert single_form.locator('input[name="csrf_token"]').count() == 1
             assert single_form.locator('input[name="schema_revision"]').input_value()
+            single_submit_button = single_form.get_by_role(
+                "button", name="Сохранить в WB", exact=True,
+            )
+            submit_button_label = single_submit_button.inner_text().strip()
+            required_missing_value = page.locator("#char_500").input_value()
+            assert submit_button_label == "Сохранить в WB", submit_button_label
+            assert required_missing_value == "", required_missing_value
             with seller_app.app_context():
                 persisted_product = Product.query.filter_by(
                     id=fixture["product_id"], seller_id=fixture["seller_id"],
@@ -1853,9 +2573,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 timeout=5000,
             ) as single_post:
                 with page.expect_navigation(wait_until="domcontentloaded"):
-                    single_form.get_by_role(
-                        "button", name="Сохранить изменения", exact=True,
-                    ).click()
+                    single_submit_button.click()
             assert single_post.value.status == 302
             assert urlsplit(page.url).path == f"/products/{fixture['product_id']}"
             assert "Карточка успешно обновлена на Wildberries" in page.locator("body").inner_text()
@@ -1867,11 +2585,9 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 "requested_fields": ["characteristics"],
                 "core_fields_requested": [],
                 "core_fields_changed": [],
-                "characteristic_ids": [202, 303, 404],
+                "characteristic_ids": [202],
                 "characteristics": [
                     {"id": 202, "value": ["Россия"]},
-                    {"id": 303, "value": 125},
-                    {"id": 404, "value": ["Пластик", "Металл"]},
                 ],
                 "full_card_read_before": True,
                 "full_card_patch_merged": True,
@@ -1897,6 +2613,11 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             REPORT["single_edit_observations"]["form_post"] = {
                 "http_status": single_post.value.status,
                 "path": single_path,
+                "submit_button_label": submit_button_label,
+                "target_channel": "Wildberries",
+                "required_missing_id": 500,
+                "required_missing_value": required_missing_value,
+                "required_missing_omitted_from_patch": 500 not in single_fake_write["characteristic_ids"],
                 "normal_html_form": True,
                 "csrf_field_present": True,
                 "fake_write_count": REPORT["fake_wb_single_write_calls"],
@@ -1906,7 +2627,13 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 "single_edit_real_form_submit_reaches_fake_wb_and_persists_exact_history",
                 fake_wb_single_write_calls=REPORT["fake_wb_single_write_calls"],
                 requested_fields=single_fake_write["requested_fields"],
-                changed_characteristics=[202, 303, 404],
+                changed_characteristics=[202],
+                submit_button_label=submit_button_label,
+                target_channel="Wildberries",
+                required_missing_value=required_missing_value,
+                required_missing_omitted_from_patch=(
+                    500 not in single_fake_write["characteristic_ids"]
+                ),
                 direct_history_count=saved_single_state["direct_history_count"],
                 sizes_and_sku_preserved=True,
             )
@@ -1929,6 +2656,8 @@ def run_browser(app, fixture: dict[str, int]) -> None:
             assert page.locator("#char_404 option:checked").evaluate_all(
                 "options => options.map(option => option.value)"
             ) == ["Пластик", "Металл"]
+            assert page.locator("#char_506").input_value() == ""
+            assert "Сохранено" in page.locator('label[for="char_506"]').inner_text()
             assert "SYNTHETIC-WB-SKU-000" in page.locator("body").inner_text()
             assert page.locator('input[name="sku"], input[name="sizes_json"]').count() == 0
             REPORT["single_edit_observations"]["reopen"] = {
@@ -1937,6 +2666,8 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 "materials": page.locator("#char_404 option:checked").evaluate_all(
                     "options => options.map(option => option.value)"
                 ),
+                "present_empty_field_preserved": page.locator("#char_506").input_value() == ""
+                    and "Сохранено" in page.locator('label[for="char_506"]').inner_text(),
                 "sku_read_only": True,
             }
             check(
@@ -1944,6 +2675,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 reopened_country="Россия",
                 reopened_weight_grams=125,
                 reopened_materials=["Пластик", "Металл"],
+                present_empty_field_preserved=True,
                 readback=saved_single_state,
             )
             interaction("single_edit_reopened_from_persisted_local_readback")
@@ -1969,6 +2701,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                         injected.name = control.name;
                         injected.value = value;
                         control.before(injected);
+                        control.dispatchEvent(new Event('input', {bubbles: true}));
                     }""", bad_value)
                 else:
                     page.locator("#char_404").evaluate("""(control, value) => {
@@ -1980,6 +2713,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                         injected.name = control.name;
                         injected.value = value;
                         control.before(injected);
+                        control.dispatchEvent(new Event('input', {bubbles: true}));
                     }""", bad_value)
                 with page.expect_navigation(wait_until="domcontentloaded") as rejected_post:
                     page.locator('form.space-y-6 button[type="submit"]').click()
