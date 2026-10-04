@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-04T05:09:29.018476+00:00",
+  "generated_at": "2026-10-04T05:32:40.383799+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "e9c624532143deec3d9afb7685565ad98f0cd6bf616ce6182b4eff5d1aa28b21"
+      "sha256": "4b659984bff50c555c398590af468bd502788d82336b782dae4a39ecd112ac5d"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -469,7 +469,7 @@
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
-      "sha256": "6f837017f5740fc7f16adf10fda559c10bcfd843677a68bea5a129478a812238"
+      "sha256": "0d7f97226d7bb06ebc56e1754af321bf19ffa927c0597e2e2e549a3e15372aad"
     },
     {
       "path": "docs/design/ozon-vue-linking-and-category-review.md",
@@ -3089,7 +3089,7 @@
     },
     {
       "path": "templates/macros/overlays.html",
-      "sha256": "bc442ea3bab708ab4cac28fc3815852ede218429044a99ac1868b7ac88bff995"
+      "sha256": "1671949884bfe6da2d91f92671a12cf376c3914313a58fbc9dfedb2d2e8b948f"
     },
     {
       "path": "templates/marketplace_accounts.html",
@@ -4857,7 +4857,7 @@
     },
     {
       "path": "tests/test_ux01_navigation.py",
-      "sha256": "e6225552cc675dd7d9130d5ca3b88028f6b63a806bad45b3fc876ee739c7f144"
+      "sha256": "f59094a7d6de187bd3d78890f6f34668676f84df1e997bc58963f8bc401a55fc"
     },
     {
       "path": "tests/test_ux01_operations.py",
@@ -4985,7 +4985,7 @@
     },
     {
       "path": "tests/ux01/common_content_browser.py",
-      "sha256": "17ccdaa8fd16139da8167b3d07a31c2081780108b4a1eb5b71332b8c12205d51"
+      "sha256": "b8feadbe96b258efb1ff96264a9af6145cf8fc7fa9547331b47b369a372e4dbe"
     },
     {
       "path": "tests/ux01/common_product_content_focus_dom.js",
@@ -5016,5 +5016,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "0c3078680eeaa01bdbf1efabfd64ca1d55f28de1a49b529ed4642a0e158e0295"
+  "aggregate_sha256": "39ee9fe8b207f898254b18e094f759e335680c59fefbb7b7437929881fec91e6"
 }

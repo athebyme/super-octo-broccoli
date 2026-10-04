@@ -1,6 +1,10 @@
 # Ozon и остаточная UX-приёмка, 01.10.2026
 
-## Продолжение r12, 04.10.2026: фото и сохранённый AI review
+## Продолжение r12, 04.10.2026: фото, навигация и сохранённый AI review
+
+Frozen G1 (`916e7c2`, CI image `7f413bcd`, 1248 inputs) завершился FAILED: 6/8 UX stages прошли, workspace и common browser не прошли, Ozon 13 stages после этого не запускались. Common failure произошёл до нового photo HTTP flow: полный no-write fingerprint не поддерживал SQL datetime. Исправлен typed canonical encoder без удаления полей из снимка. Workspace остановился на поиске «Карточки кабинетов»; failure-time query/DOM не записаны, поэтому причина именно G1 не установлена. Независимая root/worker regression actual baseline macro и `shCmdPalette` доказала отдельную race: delayed refresh стирал уже введённый запрос и менял active route на dashboard. Scoped macro fix делает единственный synchronous refresh и guarded delayed focus; владелец двух файлов macro/navigation test — Luna MAX worker. G2 требует новой общей фиксации и свежего полного UX/Ozon запуска, без замены FAILED G1.
+
+Current-gallery G3 — отдельная диагностическая попытка, NOT PASSED: один 390px/light экран и два текущих CDN JPEG прошли, но предполагаемый supplier-photo route не наблюдался. Дополнительных image/request/console failures в этой попытке не было; это не устанавливает причину четырёх G2 failures и не заменяет его четырёхэкранную приёмку. Повторные сетевые попытки или расширение allowlist только ради зелёного результата не планируются. Все результаты и ограничения сохраняются отдельно.
 
 На старте пакета r12 принятый production baseline — r11 source `302b609`, image `06679958`; result HEAD `9469d60`. В отдельном рабочем дереве исследованы остаточные media/review сценарии, без повторной реализации переданных 19 задач. Один exact owned AI-suggestions GET вернул HTTP 200, `item=null`, пустой список и отсутствие review token; новых LLM/review/draft записей не было. Это состояние выбранного черновика, а не доказательство отсутствия предложений во всём аккаунте или пройденного live apply.
 
