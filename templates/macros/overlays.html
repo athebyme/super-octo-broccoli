@@ -292,7 +292,7 @@
                 {{ icon('search') }}
                 <input type="text" class="sh-cmdpal-input" placeholder="{{ placeholder }}"
                        x-ref="cmdInput" x-model="query" @input="filter()" aria-label="{{ placeholder }}"
-                       x-init="$watch('{{ id }}', v => { if(v) { query=''; $nextTick(() => { $refs.cmdInput.focus(); refresh(); }) } })">
+                       x-init="$watch('{{ id }}', v => { if(v) { refresh(); $nextTick(() => { const panel = $refs.cmdInput.closest('.sh-cmdpal-panel'); if({{ id }} && panel && panel.getClientRects().length && !panel.contains(document.activeElement)) $refs.cmdInput.focus(); }) } })">
                 <span class="sh-cmdpal-kbd">Esc</span>
             </div>
             <div class="sh-cmdpal-list">
