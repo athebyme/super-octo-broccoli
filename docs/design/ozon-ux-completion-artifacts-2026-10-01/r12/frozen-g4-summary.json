@@ -1,0 +1,611 @@
+{
+  "schema": "r12_frozen_acceptance_aggregate_v1",
+  "source_head": "abf3a2799a916f036e9c2557390bcb474f2d601d",
+  "source_manifest_aggregate": "2c3494a3f23bb9accb87dba453e1913b1a6500106c07fdcd6c7e8df7ef69e009",
+  "source_file_count": 1248,
+  "source_verified_after": true,
+  "ci_image": "sha256:84aca5a04448e60e3c7e80b46f9a95099a7f22f7906ba5cac6543ed65099ce19",
+  "synthetic_only": true,
+  "ux_stage_results": [
+    {
+      "name": "ux01_pytest",
+      "status": "passed"
+    },
+    {
+      "name": "analytics_browser",
+      "status": "passed"
+    },
+    {
+      "name": "listing_browser",
+      "status": "passed"
+    },
+    {
+      "name": "workspace_browser",
+      "status": "passed"
+    },
+    {
+      "name": "journey_browser",
+      "status": "passed"
+    },
+    {
+      "name": "operations_pricing_browser",
+      "status": "passed"
+    },
+    {
+      "name": "wb_edit_browser",
+      "status": "passed"
+    },
+    {
+      "name": "common_content_browser",
+      "status": "passed"
+    }
+  ],
+  "ozon_stage_results": [
+    {
+      "name": "contracts",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "bulk-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "credential-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "account-history-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "quarantine-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "quarantine-commercial-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "warehouse-read-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "vue-link-category-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "upload-two-step-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "draft-ai-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "draft-editor-photo-browser",
+      "exit_code": 0,
+      "status": "passed"
+    },
+    {
+      "name": "ozon-complete-journey-browser",
+      "exit_code": 0,
+      "status": "passed"
+    }
+  ],
+  "ux_case_count": 234,
+  "ux_subtest_count": 270,
+  "ozon_case_count": 2228,
+  "ozon_subtest_count": 546,
+  "ozon_warning_count": 296,
+  "common_layout_count": 28,
+  "common_check_record_count": 35,
+  "common_provider_attempts": 0,
+  "photo_preview": {
+    "status": "passed",
+    "named_check": "common_selected_photo_pending_preview_recovers_after_bounded_retry_without_content_write",
+    "retry_delays_seconds": [
+      2,
+      4,
+      6
+    ],
+    "max_automatic_retries": 3,
+    "pending_recovers": {
+      "status_sequence": [
+        "pending",
+        "loading",
+        "ready"
+      ],
+      "photo_requests": [
+        {
+          "attempt": 1,
+          "trigger": "initial",
+          "method": "GET",
+          "same_origin": true,
+          "path_matches_product_and_slot": true,
+          "deferred_query": true,
+          "http_status": 202,
+          "content_type": "image/jpeg",
+          "response_body_bytes": 0,
+          "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "retry_after_seconds": 2,
+          "photo_cache": "pending",
+          "photo_queue": "queued",
+          "queue_count": 1,
+          "cache_ready": false
+        },
+        {
+          "attempt": 2,
+          "trigger": "automatic_retry",
+          "method": "GET",
+          "same_origin": true,
+          "path_matches_product_and_slot": true,
+          "deferred_query": true,
+          "http_status": 200,
+          "content_type": "image/jpeg",
+          "response_body_bytes": 7341,
+          "body_sha256": "bc39b1db2697c101e0910afe45e36dcad53d2383a2e35e97979f87eca97ba8c5",
+          "retry_after_seconds": null,
+          "photo_cache": null,
+          "photo_queue": null,
+          "queue_count": 1,
+          "cache_ready": true
+        }
+      ],
+      "automatic_retry_count": 1,
+      "queue_count": 1,
+      "cache_ready_before_retry": true,
+      "decoded_image": {
+        "loaded": true,
+        "width": 120,
+        "height": 80,
+        "sha256": "bc39b1db2697c101e0910afe45e36dcad53d2383a2e35e97979f87eca97ba8c5"
+      },
+      "selection": {
+        "selected_count_before": 2,
+        "selected_count_after": 2,
+        "selected_fingerprint_before": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "selected_fingerprint_after": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "order_fingerprint_before": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "order_fingerprint_after": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "source_fingerprint_before": "fa8c284172725f54bc5e7707086edc1a74254c7c37ca33203052b7027d1b27fc",
+        "source_fingerprint_after": "fa8c284172725f54bc5e7707086edc1a74254c7c37ca33203052b7027d1b27fc",
+        "current_product_unchanged": true
+      },
+      "side_effects": {
+        "preview_post_count": 0,
+        "apply_post_count": 0,
+        "provider_attempts": 0,
+        "domain_write_count": 0,
+        "domain_snapshots_unchanged": true
+      }
+    },
+    "exhaustion_manual_retry": {
+      "status_sequence": [
+        "pending",
+        "loading",
+        "pending",
+        "loading",
+        "pending",
+        "loading",
+        "failed",
+        "loading",
+        "ready"
+      ],
+      "automatic_requests": [
+        {
+          "attempt": 1,
+          "trigger": "initial",
+          "method": "GET",
+          "same_origin": true,
+          "path_matches_product_and_slot": true,
+          "deferred_query": true,
+          "http_status": 202,
+          "content_type": "image/jpeg",
+          "response_body_bytes": 0,
+          "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "retry_after_seconds": 2,
+          "photo_cache": "pending",
+          "photo_queue": "queued",
+          "queue_count": 1,
+          "cache_ready": false
+        },
+        {
+          "attempt": 2,
+          "trigger": "automatic_retry",
+          "method": "GET",
+          "same_origin": true,
+          "path_matches_product_and_slot": true,
+          "deferred_query": true,
+          "http_status": 202,
+          "content_type": "image/jpeg",
+          "response_body_bytes": 0,
+          "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "retry_after_seconds": 2,
+          "photo_cache": "pending",
+          "photo_queue": "queued",
+          "queue_count": 2,
+          "cache_ready": false
+        },
+        {
+          "attempt": 3,
+          "trigger": "automatic_retry",
+          "method": "GET",
+          "same_origin": true,
+          "path_matches_product_and_slot": true,
+          "deferred_query": true,
+          "http_status": 202,
+          "content_type": "image/jpeg",
+          "response_body_bytes": 0,
+          "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "retry_after_seconds": 2,
+          "photo_cache": "pending",
+          "photo_queue": "queued",
+          "queue_count": 3,
+          "cache_ready": false
+        },
+        {
+          "attempt": 4,
+          "trigger": "automatic_retry",
+          "method": "GET",
+          "same_origin": true,
+          "path_matches_product_and_slot": true,
+          "deferred_query": true,
+          "http_status": 202,
+          "content_type": "image/jpeg",
+          "response_body_bytes": 0,
+          "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "retry_after_seconds": 2,
+          "photo_cache": "pending",
+          "photo_queue": "queued",
+          "queue_count": 4,
+          "cache_ready": false
+        }
+      ],
+      "manual_request": {
+        "attempt": 5,
+        "trigger": "manual_retry",
+        "method": "GET",
+        "same_origin": true,
+        "path_matches_product_and_slot": true,
+        "deferred_query": true,
+        "http_status": 200,
+        "content_type": "image/jpeg",
+        "response_body_bytes": 7341,
+        "body_sha256": "bc39b1db2697c101e0910afe45e36dcad53d2383a2e35e97979f87eca97ba8c5",
+        "retry_after_seconds": null,
+        "photo_cache": null,
+        "photo_queue": null,
+        "queue_count": 4,
+        "cache_ready": true
+      },
+      "automatic_retry_count": 3,
+      "queue_count": 4,
+      "selection_button_disabled_in_inherit_mode": true,
+      "retry_button": {
+        "present": true,
+        "visible": true,
+        "enabled": true,
+        "nested_in_selection_button": false,
+        "keyboard_key": "Enter",
+        "focus_reached": true,
+        "focus_visible": true,
+        "focus_retained_after_ready": true,
+        "min_width_px": 122.34375,
+        "min_height_px": 55.1875
+      },
+      "selection": {
+        "selected_count_before": 2,
+        "selected_count_after": 2,
+        "selected_fingerprint_before": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "selected_fingerprint_after": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "order_fingerprint_before": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "order_fingerprint_after": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "source_fingerprint_before": "fa8c284172725f54bc5e7707086edc1a74254c7c37ca33203052b7027d1b27fc",
+        "source_fingerprint_after": "fa8c284172725f54bc5e7707086edc1a74254c7c37ca33203052b7027d1b27fc",
+        "current_product_unchanged": true
+      },
+      "side_effects": {
+        "preview_post_count": 0,
+        "apply_post_count": 0,
+        "provider_attempts": 0,
+        "domain_write_count": 0,
+        "domain_snapshots_unchanged": true
+      },
+      "switch_while_photo_retry_pending": {
+        "switch_completed_while_retry_pending": true,
+        "cancelled_pending_request": {
+          "attempt": 3,
+          "trigger": "manual_retry",
+          "method": "GET",
+          "same_origin": true,
+          "path_matches_product_and_slot": true,
+          "deferred_query": true,
+          "http_status": 202,
+          "content_type": "image/jpeg",
+          "response_body_bytes": 0,
+          "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "retry_after_seconds": 2,
+          "photo_cache": "pending",
+          "photo_queue": "queued",
+          "queue_count": 1,
+          "cache_ready": false
+        },
+        "requests_after_switch": 0,
+        "current_other_product_after_cancelled_pending_request": true,
+        "stale_photo_rendered_in_current_product": false,
+        "late_automatic_retries": 0,
+        "source_product_restored": true,
+        "source_selection_fingerprint_before": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "source_selection_fingerprint_after": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "source_order_fingerprint_before": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "source_order_fingerprint_after": "840f4f247c0a32711551411ec213a3304385fa2f03d377f87ad0cb60f85594e5",
+        "source_snapshot_unchanged": true
+      }
+    }
+  },
+  "photo_retry_touch_observations": [
+    {
+      "width": 320,
+      "requested_theme": "light",
+      "actual_theme": "light",
+      "status": "failed",
+      "visible": true,
+      "enabled": true,
+      "inherited_mode": true,
+      "accessible_name": "Повторить предпросмотр Фото 2",
+      "button_rect": {
+        "x": 164.796875,
+        "y": 528.796875,
+        "width": 132.203125,
+        "height": 55.1875
+      },
+      "viewport": {
+        "width": 320,
+        "height": 900
+      },
+      "center_hit_target": true,
+      "nested_in_selection_button": false,
+      "focus_visible": true,
+      "focus_outline": {
+        "style": "solid",
+        "width_px": 2,
+        "offset_px": 2
+      },
+      "focus_rect_inside_viewport": true,
+      "focus_reached_by_tab": true
+    },
+    {
+      "width": 320,
+      "requested_theme": "dark",
+      "actual_theme": "dark",
+      "status": "failed",
+      "visible": true,
+      "enabled": true,
+      "inherited_mode": true,
+      "accessible_name": "Повторить предпросмотр Фото 2",
+      "button_rect": {
+        "x": 164.796875,
+        "y": 528.796875,
+        "width": 132.203125,
+        "height": 55.1875
+      },
+      "viewport": {
+        "width": 320,
+        "height": 900
+      },
+      "center_hit_target": true,
+      "nested_in_selection_button": false,
+      "focus_visible": true,
+      "focus_outline": {
+        "style": "solid",
+        "width_px": 2,
+        "offset_px": 2
+      },
+      "focus_rect_inside_viewport": true,
+      "focus_reached_by_tab": true
+    },
+    {
+      "width": 360,
+      "requested_theme": "light",
+      "actual_theme": "light",
+      "status": "failed",
+      "visible": true,
+      "enabled": true,
+      "inherited_mode": true,
+      "accessible_name": "Повторить предпросмотр Фото 2",
+      "button_rect": {
+        "x": 184.796875,
+        "y": 530.921875,
+        "width": 152.203125,
+        "height": 55.1875
+      },
+      "viewport": {
+        "width": 360,
+        "height": 900
+      },
+      "center_hit_target": true,
+      "nested_in_selection_button": false,
+      "focus_visible": true,
+      "focus_outline": {
+        "style": "solid",
+        "width_px": 2,
+        "offset_px": 2
+      },
+      "focus_rect_inside_viewport": true,
+      "focus_reached_by_tab": true
+    },
+    {
+      "width": 360,
+      "requested_theme": "dark",
+      "actual_theme": "dark",
+      "status": "failed",
+      "visible": true,
+      "enabled": true,
+      "inherited_mode": true,
+      "accessible_name": "Повторить предпросмотр Фото 2",
+      "button_rect": {
+        "x": 184.796875,
+        "y": 530.921875,
+        "width": 152.203125,
+        "height": 55.1875
+      },
+      "viewport": {
+        "width": 360,
+        "height": 900
+      },
+      "center_hit_target": true,
+      "nested_in_selection_button": false,
+      "focus_visible": true,
+      "focus_outline": {
+        "style": "solid",
+        "width_px": 2,
+        "offset_px": 2
+      },
+      "focus_rect_inside_viewport": true,
+      "focus_reached_by_tab": true
+    },
+    {
+      "width": 390,
+      "requested_theme": "light",
+      "actual_theme": "light",
+      "status": "failed",
+      "visible": true,
+      "enabled": true,
+      "inherited_mode": true,
+      "accessible_name": "Повторить предпросмотр Фото 2",
+      "button_rect": {
+        "x": 199.796875,
+        "y": 546.015625,
+        "width": 167.203125,
+        "height": 55.1875
+      },
+      "viewport": {
+        "width": 390,
+        "height": 900
+      },
+      "center_hit_target": true,
+      "nested_in_selection_button": false,
+      "focus_visible": true,
+      "focus_outline": {
+        "style": "solid",
+        "width_px": 2,
+        "offset_px": 2
+      },
+      "focus_rect_inside_viewport": true,
+      "focus_reached_by_tab": true
+    },
+    {
+      "width": 390,
+      "requested_theme": "dark",
+      "actual_theme": "dark",
+      "status": "failed",
+      "visible": true,
+      "enabled": true,
+      "inherited_mode": true,
+      "accessible_name": "Повторить предпросмотр Фото 2",
+      "button_rect": {
+        "x": 199.796875,
+        "y": 546.015625,
+        "width": 167.203125,
+        "height": 55.1875
+      },
+      "viewport": {
+        "width": 390,
+        "height": 900
+      },
+      "center_hit_target": true,
+      "nested_in_selection_button": false,
+      "focus_visible": true,
+      "focus_outline": {
+        "style": "solid",
+        "width_px": 2,
+        "offset_px": 2
+      },
+      "focus_rect_inside_viewport": true,
+      "focus_reached_by_tab": true
+    }
+  ],
+  "touch_status_field_is_observed_failed_photo_state_not_failed_check": true,
+  "actual_live_api_publication_proven_by_this_report": false,
+  "common_fixture_api_post_count": 11,
+  "common_fixture_preview_post_count": 7,
+  "common_fixture_apply_attempt_count": 4,
+  "common_fixture_api_posts": [
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/apply",
+      "kind": "synthetic_apply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/apply",
+      "kind": "synthetic_apply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/apply",
+      "kind": "synthetic_apply"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/preview",
+      "kind": "synthetic_preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/my-products/common-content/apply",
+      "kind": "synthetic_apply"
+    }
+  ],
+  "common_successful_apply_item_counts": [
+    1,
+    50
+  ],
+  "common_stale_bulk_denial_unchanged_product_count": 50,
+  "common_stale_bulk_denial_new_audit_count": 0
+}

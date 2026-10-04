@@ -45,6 +45,7 @@ report = {
     "safe_exception_frames": [],
     "ai_create_response": {},
     "synthetic": {},
+    "mobile_ozon_photo_touch_observations": [],
     "scope": "synthetic_full_ozon_draft_to_publication",
 }
 temporary = tempfile.TemporaryDirectory(prefix="ozon-complete-browser-")
@@ -448,6 +449,195 @@ def layout(page, name):
             report["layouts"].append({"name": name, "theme": theme, "width": width})
     page.set_viewport_size({"width": 1440, "height": 980})
     page.evaluate("document.documentElement.dataset.theme = 'light'")
+
+
+def set_theme_through_visible_control(page, theme):
+    page.set_viewport_size({"width": 1440, "height": 900})
+    current = page.evaluate("() => document.documentElement.getAttribute('data-theme')")
+    if current != theme:
+        toggle = page.locator('button[aria-label="Сменить тему"]:visible')
+        assert toggle.count() == 1 and toggle.is_enabled(), "theme_control_unavailable"
+        toggle.click()
+        page.wait_for_function(
+            "expected => document.documentElement.getAttribute('data-theme') === expected",
+            arg=theme,
+        )
+    assert page.evaluate("() => document.documentElement.getAttribute('data-theme')") == theme, (
+        "theme_control_did_not_apply",
+    )
+
+
+def measure_mobile_ozon_photo_touch_targets(page):
+    """Measure actual editor controls without activating any media/save action."""
+    observations = report["mobile_ozon_photo_touch_observations"]
+    for theme in ("light", "dark"):
+        set_theme_through_visible_control(page, theme)
+        for width in (320, 360, 390):
+            row = {
+                "width_px": width,
+                "theme": theme,
+                "actual_theme": None,
+                "document_overflow_px": None,
+                "main_overflow_px": None,
+                "visible_enabled_tabs": 0,
+                "enabled_tab_targets": [],
+                "enabled_tabs_min_width_px": None,
+                "enabled_tabs_min_height_px": None,
+                "photo_tab": None,
+                "photo_tab_keyboard_reached": False,
+                "photo_tab_focus_visible": False,
+                "photo_tab_outline_px": 0.0,
+                "photo_tab_outline_style_visible": False,
+                "photo_tab_outline_inside_viewport": False,
+                "visible_enabled_media_actions": 0,
+                "media_actions_min_width_px": None,
+                "media_actions_min_height_px": None,
+                "media_action_keyboard_reached": False,
+                "media_action_enabled": False,
+                "media_action_focus_visible": False,
+                "media_action_outline_px": 0.0,
+                "media_action_outline_style_visible": False,
+                "media_action_outline_inside_viewport": False,
+                "status": "failed",
+                "failure_code": None,
+            }
+            try:
+                page.set_viewport_size({"width": width, "height": 900})
+                page.wait_for_function("document.fonts.status === 'loaded'")
+                row["actual_theme"] = page.evaluate(
+                    "() => document.documentElement.getAttribute('data-theme')"
+                )
+
+                tabs = page.locator("#ozon-draft-editor .ode-tabs button").filter(
+                    has_text=re.compile(r"^Фотографии")
+                )
+                assert tabs.count() == 1 and tabs.is_visible(), "photo_tab_unavailable"
+                tab = tabs.first
+                enabled_tabs = page.locator(
+                    "#ozon-draft-editor .ode-tabs button:visible:not([disabled])"
+                )
+                tab_targets = [
+                    target.evaluate("""(el, index) => {
+                        const r = el.getBoundingClientRect();
+                        return {index, width_px:r.width, height_px:r.height,
+                            enabled:!el.disabled && !el.hasAttribute('disabled')};
+                    }""", index)
+                    for index, target in enumerate(enabled_tabs.all())
+                ]
+                row["visible_enabled_tabs"] = len(tab_targets)
+                row["enabled_tab_targets"] = tab_targets
+                if tab_targets:
+                    row["enabled_tabs_min_width_px"] = min(
+                        item["width_px"] for item in tab_targets
+                    )
+                    row["enabled_tabs_min_height_px"] = min(
+                        item["height_px"] for item in tab_targets
+                    )
+                row["photo_tab"] = tab.evaluate("""el => {
+                    const r = el.getBoundingClientRect();
+                    return {width_px:r.width, height_px:r.height,
+                        enabled:!el.disabled && !el.hasAttribute('disabled')};
+                }""")
+
+                page.evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()")
+                found_tab = False
+                for _ in range(240):
+                    page.keyboard.press("Tab")
+                    if tab.evaluate("el => document.activeElement === el"):
+                        found_tab = True
+                        break
+                row["photo_tab_keyboard_reached"] = found_tab
+                if found_tab:
+                    tab_focus = tab.evaluate("""el => {
+                        const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+                        const w=parseFloat(s.outlineWidth)||0,o=parseFloat(s.outlineOffset)||0;
+                        return {visible:el.matches(':focus-visible'),outline_px:w,
+                            outline_style_visible:s.outlineStyle!=='none' && s.outlineStyle!=='',
+                            inside:r.left-w-o>=0 && r.top-w-o>=0 &&
+                                r.right+w+o<=innerWidth && r.bottom+w+o<=innerHeight};
+                    }""")
+                    row["photo_tab_focus_visible"] = tab_focus["visible"]
+                    row["photo_tab_outline_px"] = tab_focus["outline_px"]
+                    row["photo_tab_outline_style_visible"] = tab_focus["outline_style_visible"]
+                    row["photo_tab_outline_inside_viewport"] = tab_focus["inside"]
+
+                actions = page.locator(
+                    "#ode-section .ode-media-grid .ode-media-item button:visible:not([disabled])"
+                )
+                row["visible_enabled_media_actions"] = actions.count()
+                sizes = [
+                    action.evaluate("""el => {
+                        const r=el.getBoundingClientRect();
+                        return {width_px:r.width,height_px:r.height};
+                    }""")
+                    for action in actions.all()
+                ]
+                if sizes:
+                    row["media_actions_min_width_px"] = min(x["width_px"] for x in sizes)
+                    row["media_actions_min_height_px"] = min(x["height_px"] for x in sizes)
+                    action = actions.first
+                    page.evaluate("document.activeElement instanceof HTMLElement && document.activeElement.blur()")
+                    found_action = False
+                    for _ in range(240):
+                        page.keyboard.press("Tab")
+                        if action.evaluate("el => document.activeElement === el"):
+                            found_action = True
+                            break
+                    row["media_action_keyboard_reached"] = found_action
+                    if found_action:
+                        action_focus = action.evaluate("""el => {
+                            const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+                            const w=parseFloat(s.outlineWidth)||0,o=parseFloat(s.outlineOffset)||0;
+                            return {enabled:!el.disabled,focus_visible:el.matches(':focus-visible'),
+                                outline_px:w,outline_style_visible:s.outlineStyle!=='none' && s.outlineStyle!=='',
+                                inside:r.left-w-o>=0 && r.top-w-o>=0 &&
+                                    r.right+w+o<=innerWidth && r.bottom+w+o<=innerHeight};
+                        }""")
+                        row["media_action_focus_visible"] = action_focus["focus_visible"]
+                        row["media_action_enabled"] = action_focus["enabled"]
+                        row["media_action_outline_px"] = action_focus["outline_px"]
+                        row["media_action_outline_style_visible"] = action_focus["outline_style_visible"]
+                        row["media_action_outline_inside_viewport"] = action_focus["inside"]
+                dimensions = page.evaluate("""() => {
+                    const doc=document.documentElement,body=document.body;
+                    const main=document.querySelector('#main-content') || body;
+                    return {document:Math.max(0,doc.scrollWidth-innerWidth,body.scrollWidth-innerWidth),
+                        main:Math.max(0,main.scrollWidth-main.clientWidth)};
+                }""")
+                row["document_overflow_px"] = dimensions["document"]
+                row["main_overflow_px"] = dimensions["main"]
+                row["status"] = "measured"
+
+                assert row["actual_theme"] == theme, "theme_mismatch"
+                assert row["visible_enabled_tabs"] > 0, "enabled_tabs_unavailable"
+                assert all(
+                    item["enabled"] and item["width_px"] >= 44 and item["height_px"] >= 44
+                    for item in row["enabled_tab_targets"]
+                ), "enabled_tab_below_44px"
+                assert row["photo_tab"]["enabled"], "photo_tab_disabled"
+                assert row["photo_tab"]["width_px"] >= 44 and row["photo_tab"]["height_px"] >= 44, "photo_tab_below_44px"
+                assert row["photo_tab_keyboard_reached"] and row["photo_tab_focus_visible"], "photo_tab_keyboard_focus_missing"
+                assert row["photo_tab_outline_px"] >= 2 and row["photo_tab_outline_style_visible"] and row["photo_tab_outline_inside_viewport"], "photo_tab_focus_ring_invalid"
+                assert row["visible_enabled_media_actions"] > 0, "media_actions_unavailable"
+                assert row["media_actions_min_width_px"] >= 44 and row["media_actions_min_height_px"] >= 44, "media_action_below_44px"
+                assert row["media_action_keyboard_reached"] and row["media_action_enabled"] and row["media_action_focus_visible"], "media_action_keyboard_focus_missing"
+                assert row["media_action_outline_px"] >= 2 and row["media_action_outline_style_visible"] and row["media_action_outline_inside_viewport"], "media_action_focus_ring_invalid"
+                assert row["document_overflow_px"] <= 1 and row["main_overflow_px"] <= 1, "mobile_editor_root_overflow"
+                row["status"] = "passed"
+            except Exception as error:
+                message = str(error)
+                safe_codes = {
+                    "photo_tab_unavailable", "theme_mismatch", "enabled_tabs_unavailable",
+                    "enabled_tab_below_44px", "photo_tab_disabled", "photo_tab_below_44px",
+                    "photo_tab_keyboard_focus_missing", "photo_tab_focus_ring_invalid", "media_actions_unavailable",
+                    "media_action_below_44px", "media_action_keyboard_focus_missing",
+                    "media_action_focus_ring_invalid", "mobile_editor_root_overflow",
+                }
+                row["status"] = "failed"
+                row["failure_code"] = message if message in safe_codes else "measurement_failed"
+                observations.append(row)
+                raise AssertionError(("mobile_ozon_photo_touch_target", row["failure_code"], row)) from None
+            observations.append(row)
 
 
 def stale_ready_layout(page):
@@ -940,6 +1130,18 @@ try:
                 page.locator("#ode-photo-url").fill(photo_url)
                 page.get_by_role("button", name="Добавить", exact=True).click()
             assert page.locator(".ode-media-item").count() >= 1
+            measure_mobile_ozon_photo_touch_targets(page)
+            assert [
+                (row["width_px"], row["theme"])
+                for row in report["mobile_ozon_photo_touch_observations"]
+            ] == [
+                (width, theme)
+                for theme in ("light", "dark")
+                for width in (320, 360, 390)
+            ]
+            passed("mobile_ozon_editor_tabs_and_photo_actions_touch_focus_320_360_390_light_dark")
+            # Return to the pre-check desktop/light UI state through the actual theme control.
+            set_theme_through_visible_control(page, "light")
             page.get_by_role("button", name="Цена и упаковка", exact=True).click()
             for selector, value in (
                 ("#ode-price", "1000"),
