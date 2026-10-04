@@ -78,6 +78,7 @@ REPORT = {
     "fake_wb_single_write_calls": 0,
     "fake_wb_single_write_requests": [],
     "single_edit_contrast_diagnostic": [],
+    "single_edit_footer_clearance": [],
     "single_edit_boundary_attempts": [],
     "single_edit_observations": {
         "form_post": None,
@@ -1073,6 +1074,555 @@ def wait_for_layout_settle(page, *, width: int, theme: str) -> dict:
     return result
 
 
+def measure_single_edit_footer_state(page, *, state: str) -> dict:
+    if state not in {"open", "closed"}:
+        raise ValueError("footer clearance state must be open or closed")
+    return page.evaluate("""state => {
+        const rounded = value => Math.round(value * 100) / 100;
+        const rect = element => {
+            if (!element) return null;
+            const box = element.getBoundingClientRect();
+            return {
+                x: rounded(box.left), y: rounded(box.top),
+                width: rounded(box.width), height: rounded(box.height),
+            };
+        };
+        const area = (left, right) => {
+            if (!left || !right) return 0;
+            const width = Math.max(0, Math.min(left.x + left.width, right.x + right.width)
+                - Math.max(left.x, right.x));
+            const height = Math.max(0, Math.min(left.y + left.height, right.y + right.height)
+                - Math.max(left.y, right.y));
+            return rounded(width * height);
+        };
+        const textRects = (element, text) => {
+            if (!element) return [];
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const offset = node.textContent.indexOf(text);
+                if (offset < 0) continue;
+                const range = document.createRange();
+                range.setStart(node, offset);
+                range.setEnd(node, offset + text.length);
+                return Array.from(range.getClientRects()).map(box => ({
+                    x: rounded(box.left), y: rounded(box.top),
+                    width: rounded(box.width), height: rounded(box.height),
+                }));
+            }
+            return [];
+        };
+        const bounds = fragments => {
+            if (!fragments.length) return null;
+            const left = Math.min(...fragments.map(item => item.x));
+            const top = Math.min(...fragments.map(item => item.y));
+            const right = Math.max(...fragments.map(item => item.x + item.width));
+            const bottom = Math.max(...fragments.map(item => item.y + item.height));
+            return {
+                x: rounded(left), y: rounded(top),
+                width: rounded(right - left), height: rounded(bottom - top),
+            };
+        };
+        const contained = (inner, outer) => !!inner && !!outer
+            && inner.x >= outer.x - 0.5
+            && inner.y >= outer.y - 0.5
+            && inner.x + inner.width <= outer.x + outer.width + 0.5
+            && inner.y + inner.height <= outer.y + outer.height + 0.5;
+        const form = document.querySelector('form.space-y-6');
+        const footer = form?.querySelector('.sticky.bottom-0');
+        const controls = [
+            {name: 'save', element: footer?.querySelector('button[type="submit"]'), label: 'Сохранить в WB'},
+            {name: 'cancel', element: footer?.querySelector('a'), label: 'Отмена'},
+        ];
+        const assistant = document.querySelector('.sh-ai-pop[data-route="product_edit"]');
+        const trigger = assistant?.querySelector('.sh-ai-pop-trigger');
+        const panel = assistant?.querySelector('.sh-ai-pop-panel');
+        const panelVisible = !!panel && panel.getClientRects().length > 0
+            && getComputedStyle(panel).display !== 'none'
+            && getComputedStyle(panel).visibility !== 'hidden';
+        const triggerRect = rect(trigger);
+        const panelRect = panelVisible ? rect(panel) : null;
+        const messageScroller = panel?.querySelector('.sh-ai-pop-messages');
+        const composer = panel?.querySelector('.sh-ai-pop-composer textarea');
+        const closeControl = panel?.querySelector('.sh-ai-pop-icon[aria-label]');
+        const messageRect = rect(messageScroller);
+        const composerRect = rect(composer);
+        const closeControlRect = rect(closeControl);
+        const panelContainsMessageScroller = contained(messageRect, panelRect);
+        const panelContainsComposer = contained(composerRect, panelRect);
+        const panelContainsCloseControl = contained(closeControlRect, panelRect);
+        const messageStyle = messageScroller ? getComputedStyle(messageScroller) : null;
+        const hitTest = (element, point, name) => {
+            const hit = document.elementFromPoint(point.x, point.y);
+            const assistantHit = !!hit && !!hit.closest('.sh-ai-pop-trigger, .sh-ai-pop-panel');
+            return {
+                state,
+                point: {x: rounded(point.x), y: rounded(point.y)},
+                topmost_is_control: !!hit && !!element && (hit === element || element.contains(hit)),
+                topmost_is_assistant: assistantHit,
+            };
+        };
+        const controlRows = controls.map(({name, element, label}) => {
+            const buttonRect = rect(element);
+            const labelRects = textRects(element, label);
+            const labelRect = bounds(labelRects);
+            const style = element ? getComputedStyle(element) : null;
+            const rawText = element?.innerText || '';
+            const points = [];
+            const addPoint = (x, y) => {
+                const point = {x: rounded(x), y: rounded(y)};
+                if (!buttonRect || x < buttonRect.x || x >= buttonRect.x + buttonRect.width
+                    || y < buttonRect.y || y >= buttonRect.y + buttonRect.height
+                    || x < 0 || x >= innerWidth || y < 0 || y >= innerHeight) return;
+                if (!points.some(item => Math.abs(item.x - point.x) < 0.5 && Math.abs(item.y - point.y) < 0.5)) {
+                    points.push(point);
+                }
+            };
+            for (const fragment of labelRects) {
+                addPoint(fragment.x + fragment.width / 2, fragment.y + fragment.height / 2);
+            }
+            if (buttonRect) {
+                addPoint(buttonRect.x + buttonRect.width / 2, buttonRect.y + buttonRect.height / 2);
+            }
+            const hitTests = points.map(point => hitTest(element, point, name));
+            const triggerIntersectionArea = area(buttonRect, triggerRect);
+            const panelIntersectionArea = panelVisible ? area(buttonRect, panelRect) : 0;
+            return {
+                name,
+                visible: !!element && element.getClientRects().length > 0,
+                enabled: !!element && !element.disabled,
+                button_rect: buttonRect,
+                label_rect: labelRect,
+                label_rects: labelRects,
+                label_text: rawText.replace(/\\s+/g, ' ').trim(),
+                label_fully_inside_button: labelRects.length > 0
+                    && labelRects.every(fragment => contained(fragment, buttonRect)),
+                trigger_intersection_area_px: rounded(triggerIntersectionArea),
+                panel_intersection_area_px: rounded(panelIntersectionArea),
+                hit_tests: hitTests,
+                focus_probe_target: name,
+                outline_width_px: style ? Number.parseFloat(style.outlineWidth) || 0 : 0,
+            };
+        });
+        const heading = document.querySelector('.max-w-7xl h1');
+        const headingContainer = heading?.parentElement;
+        const headingRect = rect(heading);
+        const headingContainerRect = rect(headingContainer);
+        const headingFragments = textRects(heading, 'Редактирование карточки');
+        const root = document.documentElement;
+        return {
+            viewport: {width: innerWidth, height: innerHeight},
+            root: {
+                client_width: root.clientWidth,
+                scroll_width: root.scrollWidth,
+                overflow_px: Math.max(0, root.scrollWidth - innerWidth),
+            },
+            body: {
+                client_width: document.body.clientWidth,
+                scroll_width: document.body.scrollWidth,
+                overflow_px: Math.max(0, document.body.scrollWidth - innerWidth),
+            },
+            heading: {
+                rect: headingRect,
+                container_rect: headingContainerRect,
+                line_rects: headingFragments,
+                window_scroll_y: rounded(window.scrollY),
+                inside_viewport: headingFragments.length > 0
+                    && headingFragments.every(fragment => fragment.x >= 0 && fragment.y >= 0
+                        && fragment.x + fragment.width <= innerWidth + 0.5
+                        && fragment.y + fragment.height <= innerHeight + 0.5),
+                fully_inside_container: headingFragments.length > 0
+                    && headingFragments.every(fragment => contained(fragment, headingContainerRect)),
+            },
+            actual_theme: document.documentElement.getAttribute('data-theme') || '',
+            assistant: {
+                trigger_rect: triggerRect,
+                panel_rect: panelRect,
+                panel_visible: panelVisible,
+                trigger_expanded: trigger?.getAttribute('aria-expanded') === 'true',
+                panel_inside_viewport: !!panelRect
+                    && panelRect.x >= 0 && panelRect.y >= 0
+                    && panelRect.x + panelRect.width <= innerWidth + 0.5
+                    && panelRect.y + panelRect.height <= innerHeight + 0.5,
+                message_scroll_region: {
+                    rect: messageRect,
+                    overflow_y: messageStyle?.overflowY || '',
+                    client_height: messageScroller?.clientHeight || 0,
+                    scroll_height: messageScroller?.scrollHeight || 0,
+                    inside_panel: panelContainsMessageScroller,
+                },
+                composer_rect: composerRect,
+                close_control_rect: closeControlRect,
+                composer_inside_panel: panelContainsComposer,
+                close_control_inside_panel: panelContainsCloseControl,
+                trigger_intersection_area_px: Object.fromEntries(controlRows.map(row => [row.name, row.trigger_intersection_area_px])),
+                panel_intersection_area_px: Object.fromEntries(controlRows.map(row => [row.name, row.panel_intersection_area_px])),
+            },
+            controls: controlRows,
+        };
+    }""", state)
+
+
+def capture_single_edit_footer_clearance(
+    page,
+    *,
+    single_edit_post_requests: list[dict[str, str]],
+    browser_mutation_requests: list[dict[str, str]],
+    product_edit_path: str,
+) -> dict:
+    """Measure the real WB sticky controls and shared assistant in six mobile states."""
+    page.evaluate("""() => {
+        window.__singleEditFooterSubmitEvents = 0;
+        const form = document.querySelector('form.space-y-6');
+        if (!form) throw new Error('single_edit_form_missing_for_footer_probe');
+        form.addEventListener('submit', () => { window.__singleEditFooterSubmitEvents += 1; }, true);
+    }""")
+
+    def form_signature() -> str:
+        return page.evaluate("""() => {
+            const form = document.querySelector('form.space-y-6');
+            const root = document.querySelector('[x-data^="productEditApp"]');
+            if (!form || !root || !window.Alpine) throw new Error('single_edit_form_state_unavailable');
+            return JSON.stringify({
+                entries: Array.from(new FormData(form).entries()),
+                has_changes: !!Alpine.$data(root).hasChanges,
+            });
+        }""")
+
+    def focus_observation(selector: str) -> dict:
+        return page.evaluate("""selector => {
+            const element = document.querySelector(selector);
+            if (!element) return {reached: false, visible: false, inside_viewport: false,
+                outline_width_px: 0, outline_offset_px: 0, outline_style: ''};
+            const style = getComputedStyle(element);
+            const box = element.getBoundingClientRect();
+            return {
+                reached: document.activeElement === element,
+                visible: element.matches(':focus-visible'),
+                inside_viewport: box.left >= 0 && box.top >= 0
+                    && box.right <= innerWidth && box.bottom <= innerHeight,
+                outline_width_px: Number.parseFloat(style.outlineWidth) || 0,
+                outline_offset_px: Number.parseFloat(style.outlineOffset) || 0,
+                outline_style: style.outlineStyle,
+            };
+        }""", selector)
+
+    def rounded_rect(rect: dict | None) -> dict | None:
+        if not rect:
+            return None
+        return {
+            key: round(float(rect[key]), 2)
+            for key in ("x", "y", "width", "height")
+        }
+
+    def no_intersections(values: dict | None) -> bool:
+        return isinstance(values, dict) and set(values) == {"save", "cancel"} and all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+            for value in values.values()
+        )
+
+    REPORT["single_edit_footer_clearance"].clear()
+    for width in (320, 360, 390):
+        for theme in ("light", "dark"):
+            page.set_viewport_size({"width": width, "height": 844})
+            page.evaluate(
+                "theme => document.documentElement.setAttribute('data-theme', theme)",
+                theme,
+            )
+            page.evaluate("""() => {
+                if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+                document.body.scrollTop = 0;
+            }""")
+            wait_for_layout_settle(page, width=width, theme=theme)
+            page.evaluate("""() => new Promise(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
+            heading_state = measure_single_edit_footer_state(page, state="closed")
+
+            page.evaluate("""() => {
+                const scrolling = document.scrollingElement;
+                if (scrolling) scrolling.scrollTop = scrolling.scrollHeight;
+                document.body.scrollTop = document.body.scrollHeight;
+            }""")
+            page.evaluate("""() => new Promise(resolve =>
+                requestAnimationFrame(() => requestAnimationFrame(resolve)))""")
+            page.mouse.move(2, 2)
+
+            before_form = form_signature()
+            before_mutations = len(browser_mutation_requests)
+            before_posts = len(single_edit_post_requests)
+            before_provider_attempts = REPORT["provider_attempts"]
+            before_submit_events = page.evaluate("window.__singleEditFooterSubmitEvents")
+            closed_before = measure_single_edit_footer_state(page, state="closed")
+            if closed_before["assistant"]["panel_visible"]:
+                raise AssertionError("assistant_panel_was_open_before_footer_probe")
+
+            trigger = page.locator('.sh-ai-pop[data-route="product_edit"] .sh-ai-pop-trigger')
+            panel = page.locator('.sh-ai-pop[data-route="product_edit"] .sh-ai-pop-panel')
+            trigger.click()
+            panel.wait_for(state="visible")
+            page.wait_for_timeout(240)
+            page.mouse.move(2, 2)
+            opened = measure_single_edit_footer_state(page, state="open")
+
+            trigger.click()
+            panel.wait_for(state="hidden")
+            page.wait_for_timeout(170)
+            page.mouse.move(2, 2)
+            closed_after = measure_single_edit_footer_state(page, state="closed")
+
+            cancel_selector = "form.space-y-6 .wb-single-edit-actions a"
+            save_selector = 'form.space-y-6 .wb-single-edit-actions button[type="submit"]'
+            page.locator(cancel_selector).focus()
+            page.keyboard.press("Tab")
+            save_focus = focus_observation(save_selector)
+            page.keyboard.press("Shift+Tab")
+            cancel_focus = focus_observation(cancel_selector)
+            page.mouse.move(2, 2)
+
+            after_form = form_signature()
+            mutation_slice = browser_mutation_requests[before_mutations:]
+            generation_requests = sum(
+                request["method"] == "POST"
+                and request["path"].startswith("/agents/api/conversations")
+                for request in mutation_slice
+            )
+            form_post_count = sum(
+                request["method"] == "POST"
+                and request["path"] == product_edit_path
+                for request in single_edit_post_requests[before_posts:]
+            )
+            controls_by_state = {
+                state: {row["name"]: row for row in snapshot["controls"]}
+                for state, snapshot in (("closed", closed_after), ("open", opened))
+            }
+            control_rows = []
+            for name, label in (("save", "Сохранить в WB"), ("cancel", "Отмена")):
+                closed_control = controls_by_state["closed"].get(name, {})
+                open_control = controls_by_state["open"].get(name, {})
+                keyboard = save_focus if name == "save" else cancel_focus
+                control_rows.append({
+                    "name": name,
+                    "visible": closed_control.get("visible") is True,
+                    "enabled": closed_control.get("enabled") is True,
+                    "button_rect": rounded_rect(closed_control.get("button_rect")),
+                    "label_rect": rounded_rect(closed_control.get("label_rect")),
+                    "label_rects": [
+                        rounded_rect(rect) for rect in closed_control.get("label_rects", [])
+                    ],
+                    "label_text": closed_control.get("label_text", ""),
+                    "label_fully_inside_button": closed_control.get("label_fully_inside_button") is True,
+                    "assistant_open_intersection_area_px": open_control.get("trigger_intersection_area_px"),
+                    "assistant_closed_intersection_area_px": closed_control.get("trigger_intersection_area_px"),
+                    "open_panel_intersection_area_px": open_control.get("panel_intersection_area_px"),
+                    "hit_tests": (
+                        closed_control.get("hit_tests", [])
+                        + open_control.get("hit_tests", [])
+                    ),
+                    "keyboard_focus": keyboard,
+                })
+
+            assistant_open = opened["assistant"]
+            assistant_closed = closed_after["assistant"]
+            viewport = opened["viewport"]
+            row = {
+                "requested_theme": theme,
+                "actual_theme": opened["actual_theme"],
+                "viewport": viewport,
+                "root": opened["root"],
+                "body": opened["body"],
+                "heading": heading_state["heading"],
+                "assistant": {
+                    "opened_via_trigger": (
+                        assistant_open["panel_visible"] is True
+                        and assistant_open["trigger_expanded"] is True
+                    ),
+                    "closed_via_trigger": (
+                        assistant_closed["panel_visible"] is False
+                        and assistant_closed["trigger_expanded"] is False
+                    ),
+                    "open_rect": rounded_rect(assistant_open.get("trigger_rect")),
+                    "closed_trigger_rect": rounded_rect(assistant_closed.get("trigger_rect")),
+                    "open_panel_rect": rounded_rect(assistant_open.get("panel_rect")),
+                    "closed_panel_hidden": assistant_closed["panel_visible"] is False,
+                    "open_panel_inside_viewport": assistant_open["panel_inside_viewport"] is True,
+                    "open_intersection_area_px": assistant_open["trigger_intersection_area_px"],
+                    "closed_intersection_area_px": assistant_closed["trigger_intersection_area_px"],
+                    "open_panel_intersection_area_px": assistant_open["panel_intersection_area_px"],
+                    "message_scroll_region": assistant_open["message_scroll_region"],
+                    "composer_rect": rounded_rect(assistant_open.get("composer_rect")),
+                    "close_control_rect": rounded_rect(assistant_open.get("close_control_rect")),
+                    "composer_inside_panel": assistant_open["composer_inside_panel"] is True,
+                    "close_control_inside_panel": assistant_open["close_control_inside_panel"] is True,
+                },
+                "controls": control_rows,
+                "side_effects": {
+                    "generation_requests": generation_requests,
+                    "form_post_count": form_post_count,
+                    "provider_attempts": REPORT["provider_attempts"] - before_provider_attempts,
+                    "browser_mutations": len(mutation_slice),
+                    "form_unchanged": before_form == after_form,
+                    "form_submit_events": (
+                        page.evaluate("window.__singleEditFooterSubmitEvents") - before_submit_events
+                    ),
+                },
+            }
+            REPORT["single_edit_footer_clearance"].append(row)
+
+    expected_pairs = [
+        (width, theme)
+        for width in (320, 360, 390)
+        for theme in ("light", "dark")
+    ]
+    actual_pairs = [
+        (row.get("viewport", {}).get("width"), row.get("actual_theme"))
+        for row in REPORT["single_edit_footer_clearance"]
+    ]
+    failures = []
+    for row in REPORT["single_edit_footer_clearance"]:
+        width = row["viewport"]["width"]
+        theme = row["requested_theme"]
+        prefix = {"width": width, "theme": theme}
+        if row["actual_theme"] != theme:
+            failures.append({**prefix, "reason": "theme_mismatch"})
+        if row["viewport"]["height"] != 844:
+            failures.append({**prefix, "reason": "viewport_height_mismatch"})
+        if any(
+            row[part]["overflow_px"] != 0
+            or row[part]["scroll_width"] > width
+            for part in ("root", "body")
+        ):
+            failures.append({**prefix, "reason": "horizontal_overflow"})
+        heading = row["heading"]
+        if (
+            heading["window_scroll_y"] != 0
+            or heading["inside_viewport"] is not True
+            or heading["fully_inside_container"] is not True
+        ):
+            failures.append({**prefix, "reason": "heading_not_wrapped_within_viewport"})
+        assistant = row["assistant"]
+        if (
+            assistant["opened_via_trigger"] is not True
+            or assistant["closed_via_trigger"] is not True
+            or assistant["closed_panel_hidden"] is not True
+            or assistant["open_panel_inside_viewport"] is not True
+            or assistant["composer_inside_panel"] is not True
+            or assistant["close_control_inside_panel"] is not True
+        ):
+            failures.append({**prefix, "reason": "assistant_panel_not_accessible"})
+        message_region = assistant["message_scroll_region"]
+        if (
+            message_region["inside_panel"] is not True
+            or message_region["overflow_y"] not in {"auto", "scroll"}
+            or message_region["client_height"] <= 0
+            or message_region["scroll_height"] < message_region["client_height"]
+        ):
+            failures.append({**prefix, "reason": "assistant_message_region_not_locally_scrollable"})
+        if not no_intersections(assistant["open_intersection_area_px"]):
+            failures.append({**prefix, "reason": "open_assistant_trigger_overlaps_footer"})
+        if not no_intersections(assistant["closed_intersection_area_px"]):
+            failures.append({**prefix, "reason": "closed_assistant_trigger_overlaps_footer"})
+        if not no_intersections(assistant["open_panel_intersection_area_px"]):
+            failures.append({**prefix, "reason": "assistant_panel_overlaps_footer"})
+        if [control["name"] for control in row["controls"]] != ["save", "cancel"]:
+            failures.append({**prefix, "reason": "footer_control_set_mismatch"})
+        for control in row["controls"]:
+            button = control.get("button_rect") or {}
+            labels = control.get("label_rects") or []
+            points = control.get("hit_tests") or []
+            focus = control.get("keyboard_focus") or {}
+            if (
+                control.get("visible") is not True
+                or control.get("enabled") is not True
+                or button.get("width", 0) < 44
+                or button.get("height", 0) < 44
+            ):
+                failures.append({**prefix, "control": control["name"], "reason": "target_below_44px"})
+            if (
+                control.get("label_text") != (
+                    "Сохранить в WB" if control["name"] == "save" else "Отмена"
+                )
+                or control.get("label_fully_inside_button") is not True
+                or not labels
+            ):
+                failures.append({**prefix, "control": control["name"], "reason": "label_not_fully_visible"})
+            if (
+                control.get("assistant_open_intersection_area_px") != 0
+                or control.get("assistant_closed_intersection_area_px") != 0
+                or control.get("open_panel_intersection_area_px") != 0
+            ):
+                failures.append({**prefix, "control": control["name"], "reason": "assistant_intersects_control"})
+            expected_hit_count = 2 * (1 + len(labels))
+            if (
+                len(points) != expected_hit_count
+                or any(
+                    point.get("topmost_is_control") is not True
+                    or point.get("topmost_is_assistant") is not False
+                    for point in points
+                )
+            ):
+                failures.append({**prefix, "control": control["name"], "reason": "hit_test_mismatch"})
+            if (
+                focus.get("reached") is not True
+                or focus.get("visible") is not True
+                or focus.get("inside_viewport") is not True
+                or focus.get("outline_width_px", 0) < 2
+                or focus.get("outline_offset_px", 0) < 2
+                or focus.get("outline_style") != "solid"
+            ):
+                failures.append({**prefix, "control": control["name"], "reason": "keyboard_focus_not_visible"})
+        effects = row["side_effects"]
+        if (
+            effects["generation_requests"] != 0
+            or effects["form_post_count"] != 0
+            or effects["form_submit_events"] != 0
+            or effects["provider_attempts"] != 0
+            or effects["browser_mutations"] != 0
+            or effects["form_unchanged"] is not True
+        ):
+            failures.append({**prefix, "reason": "side_effect_during_clearance_probe"})
+
+    all_rows_measured = (
+        len(REPORT["single_edit_footer_clearance"]) == 6
+        and actual_pairs == expected_pairs
+        and len(set(actual_pairs)) == 6
+    )
+    if not all_rows_measured:
+        failures.append({"reason": "six_row_matrix_mismatch"})
+    all_controls_clear = not any(
+        failure.get("reason") in {
+            "horizontal_overflow", "assistant_panel_not_accessible",
+            "assistant_message_region_not_locally_scrollable",
+            "open_assistant_trigger_overlaps_footer", "closed_assistant_trigger_overlaps_footer",
+            "assistant_panel_overlaps_footer", "footer_control_set_mismatch",
+            "target_below_44px", "label_not_fully_visible", "assistant_intersects_control",
+            "hit_test_mismatch", "heading_not_wrapped_within_viewport",
+        }
+        for failure in failures
+    )
+    all_keyboard_focus_visible = not any(
+        failure.get("reason") == "keyboard_focus_not_visible" for failure in failures
+    )
+    no_side_effects = not any(
+        failure.get("reason") == "side_effect_during_clearance_probe" for failure in failures
+    )
+    passed = all_rows_measured and all_controls_clear and all_keyboard_focus_visible and no_side_effects
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", "light")
+    page.evaluate("() => { if (document.scrollingElement) document.scrollingElement.scrollTop = 0; }")
+    return {
+        "name": "single_edit_footer_assistant_clearance_320_360_390_light_dark",
+        "status": "passed" if passed else "failed",
+        "viewports": [320, 360, 390],
+        "themes": ["light", "dark"],
+        "row_count": len(REPORT["single_edit_footer_clearance"]),
+        "all_rows_measured": all_rows_measured,
+        "all_controls_clear": all_controls_clear,
+        "all_keyboard_focus_visible": all_keyboard_focus_visible,
+        "no_side_effects": no_side_effects,
+        "failures": failures,
+    }
+
+
 def capture_wb_editor_control_contrast(page, *, theme: str) -> dict:
     """Capture computed color/opacity contrast for enabled WB edit controls.
 
@@ -1601,6 +2151,7 @@ def run_browser(app, fixture: dict[str, int]) -> None:
         page.on("pageerror", lambda error: REPORT["javascript_errors"].append(str(error)))
         page.on("response", record_http_response)
         single_edit_post_requests = []
+        browser_mutation_requests = []
 
         def record_single_edit_post(request):
             parsed = urlsplit(request.url)
@@ -1616,6 +2167,15 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 })
 
         page.on("request", record_single_edit_post)
+
+        def record_browser_mutation_attempt(request):
+            if request.method not in {"GET", "HEAD"}:
+                browser_mutation_requests.append({
+                    "method": request.method,
+                    "path": urlsplit(request.url).path,
+                })
+
+        page.on("request", record_browser_mutation_attempt)
 
         try:
             # Avoid the legacy dashboard's automatic WB analytics/finance reads;
@@ -2566,6 +3126,14 @@ def run_browser(app, fixture: dict[str, int]) -> None:
                 pre_alignment_mismatch_fields=initial_core_mismatches,
                 post_alignment_exact=True,
             )
+            footer_clearance_check = capture_single_edit_footer_clearance(
+                page,
+                single_edit_post_requests=single_edit_post_requests,
+                browser_mutation_requests=browser_mutation_requests,
+                product_edit_path=f"/products/{fixture['product_id']}/edit",
+            )
+            REPORT["checks"].append(footer_clearance_check)
+            assert footer_clearance_check["status"] == "passed", footer_clearance_check
             single_path = f"/products/{fixture['product_id']}/edit"
             with page.expect_response(
                 lambda response: response.request.method == "POST"

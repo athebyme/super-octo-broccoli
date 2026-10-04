@@ -2,6 +2,27 @@
 
 {% block title %}Редактирование карточки - {{ product.vendor_code }}{% endblock %}
 
+{% block extra_head %}
+<style>
+@media (max-width: 639px) {
+    /* Keep the shared assistant available without covering this page's sticky
+       save/cancel bar. The route selector keeps this adjustment page-local. */
+    .sh-ai-pop[data-route="product_edit"] {
+        bottom: calc(140px + env(safe-area-inset-bottom, 0px));
+    }
+    .sh-ai-pop[data-route="product_edit"] .sh-ai-pop-panel {
+        bottom: calc(198px + env(safe-area-inset-bottom, 0px));
+        max-height: calc(100dvh - 64px - 198px - env(safe-area-inset-bottom, 0px));
+    }
+}
+#main-content .wb-single-edit-actions a:focus-visible,
+#main-content .wb-single-edit-actions button[type="submit"]:focus-visible {
+    outline: 2px solid var(--focus-outline);
+    outline-offset: 2px;
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" x-data="productEditApp()">
     <!-- Хлебные крошки -->
@@ -35,7 +56,7 @@
 
                 <div class="min-w-0 flex-1 lg:flex-none">
                     <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                        <h1 class="min-w-0 text-2xl font-normal text-white sm:text-3xl" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Редактирование карточки</h1>
+                        <h1 class="min-w-0 break-words text-2xl font-normal text-white sm:text-3xl" style="font-family:'Instrument Serif',Georgia,serif;font-style:italic">Редактирование карточки</h1>
                         <!-- Индикатор несохранённых изменений -->
                         <span x-show="hasChanges"
                               x-transition:enter="transition ease-out duration-200"
@@ -656,10 +677,10 @@
         </div>
 
         <!-- Sticky кнопки действий -->
-        <div class="sticky bottom-0 bg-white backdrop-blur-sm border-t border-gray-200 -mx-4 px-4 py-4 mt-8 shadow-lg rounded-t-xl z-40">
+        <div class="wb-single-edit-actions sticky bottom-0 bg-white backdrop-blur-sm border-t border-gray-200 -mx-4 px-4 py-4 mt-8 shadow-lg rounded-t-xl z-40">
             <div class="max-w-7xl mx-auto flex items-center justify-between">
                 <a href="{{ url_for('product_detail', product_id=product.id) }}"
-                   class="px-5 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition font-medium flex items-center">
+                   class="min-h-[44px] px-5 py-2.5 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition font-medium flex items-center">
                     <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
                     </svg>
@@ -675,7 +696,7 @@
 
                     <button type="submit"
                             :disabled="isSubmitting || !hasChanges"
-                            class="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium flex items-center disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md">
+                            class="min-h-[44px] px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition font-medium flex items-center disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md">
                         <template x-if="!isSubmitting">
                             <span class="flex items-center">
                                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
