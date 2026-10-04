@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "release": "R11",
+  "date": "2026-10-04",
+  "status": "bounded_release_deployed_live_readonly_passed_external_integration_open",
+  "source_verified": true,
+  "ux": {
+    "fresh_stages_passed": 8,
+    "fresh_stages_total": 8,
+    "pytest": {
+      "xml_tests": 481,
+      "testcase_elements": 233,
+      "pytest_cases_passed": 233,
+      "subtests_passed": 248,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "browser_stages": [
+      {
+        "name": "analytics",
+        "status": "passed",
+        "layouts": 48,
+        "reported_interactions": 152
+      },
+      {
+        "name": "listing",
+        "status": "passed",
+        "layouts": 28,
+        "reported_interactions": 10
+      },
+      {
+        "name": "workspace",
+        "status": "passed",
+        "pages": 37,
+        "layouts": 43,
+        "reported_interactions": 28
+      },
+      {
+        "name": "journey",
+        "status": "passed",
+        "pages": 25,
+        "layouts": 118,
+        "reported_interactions": 23
+      },
+      {
+        "name": "operations_pricing",
+        "status": "passed",
+        "pages": 32,
+        "layouts": 256,
+        "reported_interactions": 32
+      },
+      {
+        "name": "wb_editor",
+        "status": "passed",
+        "layouts": 30,
+        "actual_interaction_markers": 27,
+        "named_check_records": 50,
+        "check_record_statuses": {
+          "passed": 45,
+          "expected_http_observations": [
+            403,
+            409,
+            200,
+            404,
+            404
+          ]
+        }
+      },
+      {
+        "name": "common_content",
+        "status": "passed",
+        "pages": 2,
+        "layouts": 28,
+        "reported_interactions": 33
+      }
+    ],
+    "wb_footer": {
+      "named_check_passed": true,
+      "rows": 6,
+      "viewports_px": [
+        320,
+        360,
+        390
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "max_root_overflow_px": 0,
+      "max_body_overflow_px": 0,
+      "max_assistant_overlap_px": 0,
+      "minimum_save_cancel_dimension_px": 44,
+      "keyboard_focus_visible_all_rows": true,
+      "assistant_open_close_measured": true,
+      "probe_form_submit_events": 0,
+      "probe_form_posts": 0,
+      "probe_generation_requests": 0,
+      "probe_provider_attempts": 0,
+      "probe_browser_mutations": 0,
+      "synthetic_only": true
+    }
+  },
+  "ozon": {
+    "r11_fresh_ozon_stage_count": 0,
+    "r10_ozon_stages_inherited_unchanged": 13,
+    "r10_contract_xml_tests": 2761,
+    "r10_contract_testcase_elements": 2223,
+    "r10_contract_subtests_passed": 538,
+    "r10_failures_errors_skips": 0,
+    "new_r11_publication": false
+  },
+  "runtime": {
+    "startup_rehearsal_passed": true,
+    "startup_receipts": 81,
+    "protected_domain_tables": 7,
+    "counts_and_receipts_unchanged": true,
+    "first_and_repeat_startup_noop": true,
+    "backup_restore_rehearsal_fresh_in_r11": false
+  },
+  "transport": {
+    "passed_checks": 11,
+    "total_checks": 11,
+    "synthetic_only": true,
+    "provider_calls": 0,
+    "production_reload": false
+  },
+  "guarded_cutover": {
+    "passed": true,
+    "healthy": true,
+    "provider_api_probes": 0
+  },
+  "open_boundaries": {
+    "final_live_observer": "passed",
+    "live_wb_write": "not performed",
+    "new_ozon_create_moderation_rollback": "not tested; confirmed TN VED/marking facts missing in bounded shortlist",
+    "buyer_price_and_marketplace_discount": "unknown after observed 403",
+    "w9_replies": "not implemented pending current first-party contract",
+    "p10_shipment_and_labels": "not implemented pending current first-party contract"
+  },
+  "requirements": [
+    {
+      "code": "UX-01",
+      "status": "blocked_full_epic",
+      "r11_delta": "bounded release, guarded deploy, observer and restricted real WB footer passed; full integration remains open",
+      "dependencies": "—"
+    },
+    {
+      "code": "UX-01.1",
+      "status": "passed_bounded",
+      "r11_delta": "six mobile footer rows pass",
+      "dependencies": "—"
+    },
+    {
+      "code": "UX-01.2",
+      "status": "passed_bounded",
+      "r11_delta": "no new live selection run",
+      "dependencies": "—"
+    },
+    {
+      "code": "UX-01.3",
+      "status": "passed_synthetic",
+      "r11_delta": "R10 evidence carries forward",
+      "dependencies": "—"
+    },
+    {
+      "code": "UX-01.4",
+      "status": "passed_bounded",
+      "r11_delta": "R10 navigation evidence carries forward",
+      "dependencies": "UX-01.1"
+    },
+    {
+      "code": "UX-01.5",
+      "status": "passed_synthetic",
+      "r11_delta": "no live moderation evidence",
+      "dependencies": "UX-01.1, UX-01.2"
+    },
+    {
+      "code": "UX-01.6",
+      "status": "not_tested",
+      "r11_delta": "no full Ozon create/moderation/rollback",
+      "dependencies": "UX-01.1"
+    },
+    {
+      "code": "UX-01.7",
+      "status": "passed_bounded",
+      "r11_delta": "no live rollback evidence",
+      "dependencies": "UX-01.1"
+    },
+    {
+      "code": "UX-01.8",
+      "status": "passed_bounded",
+      "r11_delta": "no live photo/social effects",
+      "dependencies": "UX-01.1"
+    },
+    {
+      "code": "UX-01.9",
+      "status": "passed_bounded",
+      "r11_delta": "buyer price remains unknown",
+      "dependencies": "UX-01.1"
+    },
+    {
+      "code": "UX-01.10",
+      "status": "passed_bounded",
+      "r11_delta": "live settings writes not tested; W9/P10 not implemented",
+      "dependencies": "UX-01.1"
+    },
+    {
+      "code": "UX-01.11",
+      "status": "passed_frozen_ux_matrix",
+      "r11_delta": "fresh UX 8/8; Ozon 13 are inherited R10 only",
+      "dependencies": "UX-01.1"
+    },
+    {
+      "code": "UX-01.12",
+      "status": "passed_synthetic",
+      "r11_delta": "prior evidence carries forward",
+      "dependencies": "—"
+    },
+    {
+      "code": "WB-EDIT-01",
+      "status": "passed_fixture",
+      "r11_delta": "no live marketplace apply",
+      "dependencies": "—"
+    },
+    {
+      "code": "WB-EDIT-02",
+      "status": "passed_bounded",
+      "r11_delta": "no real WB write",
+      "dependencies": "—"
+    },
+    {
+      "code": "WB-EDIT-03",
+      "status": "passed_synthetic",
+      "r11_delta": "six synthetic footer rows plus seven real own-card read-only checks passed; provider write remains untested",
+      "dependencies": "—"
+    },
+    {
+      "code": "WB-EDIT-04",
+      "status": "passed_fixture",
+      "r11_delta": "no live provider effect",
+      "dependencies": "—"
+    },
+    {
+      "code": "CAT-EDIT-01",
+      "status": "passed_bounded",
+      "r11_delta": "no real channel publication",
+      "dependencies": "—"
+    },
+    {
+      "code": "CAT-EDIT-02",
+      "status": "passed_fixture",
+      "r11_delta": "local save does not publish",
+      "dependencies": "CAT-EDIT-01, UX-01.1"
+    }
+  ],
+  "source_head": "302b60928a66df8c3b2054d45c02ef6a15b7b9ba",
+  "source_manifest_aggregate": "eaa593ab23596b678508804aa4bf1e413d515143f63dc131f977a494db787787",
+  "runtime_image": "sha256:066799589c59ce061e1e9669b442cfd85e0af704e12f53ea627d97a2a6c351f2",
+  "ci_image": "sha256:c0b876cb331704a8d2dac238915ff561d01085ccf1118a0c7c8dc9128c56d9b0",
+  "runtime_observer": {
+    "passed": true,
+    "heartbeat_advanced": true,
+    "completed_receipts": 81,
+    "running_failed": 0,
+    "restart_count": 0,
+    "ordinary_login_form_submitted": false
+  },
+  "live_wb_footer": {
+    "status": "passed_with_restrictions",
+    "passed_checks": 7,
+    "total_checks": 7,
+    "layouts": 6,
+    "viewports": [
+      320,
+      360,
+      390
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "page_gets": 2,
+    "max_root_body_overflow": 0,
+    "minimum_action_dimension_px": 44,
+    "max_assistant_intersection_area_px": 0,
+    "visible_keyboard_focus": true,
+    "form_submit_events": 0,
+    "forwarded_non_get_requests": 0,
+    "forwarded_provider_requests": 0,
+    "browser_errors": 0,
+    "http_errors": 0,
+    "photo_placeholders": 2,
+    "pinned_external_asset_fulfills": 18,
+    "notifications_synthetic_fulfills": 2,
+    "task_tray_synthetic_fulfills": 2,
+    "server_side_provider_reads_measured": false,
+    "ordinary_login_form_submitted": false,
+    "earlier_operator_preflight_failed_preserved": true
+  }
+}

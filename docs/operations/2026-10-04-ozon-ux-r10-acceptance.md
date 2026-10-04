@@ -1,4 +1,79 @@
-# Ozon и UX: приёмка r10, 04.10.2026
+# Ozon и UX: приёмка r10 / r11, 04.10.2026
+
+Последний принятый runtime — r11 source `302b60928a66df8c3b2054d45c02ef6a15b7b9ba`, image `sha256:066799589c59ce061e1e9669b442cfd85e0af704e12f53ea627d97a2a6c351f2`: source merged/pushed, guarded production deploy, runtime observer и ограниченный live WB smoke прошли. **Вся интеграция не закрыта:** новый Ozon create/moderation/rollback, buyer price/скидка, W9/P10 и реальная WB запись остаются без полного evidence. Следом приведены текущие 19 кодов и затем историческая приёмка r10.
+
+## Текущий выпуск r11: дополнительные исправления и приёмка
+
+**Статус:** frozen UX 8/8, runtime startup, transport 11/11, guarded deployment и runtime observation PASSED. Live WB footer PASSED WITH RESTRICTIONS (7/7 checks, 6 layouts); полная внешняя интеграция остаётся открытой.
+
+### R11 source and gate evidence
+
+The accepted R11 source is `302b60928a66df8c3b2054d45c02ef6a15b7b9ba`, with 1,248 manifest inputs and aggregate SHA-256 `eaa593ab23596b678508804aa4bf1e413d515143f63dc131f977a494db787787`. Frozen UX G1 passed all 8 of 8 stages with source verification before and after. The R11 build receipt explicitly says the 13 Ozon stages are inherited from the R10 baseline with their inputs unchanged; they were **not rerun as a fresh R11 Ozon gate**.
+
+| R11 UX stage | Result | Reported layout rows | Reported interactions/checks | Pages |
+| --- | --- | ---: | ---: | ---: |
+| UX pytest | passed | — | 233 pytest cases | — |
+| Analytics browser | passed | 48 | 152 | — |
+| Listing browser | passed | 28 | 10 | — |
+| Workspace browser | passed | 43 | 28 | 37 |
+| Journey browser | passed | 118 | 23 | 25 |
+| Operations/pricing browser | passed | 256 | 32 | 32 |
+| WB editor browser | passed | 30 | 50 named checks; 27 actual interaction markers | — |
+| Common-content browser | passed | 28 | 33 | 2 |
+
+The R11 UX JUnit XML reports 481 tests, 233 `<testcase>` elements, zero failures/errors/skips; pytest’s log separately records **233 passed and 248 subtests passed**. The 248 are included in the suite `tests` total (481); there are no separate `<subtest>` XML elements. The inherited R10 Ozon contracts XML reports 2,761 tests: 2,223 `<testcase>` elements plus 538 pytest subtests; the log records 2,223 passed and 538 subtests passed, with zero failures/errors/skips. These Ozon figures are R10 evidence, not new R11 execution.
+
+#### WB mobile footer correction
+
+The frozen R11 WB browser report has 50 check records, 27 interaction markers, and six separately measured footer rows for 320/360/390px in light/dark themes. Of the records, 45 carry `status=passed`; the remaining five are explicit expected HTTP observations (403, 409, 200, 404, 404) whose exact route contracts are validated. The WB stage and strict release validator passed. The new named check `single_edit_footer_assistant_clearance_320_360_390_light_dark` passed. In all six rows, root and body horizontal overflow were 0px; the assistant trigger/panel overlap with Save and Cancel was 0px; both enabled controls measured at least 44×44px; labels fit inside their buttons; keyboard focus was reached and visible; actual hit testing found the intended controls above the assistant. The assistant opened and closed through its trigger; its panel, message scroll area, composer, and close control were measured in bounds.
+
+The footer probe itself recorded zero generation requests, form POSTs, submit events, provider attempts, and browser mutations; the form stayed unchanged. The larger synthetic WB scenario separately exercised one fake single-card write/readback and the two-item fake bulk update. It made no provider calls. These are fixture results, not a live WB save or publication.
+
+#### Runtime and deployment
+
+The R11 startup rehearsal passed against the accepted runtime image: scheduler disabled, no credentials/provider calls, 81 receipts across 7 protected domain tables, counts/receipts unchanged, and first plus repeat startup were no-ops. The R10 backup/restore rehearsal is inherited baseline evidence and was not repeated in R11.
+
+The new exact-runtime transport check passed 11/11 checks in a synthetic isolated harness. It used no production reload, database mounts, or provider calls. Guarded R11 cutover PASSED at 03:10:06 UTC. Runtime image `sha256:066799589c59ce061e1e9669b442cfd85e0af704e12f53ea627d97a2a6c351f2` preserves all 77 environment entries, flags 1/1/0/1, mounts, network and orchestrator identity. Caddy was neither recreated nor reloaded; its exact running config, upstream, TLS option, keepalive=1s and retries=0 passed. Temporary secret override was removed. Runtime observer PASSED at 03:10:50 UTC: exact image/identity preserved, healthy, restarts=0; scheduler heartbeat advanced over 35s, all 81 receipts completed, running/failed=0. Verified direct HTTPS GET login and frozen CSS returned 200. Ordinary login form was not submitted. Observer provider calls/domain writes=0. Live WB footer G2 PASSED WITH RESTRICTIONS at 03:21:43 UTC: seven of seven checks, six layouts (320/360/390px × light/dark), two exact owned page GETs. Both enabled actions are at least 44×44px; root/body overflow and assistant trigger/panel/label intersections are zero, full labels are clickable in actual hit tests, and Tab reaches Cancel then Save with a visible outline in the viewport. The assistant safely opens/closes, and the local title marker is never submitted. Browser non-GET/provider forwarding/form submit events/unexpected requests/HTTP errors/page/console/request failures are zero. Runtime image/health/container identity, actual source/manifest labels, Git HEADs and helper hash were checked before/after and preserved. Restrictions: ephemeral seller session rather than ordinary login; 18 external pinned-asset fulfills, two photo placeholders, two notifications and two task-tray synthetic fulfills. Real photos, AI generation, tasks, server-side provider/cache reads and WB save are not tested. The first G1 operator failed before the browser because it imposed an unsupported session-secret length check; it did not change runtime credentials or perform product writes. The G1 failed receipt remains separate; G2 corrected only that operator condition and receipt identity.
+
+### Carry-forward status for the 19 requirement codes
+
+Statuses remain bounded to the evidence shown. R11 adds focused mobile-footer proof and release/deployment evidence; it does not turn fixture writes into live effects or make the inherited R10 Ozon suite fresh.
+
+| Код | Статус в проверенном объёме | R11: проверки и оставшиеся ограничения | Зависимости |
+| --- | --- | --- | --- |
+| UX-01 | BLOCKED — full epic; bounded R11 release/cutover passed | Runtime observer and real owned-card footer check passed within their read-only scope. No new Ozon create, moderation, rollback, or live WB write is evidenced. | — |
+| UX-01.1 | PASSED — bounded UI | Adds six actual WB footer/assistant rows at 320/360/390px × light/dark with zero overflow/overlap and visible keyboard focus. Not a full independent accessibility audit. | — |
+| UX-01.2 | PASSED — bounded selection flow | No new R11 live selection run; the one-card footer smoke is separate. Prior bounded flow evidence carries forward; live WB apply and ordinary login are not proved here. | — |
+| UX-01.3 | PASSED — synthetic analytics/pricing | All seven browser stages, including the analytics and pricing matrices, reran on R11; live period/account freshness is not established. | — |
+| UX-01.4 | PASSED — bounded navigation | R11 reran the seven named actual navigation/action checks; routes were synthetic loopback fixtures. | UX-01.1 |
+| UX-01.5 | PASSED — synthetic moderation UX | No new live moderation sample or CDN/photo delivery evidence. | UX-01.1, UX-01.2 |
+| UX-01.6 | NOT TESTED — full Ozon cycle | No new create/storefront moderation/correction/rollback. Candidate research remains bounded; it is not proof the whole catalog is suitable or unsuitable. | UX-01.1 |
+| UX-01.7 | PASSED — bounded history/readback UI | R11 reran the four strict history scenarios; no live rollback or external write confirmation. | UX-01.1 |
+| UX-01.8 | PASSED — bounded provenance/photo UI | R11 reran the synthetic Image Lab/source-context checks; no live photo pipeline or social effect. | UX-01.1 |
+| UX-01.9 | PASSED — seller price lanes/UI | Buyer price and marketplace discount remain UNKNOWN after observed 403; no new buyer-price evidence. | UX-01.1 |
+| UX-01.10 | PASSED — bounded settings UI; live writes NOT TESTED | R11 does not test live reconnect/settings writes. W9/P10 remain not implemented pending current first-party contracts. | UX-01.1 |
+| UX-01.11 | PASSED — R11 frozen UX matrix; external regression NOT TESTED | UX 8/8 fresh. Ozon 13/13 are inherited unchanged R10 results. Startup, synthetic transport, and guarded cutover passed; runtime observer and real WB footer check passed with explicit read-only restrictions. | UX-01.1 |
+| UX-01.12 | PASSED — synthetic legacy cap | No R11 contract change; prior synthetic boundary evidence carries forward. | — |
+| WB-EDIT-01 | PASSED — bounded selection/bulk fixture | R11 reran mixed 50/2/48 and two fake-provider writes; no live marketplace apply. | — |
+| WB-EDIT-02 | PASSED — bounded dictionary/reference UI | R11 reran schema/dictionary and invalid-value guards; no real WB card write. | — |
+| WB-EDIT-03 | PASSED — synthetic single save/readback | R11 adds six-row synthetic geometry and seven real owned-card read-only checks. Save/readback writes remain fake-provider fixtures, not live WB effects. | — |
+| WB-EDIT-04 | PASSED — synthetic reviewed bulk | R11 reran the reviewed 50/2/48 fake-provider scenario; no real provider effect. | — |
+| CAT-EDIT-01 | PASSED — bounded common-content contract | R9/R10 accepted contract evidence carries forward; R11 made no real channel publication. | — |
+| CAT-EDIT-02 | PASSED — fixture editor/apply | R11 reran the common editor browser, including 11 local fixture writes; common-content save remains local and does not publish. | CAT-EDIT-01, UX-01.1 |
+
+### Explicit open boundaries
+
+No new publication or real WB write was performed in R11. Buyer price and marketplace discount remain unknown. W9 replies and P10 shipment/labels remain **NOT IMPLEMENTED** pending current first-party contracts. The R11 deployment passed, runtime observer and the read-only live WB footer checks passed. This does not complete the external integration.
+
+### Артефакты и аудит
+
+Снимки содержат только synthetic fixtures. [WB light после](../design/ozon-ux-completion-artifacts-2026-10-01/r11/wb-edit-single-product-edit-light-390.png), [WB dark после](../design/ozon-ux-completion-artifacts-2026-10-01/r11/wb-edit-single-product-edit-dark-390.png), [точная геометрия после](../design/ozon-ux-completion-artifacts-2026-10-01/r11/wb-footer-after-hit-test.json), [геометрия до](../design/ozon-ux-completion-artifacts-2026-10-01/r10/wb-footer-before-hit-test.json), [aggregate R11](../design/ozon-ux-completion-artifacts-2026-10-01/r11/frozen-g1-summary.json). Full-page кадры не заменяют viewport hit tests; обе формы evidence приведены отдельно.
+
+Private receipts: `frozen-ux-g1/build-receipt.json`, `runtime-startup-g1/receipt.json`, `transport-frozen-g1/driver-receipt.json`, `guarded-cutover-g1/receipt.json`, `runtime-observation-g1.json`, `live-wb-footer-g1.json` (failed preflight), `live-wb-footer-g2.json` (passed with restrictions). Real IDs/cookies/environment/raw provider bodies не публикуются. Финальный known-value Git audit итогового result HEAD фиксируется после commit/push отдельной host-local квитанцией `known-secrets-r11-final.json`; исторический аудит предыдущего HEAD ниже не считается этой финальной проверкой.
+
+Удалена только собственная staged restore-копия r10 (14,034,292,736 bytes) после сверки exact DB/archive hashes, file set, отдельного от production inode и отсутствия активных mounts. Архив и manifest r10 сохранены, production DB не удалялась. Cleanup PASSED, provider calls=0; private receipt `r10-owned-restore-cleanup-g1.json`.
+
+## Историческая приёмка r10
 
 Статус: **r10 G2 synthetic release gates PASSED; source merged/pushed; guarded production deployment выполнен**. Frozen source HEAD `23efe2b40bb09287393480690a74ddde36ee1afd`, 1,248 inputs, aggregate SHA-256 `98c65de3ab23536a277d90cca5eff94431b36003de38c887bb0bda32d4040230`. Runtime image `sha256:2d509178450ed3633a62cf4dc9278c3da6a8d0d93eff1c0e14346124afcec13f`; CI image `sha256:f414829f8e5831082ac1409aa1e06794e0349867a9d5f3e28b289660bafb7ded`. Полная внешняя интеграция остаётся открытой: новый create/moderation/rollback не подтверждены, buyer price unknown, W9/P10 current contracts недоступны. [Приёмка r9 по всем 19 кодам](2026-10-03-ozon-ux-r9-acceptance.md) сохраняется как историческое bounded evidence. Этот result-only документ и перечисленный каталог артефактов исключены из frozen source manifest.
 
@@ -42,7 +117,7 @@ Workspace/history final browser report **PASSED on strict revalidation** after c
 
 Buyer price и скидка площадки остаются **UNKNOWN** после observed 403. W9 replies и P10 shipment/labels — **NOT IMPLEMENTED** до получения точного current first-party API контракта. Нет blind retries, paid subscription, support send или выдуманных юридических значений. Локальное сохранение common/draft не публикует данные в канал.
 
-## Статус всех 19 кодов на принятом r10 source
+## Исторический статус всех 19 кодов на принятом r10 source
 
 `PASSED` относится только к bounded scope в строке. `NOT TESTED` означает, что требуемого evidence ещё нет; `BLOCKED` — незакрытую внешнюю или release-зависимость. Предыдущие failed diagnostics остаются в сохранённых receipts, даже если отдельный повторный report прошёл. Frozen synthetic gates и deployment подтверждены отдельно; таблица не выдаёт их за полную внешнюю publication/regression.
 
@@ -92,7 +167,7 @@ G2 **PASSED** на exact source `23efe2b40bb09287393480690a74ddde36ee1afd` и ma
 | Workspace | PASSED | 37 visits, 43 layouts, 28 interactions; 7 named actual actions |
 | Journey/classic | PASSED | 25 visits, 118 layouts, 23 interactions; отдельно 4 narrow facts rows |
 | Operations/pricing | PASSED | 32 visits, 256 layouts, 32 interactions; 4 named history scenarios |
-| WB edit | PASSED | 30 layouts, **49 interactions**; 1 single-edit и 2 mixed-bulk fake-provider writes; 10 settled contrast checks |
+| WB edit | PASSED | 30 layouts, **49 named checks и 27 interaction markers**; 1 single-edit и 2 mixed-bulk fake-provider writes; 10 settled contrast checks |
 | Common editor | PASSED | 2 pages, 28 layouts, 33 interactions; 11 synthetic local writes |
 | Ozon contracts | PASSED | 2,223 testcase nodes + 538 subtests (XML tests=2,761); failures/errors/skips=0 |
 | Ozon browser stages | PASSED | Все 12 browser stages exit=0; 108 named checks, 522 layouts; вместе с contracts — 13/13 |
@@ -115,7 +190,7 @@ Public synthetic evidence: [G2 aggregate](../design/ozon-ux-completion-artifacts
 
 ## Дополнительная visual приёмка после r10 deployment
 
-Root просмотрел шесть synthetic full-page screenshots. Этот просмотр выявил подозрение на пересечение fixed помощника и sticky Save; отдельный actual viewport probe подтвердил **FAILED остаточную mobile UI приёмку** на 6/6 комбинациях320/360/390 × light/dark. Save/assistant intersection:644px² при320,598px² при360/390; outline/Tab и три sample hits по label достигали Save, поэтому полная невозможность клика не заявляется. Root/body при320 —328px против viewport320; Save41px/Cancel43px при360/390 меньше44px. Это gap прежнего bounded browser protocol, несмотря на зелёный G2; не переименование G2 в failed. Initial temporary harness failed до geometry из-за неверного form selector, report сохранён. Исправленный probe: synthetic login POST1, form submits/non-login POST/provider calls/JS errors=0. [Точные synthetic измерения до исправления](../design/ozon-ux-completion-artifacts-2026-10-01/r10/wb-footer-before-hit-test.json). Минимальный local WB editor follow-up с новым manifest/affected checks находится в работе; r10 source/receipts остаются прежними.
+Root просмотрел шесть synthetic full-page screenshots. Этот просмотр выявил подозрение на пересечение fixed помощника и sticky Save; отдельный actual viewport probe подтвердил **FAILED остаточную mobile UI приёмку** на 6/6 комбинациях320/360/390 × light/dark. Save/assistant intersection:644px² при320,598px² при360/390; outline/Tab и три sample hits по label достигали Save, поэтому полная невозможность клика не заявляется. Root/body при320 —328px против viewport320; Save41px/Cancel43px при360/390 меньше44px. Это gap прежнего bounded browser protocol, несмотря на зелёный G2; не переименование G2 в failed. Initial temporary harness failed до geometry из-за неверного form selector, report сохранён. Исправленный probe: synthetic login POST1, form submits/non-login POST/provider calls/JS errors=0. [Точные synthetic измерения до исправления](../design/ozon-ux-completion-artifacts-2026-10-01/r10/wb-footer-before-hit-test.json). Остаток закрыт отдельным r11 follow-up с новым manifest, полным affected UX gate и реальным read-only WB smoke; r10 source/receipts остаются историческими.
 
 ## Известные секреты и Git
 

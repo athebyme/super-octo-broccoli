@@ -1,0 +1,1706 @@
+{
+  "schema_version": 1,
+  "scope": "synthetic_actual_production_template_handlers",
+  "source_head": "302b60928a66df8c3b2054d45c02ef6a15b7b9ba",
+  "layout_row_count": 6,
+  "rows": [
+    {
+      "requested_theme": "light",
+      "actual_theme": "light",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "root": {
+        "client_width": 320,
+        "scroll_width": 320,
+        "overflow_px": 0
+      },
+      "body": {
+        "client_width": 320,
+        "scroll_width": 320,
+        "overflow_px": 0
+      },
+      "heading": {
+        "rect": {
+          "x": 120,
+          "y": 156,
+          "width": 160,
+          "height": 96
+        },
+        "container_rect": {
+          "x": 120,
+          "y": 156,
+          "width": 160,
+          "height": 122
+        },
+        "line_rects": [
+          {
+            "x": 120,
+            "y": 156,
+            "width": 147.05,
+            "height": 31
+          },
+          {
+            "x": 120,
+            "y": 188,
+            "width": 60.52,
+            "height": 31
+          },
+          {
+            "x": 120,
+            "y": 220,
+            "width": 119.27,
+            "height": 31
+          }
+        ],
+        "window_scroll_y": 0,
+        "inside_viewport": true,
+        "fully_inside_container": true
+      },
+      "assistant": {
+        "opened_via_trigger": true,
+        "closed_via_trigger": true,
+        "open_rect": {
+          "x": 258.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "closed_trigger_rect": {
+          "x": 258.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "open_panel_rect": {
+          "x": 8.0,
+          "y": 64.0,
+          "width": 304.0,
+          "height": 582.0
+        },
+        "closed_panel_hidden": true,
+        "open_panel_inside_viewport": true,
+        "open_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "closed_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "open_panel_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "message_scroll_region": {
+          "rect": {
+            "x": 9,
+            "y": 182,
+            "width": 302,
+            "height": 377.31
+          },
+          "overflow_y": "auto",
+          "client_height": 377,
+          "scroll_height": 377,
+          "inside_panel": true
+        },
+        "composer_rect": {
+          "x": 21.0,
+          "y": 570.31,
+          "width": 235.0,
+          "height": 43.19
+        },
+        "close_control_rect": {
+          "x": 265.0,
+          "y": 80.5,
+          "width": 32.0,
+          "height": 32.0
+        },
+        "composer_inside_panel": true,
+        "close_control_inside_panel": true
+      },
+      "controls": [
+        {
+          "name": "save",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 147.19,
+            "y": 734.0,
+            "width": 156.81,
+            "height": 62.0
+          },
+          "label_rect": {
+            "x": 199.83,
+            "y": 746.0,
+            "width": 74.66,
+            "height": 38.0
+          },
+          "label_rects": [
+            {
+              "x": 199.83,
+              "y": 746.0,
+              "width": 74.66,
+              "height": 17.0
+            },
+            {
+              "x": 219.69,
+              "y": 767.0,
+              "width": 34.94,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Сохранить в WB",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 237.16,
+                "y": 754.5
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 237.16,
+                "y": 775.5
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 225.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 237.16,
+                "y": 754.5
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 237.16,
+                "y": 775.5
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 225.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        },
+        {
+          "name": "cancel",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 16.0,
+            "y": 743.0,
+            "width": 119.19,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 61.0,
+            "y": 756.5,
+            "width": 53.19,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 61.0,
+              "y": 756.5,
+              "width": 53.19,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Отмена",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 87.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 75.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 87.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 75.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        }
+      ],
+      "side_effects": {
+        "generation_requests": 0,
+        "form_post_count": 0,
+        "provider_attempts": 0,
+        "browser_mutations": 0,
+        "form_unchanged": true,
+        "form_submit_events": 0
+      }
+    },
+    {
+      "requested_theme": "dark",
+      "actual_theme": "dark",
+      "viewport": {
+        "width": 320,
+        "height": 844
+      },
+      "root": {
+        "client_width": 320,
+        "scroll_width": 320,
+        "overflow_px": 0
+      },
+      "body": {
+        "client_width": 320,
+        "scroll_width": 320,
+        "overflow_px": 0
+      },
+      "heading": {
+        "rect": {
+          "x": 120,
+          "y": 156,
+          "width": 160,
+          "height": 96
+        },
+        "container_rect": {
+          "x": 120,
+          "y": 156,
+          "width": 160,
+          "height": 122
+        },
+        "line_rects": [
+          {
+            "x": 120,
+            "y": 156,
+            "width": 147.05,
+            "height": 31
+          },
+          {
+            "x": 120,
+            "y": 188,
+            "width": 60.52,
+            "height": 31
+          },
+          {
+            "x": 120,
+            "y": 220,
+            "width": 119.27,
+            "height": 31
+          }
+        ],
+        "window_scroll_y": 0,
+        "inside_viewport": true,
+        "fully_inside_container": true
+      },
+      "assistant": {
+        "opened_via_trigger": true,
+        "closed_via_trigger": true,
+        "open_rect": {
+          "x": 258.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "closed_trigger_rect": {
+          "x": 258.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "open_panel_rect": {
+          "x": 8.0,
+          "y": 64.0,
+          "width": 304.0,
+          "height": 582.0
+        },
+        "closed_panel_hidden": true,
+        "open_panel_inside_viewport": true,
+        "open_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "closed_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "open_panel_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "message_scroll_region": {
+          "rect": {
+            "x": 9,
+            "y": 182,
+            "width": 302,
+            "height": 377.31
+          },
+          "overflow_y": "auto",
+          "client_height": 377,
+          "scroll_height": 377,
+          "inside_panel": true
+        },
+        "composer_rect": {
+          "x": 21.0,
+          "y": 570.31,
+          "width": 235.0,
+          "height": 43.19
+        },
+        "close_control_rect": {
+          "x": 265.0,
+          "y": 80.5,
+          "width": 32.0,
+          "height": 32.0
+        },
+        "composer_inside_panel": true,
+        "close_control_inside_panel": true
+      },
+      "controls": [
+        {
+          "name": "save",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 147.19,
+            "y": 734.0,
+            "width": 156.81,
+            "height": 62.0
+          },
+          "label_rect": {
+            "x": 199.83,
+            "y": 746.0,
+            "width": 74.66,
+            "height": 38.0
+          },
+          "label_rects": [
+            {
+              "x": 199.83,
+              "y": 746.0,
+              "width": 74.66,
+              "height": 17.0
+            },
+            {
+              "x": 219.69,
+              "y": 767.0,
+              "width": 34.94,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Сохранить в WB",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 237.16,
+                "y": 754.5
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 237.16,
+                "y": 775.5
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 225.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 237.16,
+                "y": 754.5
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 237.16,
+                "y": 775.5
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 225.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        },
+        {
+          "name": "cancel",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 16.0,
+            "y": 743.0,
+            "width": 119.19,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 61.0,
+            "y": 756.5,
+            "width": 53.19,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 61.0,
+              "y": 756.5,
+              "width": 53.19,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Отмена",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 87.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 75.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 87.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 75.6,
+                "y": 765
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        }
+      ],
+      "side_effects": {
+        "generation_requests": 0,
+        "form_post_count": 0,
+        "provider_attempts": 0,
+        "browser_mutations": 0,
+        "form_unchanged": true,
+        "form_submit_events": 0
+      }
+    },
+    {
+      "requested_theme": "light",
+      "actual_theme": "light",
+      "viewport": {
+        "width": 360,
+        "height": 844
+      },
+      "root": {
+        "client_width": 360,
+        "scroll_width": 360,
+        "overflow_px": 0
+      },
+      "body": {
+        "client_width": 360,
+        "scroll_width": 360,
+        "overflow_px": 0
+      },
+      "heading": {
+        "rect": {
+          "x": 120,
+          "y": 156,
+          "width": 200,
+          "height": 64
+        },
+        "container_rect": {
+          "x": 120,
+          "y": 156,
+          "width": 200,
+          "height": 90
+        },
+        "line_rects": [
+          {
+            "x": 120,
+            "y": 156,
+            "width": 193.34,
+            "height": 31
+          },
+          {
+            "x": 120,
+            "y": 188,
+            "width": 137.55,
+            "height": 31
+          }
+        ],
+        "window_scroll_y": 0,
+        "inside_viewport": true,
+        "fully_inside_container": true
+      },
+      "assistant": {
+        "opened_via_trigger": true,
+        "closed_via_trigger": true,
+        "open_rect": {
+          "x": 298.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "closed_trigger_rect": {
+          "x": 298.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "open_panel_rect": {
+          "x": 8.0,
+          "y": 64.0,
+          "width": 344.0,
+          "height": 582.0
+        },
+        "closed_panel_hidden": true,
+        "open_panel_inside_viewport": true,
+        "open_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "closed_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "open_panel_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "message_scroll_region": {
+          "rect": {
+            "x": 9,
+            "y": 182,
+            "width": 342,
+            "height": 377.31
+          },
+          "overflow_y": "auto",
+          "client_height": 377,
+          "scroll_height": 377,
+          "inside_panel": true
+        },
+        "composer_rect": {
+          "x": 21.0,
+          "y": 570.31,
+          "width": 275.0,
+          "height": 43.19
+        },
+        "close_control_rect": {
+          "x": 305.0,
+          "y": 80.5,
+          "width": 32.0,
+          "height": 32.0
+        },
+        "composer_inside_panel": true,
+        "close_control_inside_panel": true
+      },
+      "controls": [
+        {
+          "name": "save",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 154.69,
+            "y": 752.0,
+            "width": 189.31,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 206.69,
+            "y": 765.5,
+            "width": 113.31,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 206.69,
+              "y": 765.5,
+              "width": 113.31,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Сохранить в WB",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 263.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 249.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 263.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 249.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        },
+        {
+          "name": "cancel",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 16.0,
+            "y": 752.0,
+            "width": 119.19,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 61.0,
+            "y": 765.5,
+            "width": 53.19,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 61.0,
+              "y": 765.5,
+              "width": 53.19,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Отмена",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 87.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 75.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 87.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 75.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        }
+      ],
+      "side_effects": {
+        "generation_requests": 0,
+        "form_post_count": 0,
+        "provider_attempts": 0,
+        "browser_mutations": 0,
+        "form_unchanged": true,
+        "form_submit_events": 0
+      }
+    },
+    {
+      "requested_theme": "dark",
+      "actual_theme": "dark",
+      "viewport": {
+        "width": 360,
+        "height": 844
+      },
+      "root": {
+        "client_width": 360,
+        "scroll_width": 360,
+        "overflow_px": 0
+      },
+      "body": {
+        "client_width": 360,
+        "scroll_width": 360,
+        "overflow_px": 0
+      },
+      "heading": {
+        "rect": {
+          "x": 120,
+          "y": 156,
+          "width": 200,
+          "height": 64
+        },
+        "container_rect": {
+          "x": 120,
+          "y": 156,
+          "width": 200,
+          "height": 90
+        },
+        "line_rects": [
+          {
+            "x": 120,
+            "y": 156,
+            "width": 193.34,
+            "height": 31
+          },
+          {
+            "x": 120,
+            "y": 188,
+            "width": 137.55,
+            "height": 31
+          }
+        ],
+        "window_scroll_y": 0,
+        "inside_viewport": true,
+        "fully_inside_container": true
+      },
+      "assistant": {
+        "opened_via_trigger": true,
+        "closed_via_trigger": true,
+        "open_rect": {
+          "x": 298.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "closed_trigger_rect": {
+          "x": 298.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "open_panel_rect": {
+          "x": 8.0,
+          "y": 64.0,
+          "width": 344.0,
+          "height": 582.0
+        },
+        "closed_panel_hidden": true,
+        "open_panel_inside_viewport": true,
+        "open_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "closed_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "open_panel_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "message_scroll_region": {
+          "rect": {
+            "x": 9,
+            "y": 182,
+            "width": 342,
+            "height": 377.31
+          },
+          "overflow_y": "auto",
+          "client_height": 377,
+          "scroll_height": 377,
+          "inside_panel": true
+        },
+        "composer_rect": {
+          "x": 21.0,
+          "y": 570.31,
+          "width": 275.0,
+          "height": 43.19
+        },
+        "close_control_rect": {
+          "x": 305.0,
+          "y": 80.5,
+          "width": 32.0,
+          "height": 32.0
+        },
+        "composer_inside_panel": true,
+        "close_control_inside_panel": true
+      },
+      "controls": [
+        {
+          "name": "save",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 154.69,
+            "y": 752.0,
+            "width": 189.31,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 206.69,
+            "y": 765.5,
+            "width": 113.31,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 206.69,
+              "y": 765.5,
+              "width": 113.31,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Сохранить в WB",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 263.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 249.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 263.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 249.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        },
+        {
+          "name": "cancel",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 16.0,
+            "y": 752.0,
+            "width": 119.19,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 61.0,
+            "y": 765.5,
+            "width": 53.19,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 61.0,
+              "y": 765.5,
+              "width": 53.19,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Отмена",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 87.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 75.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 87.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 75.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        }
+      ],
+      "side_effects": {
+        "generation_requests": 0,
+        "form_post_count": 0,
+        "provider_attempts": 0,
+        "browser_mutations": 0,
+        "form_unchanged": true,
+        "form_submit_events": 0
+      }
+    },
+    {
+      "requested_theme": "light",
+      "actual_theme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "root": {
+        "client_width": 390,
+        "scroll_width": 390,
+        "overflow_px": 0
+      },
+      "body": {
+        "client_width": 390,
+        "scroll_width": 390,
+        "overflow_px": 0
+      },
+      "heading": {
+        "rect": {
+          "x": 120,
+          "y": 156,
+          "width": 230,
+          "height": 64
+        },
+        "container_rect": {
+          "x": 120,
+          "y": 156,
+          "width": 230,
+          "height": 90
+        },
+        "line_rects": [
+          {
+            "x": 120,
+            "y": 156,
+            "width": 207.55,
+            "height": 31
+          },
+          {
+            "x": 120,
+            "y": 188,
+            "width": 119.27,
+            "height": 31
+          }
+        ],
+        "window_scroll_y": 0,
+        "inside_viewport": true,
+        "fully_inside_container": true
+      },
+      "assistant": {
+        "opened_via_trigger": true,
+        "closed_via_trigger": true,
+        "open_rect": {
+          "x": 328.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "closed_trigger_rect": {
+          "x": 328.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "open_panel_rect": {
+          "x": 8.0,
+          "y": 64.0,
+          "width": 374.0,
+          "height": 582.0
+        },
+        "closed_panel_hidden": true,
+        "open_panel_inside_viewport": true,
+        "open_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "closed_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "open_panel_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "message_scroll_region": {
+          "rect": {
+            "x": 9,
+            "y": 182,
+            "width": 372,
+            "height": 377.31
+          },
+          "overflow_y": "auto",
+          "client_height": 377,
+          "scroll_height": 377,
+          "inside_panel": true
+        },
+        "composer_rect": {
+          "x": 21.0,
+          "y": 570.31,
+          "width": 305.0,
+          "height": 43.19
+        },
+        "close_control_rect": {
+          "x": 335.0,
+          "y": 80.5,
+          "width": 32.0,
+          "height": 32.0
+        },
+        "composer_inside_panel": true,
+        "close_control_inside_panel": true
+      },
+      "controls": [
+        {
+          "name": "save",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 184.69,
+            "y": 752.0,
+            "width": 189.31,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 236.69,
+            "y": 765.5,
+            "width": 113.31,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 236.69,
+              "y": 765.5,
+              "width": 113.31,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Сохранить в WB",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 293.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 279.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 293.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 279.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        },
+        {
+          "name": "cancel",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 16.0,
+            "y": 752.0,
+            "width": 119.19,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 61.0,
+            "y": 765.5,
+            "width": 53.19,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 61.0,
+              "y": 765.5,
+              "width": 53.19,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Отмена",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 87.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 75.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 87.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 75.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        }
+      ],
+      "side_effects": {
+        "generation_requests": 0,
+        "form_post_count": 0,
+        "provider_attempts": 0,
+        "browser_mutations": 0,
+        "form_unchanged": true,
+        "form_submit_events": 0
+      }
+    },
+    {
+      "requested_theme": "dark",
+      "actual_theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "root": {
+        "client_width": 390,
+        "scroll_width": 390,
+        "overflow_px": 0
+      },
+      "body": {
+        "client_width": 390,
+        "scroll_width": 390,
+        "overflow_px": 0
+      },
+      "heading": {
+        "rect": {
+          "x": 120,
+          "y": 156,
+          "width": 230,
+          "height": 64
+        },
+        "container_rect": {
+          "x": 120,
+          "y": 156,
+          "width": 230,
+          "height": 90
+        },
+        "line_rects": [
+          {
+            "x": 120,
+            "y": 156,
+            "width": 207.55,
+            "height": 31
+          },
+          {
+            "x": 120,
+            "y": 188,
+            "width": 119.27,
+            "height": 31
+          }
+        ],
+        "window_scroll_y": 0,
+        "inside_viewport": true,
+        "fully_inside_container": true
+      },
+      "assistant": {
+        "opened_via_trigger": true,
+        "closed_via_trigger": true,
+        "open_rect": {
+          "x": 328.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "closed_trigger_rect": {
+          "x": 328.0,
+          "y": 652.0,
+          "width": 50.0,
+          "height": 50.0
+        },
+        "open_panel_rect": {
+          "x": 8.0,
+          "y": 64.0,
+          "width": 374.0,
+          "height": 582.0
+        },
+        "closed_panel_hidden": true,
+        "open_panel_inside_viewport": true,
+        "open_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "closed_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "open_panel_intersection_area_px": {
+          "save": 0,
+          "cancel": 0
+        },
+        "message_scroll_region": {
+          "rect": {
+            "x": 9,
+            "y": 182,
+            "width": 372,
+            "height": 377.31
+          },
+          "overflow_y": "auto",
+          "client_height": 377,
+          "scroll_height": 377,
+          "inside_panel": true
+        },
+        "composer_rect": {
+          "x": 21.0,
+          "y": 570.31,
+          "width": 305.0,
+          "height": 43.19
+        },
+        "close_control_rect": {
+          "x": 335.0,
+          "y": 80.5,
+          "width": 32.0,
+          "height": 32.0
+        },
+        "composer_inside_panel": true,
+        "close_control_inside_panel": true
+      },
+      "controls": [
+        {
+          "name": "save",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 184.69,
+            "y": 752.0,
+            "width": 189.31,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 236.69,
+            "y": 765.5,
+            "width": 113.31,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 236.69,
+              "y": 765.5,
+              "width": 113.31,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Сохранить в WB",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 293.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 279.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 293.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 279.35,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        },
+        {
+          "name": "cancel",
+          "visible": true,
+          "enabled": true,
+          "button_rect": {
+            "x": 16.0,
+            "y": 752.0,
+            "width": 119.19,
+            "height": 44.0
+          },
+          "label_rect": {
+            "x": 61.0,
+            "y": 765.5,
+            "width": 53.19,
+            "height": 17.0
+          },
+          "label_rects": [
+            {
+              "x": 61.0,
+              "y": 765.5,
+              "width": 53.19,
+              "height": 17.0
+            }
+          ],
+          "label_text": "Отмена",
+          "label_fully_inside_button": true,
+          "assistant_open_intersection_area_px": 0,
+          "assistant_closed_intersection_area_px": 0,
+          "open_panel_intersection_area_px": 0,
+          "hit_tests": [
+            {
+              "state": "closed",
+              "point": {
+                "x": 87.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "closed",
+              "point": {
+                "x": 75.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 87.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            },
+            {
+              "state": "open",
+              "point": {
+                "x": 75.6,
+                "y": 774
+              },
+              "topmost_is_control": true,
+              "topmost_is_assistant": false
+            }
+          ],
+          "keyboard_focus": {
+            "reached": true,
+            "visible": true,
+            "inside_viewport": true,
+            "outline_width_px": 2,
+            "outline_offset_px": 2,
+            "outline_style": "solid"
+          }
+        }
+      ],
+      "side_effects": {
+        "generation_requests": 0,
+        "form_post_count": 0,
+        "provider_attempts": 0,
+        "browser_mutations": 0,
+        "form_unchanged": true,
+        "form_submit_events": 0
+      }
+    }
+  ]
+}
