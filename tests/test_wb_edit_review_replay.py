@@ -1289,12 +1289,42 @@ class WBBulkReviewReplayTest(unittest.TestCase):
             response = self._client().get(f'/products/{self.product_id}/edit')
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn('Страна производства', html)
-        self.assertIn('Вес товара', html)
-        self.assertIn('Материал', html)
-        self.assertIn('name="char_202"', html)
-        self.assertIn('name="char_303"', html)
-        self.assertIn('name="char_404"', html)
+        schema_marker = '<script type="application/json" id="wb-characteristic-schema">'
+        self.assertIn(schema_marker, html)
+        schema_json = html.split(schema_marker, 1)[1].split('</script>', 1)[0]
+        schema = json.loads(schema_json)
+        fields = {row['id']: row for row in schema}
+        self.assertEqual(set(fields), {101, 202, 303, 404})
+
+        # The saved characteristic is rendered as an editable server-side
+        # control. Empty optional fields stay in the cached schema and enter
+        # the client-side picker; they are not fabricated as empty SSR inputs.
+        self.assertTrue(fields[101]['present'])
+        self.assertEqual(fields[101]['current_values'], ['old'])
+        self.assertIn('name="char_101"', html)
+        self.assertIn('id="wb-optional-characteristic-picker"', html)
+        self.assertIn('availableOptionalCharacteristics()', html)
+        self.assertNotIn('name="char_202"', html)
+        self.assertNotIn('name="char_303"', html)
+        self.assertNotIn('name="char_404"', html)
+
+        country = fields[202]
+        self.assertEqual(country['name'], 'Страна производства')
+        self.assertTrue(country['editable'])
+        self.assertFalse(country['required'])
+        self.assertEqual(country['dictionary_source'], 'countries')
+        self.assertEqual(country['dictionary_values'], ['Россия', 'Китай'])
+
+        weight = fields[303]
+        self.assertEqual(weight['name'], 'Вес товара')
+        self.assertEqual(weight['charc_type'], 4)
+        self.assertEqual(weight['unit_name'], 'г')
+        self.assertTrue(weight['editable'])
+
+        material = fields[404]
+        self.assertEqual(material['name'], 'Материал')
+        self.assertEqual(material['max_count'], 3)
+        self.assertTrue(material['editable'])
         self.assertIn('synthetic-size-sku', html)
         self.assertNotIn('name="sizes_json"', html)
         self.assertNotIn('name="sku"', html)
