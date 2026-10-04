@@ -1002,7 +1002,8 @@ def _wb_edit_footer_clearance_protocol_issues(data: dict, checks: object) -> lis
         if not (
             isinstance(effects, dict)
             and all(type(effects.get(field)) is int and effects[field] == 0 for field in (
-                "generation_requests", "form_post_count", "provider_attempts", "browser_mutations",
+                "generation_requests", "form_post_count", "form_submit_events",
+                "provider_attempts", "browser_mutations",
             ))
             and effects.get("form_unchanged") is True
         ):

@@ -823,6 +823,7 @@ def _wb_footer_clearance_diagnostic() -> list[dict]:
                 "side_effects": {
                     "generation_requests": 0,
                     "form_post_count": 0,
+                    "form_submit_events": 0,
                     "provider_attempts": 0,
                     "browser_mutations": 0,
                     "form_unchanged": True,
@@ -2641,6 +2642,12 @@ class Ux01RunnerContractTest(unittest.TestCase):
             footer_form_post = copy.deepcopy(report)
             footer_form_post["single_edit_footer_clearance"][0]["side_effects"]["form_post_count"] = 1
             invalid_reports.append(("assistant probe submits the WB form", footer_form_post, footer_issue))
+
+            footer_prevented_form_submit = copy.deepcopy(report)
+            footer_prevented_form_submit["single_edit_footer_clearance"][0]["side_effects"][
+                "form_submit_events"
+            ] = 1
+            invalid_reports.append(("prevented form submit event still fired", footer_prevented_form_submit, footer_issue))
 
             footer_generation = copy.deepcopy(report)
             footer_generation["single_edit_footer_clearance"][0]["side_effects"]["generation_requests"] = 1
