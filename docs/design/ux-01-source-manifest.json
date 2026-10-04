@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-04T05:32:40.383799+00:00",
+  "generated_at": "2026-10-04T05:44:55.107039+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -469,7 +469,7 @@
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
-      "sha256": "0d7f97226d7bb06ebc56e1754af321bf19ffa927c0597e2e2e549a3e15372aad"
+      "sha256": "73f590eb536dc35c94c106241e950afe03d0f640b1afc5839cdd60cc04ba05db"
     },
     {
       "path": "docs/design/ozon-vue-linking-and-category-review.md",
@@ -4985,7 +4985,7 @@
     },
     {
       "path": "tests/ux01/common_content_browser.py",
-      "sha256": "b8feadbe96b258efb1ff96264a9af6145cf8fc7fa9547331b47b369a372e4dbe"
+      "sha256": "f3c09d71859cb43b8a74c2581106b77508ed9626d51811efa2d8eae980e33f17"
     },
     {
       "path": "tests/ux01/common_product_content_focus_dom.js",
@@ -5016,5 +5016,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "39ee9fe8b207f898254b18e094f759e335680c59fefbb7b7437929881fec91e6"
+  "aggregate_sha256": "2788556b225709d22bd8bf8c3bdeafb1e7a5c315c5a8a3780b785ab2ccf5d103"
 }
