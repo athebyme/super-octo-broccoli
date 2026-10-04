@@ -211,6 +211,17 @@ COMMON_CONTENT_LAYOUT_THEMES = ("light", "dark")
 COMMON_CONTENT_MOBILE_WIDTHS = (320, 360, 390)
 COMMON_CONTENT_MOBILE_THEMES = ("light", "dark")
 COMMON_CONTENT_NAVIGATOR_CHECK = "common_mobile_product_navigator_bounded_accessible_keyboard"
+COMMON_PHOTO_RETRY_CHECK = (
+    "common_selected_photo_pending_preview_recovers_after_bounded_retry_without_content_write"
+)
+COMMON_PHOTO_RETRY_TOUCH_CHECK = (
+    "common_photo_retry_touch_target_focus_hit_320_360_390_light_dark"
+)
+COMMON_PHOTO_RETRY_WIDTHS = (320, 360, 390)
+COMMON_PHOTO_RETRY_THEMES = ("light", "dark")
+COMMON_PHOTO_RETRY_EMPTY_SHA256 = (
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+)
 COMMON_CONTENT_LAYOUT_STATES = {
     "empty": "empty_editor",
     "selected": "selected_editor",
@@ -230,6 +241,8 @@ COMMON_CONTENT_REQUIRED_CHECKS = frozenset({
     "common_50_recovery_apply_persists_50_overrides_and_50_server_audits",
     "common_50_recovery_preserves_inheritance_source_and_channel_snapshots",
     "expected_413_console_rejections_scoped_by_receipt_endpoint_query_code_and_count",
+    COMMON_PHOTO_RETRY_CHECK,
+    COMMON_PHOTO_RETRY_TOUCH_CHECK,
 })
 COMMON_CONTENT_REQUIRED_FOCUS = frozenset({
     "common_photo_boundary_focus_first",
@@ -1566,6 +1579,387 @@ def parse_junit(path: Path) -> dict:
     }
 
 
+def _common_photo_retry_protocol_issues(data: dict) -> list[str]:
+    """Require source-scoped cold-photo recovery and mobile retry evidence."""
+    issues: list[str] = []
+
+    def finite_number(value: object) -> bool:
+        return type(value) in (int, float) and math.isfinite(value)
+
+    def is_sha256(value: object) -> bool:
+        return (
+            isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
+
+    def check_row(name: str) -> dict | None:
+        rows = [
+            row for row in (data.get("checks") if isinstance(data.get("checks"), list) else [])
+            if isinstance(row, dict) and row.get("name") == name
+        ]
+        if len(rows) != 1:
+            return None
+        row = rows[0]
+        if (
+            row.get("status") != "passed"
+            or row.get("ok") is not True
+            or row.get("passed") is not True
+        ):
+            return None
+        return row
+
+    main_check = check_row(COMMON_PHOTO_RETRY_CHECK)
+    if main_check is None or main_check.get("scenario_count") != 2:
+        issues.append("common_photo_retry_named_check_missing_or_failed")
+
+    touch_check = check_row(COMMON_PHOTO_RETRY_TOUCH_CHECK)
+    if (
+        touch_check is None
+        or touch_check.get("observed_rows") != 6
+        or touch_check.get("expected_rows") != 6
+        or touch_check.get("minimum_target_px") != 44
+    ):
+        issues.append("common_photo_retry_touch_named_check_missing_or_failed")
+
+    request_keys = {
+        "attempt", "trigger", "method", "same_origin", "path_matches_product_and_slot",
+        "deferred_query", "http_status", "content_type", "response_body_bytes",
+        "body_sha256", "retry_after_seconds", "photo_cache", "photo_queue",
+        "queue_count", "cache_ready",
+    }
+    selection_keys = {
+        "selected_count_before", "selected_count_after", "selected_fingerprint_before",
+        "selected_fingerprint_after", "order_fingerprint_before", "order_fingerprint_after",
+        "source_fingerprint_before", "source_fingerprint_after", "current_product_unchanged",
+    }
+    side_effect_keys = {
+        "preview_post_count", "apply_post_count", "provider_attempts",
+        "domain_write_count", "domain_snapshots_unchanged",
+    }
+
+    def valid_request(row: object, *, attempt: int, trigger: str,
+                      status: int, queue_count: int) -> bool:
+        if not isinstance(row, dict) or set(row) != request_keys:
+            return False
+        base_valid = (
+            row.get("attempt") == attempt and type(row.get("attempt")) is int
+            and row.get("trigger") == trigger
+            and row.get("method") == "GET"
+            and row.get("same_origin") is True
+            and row.get("path_matches_product_and_slot") is True
+            and row.get("deferred_query") is True
+            and row.get("http_status") == status and type(row.get("http_status")) is int
+            and row.get("content_type") == "image/jpeg"
+            and type(row.get("response_body_bytes")) is int
+            and is_sha256(row.get("body_sha256"))
+            and type(row.get("queue_count")) is int
+            and row.get("queue_count") == queue_count
+            and type(row.get("cache_ready")) is bool
+        )
+        if not base_valid:
+            return False
+        if status == 202:
+            return (
+                row.get("response_body_bytes") == 0
+                and row.get("body_sha256") == COMMON_PHOTO_RETRY_EMPTY_SHA256
+                and type(row.get("retry_after_seconds")) is int
+                and row.get("retry_after_seconds") == 2
+                and row.get("photo_cache") == "pending"
+                and row.get("photo_queue") in {"queued", "pending"}
+                and row.get("cache_ready") is False
+            )
+        return (
+            status == 200
+            and row.get("response_body_bytes") >= 256
+            and row.get("retry_after_seconds") is None
+            and row.get("photo_cache") is None
+            and row.get("photo_queue") is None
+            and row.get("cache_ready") is True
+        )
+
+    def valid_selection(value: object) -> bool:
+        if not isinstance(value, dict) or set(value) != selection_keys:
+            return False
+        if (
+            type(value.get("selected_count_before")) is not int
+            or value.get("selected_count_before") != 2
+            or type(value.get("selected_count_after")) is not int
+            or value.get("selected_count_after") != 2
+            or value.get("current_product_unchanged") is not True
+        ):
+            return False
+        for stem in ("selected", "order", "source"):
+            before = value.get(stem + "_fingerprint_before")
+            after = value.get(stem + "_fingerprint_after")
+            if not is_sha256(before) or not is_sha256(after) or before != after:
+                return False
+        return True
+
+    def valid_side_effects(value: object) -> bool:
+        return (
+            isinstance(value, dict) and set(value) == side_effect_keys
+            and all(
+                type(value.get(key)) is int and value.get(key) == 0
+                for key in (
+                    "preview_post_count", "apply_post_count", "provider_attempts",
+                    "domain_write_count",
+                )
+            )
+            and value.get("domain_snapshots_unchanged") is True
+        )
+
+    receipt = data.get("common_photo_retry_observations")
+    expected_receipt_keys = {
+        "status", "named_check", "retry_delays_seconds", "max_automatic_retries",
+        "pending_recovers", "exhaustion_manual_retry",
+    }
+    receipt_valid = (
+        isinstance(receipt, dict)
+        and set(receipt) == expected_receipt_keys
+        and receipt.get("status") == "passed"
+        and receipt.get("named_check") == COMMON_PHOTO_RETRY_CHECK
+        and receipt.get("retry_delays_seconds") == [2, 4, 6]
+        and receipt.get("max_automatic_retries") == 3
+    )
+    if receipt_valid:
+        pending = receipt.get("pending_recovers")
+        pending_keys = {
+            "status_sequence", "photo_requests", "automatic_retry_count", "queue_count",
+            "cache_ready_before_retry", "decoded_image", "selection", "side_effects",
+        }
+        pending_requests = pending.get("photo_requests") if isinstance(pending, dict) else None
+        pending_states = pending.get("status_sequence") if isinstance(pending, dict) else None
+        pending_states_valid = (
+            isinstance(pending_states, list)
+            and len(pending_states) in {2, 3}
+            and pending_states[0] == "pending"
+            and pending_states[-1] == "ready"
+            and all(
+                isinstance(state, str) and state in {"pending", "loading", "ready"}
+                for state in pending_states
+            )
+            and pending_states.count("pending") == 1
+        )
+        pending_valid = (
+            isinstance(pending, dict) and set(pending) == pending_keys
+            and pending_states_valid
+            and type(pending.get("automatic_retry_count")) is int
+            and pending.get("automatic_retry_count") == 1
+            and type(pending.get("queue_count")) is int
+            and pending.get("queue_count") == 1
+            and pending.get("cache_ready_before_retry") is True
+            and isinstance(pending_requests, list) and len(pending_requests) == 2
+            and valid_request(pending_requests[0], attempt=1, trigger="initial", status=202, queue_count=1)
+            and valid_request(pending_requests[1], attempt=2, trigger="automatic_retry", status=200, queue_count=1)
+            and isinstance(pending.get("decoded_image"), dict)
+            and set(pending["decoded_image"]) == {"loaded", "width", "height", "sha256"}
+            and pending["decoded_image"].get("loaded") is True
+            and type(pending["decoded_image"].get("width")) is int
+            and pending["decoded_image"].get("width") == 120
+            and type(pending["decoded_image"].get("height")) is int
+            and pending["decoded_image"].get("height") == 80
+            and pending["decoded_image"].get("sha256") == (
+                pending_requests[1].get("body_sha256") if isinstance(pending_requests, list) and len(pending_requests) == 2 else None
+            )
+            and valid_selection(pending.get("selection"))
+            and valid_side_effects(pending.get("side_effects"))
+        )
+
+        exhausted = receipt.get("exhaustion_manual_retry")
+        exhausted_keys = {
+            "status_sequence", "automatic_requests", "manual_request", "automatic_retry_count",
+            "queue_count", "selection_button_disabled_in_inherit_mode", "retry_button",
+            "selection", "side_effects", "switch_while_photo_retry_pending",
+        }
+        auto_requests = exhausted.get("automatic_requests") if isinstance(exhausted, dict) else None
+        retry_button = exhausted.get("retry_button") if isinstance(exhausted, dict) else None
+        switch = exhausted.get("switch_while_photo_retry_pending") if isinstance(exhausted, dict) else None
+        expected_states = {"loading", "pending", "failed", "ready"}
+        states = exhausted.get("status_sequence") if isinstance(exhausted, dict) else None
+        state_rows = states if isinstance(states, list) else []
+        failed_index = state_rows.index("failed") if "failed" in state_rows else -1
+        manual_loading_index = next(
+            (index for index, state in enumerate(state_rows) if index > failed_index and state == "loading"),
+            -1,
+        )
+        ready_after_manual_index = next(
+            (index for index, state in enumerate(state_rows) if index > manual_loading_index and state == "ready"),
+            -1,
+        )
+        states_valid = (
+            isinstance(states, list) and len(states) >= 4
+            and all(isinstance(state, str) and state in expected_states for state in states)
+            and states[0] == "pending" and states[-1] == "ready"
+            and failed_index > 0
+            and manual_loading_index > failed_index
+            and ready_after_manual_index > manual_loading_index
+        )
+        retry_keys = {
+            "present", "visible", "enabled", "nested_in_selection_button", "keyboard_key",
+            "focus_reached", "focus_visible", "focus_retained_after_ready",
+            "min_width_px", "min_height_px",
+        }
+        switch_keys = {
+            "switch_completed_while_retry_pending", "cancelled_pending_request",
+            "requests_after_switch", "current_other_product_after_cancelled_pending_request",
+            "stale_photo_rendered_in_current_product", "late_automatic_retries",
+            "source_product_restored", "source_selection_fingerprint_before",
+            "source_selection_fingerprint_after", "source_order_fingerprint_before",
+            "source_order_fingerprint_after", "source_snapshot_unchanged",
+        }
+        switch_valid = (
+            isinstance(switch, dict) and set(switch) == switch_keys
+            and switch.get("switch_completed_while_retry_pending") is True
+            and valid_request(
+                switch.get("cancelled_pending_request"),
+                attempt=3, trigger="manual_retry", status=202, queue_count=1,
+            )
+            and type(switch.get("requests_after_switch")) is int
+            and switch.get("requests_after_switch") == 0
+            and switch.get("current_other_product_after_cancelled_pending_request") is True
+            and switch.get("stale_photo_rendered_in_current_product") is False
+            and type(switch.get("late_automatic_retries")) is int
+            and switch.get("late_automatic_retries") == 0
+            and switch.get("source_product_restored") is True
+            and is_sha256(switch.get("source_selection_fingerprint_before"))
+            and switch.get("source_selection_fingerprint_before") == switch.get("source_selection_fingerprint_after")
+            and is_sha256(switch.get("source_order_fingerprint_before"))
+            and switch.get("source_order_fingerprint_before") == switch.get("source_order_fingerprint_after")
+            and switch.get("source_snapshot_unchanged") is True
+        )
+        exhausted_valid = (
+            isinstance(exhausted, dict) and set(exhausted) == exhausted_keys
+            and states_valid
+            and isinstance(auto_requests, list) and len(auto_requests) == 4
+            and all(
+                valid_request(
+                    row,
+                    attempt=index,
+                    trigger="initial" if index == 1 else "automatic_retry",
+                    status=202,
+                    queue_count=index,
+                )
+                for index, row in enumerate(auto_requests, start=1)
+            )
+            and valid_request(exhausted.get("manual_request"), attempt=5, trigger="manual_retry", status=200, queue_count=4)
+            and type(exhausted.get("automatic_retry_count")) is int
+            and exhausted.get("automatic_retry_count") == 3
+            and type(exhausted.get("queue_count")) is int
+            and exhausted.get("queue_count") == 4
+            and exhausted.get("selection_button_disabled_in_inherit_mode") is True
+            and isinstance(retry_button, dict) and set(retry_button) == retry_keys
+            and retry_button.get("present") is True
+            and retry_button.get("visible") is True
+            and retry_button.get("enabled") is True
+            and retry_button.get("nested_in_selection_button") is False
+            and retry_button.get("keyboard_key") == "Enter"
+            and retry_button.get("focus_reached") is True
+            and retry_button.get("focus_visible") is True
+            and retry_button.get("focus_retained_after_ready") is True
+            and finite_number(retry_button.get("min_width_px"))
+            and retry_button.get("min_width_px") >= 44
+            and finite_number(retry_button.get("min_height_px"))
+            and retry_button.get("min_height_px") >= 44
+            and switch_valid
+            and valid_selection(exhausted.get("selection"))
+            and valid_side_effects(exhausted.get("side_effects"))
+        )
+        if not pending_valid or not exhausted_valid:
+            issues.append("common_photo_retry_recovery_receipt_missing_or_unsafe")
+    else:
+        issues.append("common_photo_retry_recovery_receipt_missing_or_unsafe")
+
+    touch_rows = data.get("common_photo_retry_touch_observations")
+    expected_combos = {
+        (width, theme)
+        for width in COMMON_PHOTO_RETRY_WIDTHS
+        for theme in COMMON_PHOTO_RETRY_THEMES
+    }
+    touch_keys = {
+        "width", "requested_theme", "actual_theme", "status", "visible", "enabled",
+        "inherited_mode", "accessible_name", "button_rect", "viewport",
+        "center_hit_target", "nested_in_selection_button", "focus_reached_by_tab",
+        "focus_visible", "focus_outline", "focus_rect_inside_viewport",
+    }
+    rect_keys = {"x", "y", "width", "height"}
+    outline_keys = {"style", "width_px", "offset_px"}
+    observed_combos = []
+    touch_valid = isinstance(touch_rows, list) and len(touch_rows) == len(expected_combos)
+    if touch_valid:
+        for row in touch_rows:
+            if not isinstance(row, dict) or set(row) != touch_keys:
+                touch_valid = False
+                break
+            width, theme = row.get("width"), row.get("requested_theme")
+            if type(width) is not int or theme not in COMMON_PHOTO_RETRY_THEMES:
+                touch_valid = False
+                break
+            observed_combos.append((width, theme))
+            rect, viewport, outline = row.get("button_rect"), row.get("viewport"), row.get("focus_outline")
+            if (
+                row.get("actual_theme") != theme
+                or row.get("status") != "failed"
+                or row.get("visible") is not True
+                or row.get("enabled") is not True
+                or row.get("inherited_mode") is not True
+                or not isinstance(row.get("accessible_name"), str)
+                or not row.get("accessible_name", "").startswith("Повторить предпросмотр ")
+                or not row.get("accessible_name", "")[len("Повторить предпросмотр "):].strip()
+                or row.get("center_hit_target") is not True
+                or row.get("nested_in_selection_button") is not False
+                or row.get("focus_reached_by_tab") is not True
+                or row.get("focus_visible") is not True
+                or row.get("focus_rect_inside_viewport") is not True
+                or not isinstance(rect, dict) or set(rect) != rect_keys
+                or not isinstance(viewport, dict) or set(viewport) != {"width", "height"}
+                or not isinstance(outline, dict) or set(outline) != outline_keys
+            ):
+                touch_valid = False
+                break
+            if any(not finite_number(rect.get(key)) for key in rect_keys):
+                touch_valid = False
+                break
+            if any(not finite_number(viewport.get(key)) for key in ("width", "height")):
+                touch_valid = False
+                break
+            if (
+                viewport.get("width") != width
+                or viewport.get("height") <= 0
+                or rect.get("x") < 0 or rect.get("y") < 0
+                or rect.get("width") < 44 or rect.get("height") < 44
+                or rect.get("x") + rect.get("width") > viewport.get("width") + 0.5
+                or rect.get("y") + rect.get("height") > viewport.get("height") + 0.5
+            ):
+                touch_valid = False
+                break
+            if (
+                outline.get("style") != "solid"
+                or not finite_number(outline.get("width_px"))
+                or outline.get("width_px") < 2
+                or not finite_number(outline.get("offset_px"))
+                or outline.get("offset_px") < 2
+            ):
+                touch_valid = False
+                break
+            margin = outline["width_px"] + outline["offset_px"]
+            if (
+                rect["x"] - margin < -0.5
+                or rect["y"] - margin < -0.5
+                or rect["x"] + rect["width"] + margin > viewport["width"] + 0.5
+                or rect["y"] + rect["height"] + margin > viewport["height"] + 0.5
+            ):
+                touch_valid = False
+                break
+    if (
+        not touch_valid
+        or len(observed_combos) != len(expected_combos)
+        or len(set(observed_combos)) != len(expected_combos)
+        or set(observed_combos) != expected_combos
+    ):
+        issues.append("common_photo_retry_touch_matrix_incomplete_or_unsafe")
+    return issues
+
+
 def _common_content_protocol_issues(data: dict) -> list[str]:
     """Require the common editor's exact responsive/focus evidence contract."""
     issues: list[str] = []
@@ -1867,6 +2261,7 @@ def _common_content_protocol_issues(data: dict) -> list[str]:
     )):
         issues.append("common_state_assertion_missing")
     issues.extend(_common_bulk_50_protocol_issues(data))
+    issues.extend(_common_photo_retry_protocol_issues(data))
     return issues
 
 

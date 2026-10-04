@@ -12,6 +12,7 @@ from collections import Counter
 from datetime import datetime
 import hashlib
 from html.parser import HTMLParser
+from io import BytesIO
 import json
 import logging
 import os
@@ -22,12 +23,15 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 
 import requests
 from flask import url_for
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 from werkzeug.serving import make_server
+from PIL import Image
+from sqlalchemy import event
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +49,8 @@ ASSETS = ROOT / "tests/ozon_release/assets"
 COMMON_CONTENT_MOBILE_WIDTHS = (320, 360, 390)
 COMMON_CONTENT_MOBILE_THEMES = ("light", "dark")
 COMMON_CONTENT_NAVIGATOR_CHECK = "common_mobile_product_navigator_bounded_accessible_keyboard"
+COMMON_PHOTO_RETRY_CHECK = "common_selected_photo_pending_preview_recovers_after_bounded_retry_without_content_write"
+COMMON_PHOTO_RETRY_TOUCH_CHECK = "common_photo_retry_touch_target_focus_hit_320_360_390_light_dark"
 
 REPORT = {
     "source": SOURCE,
@@ -59,6 +65,8 @@ REPORT = {
     "screenshots": [],
     "mobile_touch_target_observations": [],
     "mobile_product_navigator_observations": [],
+    "common_photo_retry_observations": None,
+    "common_photo_retry_touch_observations": [],
     "browser_api_reads": [],
     "writes": [],
     "preview_item_counts": [],
@@ -140,6 +148,8 @@ SHARED_SHELL_READ_PATH_CATEGORIES = {
     "/api/notifications/unread-count": "notifications_unread_count",
     "/api/tasks/tray": "background_tasks_tray",
 }
+PHOTO_CASE_CAPTURE = None
+PHOTO_CASE_CACHE = None
 
 os.environ.update({
     "DATABASE_URL": "sqlite:///" + str(TEMP_PATH / "seller-hub.sqlite"),
@@ -345,6 +355,75 @@ def bridge(route):
         route.continue_()
         return
     if parsed.hostname == "127.0.0.1" and parsed.port == server.server_port:
+        if (
+            PHOTO_CASE_CAPTURE is not None
+            and request.method == "GET"
+            and parsed.path.startswith("/api/photos/imported-product/")
+        ):
+            try:
+                slot = int(parsed.path.rsplit("/", 1)[-1])
+                expected = PHOTO_CASE_CAPTURE["route_paths"][slot]
+            except (KeyError, TypeError, ValueError):
+                expected = None
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            retry_values = query.get("retry", [])
+            initial_query = set(query) == {"deferred"} and not retry_values
+            attempt = (
+                1 if initial_query else
+                int(retry_values[0]) if len(retry_values) == 1 and retry_values[0].isdigit() else -1
+            )
+            row = {
+                "attempt": attempt,
+                "trigger": (
+                    "initial" if attempt == 1 and PHOTO_CASE_CAPTURE["phase"] != "switch_pending"
+                    else "manual_retry" if PHOTO_CASE_CAPTURE["phase"] in {"manual_retry", "switch_pending"}
+                    else "automatic_retry"
+                ),
+                "method": request.method,
+                "same_origin": parsed.scheme == "http" and parsed.netloc == urlsplit(BASE).netloc,
+                "path_matches_product_and_slot": parsed.path == expected,
+                "deferred_query": (
+                    query.get("deferred") == ["1"]
+                    and (
+                        (initial_query and attempt == 1)
+                        or (set(query) == {"deferred", "retry"} and retry_values == [str(attempt)])
+                    )
+                    and attempt > 0
+                ),
+            }
+            if parsed.path != expected or not row["same_origin"] or not row["deferred_query"]:
+                REPORT["unexpected_http_requests"].append({
+                    "method": request.method,
+                    "path_category": "photo_case_unexpected_route",
+                })
+                route.abort()
+                return
+            response = route.fetch(max_redirects=0)
+            body = response.body()
+            headers = response.headers
+            content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            retry_after = headers.get("retry-after")
+            try:
+                retry_after_seconds = int(retry_after) if retry_after is not None else None
+            except (TypeError, ValueError):
+                retry_after_seconds = -1
+            queue_count = PHOTO_CASE_CACHE.queue_count_for(slot)
+            row.update({
+                "http_status": response.status,
+                "content_type": content_type,
+                "response_body_bytes": len(body),
+                "body_sha256": hashlib.sha256(body).hexdigest(),
+                "retry_after_seconds": retry_after_seconds,
+                "photo_cache": headers.get("x-photo-cache"),
+                "photo_queue": headers.get("x-photo-queue"),
+                "queue_count": queue_count,
+                "cache_ready": PHOTO_CASE_CACHE.last_lookup_for(slot),
+                "_slot": slot,
+                "_phase": PHOTO_CASE_CAPTURE["phase"],
+            })
+            PHOTO_CASE_CAPTURE["requests"].append(row)
+            route.fulfill(response=response)
+            return
         if request.method in {"GET", "HEAD"}:
             if parsed.path.startswith("/api/"):
                 shared_category = SHARED_SHELL_READ_PATH_CATEGORIES.get(parsed.path)
@@ -1773,6 +1852,671 @@ def _run_bulk_50_case(page) -> None:
     REPORT["checks"].append("common_50_recovery_preserves_inheritance_source_and_channel_snapshots")
 
 
+def _photo_fingerprint(value) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+class _SyntheticColdPhotoCache:
+    """Deterministic local cache for the isolated real-route cold-photo case."""
+
+    def __init__(self, source_urls: list[str], image_bytes: bytes, directory: Path):
+        self._lock = threading.Lock()
+        self._slot_for_url = {url: slot for slot, url in enumerate(source_urls)}
+        self._queue_counts = {slot: 0 for slot in self._slot_for_url.values()}
+        self._lookup_history = {slot: [] for slot in self._slot_for_url.values()}
+        self._ready_after = {0: 1, 1: 4}
+        self._ready = {slot: False for slot in self._slot_for_url.values()}
+        self._image_path = directory / "synthetic-cold-photo.jpg"
+        self._image_path.write_bytes(image_bytes)
+
+    def _slot(self, url: str) -> int:
+        try:
+            return self._slot_for_url[url]
+        except KeyError as exc:
+            raise AssertionError("The isolated photo cache received an unseeded source URL") from exc
+
+    def is_cached(self, _supplier_type, _external_id, url):
+        slot = self._slot(url)
+        with self._lock:
+            ready = bool(self._ready[slot])
+            self._lookup_history[slot].append(ready)
+            return ready
+
+    def queue_download(self, *, supplier_type, external_id, url, fallback_urls, auth_cookies_provider):
+        del supplier_type, external_id, fallback_urls, auth_cookies_provider
+        slot = self._slot(url)
+        with self._lock:
+            self._queue_counts[slot] += 1
+            if self._queue_counts[slot] >= self._ready_after[slot]:
+                self._ready[slot] = True
+        return True
+
+    def get_cache_path(self, _supplier_type, _external_id, url):
+        self._slot(url)
+        return self._image_path
+
+    def queue_count_for(self, slot: int) -> int:
+        with self._lock:
+            return self._queue_counts[slot]
+
+    def last_lookup_for(self, slot: int) -> bool:
+        with self._lock:
+            history = self._lookup_history[slot]
+            if not history:
+                raise AssertionError("Photo route did not check cache before serving its response")
+            return history[-1]
+
+    def lookup_history_for(self, slot: int) -> list[bool]:
+        with self._lock:
+            return list(self._lookup_history[slot])
+
+    def reset_slot(self, slot: int, *, ready_after: int) -> None:
+        with self._lock:
+            self._queue_counts[slot] = 0
+            self._lookup_history[slot] = []
+            self._ready_after[slot] = ready_after
+            self._ready[slot] = False
+
+
+def _synthetic_photo_jpeg() -> bytes:
+    image = Image.new("RGB", (120, 80))
+    for y in range(80):
+        for x in range(120):
+            image.putpixel((x, y), ((x * 17 + y * 3) % 256, (y * 29 + x * 5) % 256, (x * 7 + y * 11) % 256))
+    stream = BytesIO()
+    image.save(stream, format="JPEG", quality=88, optimize=True)
+    payload = stream.getvalue()
+    if len(payload) < 256:
+        raise AssertionError("Synthetic JPEG must be a nontrivial real image body")
+    return payload
+
+
+def _seed_cold_photo_product() -> tuple[int, list[str]]:
+    source_urls = [
+        "https://photo-cold-fixture.invalid/selected-first.jpg",
+        "https://photo-cold-fixture.invalid/selected-second.jpg",
+    ]
+    with app.app_context():
+        product = ImportedProduct(
+            seller_id=FIXTURE["seller_id"],
+            external_id="COMMON-COLD-PHOTO-FIXTURE",
+            source_type="manual",
+            title="Синтетический товар с холодным предпросмотром",
+            description="Локальный browser fixture; внешняя загрузка запрещена.",
+            photo_urls=json.dumps(source_urls, ensure_ascii=False),
+            original_data=json.dumps({
+                "title": "Синтетический товар с холодным предпросмотром",
+                "description": "Локальный browser fixture; внешняя загрузка запрещена.",
+                "photo_urls": source_urls,
+            }, ensure_ascii=False),
+        )
+        db.session.add(product)
+        db.session.commit()
+        return int(product.id), source_urls
+
+
+def _photo_domain_snapshot(product_id: int) -> dict:
+    with app.app_context():
+        db.session.expire_all()
+        product = db.session.get(ImportedProduct, product_id)
+        if product is None:
+            raise AssertionError("Synthetic cold-photo source disappeared")
+        source_values = {
+            column.name: getattr(product, column.name)
+            for column in ImportedProduct.__table__.columns
+        }
+        return {
+            "source_fingerprint": _photo_fingerprint(source_values),
+            "domain_fingerprint": _photo_fingerprint({
+                "source": source_values,
+                "drafts": _model_snapshot(MarketplaceProductDraft),
+                "listings": _model_snapshot(MarketplaceListing),
+                "operations": _model_snapshot(MarketplaceOperation),
+                "source_audits": _bulk_audit_snapshot([product_id]),
+            }),
+        }
+
+
+def _photo_selection_state(page, product_id: int) -> dict:
+    value = page.evaluate("""productId => {
+        const current = document.querySelector('#common-content-product-list [aria-current="true"]');
+        const cards = [...document.querySelectorAll(
+            '.cpc-photo-card[data-photo-preview-product="' + productId + '"]'
+        )];
+        const selected = cards.flatMap(card => [...card.querySelectorAll(
+            '.cpc-photo-option[aria-pressed="true"]'
+        )].map(button => button.dataset.photoUrl));
+        const ordered = [...document.querySelectorAll(
+            '.cpc-photo-order-row .cpc-photo-order-actions button[data-direction="-1"]'
+        )].map(button => button.dataset.photoUrl);
+        return {
+            current_product: current ? current.dataset.productId : null,
+            selected_urls: selected,
+            ordered_urls: ordered,
+        };
+    }""", str(product_id))
+    selected_urls = value.get("selected_urls") if isinstance(value, dict) else None
+    ordered_urls = value.get("ordered_urls") if isinstance(value, dict) else None
+    if not isinstance(selected_urls, list) or not isinstance(ordered_urls, list):
+        raise AssertionError("Could not read inherited photo selection from the actual editor DOM")
+    return {
+        "selected_count": len(selected_urls),
+        "selected_fingerprint": _photo_fingerprint(selected_urls),
+        "order_fingerprint": _photo_fingerprint(ordered_urls),
+        "current_product": value.get("current_product"),
+    }
+
+
+def _wait_for_photo_status(page, selector: str, desired: str, *, timeout_ms: int = 25000) -> list[str]:
+    deadline = time.monotonic() + timeout_ms / 1000
+    sequence: list[str] = []
+    started = False
+    while time.monotonic() < deadline:
+        current = page.locator(selector).get_attribute("data-photo-preview-state")
+        if current and (started or current != "loading"):
+            started = True
+            if not sequence or sequence[-1] != current:
+                sequence.append(current)
+        if current == desired:
+            return sequence
+        page.wait_for_timeout(75)
+    raise AssertionError({"photo_state_timeout": desired, "observed_states": sequence})
+
+
+def _install_photo_state_observer(page, product_id: int) -> None:
+    script = """(() => {
+        const productId = __PRODUCT_ID__;
+        const history = {0: [], 1: []};
+        const remember = status => {
+            if (!status) return;
+            const card = status.closest('.cpc-photo-card[data-photo-preview-product][data-photo-preview-slot]');
+            if (!card || card.dataset.photoPreviewProduct !== String(productId)) return;
+            const slot = Number(card.dataset.photoPreviewSlot);
+            const value = status.dataset.photoPreviewState;
+            if (!(slot in history) || !value) return;
+            const rows = history[slot];
+            if (!rows.length || rows[rows.length - 1] !== value) rows.push(value);
+        };
+        const rememberTree = node => {
+            if (!(node instanceof Element)) return;
+            if (node.matches('[data-photo-preview-state]')) remember(node);
+            node.querySelectorAll('[data-photo-preview-state]').forEach(remember);
+        };
+        document.querySelectorAll('[data-photo-preview-state]').forEach(remember);
+        const observer = new MutationObserver(records => records.forEach(record => {
+            if (record.type === 'attributes') remember(record.target);
+            else record.addedNodes.forEach(rememberTree);
+        }));
+        observer.observe(document.documentElement, {
+            subtree: true, childList: true, attributes: true,
+            attributeFilter: ['data-photo-preview-state'],
+        });
+        window.__uxCommonPhotoStateHistory = history;
+        window.__uxCommonPhotoStateObserver = observer;
+    })();""".replace("__PRODUCT_ID__", json.dumps(str(product_id)))
+    page.add_init_script(script)
+
+
+def _photo_state_history(page, slot: int, *, start_at_pending: bool = False) -> list[str]:
+    values = page.evaluate("slot => (window.__uxCommonPhotoStateHistory || {})[slot] || []", slot)
+    if not isinstance(values, list):
+        return []
+    result = []
+    started = not start_at_pending
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        if not started:
+            if value != "pending":
+                continue
+            started = True
+        if not result or result[-1] != value:
+            result.append(value)
+    return result
+
+
+def _photo_status_selector(product_id: int, slot: int) -> str:
+    return (
+        '.cpc-photo-card[data-photo-preview-product="' + str(product_id)
+        + '"][data-photo-preview-slot="' + str(slot) + '"] [data-photo-preview-state]'
+    )
+
+
+def _photo_card_selector(product_id: int, slot: int) -> str:
+    return (
+        '.cpc-photo-card[data-photo-preview-product="' + str(product_id)
+        + '"][data-photo-preview-slot="' + str(slot) + '"]'
+    )
+
+
+def _photo_requests_for(slot: int) -> list[dict]:
+    rows = []
+    for row in PHOTO_CASE_CAPTURE["requests"]:
+        if row.get("_slot") != slot:
+            continue
+        rows.append({key: value for key, value in row.items() if not key.startswith("_")})
+    return rows
+
+
+def _photo_side_effects(before: dict, after: dict) -> dict:
+    return {
+        "preview_post_count": REPORT["synthetic_actions"]["preview_requests"] - before["preview_requests"],
+        "apply_post_count": REPORT["synthetic_actions"]["apply_requests"] - before["apply_requests"],
+        "provider_attempts": REPORT["synthetic_actions"]["provider_attempts"] - before["provider_attempts"],
+        "domain_write_count": PHOTO_CASE_CAPTURE["domain_write_count"],
+        "domain_snapshots_unchanged": before["domain_fingerprint"] == after["domain_fingerprint"],
+    }
+
+
+def _photo_selection_receipt(before: dict, after: dict, source_before: dict, source_after: dict) -> dict:
+    return {
+        "selected_count_before": before["selected_count"],
+        "selected_count_after": after["selected_count"],
+        "selected_fingerprint_before": before["selected_fingerprint"],
+        "selected_fingerprint_after": after["selected_fingerprint"],
+        "order_fingerprint_before": before["order_fingerprint"],
+        "order_fingerprint_after": after["order_fingerprint"],
+        "source_fingerprint_before": source_before["source_fingerprint"],
+        "source_fingerprint_after": source_after["source_fingerprint"],
+        "current_product_unchanged": (
+            before["current_product"] == after["current_product"]
+            and before["current_product"] is not None
+        ),
+    }
+
+
+def _measure_retry_touch_row(page, product_id: int, slot: int, width: int, theme: str) -> dict:
+    page.set_viewport_size({"width": width, "height": 900})
+    page.evaluate("theme => { localStorage.setItem('sh-theme', theme); document.documentElement.dataset.theme = theme; }", theme)
+    card_selector = _photo_card_selector(product_id, slot)
+    card = page.locator(card_selector)
+    card.scroll_into_view_if_needed()
+    retry = card.locator('button[data-action="retry-photo-preview"]')
+    target = retry.evaluate("el => ({present: !!el, visible: !el.hidden && el.getClientRects().length > 0})")
+    if not target["present"] or not target["visible"]:
+        raise AssertionError("Manual photo retry was not visible at the failed state")
+    mode = page.locator('#common-content-fields section[data-field-section="photos"] button[data-action="toggle-mode"]')
+    mode.focus()
+    reached = False
+    for _ in range(12):
+        page.keyboard.press("Tab")
+        if retry.evaluate("el => document.activeElement === el"):
+            reached = True
+            break
+    result = retry.evaluate("""(el, requestedTheme) => {
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        const center = {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2};
+        const top = document.elementFromPoint(center.x, center.y);
+        const topRetry = top && top.closest('[data-action="retry-photo-preview"]');
+        const viewport = {width: innerWidth, height: innerHeight};
+        return {
+            width: viewport.width,
+            requested_theme: requestedTheme,
+            actual_theme: document.documentElement.dataset.theme,
+            status: el.closest('[data-photo-preview-state]')?.dataset.photoPreviewState
+                || el.closest('.cpc-photo-card')?.querySelector('[data-photo-preview-state]')?.dataset.photoPreviewState,
+            visible: !el.hidden && el.getClientRects().length > 0
+                && style.display !== 'none' && style.visibility !== 'hidden'
+                && Number(style.opacity || 1) > 0,
+            enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
+            inherited_mode: document.querySelector(
+                '#common-content-fields section[data-field-section="photos"] button[data-action="toggle-mode"]'
+            )?.textContent.trim() === 'Изменить значение',
+            accessible_name: el.getAttribute('aria-label') || el.innerText.trim(),
+            button_rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+            viewport,
+            center_hit_target: !!topRetry && topRetry === el,
+            nested_in_selection_button: !!el.closest('.cpc-photo-option'),
+            focus_visible: document.activeElement === el && el.matches(':focus-visible'),
+            focus_outline: {
+                style: style.outlineStyle,
+                width_px: Number.parseFloat(style.outlineWidth) || 0,
+                offset_px: Number.parseFloat(style.outlineOffset) || 0,
+            },
+            focus_rect_inside_viewport: rect.x >= 0 && rect.y >= 0
+                && rect.right <= innerWidth && rect.bottom <= innerHeight,
+        };
+    }""", theme)
+    result["visible"] = bool(result.get("visible"))
+    result["enabled"] = bool(result.get("enabled"))
+    result["focus_reached_by_tab"] = reached
+    if not reached:
+        raise AssertionError({"retry_not_tab_reachable": {"width": width, "theme": theme}})
+    if result["status"] != "failed" or not result["inherited_mode"]:
+        raise AssertionError({"retry_touch_state_invalid": {"width": width, "theme": theme, "state": result}})
+    return result
+
+
+def _run_common_photo_retry_case(page) -> None:
+    global PHOTO_CASE_CAPTURE, PHOTO_CASE_CACHE
+    source_id, source_urls = _seed_cold_photo_product()
+    route_paths = {
+        slot: f"/api/photos/imported-product/{source_id}/{slot}"
+        for slot in (0, 1)
+    }
+    image_bytes = _synthetic_photo_jpeg()
+    PHOTO_CASE_CACHE = _SyntheticColdPhotoCache(source_urls, image_bytes, TEMP_PATH)
+    import services.photo_cache as photo_cache_module
+    previous_cache_factory = photo_cache_module.get_photo_cache
+    photo_cache_module.get_photo_cache = lambda: PHOTO_CASE_CACHE
+
+    capture = {
+        "route_paths": route_paths,
+        "phase": "initial",
+        "requests": [],
+        "domain_write_count": 0,
+    }
+    PHOTO_CASE_CAPTURE = capture
+    with app.app_context():
+        engine = db.engine
+
+    def count_domain_write(_conn, _cursor, statement, _parameters, _context, _many):
+        if PHOTO_CASE_CAPTURE is None:
+            return
+        normalized = statement.lstrip().upper()
+        if normalized.startswith(("INSERT ", "UPDATE ", "DELETE ", "REPLACE ")):
+            PHOTO_CASE_CAPTURE["domain_write_count"] += 1
+
+    event.listen(engine, "before_cursor_execute", count_domain_write)
+    try:
+        with app.app_context():
+            before_domain = _photo_domain_snapshot(source_id)
+        before_effects = {
+            "preview_requests": REPORT["synthetic_actions"]["preview_requests"],
+            "apply_requests": REPORT["synthetic_actions"]["apply_requests"],
+            "provider_attempts": REPORT["synthetic_actions"]["provider_attempts"],
+            "domain_fingerprint": before_domain["domain_fingerprint"],
+        }
+        query = f"/my-products/common-content?product_id={source_id}&product_id={FIXTURE['second_source_id']}"
+        page.set_viewport_size({"width": 1440, "height": 1050})
+        _install_photo_state_observer(page, source_id)
+        response = page.goto(BASE + query, wait_until="domcontentloaded")
+        assert response and response.status == 200
+        page.locator("#common-content-fields").wait_for()
+        initial_selection = _photo_selection_state(page, source_id)
+        assert initial_selection["selected_count"] == 2
+        assert initial_selection["current_product"] == str(source_id)
+        page.locator(_photo_card_selector(source_id, 0)).scroll_into_view_if_needed()
+        page.locator(_photo_card_selector(source_id, 1)).scroll_into_view_if_needed()
+        for slot in (0, 1):
+            page.locator(_photo_status_selector(source_id, slot)).wait_for()
+        cards_visible = page.evaluate("""productId => [0, 1].map(slot => {
+            const card = document.querySelector(
+                '.cpc-photo-card[data-photo-preview-product="' + productId
+                + '"][data-photo-preview-slot="' + slot + '"]'
+            );
+            if (!card) return false;
+            const rect = card.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.left < innerWidth
+                && rect.bottom > 0 && rect.top < innerHeight;
+        })""", str(source_id))
+        assert cards_visible == [True, True], cards_visible
+        page.wait_for_function("""productId => {
+            const state = slot => document.querySelector(
+                '.cpc-photo-card[data-photo-preview-product="' + productId
+                + '"][data-photo-preview-slot="' + slot + '"] [data-photo-preview-state]'
+            )?.dataset.photoPreviewState;
+            return state(0) === 'ready' && state(1) === 'failed';
+        }""", arg=str(source_id), timeout=40000)
+        slot0_sequence = _photo_state_history(page, 0, start_at_pending=True)
+        slot1_sequence = _photo_state_history(page, 1, start_at_pending=True)
+        assert PHOTO_CASE_CACHE.lookup_history_for(0)[:2] == [False, True]
+        assert PHOTO_CASE_CACHE.lookup_history_for(1)[:4] == [False, False, False, False]
+        assert PHOTO_CASE_CACHE.queue_count_for(0) == 1
+        assert PHOTO_CASE_CACHE.queue_count_for(1) == 4
+        pending_rows = _photo_requests_for(0)
+        auto_rows = _photo_requests_for(1)
+        assert len(pending_rows) == 2 and len(auto_rows) == 4
+        assert all(row["http_status"] == 202 for row in auto_rows)
+        assert pending_rows[0]["http_status"] == 202 and pending_rows[1]["http_status"] == 200
+        assert pending_rows[0]["trigger"] == "initial" and pending_rows[1]["trigger"] == "automatic_retry"
+        assert all(row["trigger"] == ("initial" if index == 0 else "automatic_retry")
+                   for index, row in enumerate(auto_rows))
+
+        image0 = page.locator(
+            _photo_card_selector(source_id, 0) + ' img[data-photo-preview-image]'
+        )
+        decoded0 = image0.evaluate("el => ({loaded: el.complete && el.naturalWidth > 0, width: el.naturalWidth, height: el.naturalHeight})")
+        assert decoded0 == {"loaded": True, "width": 120, "height": 80}
+        auto_selection = _photo_selection_state(page, source_id)
+        with app.app_context():
+            after_auto = _photo_domain_snapshot(source_id)
+
+        pending_case = {
+            "status_sequence": slot0_sequence,
+            "photo_requests": pending_rows,
+            "automatic_retry_count": 1,
+            "queue_count": 1,
+            "cache_ready_before_retry": PHOTO_CASE_CACHE.lookup_history_for(0)[1],
+            "decoded_image": {
+                "loaded": decoded0["loaded"],
+                "width": decoded0["width"],
+                "height": decoded0["height"],
+                "sha256": pending_rows[-1]["body_sha256"],
+            },
+            "selection": _photo_selection_receipt(initial_selection, auto_selection, before_domain, after_auto),
+            "side_effects": _photo_side_effects(before_effects, after_auto),
+        }
+
+        touch_rows = []
+        for width in (320, 360, 390):
+            for theme in ("light", "dark"):
+                touch_rows.append(_measure_retry_touch_row(page, source_id, 1, width, theme))
+        assert len(touch_rows) == 6
+
+        # The failed photo remains selected/inherited. Manual retry is a
+        # separate sibling control reached by the keyboard and performs only
+        # the exact same-origin GET route.
+        page.set_viewport_size({"width": 1440, "height": 1050})
+        page.evaluate("localStorage.setItem('sh-theme', 'light'); document.documentElement.dataset.theme = 'light'")
+        retry_slot1 = page.locator(
+            _photo_card_selector(source_id, 1) + ' button[data-action="retry-photo-preview"]'
+        )
+        retry_slot1.scroll_into_view_if_needed()
+        mode = page.locator('#common-content-fields section[data-field-section="photos"] button[data-action="toggle-mode"]')
+        mode.focus()
+        focused_slot1 = False
+        for _ in range(12):
+            page.keyboard.press("Tab")
+            if retry_slot1.evaluate("el => document.activeElement === el"):
+                focused_slot1 = True
+                break
+        assert focused_slot1, "Manual retry control must be reachable by keyboard"
+        retry_button_observed = retry_slot1.evaluate("""el => ({
+            present: !!el && !el.hidden,
+            visible: el.getClientRects().length > 0,
+            enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
+            nested_in_selection_button: !!el.closest('.cpc-photo-option'),
+            accessible_name: el.getAttribute('aria-label') || el.innerText.trim(),
+            focus_reached: document.activeElement === el,
+            focus_visible: el.matches(':focus-visible'),
+            min_width_px: el.getBoundingClientRect().width,
+            min_height_px: el.getBoundingClientRect().height,
+            selection_button_disabled_in_inherit_mode: !!el.closest('.cpc-photo-card')?.querySelector('.cpc-photo-option')?.disabled,
+        })""")
+        assert retry_button_observed["present"] and retry_button_observed["visible"]
+        assert retry_button_observed["enabled"] and retry_button_observed["focus_visible"]
+        assert retry_button_observed["selection_button_disabled_in_inherit_mode"]
+        PHOTO_CASE_CAPTURE["phase"] = "manual_retry"
+        before_manual_selection = _photo_selection_state(page, source_id)
+        with app.app_context():
+            before_manual_domain = _photo_domain_snapshot(source_id)
+        manual_effects_before = {
+            "preview_requests": REPORT["synthetic_actions"]["preview_requests"],
+            "apply_requests": REPORT["synthetic_actions"]["apply_requests"],
+            "provider_attempts": REPORT["synthetic_actions"]["provider_attempts"],
+            "domain_fingerprint": before_manual_domain["domain_fingerprint"],
+        }
+        pre_manual_count = len(PHOTO_CASE_CAPTURE["requests"])
+        page.evaluate("slot => { window.__uxCommonPhotoStateHistory[slot] = []; }", 1)
+        page.keyboard.press("Enter")
+        manual_image = page.locator(
+            _photo_card_selector(source_id, 1) + ' img[data-photo-preview-image][data-photo-preview-attempt="5"]'
+        )
+        manual_image.wait_for(state="attached", timeout=5000)
+        page.wait_for_function("""() => {
+            const img = document.querySelector('.cpc-photo-card[data-photo-preview-slot="1"] img[data-photo-preview-image][data-photo-preview-attempt="5"]');
+            return !!img && img.complete && img.naturalWidth === 120 && img.naturalHeight === 80;
+        }""", timeout=10000)
+        manual_states = _photo_state_history(page, 1)
+        manual_image_info = manual_image.evaluate("el => ({loaded: el.complete && el.naturalWidth > 0, width: el.naturalWidth, height: el.naturalHeight})")
+        assert manual_image_info == {"loaded": True, "width": 120, "height": 80}
+        focus_retained_after_ready = retry_slot1.evaluate(
+            "el => document.activeElement === el && el.matches(':focus-visible')"
+        )
+        assert focus_retained_after_ready
+        assert len(PHOTO_CASE_CAPTURE["requests"]) == pre_manual_count + 1
+        manual_request = _photo_requests_for(1)[-1]
+        assert manual_request["attempt"] == 5 and manual_request["trigger"] == "manual_retry"
+        assert manual_request["http_status"] == 200
+        after_manual_selection = _photo_selection_state(page, source_id)
+        with app.app_context():
+            after_manual_domain = _photo_domain_snapshot(source_id)
+        manual_side_effects = _photo_side_effects(manual_effects_before, after_manual_domain)
+        assert manual_side_effects["preview_post_count"] == 0
+        assert manual_side_effects["apply_post_count"] == 0
+        assert manual_side_effects["provider_attempts"] == 0
+        assert manual_side_effects["domain_write_count"] == 0
+        assert manual_side_effects["domain_snapshots_unchanged"]
+
+        # Re-arm one real automatic-retry timer, then change current product
+        # before its delay. The old generation must stop without another GET
+        # or rendering the previous product's image in the decoy editor.
+        PHOTO_CASE_CACHE.reset_slot(0, ready_after=100)
+        PHOTO_CASE_CAPTURE["phase"] = "switch_pending"
+        source_before_switch = _photo_selection_state(page, source_id)
+        with app.app_context():
+            domain_before_switch = _photo_domain_snapshot(source_id)
+        retry_slot0 = page.locator(
+            _photo_card_selector(source_id, 0) + ' button[data-action="retry-photo-preview"]'
+        )
+        retry_slot0.focus()
+        page.keyboard.press("Enter")
+        switch_state = _wait_for_photo_status(
+            page, _photo_status_selector(source_id, 0), "pending", timeout_ms=5000,
+        )
+        switch_request = _photo_requests_for(0)[-1]
+        assert switch_request["http_status"] == 202 and switch_request["trigger"] == "manual_retry"
+        switch_request_count = len(PHOTO_CASE_CAPTURE["requests"])
+        PHOTO_CASE_CAPTURE["phase"] = "switch_wait"
+        page.locator(
+            '#common-content-product-list button[data-action="choose-product"][data-product-id="{}"]'.format(FIXTURE["second_source_id"])
+        ).click()
+        current_other_product = page.locator('#common-content-product-list button[aria-current="true"]').get_attribute("data-product-id") == str(FIXTURE["second_source_id"])
+        assert current_other_product
+        page.wait_for_timeout(2500)
+        requests_after_switch = len(PHOTO_CASE_CAPTURE["requests"]) - switch_request_count
+        assert requests_after_switch == 0
+        stale_photo_rendered = page.locator('.cpc-photo-card img[data-photo-preview-image]').count() > 0
+        assert not stale_photo_rendered
+        current_other_product_after_wait = page.locator(
+            '#common-content-product-list button[aria-current="true"]'
+        ).get_attribute("data-product-id") == str(FIXTURE["second_source_id"])
+        assert current_other_product_after_wait
+        late_automatic_retries = sum(
+            1 for row in PHOTO_CASE_CAPTURE["requests"][switch_request_count:]
+            if row.get("trigger") == "automatic_retry"
+        )
+        page.locator(
+            '#common-content-product-list button[data-action="choose-product"][data-product-id="{}"]'.format(source_id)
+        ).click()
+        assert page.locator('#common-content-product-list button[aria-current="true"]').get_attribute("data-product-id") == str(source_id)
+        page.locator(_photo_status_selector(source_id, 0)).wait_for()
+        source_after_switch = _photo_selection_state(page, source_id)
+        with app.app_context():
+            domain_after_switch = _photo_domain_snapshot(source_id)
+        switch_receipt = {
+            "switch_completed_while_retry_pending": switch_state[-1:] == ["pending"] and current_other_product,
+            "cancelled_pending_request": switch_request,
+            "requests_after_switch": requests_after_switch,
+            "current_other_product_after_cancelled_pending_request": current_other_product_after_wait,
+            "stale_photo_rendered_in_current_product": stale_photo_rendered,
+            "late_automatic_retries": late_automatic_retries,
+            "source_product_restored": source_after_switch["current_product"] == str(source_id),
+            "source_selection_fingerprint_before": source_before_switch["selected_fingerprint"],
+            "source_selection_fingerprint_after": source_after_switch["selected_fingerprint"],
+            "source_order_fingerprint_before": source_before_switch["order_fingerprint"],
+            "source_order_fingerprint_after": source_after_switch["order_fingerprint"],
+            "source_snapshot_unchanged": domain_before_switch["source_fingerprint"] == domain_after_switch["source_fingerprint"],
+        }
+        assert switch_receipt["current_other_product_after_cancelled_pending_request"] is True
+        assert switch_receipt["stale_photo_rendered_in_current_product"] is False
+        assert switch_receipt["late_automatic_retries"] == 0
+        assert switch_receipt["source_selection_fingerprint_before"] == switch_receipt["source_selection_fingerprint_after"]
+        assert switch_receipt["source_order_fingerprint_before"] == switch_receipt["source_order_fingerprint_after"]
+        assert switch_receipt["source_snapshot_unchanged"]
+
+        with app.app_context():
+            final_domain = _photo_domain_snapshot(source_id)
+        final_effects = _photo_side_effects(before_effects, final_domain)
+        assert final_effects["preview_post_count"] == 0
+        assert final_effects["apply_post_count"] == 0
+        assert final_effects["provider_attempts"] == 0
+        assert final_effects["domain_write_count"] == 0
+        assert final_effects["domain_snapshots_unchanged"]
+
+        overall_selection = _photo_selection_receipt(initial_selection, after_manual_selection, before_domain, after_manual_domain)
+        overall_selection["current_product_unchanged"] = (
+            initial_selection["current_product"] == str(source_id)
+            and after_manual_selection["current_product"] == str(source_id)
+        )
+        exhausted_case = {
+            "status_sequence": slot1_sequence + manual_states,
+            "automatic_requests": auto_rows,
+            "manual_request": manual_request,
+            "automatic_retry_count": 3,
+            "queue_count": 4,
+            "selection_button_disabled_in_inherit_mode": retry_button_observed[
+                "selection_button_disabled_in_inherit_mode"
+            ],
+            "retry_button": {
+                "present": retry_button_observed["present"],
+                "visible": retry_button_observed["visible"],
+                "enabled": retry_button_observed["enabled"],
+                "nested_in_selection_button": retry_button_observed["nested_in_selection_button"],
+                "keyboard_key": "Enter",
+                "focus_reached": retry_button_observed["focus_reached"],
+                "focus_visible": retry_button_observed["focus_visible"],
+                "focus_retained_after_ready": focus_retained_after_ready,
+                "min_width_px": retry_button_observed["min_width_px"],
+                "min_height_px": retry_button_observed["min_height_px"],
+            },
+            "selection": overall_selection,
+            "side_effects": final_effects,
+            "switch_while_photo_retry_pending": switch_receipt,
+        }
+        REPORT["common_photo_retry_observations"] = {
+            "status": "passed",
+            "named_check": COMMON_PHOTO_RETRY_CHECK,
+            "retry_delays_seconds": [2, 4, 6],
+            "max_automatic_retries": 3,
+            "pending_recovers": pending_case,
+            "exhaustion_manual_retry": exhausted_case,
+        }
+        REPORT["common_photo_retry_touch_observations"] = touch_rows
+        REPORT["checks"].append({
+            "name": COMMON_PHOTO_RETRY_CHECK,
+            "status": "passed", "ok": True, "passed": True,
+            "scenario_count": 2,
+        })
+        REPORT["checks"].append({
+            "name": COMMON_PHOTO_RETRY_TOUCH_CHECK,
+            "status": "passed", "ok": True, "passed": True,
+            "observed_rows": len(touch_rows), "expected_rows": 6,
+            "minimum_target_px": 44,
+        })
+        assert final_effects["domain_write_count"] == 0
+        assert set((row["width"], row["requested_theme"]) for row in touch_rows) == {
+            (width, theme) for width in (320, 360, 390) for theme in ("light", "dark")
+        }
+    finally:
+        event.remove(engine, "before_cursor_execute", count_domain_write)
+        PHOTO_CASE_CAPTURE = None
+        photo_cache_module.get_photo_cache = previous_cache_factory
+
+
 def run():
     product_ids = [FIXTURE["source_id"], FIXTURE["second_source_id"]]
     query = "&".join("product_id=" + str(value) for value in product_ids)
@@ -2174,6 +2918,7 @@ def run():
         REPORT["checks"].append("seller_facing_labels_replace_raw_json")
 
         _run_bulk_50_case(page)
+        _run_common_photo_retry_case(page)
 
         assert REPORT["synthetic_actions"]["preview_requests"] == 7
         assert REPORT["synthetic_actions"]["apply_requests"] == 4

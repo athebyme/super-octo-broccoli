@@ -24,6 +24,11 @@ from scripts.check_ux01 import (
     COMMON_CONTENT_NAVIGATOR_CHECK,
     COMMON_CONTENT_REQUIRED_CHECKS,
     COMMON_CONTENT_REQUIRED_FOCUS,
+    COMMON_PHOTO_RETRY_CHECK,
+    COMMON_PHOTO_RETRY_EMPTY_SHA256,
+    COMMON_PHOTO_RETRY_THEMES,
+    COMMON_PHOTO_RETRY_TOUCH_CHECK,
+    COMMON_PHOTO_RETRY_WIDTHS,
     OPERATIONS_PRICING_PAGE_LABELS,
     OPERATIONS_PRICING_LAYOUT_VARIANTS,
     OPERATIONS_PRICE_INIT_CHECK,
@@ -415,6 +420,156 @@ def _workspace_browser_report() -> dict:
     }
 
 
+def _common_photo_request(attempt: int, trigger: str, status: int, queue_count: int) -> dict:
+    pending = status == 202
+    return {
+        "attempt": attempt,
+        "trigger": trigger,
+        "method": "GET",
+        "same_origin": True,
+        "path_matches_product_and_slot": True,
+        "deferred_query": True,
+        "http_status": status,
+        "content_type": "image/jpeg",
+        "response_body_bytes": 0 if pending else 2048,
+        "body_sha256": COMMON_PHOTO_RETRY_EMPTY_SHA256 if pending else "d" * 64,
+        "retry_after_seconds": 2 if pending else None,
+        "photo_cache": "pending" if pending else None,
+        "photo_queue": ("queued" if attempt == 1 else "pending") if pending else None,
+        "queue_count": queue_count,
+        "cache_ready": not pending,
+    }
+
+
+def _common_photo_selection() -> dict:
+    return {
+        "selected_count_before": 2,
+        "selected_count_after": 2,
+        "selected_fingerprint_before": "a" * 64,
+        "selected_fingerprint_after": "a" * 64,
+        "order_fingerprint_before": "b" * 64,
+        "order_fingerprint_after": "b" * 64,
+        "source_fingerprint_before": "c" * 64,
+        "source_fingerprint_after": "c" * 64,
+        "current_product_unchanged": True,
+    }
+
+
+def _common_photo_side_effects() -> dict:
+    return {
+        "preview_post_count": 0,
+        "apply_post_count": 0,
+        "provider_attempts": 0,
+        "domain_write_count": 0,
+        "domain_snapshots_unchanged": True,
+    }
+
+
+def _common_photo_retry_fixture() -> tuple[dict, list[dict], list[dict]]:
+    pending_requests = [
+        _common_photo_request(1, "initial", 202, 1),
+        _common_photo_request(2, "automatic_retry", 200, 1),
+    ]
+    automatic_requests = [
+        _common_photo_request(index, "initial" if index == 1 else "automatic_retry", 202, index)
+        for index in range(1, 5)
+    ]
+    exhaustion = {
+        "status_sequence": [
+            "pending", "loading", "pending", "loading", "pending", "loading",
+            "pending", "failed", "loading", "ready",
+        ],
+        "automatic_requests": automatic_requests,
+        "manual_request": _common_photo_request(5, "manual_retry", 200, 4),
+        "automatic_retry_count": 3,
+        "queue_count": 4,
+        "selection_button_disabled_in_inherit_mode": True,
+        "retry_button": {
+            "present": True,
+            "visible": True,
+            "enabled": True,
+            "nested_in_selection_button": False,
+            "keyboard_key": "Enter",
+            "focus_reached": True,
+            "focus_visible": True,
+            "focus_retained_after_ready": True,
+            "min_width_px": 44,
+            "min_height_px": 44,
+        },
+        "selection": _common_photo_selection(),
+        "side_effects": _common_photo_side_effects(),
+        "switch_while_photo_retry_pending": {
+            "switch_completed_while_retry_pending": True,
+            "cancelled_pending_request": _common_photo_request(3, "manual_retry", 202, 1),
+            "requests_after_switch": 0,
+            "current_other_product_after_cancelled_pending_request": True,
+            "stale_photo_rendered_in_current_product": False,
+            "late_automatic_retries": 0,
+            "source_product_restored": True,
+            "source_selection_fingerprint_before": "a" * 64,
+            "source_selection_fingerprint_after": "a" * 64,
+            "source_order_fingerprint_before": "b" * 64,
+            "source_order_fingerprint_after": "b" * 64,
+            "source_snapshot_unchanged": True,
+        },
+    }
+    receipt = {
+        "status": "passed",
+        "named_check": COMMON_PHOTO_RETRY_CHECK,
+        "retry_delays_seconds": [2, 4, 6],
+        "max_automatic_retries": 3,
+        "pending_recovers": {
+            "status_sequence": ["pending", "loading", "ready"],
+            "photo_requests": pending_requests,
+            "automatic_retry_count": 1,
+            "queue_count": 1,
+            "cache_ready_before_retry": True,
+            "decoded_image": {
+                "loaded": True,
+                "width": 120,
+                "height": 80,
+                "sha256": pending_requests[1]["body_sha256"],
+            },
+            "selection": _common_photo_selection(),
+            "side_effects": _common_photo_side_effects(),
+        },
+        "exhaustion_manual_retry": exhaustion,
+    }
+    touch_rows = []
+    for width in COMMON_PHOTO_RETRY_WIDTHS:
+        for theme in COMMON_PHOTO_RETRY_THEMES:
+            touch_rows.append({
+                "width": width,
+                "requested_theme": theme,
+                "actual_theme": theme,
+                "status": "failed",
+                "visible": True,
+                "enabled": True,
+                "inherited_mode": True,
+                "accessible_name": "Повторить предпросмотр Фото 2",
+                "button_rect": {"x": 16, "y": 550, "width": 180, "height": 48},
+                "viewport": {"width": width, "height": 900},
+                "center_hit_target": True,
+                "nested_in_selection_button": False,
+                "focus_reached_by_tab": True,
+                "focus_visible": True,
+                "focus_outline": {"style": "solid", "width_px": 2, "offset_px": 2},
+                "focus_rect_inside_viewport": True,
+            })
+    return receipt, touch_rows, [
+        {
+            "name": COMMON_PHOTO_RETRY_CHECK,
+            "status": "passed", "ok": True, "passed": True,
+            "scenario_count": 2,
+        },
+        {
+            "name": COMMON_PHOTO_RETRY_TOUCH_CHECK,
+            "status": "passed", "ok": True, "passed": True,
+            "observed_rows": 6, "expected_rows": 6, "minimum_target_px": 44,
+        },
+    ]
+
+
 def _common_content_browser_report() -> dict:
     layouts = [
         {
@@ -560,11 +715,13 @@ def _common_content_browser_report() -> dict:
         }
         for receipt in expected_413
     ]
+    photo_retry_receipt, photo_retry_touch_rows, photo_retry_checks = _common_photo_retry_fixture()
     check_names = sorted(COMMON_CONTENT_REQUIRED_CHECKS - {
         mobile_touch_check["name"], COMMON_CONTENT_NAVIGATOR_CHECK,
+        COMMON_PHOTO_RETRY_CHECK, COMMON_PHOTO_RETRY_TOUCH_CHECK,
     }) + [
         "existing-review-safety", "existing-cancel-reopen", mobile_touch_check,
-        mobile_navigator_check,
+        mobile_navigator_check, *photo_retry_checks,
     ]
     return {
         "status": "passed",
@@ -578,6 +735,8 @@ def _common_content_browser_report() -> dict:
         "checks": check_names,
         "focus_observations": focus_observations,
         "mobile_product_navigator_observations": mobile_navigator_observations,
+        "common_photo_retry_observations": photo_retry_receipt,
+        "common_photo_retry_touch_observations": photo_retry_touch_rows,
         "writes": writes,
         "preview_item_counts": [1, 1, 1, 1, 51, 50, 50],
         "preview_selection_observations": [
@@ -2321,6 +2480,197 @@ class Ux01RunnerContractTest(unittest.TestCase):
             invalid_reports.append((
                 "console 413 is from a different local endpoint", wrong_413_console_endpoint,
                 "common_bulk_50_413_console_rejections_missing_or_unscoped",
+            ))
+
+            missing_photo_recovery = copy.deepcopy(report)
+            missing_photo_recovery.pop("common_photo_retry_observations")
+            invalid_reports.append((
+                "cold photo recovery receipt is absent", missing_photo_recovery,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            wrong_cold_photo_endpoint = copy.deepcopy(report)
+            wrong_cold_photo_endpoint["common_photo_retry_observations"]["pending_recovers"][
+                "photo_requests"][0]["path_matches_product_and_slot"] = False
+            invalid_reports.append((
+                "cold photo GET does not match the exact source slot", wrong_cold_photo_endpoint,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            nonempty_pending_photo = copy.deepcopy(report)
+            nonempty_pending_photo["common_photo_retry_observations"]["pending_recovers"][
+                "photo_requests"][0]["response_body_bytes"] = 1
+            invalid_reports.append((
+                "202 response is not actually empty", nonempty_pending_photo,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            wrong_pending_photo_origin = copy.deepcopy(report)
+            wrong_pending_photo_origin["common_photo_retry_observations"]["pending_recovers"][
+                "photo_requests"][0]["same_origin"] = False
+            invalid_reports.append((
+                "photo response came from another origin", wrong_pending_photo_origin,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            fake_loaded_photo_dimensions = copy.deepcopy(report)
+            fake_loaded_photo_dimensions["common_photo_retry_observations"]["pending_recovers"][
+                "decoded_image"]["width"] = 1
+            invalid_reports.append((
+                "recovered photo has placeholder dimensions", fake_loaded_photo_dimensions,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            changed_photo_order_after_retry = copy.deepcopy(report)
+            changed_photo_order_after_retry["common_photo_retry_observations"][
+                "exhaustion_manual_retry"]["selection"]["order_fingerprint_after"] = "0" * 64
+            invalid_reports.append((
+                "manual retry changed selected photo order", changed_photo_order_after_retry,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            photo_retry_preview_write = copy.deepcopy(report)
+            photo_retry_preview_write["common_photo_retry_observations"][
+                "pending_recovers"]["side_effects"]["preview_post_count"] = 1
+            invalid_reports.append((
+                "photo preview unexpectedly called content preview", photo_retry_preview_write,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            late_retry_after_switch = copy.deepcopy(report)
+            late_retry_after_switch["common_photo_retry_observations"][
+                "exhaustion_manual_retry"]["switch_while_photo_retry_pending"][
+                    "late_automatic_retries"
+                ] = 1
+            invalid_reports.append((
+                "old product retried after switching current product", late_retry_after_switch,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            stale_photo_rendered_after_switch = copy.deepcopy(report)
+            stale_photo_rendered_after_switch["common_photo_retry_observations"][
+                "exhaustion_manual_retry"]["switch_while_photo_retry_pending"][
+                    "stale_photo_rendered_in_current_product"
+                ] = True
+            invalid_reports.append((
+                "stale photo rendered in the other selected product", stale_photo_rendered_after_switch,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            missing_switch_pending_receipt = copy.deepcopy(report)
+            missing_switch_pending_receipt["common_photo_retry_observations"][
+                "exhaustion_manual_retry"]["switch_while_photo_retry_pending"][
+                    "cancelled_pending_request"]["http_status"
+                ] = 200
+            invalid_reports.append((
+                "switch cancellation lacks an actual pending 202 receipt", missing_switch_pending_receipt,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            retry_after_switch = copy.deepcopy(report)
+            retry_after_switch["common_photo_retry_observations"][
+                "exhaustion_manual_retry"]["switch_while_photo_retry_pending"][
+                    "requests_after_switch"
+                ] = 1
+            invalid_reports.append((
+                "a photo request continued after switching products", retry_after_switch,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            nested_retry_button = copy.deepcopy(report)
+            nested_retry_button["common_photo_retry_observations"][
+                "exhaustion_manual_retry"]["retry_button"]["nested_in_selection_button"] = True
+            invalid_reports.append((
+                "manual retry is nested in selection button", nested_retry_button,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            undersized_retry_button = copy.deepcopy(report)
+            undersized_retry_button["common_photo_retry_observations"][
+                "exhaustion_manual_retry"]["retry_button"]["min_height_px"] = 43
+            invalid_reports.append((
+                "manual retry target is below 44px", undersized_retry_button,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
+            ))
+
+            missing_photo_retry_touch_rows = copy.deepcopy(report)
+            missing_photo_retry_touch_rows["common_photo_retry_touch_observations"].pop()
+            invalid_reports.append((
+                "retry touch matrix omits a viewport-theme pair", missing_photo_retry_touch_rows,
+                "common_photo_retry_touch_matrix_incomplete_or_unsafe",
+            ))
+
+            duplicate_photo_retry_touch_rows = copy.deepcopy(report)
+            duplicate_photo_retry_touch_rows["common_photo_retry_touch_observations"][-1] = copy.deepcopy(
+                duplicate_photo_retry_touch_rows["common_photo_retry_touch_observations"][0]
+            )
+            invalid_reports.append((
+                "retry touch matrix duplicates a viewport-theme pair", duplicate_photo_retry_touch_rows,
+                "common_photo_retry_touch_matrix_incomplete_or_unsafe",
+            ))
+
+            dark_retry_target_small = copy.deepcopy(report)
+            dark_retry_target_small["common_photo_retry_touch_observations"][1][
+                "button_rect"]["height"] = 43
+            invalid_reports.append((
+                "dark mobile retry button is below 44px", dark_retry_target_small,
+                "common_photo_retry_touch_matrix_incomplete_or_unsafe",
+            ))
+
+            retry_control_misses_hit_test = copy.deepcopy(report)
+            retry_control_misses_hit_test["common_photo_retry_touch_observations"][0][
+                "center_hit_target"
+            ] = False
+            invalid_reports.append((
+                "retry button is obscured at its hit-test center", retry_control_misses_hit_test,
+                "common_photo_retry_touch_matrix_incomplete_or_unsafe",
+            ))
+
+            retry_control_not_keyboard_reachable = copy.deepcopy(report)
+            retry_control_not_keyboard_reachable["common_photo_retry_touch_observations"][0][
+                "focus_reached_by_tab"
+            ] = False
+            invalid_reports.append((
+                "retry button cannot be reached by Tab", retry_control_not_keyboard_reachable,
+                "common_photo_retry_touch_matrix_incomplete_or_unsafe",
+            ))
+
+            dark_retry_focus_ring_clipped = copy.deepcopy(report)
+            dark_retry_focus_ring_clipped["common_photo_retry_touch_observations"][1][
+                "button_rect"]["x"
+            ] = -4
+            invalid_reports.append((
+                "retry focus ring is outside viewport", dark_retry_focus_ring_clipped,
+                "common_photo_retry_touch_matrix_incomplete_or_unsafe",
+            ))
+
+            missing_photo_retry_touch_named_check = copy.deepcopy(report)
+            missing_photo_retry_touch_named_check["checks"] = [
+                check for check in missing_photo_retry_touch_named_check["checks"]
+                if not (isinstance(check, dict) and check.get("name") == COMMON_PHOTO_RETRY_TOUCH_CHECK)
+            ]
+            invalid_reports.append((
+                "missing separate photo retry touch check", missing_photo_retry_touch_named_check,
+                "common_photo_retry_touch_named_check_missing_or_failed",
+            ))
+
+            contextless_retry_accessible_name = copy.deepcopy(report)
+            contextless_retry_accessible_name["common_photo_retry_touch_observations"][0][
+                "accessible_name"
+            ] = "Повторить предпросмотр"
+            invalid_reports.append((
+                "retry accessible name omits photo context", contextless_retry_accessible_name,
+                "common_photo_retry_touch_matrix_incomplete_or_unsafe",
+            ))
+
+            no_loading_after_failed_retry = copy.deepcopy(report)
+            no_loading_after_failed_retry["common_photo_retry_observations"][
+                "exhaustion_manual_retry"]["status_sequence"] = [
+                    "pending", "loading", "pending", "failed", "ready",
+                ]
+            invalid_reports.append((
+                "manual retry lacks an observed loading state after exhaustion", no_loading_after_failed_retry,
+                "common_photo_retry_recovery_receipt_missing_or_unsafe",
             ))
 
             for label, invalid, expected_issue in invalid_reports:
