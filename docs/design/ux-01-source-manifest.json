@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-04T05:44:55.107039+00:00",
+  "generated_at": "2026-10-04T06:34:41.081021+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "4b659984bff50c555c398590af468bd502788d82336b782dae4a39ecd112ac5d"
+      "sha256": "1a17dbabbb4cc1e0dddab260376afa534428e42f769d46989f0373cb9f17bba6"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -469,7 +469,7 @@
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
-      "sha256": "73f590eb536dc35c94c106241e950afe03d0f640b1afc5839cdd60cc04ba05db"
+      "sha256": "c21746a7326836585888668e5674f93f044b0da20e93da79e5c0b8ea60f74e66"
     },
     {
       "path": "docs/design/ozon-vue-linking-and-category-review.md",
@@ -2281,7 +2281,7 @@
     },
     {
       "path": "services/photo_cache.py",
-      "sha256": "9fd1348a079ede20587913be5db1a90bf53e631fe9637816d104be6332aaa409"
+      "sha256": "7bb00d71b8c6e7567a3cb1337d2924835ce1e30073361e6b7e2ebb33b75712ac"
     },
     {
       "path": "services/photo_url_verifier.py",
@@ -4649,7 +4649,7 @@
     },
     {
       "path": "tests/test_photo_proxy.py",
-      "sha256": "05b2660082158c042b5f8a7ac653a4659f93cd232a82bdc4e71245dedfbb6b04"
+      "sha256": "f684e2bb1d28271efa82811bab67bb01d6a55693d85bda8164cef97c6d798ccc"
     },
     {
       "path": "tests/test_price_reconciliation.py",
@@ -5016,5 +5016,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "2788556b225709d22bd8bf8c3bdeafb1e7a5c315c5a8a3780b785ab2ccf5d103"
+  "aggregate_sha256": "2c3494a3f23bb9accb87dba453e1913b1a6500106c07fdcd6c7e8df7ef69e009"
 }
