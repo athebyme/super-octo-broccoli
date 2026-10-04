@@ -2054,6 +2054,7 @@ def _wait_for_photo_status(page, selector: str, desired: str, *, timeout_ms: int
 
 def _install_photo_state_observer(page, product_id: int) -> None:
     script = """(() => {
+        if (window.__uxCommonPhotoStateObserver) return;
         const productId = __PRODUCT_ID__;
         const history = {0: [], 1: []};
         const remember = status => {
@@ -2076,14 +2077,30 @@ def _install_photo_state_observer(page, product_id: int) -> None:
             if (record.type === 'attributes') remember(record.target);
             else record.addedNodes.forEach(rememberTree);
         }));
-        observer.observe(document.documentElement, {
+        // The init script may run before the parser creates <html>. The
+        // Document node exists throughout the navigation and observes the
+        // real insertions without delaying instrumentation until DOMContentLoaded.
+        observer.observe(document, {
             subtree: true, childList: true, attributes: true,
             attributeFilter: ['data-photo-preview-state'],
         });
         window.__uxCommonPhotoStateHistory = history;
         window.__uxCommonPhotoStateObserver = observer;
     })();""".replace("__PRODUCT_ID__", json.dumps(str(product_id)))
+    # Page init scripts run before each page navigation; observing Document
+    # also works before the parser creates document.documentElement.
     page.add_init_script(script)
+
+
+def _reset_photo_state_history(page, slot: int) -> None:
+    reset = page.evaluate("""slot => {
+        const history = window.__uxCommonPhotoStateHistory;
+        if (!history || !Array.isArray(history[slot])) return false;
+        history[slot] = [];
+        return true;
+    }""", slot)
+    if reset is not True:
+        raise AssertionError("Photo state observer was not installed in the current document")
 
 
 def _photo_state_history(page, slot: int, *, start_at_pending: bool = False) -> list[str]:
@@ -2262,6 +2279,10 @@ def _run_common_photo_retry_case(page) -> None:
         _install_photo_state_observer(page, source_id)
         response = page.goto(BASE + query, wait_until="domcontentloaded")
         assert response and response.status == 200
+        page.wait_for_function("""() => {
+            const history = window.__uxCommonPhotoStateHistory;
+            return !!history && Array.isArray(history[0]) && Array.isArray(history[1]);
+        }""")
         page.locator("#common-content-fields").wait_for()
         initial_selection = _photo_selection_state(page, source_id)
         assert initial_selection["selected_count"] == 2
@@ -2378,7 +2399,7 @@ def _run_common_photo_retry_case(page) -> None:
             "domain_fingerprint": before_manual_domain["domain_fingerprint"],
         }
         pre_manual_count = len(PHOTO_CASE_CAPTURE["requests"])
-        page.evaluate("slot => { window.__uxCommonPhotoStateHistory[slot] = []; }", 1)
+        _reset_photo_state_history(page, 1)
         page.keyboard.press("Enter")
         manual_image = page.locator(
             _photo_card_selector(source_id, 1) + ' img[data-photo-preview-image][data-photo-preview-attempt="5"]'
