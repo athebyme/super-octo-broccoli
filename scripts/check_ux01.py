@@ -10,6 +10,7 @@ touch a persistent database, or inherit seller/provider credentials.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 
 
@@ -97,6 +99,109 @@ OPERATIONS_PRICING_PAGE_LABELS = frozenset({
     "ozon_proposal_classic",
 })
 OPERATIONS_PRICE_INIT_CHECK = "wb_price_change_initializes_once_and_renders_products"
+WORKSPACE_LEGACY_ACTION_CHECKS = frozenset({
+    "legacy_sidebar_keyboard_activation_reaches_exact_routes",
+    "command_palette_enter_reaches_help_and_social",
+    "legacy_product_actions_open_exact_product_routes",
+    "command_palette_account_link_preserves_selected_account",
+    "wb_only_tool_labels_and_image_lab_source_are_distinct",
+    "image_lab_fixture_photo_loads_with_imported_source_context",
+    "image_lab_empty_manual_override_suppresses_wb_fallback",
+})
+OPERATIONS_HISTORY_SCENARIO_CHECKS = frozenset({
+    "wb_history_batch31_exact_rows_values_and_outcomes",
+    "wb_history_owned_fix_link_opens_exact_product",
+    "wb_history_foreign_fix_link_absent",
+    "wb_history_unresolved_rows_no_retry_or_revert",
+})
+CLASSIC_DRAFT_FACTS_CHECK = "classic_draft_facts_scroll_regions_fit_320_360_light_dark"
+CLASSIC_DRAFT_FACTS_PAGE = "draft_detail_classic"
+CLASSIC_DRAFT_FACTS_WIDTHS = (320, 360)
+CLASSIC_DRAFT_FACTS_THEMES = ("light", "dark")
+CLASSIC_JOURNEY_PAGES = frozenset({
+    "supplier_catalog", "supplier_products", "supplier_source_detail",
+    "internal_ozon", "drafts_vue", "drafts_classic", "draft_detail_vue",
+    "draft_detail_classic", "review", "upload_history", "upload_result",
+    "internal_beta", "listing_vue", "listing_classic",
+})
+CLASSIC_JOURNEY_PAGE_VISITS = (
+    "supplier_catalog", "supplier_products", "supplier_source_detail",
+    "internal_ozon", "drafts_vue", "drafts_classic", "draft_detail_vue",
+    "draft_detail_classic", "review", "upload_history", "upload_result",
+    "internal_beta", "listing_vue", "listing_classic",
+    "supplier_catalog", "supplier_products", "supplier_source_detail",
+    "internal_ozon", "drafts_vue", "drafts_classic", "draft_detail_vue",
+    "draft_detail_classic", "review", "upload_history", "upload_result",
+)
+CLASSIC_JOURNEY_MACRO_LAYOUT_PAGES = frozenset({
+    "supplier_catalog", "supplier_products", "supplier_source_detail",
+    "internal_ozon", "drafts_vue", "drafts_classic", "draft_detail_vue",
+    "draft_detail_classic", "review", "upload_history", "upload_result",
+})
+CLASSIC_DRAFT_FACTS_REGION_KEYS = frozenset({
+    "visible", "left_px", "right_px", "client_width_px", "scroll_width_px",
+    "scrolls_horizontally", "overflow_x_auto", "role_region",
+    "has_accessible_name", "tabindex", "min_height_px", "table_width_px",
+    "table_min_width_px", "table_within_bounded_width", "row_count",
+    "value_wraps",
+})
+CLASSIC_DRAFT_FACTS_LAYOUT_KEYS = frozenset({
+    "page", "width", "theme", "actual_theme", "navigation_receipt",
+    "document_overflow_px", "body_overflow_px", "main_overflow_px",
+    "content_overflow_px", "form_overflow_px", "main_left_px",
+    "main_right_px", "summary_count", "summaries_fit_viewport",
+    "details_summary_bounds_px", "fact_region_count",
+    "visible_fact_region_count", "local_scroll_region_count",
+    "all_regions_accessible", "all_regions_fit_viewport",
+    "all_visible_regions_have_touch_height",
+    "all_visible_tables_within_bounded_width", "all_visible_values_wrap",
+    "synthetic_fact_marker_visible", "full_snapshot_retains_synthetic_fact",
+    "keyboard_focus_reached", "keyboard_focus_visible", "focus_outline_px",
+    "focus_outline_offset_px", "focus_outline_visible",
+    "focus_outline_inside_viewport", "keyboard_scroll_delta_px",
+    "classic_update_form_preserved", "classic_validate_form_preserved",
+    "classic_refresh_form_preserved", "region_rows",
+})
+WB_HISTORY_STORED_STATUS_COUNTS = {
+    "success": 25,
+    "failed": 1,
+    "pending": 1,
+    "submitted": 1,
+    "uncertain": 1,
+    "partial": 1,
+    "conflict": 1,
+}
+WB_HISTORY_RENDERED_STATUS_COUNTS = {
+    key: value for key, value in WB_HISTORY_STORED_STATUS_COUNTS.items()
+    if key != "conflict"
+}
+WB_HISTORY_PARENT_AGGREGATES = {
+    "total_products": 31,
+    "success_count": 29,
+    "error_count": 1,
+}
+WB_HISTORY_AGGREGATE_CARDS = [
+    {"label": "Всего товаров", "value": "31"},
+    {"label": "Обработано без ошибки", "value": "29"},
+    {"label": "Ошибок", "value": "1"},
+    {"label": "Без общей ошибки", "value": "94%"},
+]
+WB_QUANTITY_ROLLBACK_NOTE = (
+    "Безопасный откат для этой операции недоступен. Проверьте результаты строк выше."
+)
+WB_HISTORY_DOMAIN_COUNTS = {
+    "bulk_edit_history": 2,
+    "card_edit_history": 32,
+    "products": 32,
+}
+WB_HISTORY_READABLE_STATUS_TEXT = {
+    "success": "Результат WB: WB сообщил об успехе.",
+    "failed": "Результат WB: WB вернул ошибку; проверьте фактическое состояние перед новым действием.",
+    "pending": "Результат WB: Ожидается отправка или подтверждение.",
+    "submitted": "Результат WB: Изменение отправлено; итог ещё требует проверки.",
+    "uncertain": "Результат WB: Точный исход неизвестен. Не повторяйте изменение до сверки с WB.",
+    "partial": "Результат WB: WB подтвердил только часть изменения; проверьте сохранённые значения.",
+}
 OPERATIONS_PRICING_LAYOUT_VARIANTS = (
     (320, 100), (390, 100), (768, 100), (1024, 100),
     (1280, 100), (1440, 100), (320, 200), (390, 200),
@@ -142,9 +247,23 @@ WB_EDIT_REQUIRED_CHECKS = frozenset({
     "single_edit_owner_session_cannot_post_foreign_product",
     "single_edit_foreign_owner_session_cannot_post_seller_product",
     "single_edit_no_profile_post_redirects_without_provider_write",
+    "single_edit_uses_cached_country_weight_multi_schema_and_read_only_sku",
+    "single_edit_enabled_controls_contrast_aa_light_dark",
     "mixed_fixture_preview_selected50_eligible2_changed2_skipped48",
     "mixed_fixture_confirm_writes_exact_two_provider_products_with_history_readback",
 })
+WB_EDIT_CONTRAST_CHECK = "single_edit_enabled_controls_contrast_aa_light_dark"
+WB_EDIT_CONTRAST_THEMES = ("light", "dark")
+WB_EDIT_CONTRAST_CONTROL_NAMES = (
+    "cancel", "optional_picker_label", "optional_picker", "optional_add", "save",
+)
+WB_EDIT_CONTRAST_SELECTORS = (
+    '.sticky.bottom-0 a[href^="/products/"]',
+    'label[for="wb-optional-characteristic-picker"]',
+    "#wb-optional-characteristic-picker",
+    "#wb-add-optional-characteristic",
+    "form.space-y-6 button[type=\"submit\"]",
+)
 WB_EDIT_PAGES = frozenset({
     "products_list", "bulk_editor", "bulk_review",
     "single_product_edit", "unmapped_product_edit",
@@ -352,6 +471,218 @@ def _common_bulk_50_protocol_issues(data: dict) -> list[str]:
     return issues
 
 
+def _wb_keyboard_add_receipt_valid(receipt: object, *, field_id: int) -> bool:
+    if not isinstance(receipt, dict):
+        return False
+    picker = receipt.get("picker_focus")
+    add_button = receipt.get("add_button_focus")
+    control = receipt.get("added_control_focus")
+    return (
+        isinstance(picker, dict)
+        and picker.get("id") == "wb-optional-characteristic-picker"
+        and picker.get("selected_value") == str(field_id)
+        and isinstance(add_button, dict)
+        and add_button.get("text") == "Добавить поле"
+        and add_button.get("focus_visible") is True
+        and type(add_button.get("box_height")) is int
+        and add_button["box_height"] >= 44
+        and isinstance(control, dict)
+        and control.get("active_id") == f"char_{field_id}"
+        and control.get("field_tag") == "SELECT"
+        and control.get("focus_visible") is True
+    )
+
+
+def _finite_json_number(value: object) -> bool:
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def _valid_rgb_triplet(value: object) -> bool:
+    return (
+        isinstance(value, list) and len(value) == 3
+        and all(_finite_json_number(channel) and 0 <= channel <= 255 for channel in value)
+    )
+
+
+def _wcag_contrast_ratio(foreground: list, background: list) -> float:
+    def luminance(rgb: list) -> float:
+        linear = []
+        for channel in rgb:
+            normalized = channel / 255
+            linear.append(
+                normalized / 12.92
+                if normalized <= 0.04045
+                else ((normalized + 0.055) / 1.055) ** 2.4
+            )
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    first, second = sorted((luminance(foreground), luminance(background)))
+    return (second + 0.05) / (first + 0.05)
+
+
+def _wb_edit_contrast_protocol_issues(data: dict, checks: object) -> list[str]:
+    issue = "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"
+    issues: list[str] = []
+    named = [
+        row for row in checks
+        if isinstance(row, dict) and row.get("name") == WB_EDIT_CONTRAST_CHECK
+    ] if isinstance(checks, list) else []
+    expected_summary = (
+        len(named) == 1
+        and named[0].get("status") == "passed"
+        and named[0].get("themes") == list(WB_EDIT_CONTRAST_THEMES)
+        and named[0].get("control_names") == list(WB_EDIT_CONTRAST_CONTROL_NAMES)
+        and type(named[0].get("control_count")) is int
+        and named[0]["control_count"] == 10
+        and _finite_json_number(named[0].get("minimum_contrast_ratio"))
+        and named[0]["minimum_contrast_ratio"] == 4.5
+        and named[0].get("all_enabled_visible") is True
+        and named[0].get("all_settled") is True
+        and named[0].get("all_contrast_aa") is True
+        and named[0].get("failures") == []
+    )
+    if not expected_summary:
+        issues.append(issue)
+
+    rows = data.get("single_edit_contrast_diagnostic")
+    if not isinstance(rows, list) or len(rows) != 2:
+        issues.append(issue)
+        return issues
+    observed_themes = [row.get("requested_theme") if isinstance(row, dict) else None for row in rows]
+    if observed_themes != list(WB_EDIT_CONTRAST_THEMES):
+        issues.append(issue)
+        return issues
+
+    expected_ancestor_effects = {
+        "has_background_image", "has_filter", "has_backdrop_filter", "has_non_normal_blend",
+    }
+    expected_final_style_fields = {
+        "selector", "color", "background_color", "border_color", "opacity",
+        "box_shadow", "outline_color",
+    }
+    valid = True
+    for expected_theme, row in zip(WB_EDIT_CONTRAST_THEMES, rows):
+        viewport = row.get("viewport") if isinstance(row, dict) else None
+        stability = row.get("appearance_stability") if isinstance(row, dict) else None
+        final_styles = stability.get("final_computed_styles") if isinstance(stability, dict) else None
+        final_styles_valid = (
+            isinstance(final_styles, list)
+            and len(final_styles) == len(WB_EDIT_CONTRAST_SELECTORS)
+            and all(
+                isinstance(style, dict)
+                and set(style) == expected_final_style_fields
+                and style.get("selector") == selector
+                and all(
+                    isinstance(style.get(field), str)
+                    and 0 < len(style[field]) <= 160
+                    and style[field].strip()
+                    for field in expected_final_style_fields - {"selector"}
+                )
+                for style, selector in zip(
+                    final_styles if isinstance(final_styles, list) else (),
+                    WB_EDIT_CONTRAST_SELECTORS,
+                )
+            )
+            and len({style.get("selector") for style in final_styles if isinstance(style, dict)})
+                == len(WB_EDIT_CONTRAST_SELECTORS)
+        )
+        if not (
+            isinstance(row, dict)
+            and row.get("requested_theme") == expected_theme
+            and row.get("actual_theme") == expected_theme
+            and viewport == {"width": 390, "height": 900}
+            and row.get("measurement_valid") is True
+            and isinstance(stability, dict)
+            and stability.get("settled") is True
+            and type(stability.get("samples")) is int
+            and stability["samples"] >= 3
+            and type(stability.get("stable_frames")) is int
+            and stability["stable_frames"] >= 3
+            and _finite_json_number(stability.get("elapsed_ms"))
+            and stability["elapsed_ms"] >= 0
+            and stability.get("active_relevant_transitions") == []
+            and final_styles_valid
+        ):
+            valid = False
+            continue
+        controls = row.get("controls")
+        if not isinstance(controls, list) or len(controls) != len(WB_EDIT_CONTRAST_CONTROL_NAMES):
+            valid = False
+            continue
+        names = [control.get("name") if isinstance(control, dict) else None for control in controls]
+        if names != list(WB_EDIT_CONTRAST_CONTROL_NAMES):
+            valid = False
+            continue
+        selectors = [control.get("selector") if isinstance(control, dict) else None for control in controls]
+        if selectors != list(WB_EDIT_CONTRAST_SELECTORS):
+            valid = False
+            continue
+        for control in controls:
+            if not isinstance(control, dict):
+                valid = False
+                continue
+            foreground = control.get("effective_foreground_rgb")
+            background = control.get("effective_background_rgb")
+            ratio = control.get("contrast_ratio_estimate")
+            opacity_product = control.get("opacity_product")
+            opacity_chain = control.get("opacity_chain")
+            ancestor_effects = control.get("ancestor_effects")
+            background_layers = control.get("background_layers")
+            if not (
+                control.get("visible") is True
+                and control.get("in_viewport") is True
+                and control.get("enabled") is True
+                and control.get("disabled") is False
+                and isinstance(control.get("text"), str)
+                and bool(control["text"].strip())
+                and isinstance(control.get("computed_color"), str)
+                and bool(control["computed_color"].strip())
+                and isinstance(control.get("computed_background_color"), str)
+                and bool(control["computed_background_color"].strip())
+                and _valid_rgb_triplet(foreground)
+                and _valid_rgb_triplet(background)
+                and _finite_json_number(ratio)
+                and ratio >= 4.5
+                and abs(ratio - _wcag_contrast_ratio(foreground, background)) <= 0.02
+                and control.get("normal_text_wcag_aa") is True
+                and _finite_json_number(opacity_product)
+                and 0 < opacity_product <= 1
+                and isinstance(opacity_chain, list) and bool(opacity_chain)
+                and isinstance(ancestor_effects, dict)
+                and set(ancestor_effects) == expected_ancestor_effects
+                and all(type(value) is bool for value in ancestor_effects.values())
+                and isinstance(background_layers, list) and bool(background_layers)
+            ):
+                valid = False
+                continue
+            for opacity in opacity_chain:
+                if not (
+                    isinstance(opacity, dict)
+                    and isinstance(opacity.get("tag"), str)
+                    and isinstance(opacity.get("id"), str)
+                    and _finite_json_number(opacity.get("opacity"))
+                    and 0 <= opacity["opacity"] <= 1
+                ):
+                    valid = False
+            for layer in background_layers:
+                if not (
+                    isinstance(layer, dict)
+                    and all(isinstance(layer.get(field), str) for field in (
+                        "tag", "id", "background_color", "background_image",
+                        "filter", "backdrop_filter", "mix_blend_mode",
+                    ))
+                    and _valid_rgb_triplet(layer.get("background_rgb_after_compositing"))
+                    and _finite_json_number(layer.get("opacity"))
+                    and 0 <= layer["opacity"] <= 1
+                    and type(layer.get("has_background_image")) is bool
+                    and type(layer.get("background_changed")) is bool
+                ):
+                    valid = False
+    if not valid:
+        issues.append(issue)
+    return issues
+
+
 def _wb_edit_protocol_issues(data: dict) -> list[str]:
     """Require real single-edit and mixed-selection fixture evidence."""
     issues: list[str] = []
@@ -383,6 +714,7 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
             )
         if not expected_details:
             issues.append("wb_edit_named_check_missing_or_failed:" + name)
+    issues.extend(_wb_edit_contrast_protocol_issues(data, checks))
 
     expected_layouts = {
         (page, theme, width)
@@ -452,11 +784,9 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
         "requested_fields": ["characteristics"],
         "core_fields_requested": [],
         "core_fields_changed": [],
-        "characteristic_ids": [202, 303, 404],
+        "characteristic_ids": [202],
         "characteristics": [
             {"id": 202, "value": ["Россия"]},
-            {"id": 303, "value": 125},
-            {"id": 404, "value": ["Пластик", "Металл"]},
         ],
         "full_card_read_before": True,
         "full_card_patch_merged": True,
@@ -497,14 +827,150 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
         and form_post.get("csrf_field_present") is True
         and type(form_post.get("fake_write_count")) is int and form_post["fake_write_count"] == 1
         and isinstance(readback, dict)
-        and readback.get("characteristic_ids") == [101, 202, 303, 404]
+        and readback.get("characteristic_ids") == [101, 202, 303, 404, 501, 502, 506]
         and type(readback.get("size_count")) is int and readback["size_count"] == 1
         and readback.get("sku") == "SYNTHETIC-WB-SKU-000"
         and type(readback.get("direct_history_count")) is int
         and readback["direct_history_count"] == 1
         and readback.get("history_changed_fields") == ["characteristics"]
+        and form_post.get("submit_button_label") == "Сохранить в WB"
+        and form_post.get("target_channel") == "Wildberries"
+        and form_post.get("required_missing_id") == 500
+        and form_post.get("required_missing_value") == ""
+        and form_post.get("required_missing_omitted_from_patch") is True
     ):
         issues.append("wb_single_edit_form_and_history_evidence_incomplete")
+
+    save_checks = [
+        row for row in checks
+        if isinstance(row, dict)
+        and row.get("name") == "single_edit_real_form_submit_reaches_fake_wb_and_persists_exact_history"
+    ] if isinstance(checks, list) else []
+    if not (
+        len(save_checks) == 1
+        and save_checks[0].get("changed_characteristics") == [202]
+        and save_checks[0].get("submit_button_label") == "Сохранить в WB"
+        and save_checks[0].get("target_channel") == "Wildberries"
+        and save_checks[0].get("required_missing_value") == ""
+        and save_checks[0].get("required_missing_omitted_from_patch") is True
+        and type(save_checks[0].get("direct_history_count")) is int
+        and save_checks[0]["direct_history_count"] == 1
+        and save_checks[0].get("sizes_and_sku_preserved") is True
+    ):
+        issues.append("wb_single_edit_save_receipt_details_incomplete")
+
+    progressive_checks = [
+        row for row in checks
+        if isinstance(row, dict)
+        and row.get("name") == "single_edit_uses_cached_country_weight_multi_schema_and_read_only_sku"
+    ] if isinstance(checks, list) else []
+    progressive = observations.get("progressive_ui") if isinstance(observations, dict) else None
+    initial_view = progressive.get("initial_view") if isinstance(progressive, dict) else None
+    request_submit = (
+        progressive.get("empty_add_request_submit_attempt")
+        if isinstance(progressive, dict) else None
+    )
+    enter_submit = (
+        progressive.get("empty_add_enter_attempt")
+        if isinstance(progressive, dict) else None
+    )
+    if not (
+        len(progressive_checks) == 1
+        and progressive_checks[0].get("schema_fields") == 31
+        and progressive_checks[0].get("initial_visible_field_ids") == [101, 303, 404, 500, 502, 506]
+        and progressive_checks[0].get("required_missing_id") == 500
+        and progressive_checks[0].get("stale_read_only_id") == 501
+        and progressive_checks[0].get("stale_read_only_disclosure_keyboard") is True
+        and progressive_checks[0].get("stale_read_only_displayed") is True
+        and progressive_checks[0].get("stale_read_only_control_count") == 0
+        and progressive_checks[0].get("optional_country_picker_label") == "Страна производства"
+        and progressive_checks[0].get("picker_keyboard_selection") == 202
+        and progressive_checks[0].get("present_empty_id") == 506
+        and progressive_checks[0].get("present_empty_visible") is True
+        and progressive_checks[0].get("present_empty_excluded_from_picker") is True
+        and progressive_checks[0].get("empty_add_remove_dirty") is False
+        and progressive_checks[0].get("empty_add_no_post_or_provider") is True
+        and isinstance(initial_view, dict)
+        and initial_view.get("viewport_width") == 390
+        and type(initial_view.get("document_width")) is int
+        and initial_view.get("document_width") <= 390
+        and initial_view.get("schema_field_count") == 31
+        and initial_view.get("visible_field_ids") == [101, 303, 404, 500, 502, 506]
+        and initial_view.get("required_missing_visible") is True
+        and initial_view.get("required_missing_input_visible") is True
+        and initial_view.get("country_hidden_until_chosen") is True
+        and initial_view.get("picker_country_label") == "Страна производства"
+        and initial_view.get("optional_choice_count") == 25
+        and initial_view.get("present_empty_visible") is True
+        and initial_view.get("present_empty_excluded_from_picker") is True
+        and initial_view.get("filled_summary") == "4 заполнено · 31 в схеме"
+        and initial_view.get("has_changes") is False
+        and initial_view.get("save_disabled") is True
+        and isinstance(initial_view.get("picker_box"), dict)
+        and type(initial_view["picker_box"].get("width")) is int
+        and initial_view["picker_box"]["width"] >= 44
+        and type(initial_view["picker_box"].get("height")) is int
+        and initial_view["picker_box"]["height"] >= 44
+        and isinstance(initial_view.get("add_button_box"), dict)
+        and type(initial_view["add_button_box"].get("width")) is int
+        and initial_view["add_button_box"]["width"] >= 44
+        and type(initial_view["add_button_box"].get("height")) is int
+        and initial_view["add_button_box"]["height"] >= 44
+        and initial_view.get("saved_text_input") is True
+        and initial_view.get("numeric_grams_input") is True
+        and initial_view.get("dictionary_multiple_select") is True
+        and initial_view.get("bounded_textarea") is True
+        and isinstance(progressive.get("stale_legacy_field_read_only"), dict)
+        and progressive["stale_legacy_field_read_only"].get("field_id") == 501
+        and progressive["stale_legacy_field_read_only"].get("disclosure_opened_by_keyboard") is True
+        and progressive["stale_legacy_field_read_only"].get("field_text_present") is True
+        and progressive["stale_legacy_field_read_only"].get("saved_value_present") is True
+        and progressive["stale_legacy_field_read_only"].get("form_control_count") == 0
+        and isinstance(request_submit, dict)
+        and request_submit.get("submit_event") == {"seen": True, "default_prevented": True}
+        and request_submit.get("still_on_edit_route") is True
+        and all(type(request_submit.get(field)) is int for field in (
+            "post_count", "fake_client_instances", "fake_single_write_calls",
+            "provider_attempts", "post_count_delta", "fake_client_delta", "fake_write_delta",
+        ))
+        and request_submit.get("provider_attempts") == 0
+        and request_submit.get("post_count_delta") == 0
+        and request_submit.get("fake_client_delta") == 0
+        and request_submit.get("fake_write_delta") == 0
+        and _wb_keyboard_add_receipt_valid(
+            progressive.get("empty_optional_add_keyboard") if isinstance(progressive, dict) else None,
+            field_id=202,
+        )
+        and _wb_keyboard_add_receipt_valid(
+            progressive.get("country_picker_add_keyboard") if isinstance(progressive, dict) else None,
+            field_id=202,
+        )
+        and isinstance(progressive.get("empty_optional_remove_keyboard"), dict)
+        and progressive["empty_optional_remove_keyboard"].get("picker_focused") is True
+        and progressive["empty_optional_remove_keyboard"].get("has_changes") is False
+        and isinstance(progressive["empty_optional_remove_keyboard"].get("focus"), dict)
+        and progressive["empty_optional_remove_keyboard"]["focus"].get("label")
+        == "Убрать пустое поле «Страна производства»"
+        and progressive["empty_optional_remove_keyboard"]["focus"].get("focus_visible") is True
+        and type(progressive["empty_optional_remove_keyboard"]["focus"].get("box_height")) is int
+        and progressive["empty_optional_remove_keyboard"]["focus"]["box_height"] >= 44
+        and progressive["empty_optional_remove_keyboard"].get("post_count_delta") == 0
+        and progressive["empty_optional_remove_keyboard"].get("fake_client_delta") == 0
+        and progressive["empty_optional_remove_keyboard"].get("fake_write_delta") == 0
+        and isinstance(enter_submit, dict)
+        and enter_submit.get("still_on_edit_route") is True
+        and enter_submit.get("has_changes") is False
+        and enter_submit.get("save_disabled") is True
+        and all(type(enter_submit.get(field)) is int for field in (
+            "post_count", "fake_client_instances", "fake_single_write_calls",
+            "provider_attempts", "post_count_delta", "fake_client_delta", "fake_write_delta",
+        ))
+        and enter_submit.get("provider_attempts") == 0
+        and enter_submit.get("post_count_delta") == 0
+        and enter_submit.get("fake_client_delta") == 0
+        and enter_submit.get("fake_write_delta") == 0
+    ):
+        issues.append("wb_single_edit_progressive_empty_submit_guard_incomplete")
 
     alignment = observations.get("core_form_alignment") if isinstance(observations, dict) else None
     core_fields = {"vendor_code", "title", "description", "brand"}
@@ -532,6 +998,7 @@ def _wb_edit_protocol_issues(data: dict) -> list[str]:
         and reopen.get("country") == "Россия"
         and type(reopen.get("weight_grams")) is int and reopen["weight_grams"] == 125
         and reopen.get("materials") == ["Пластик", "Металл"]
+        and reopen.get("present_empty_field_preserved") is True
         and reopen.get("sku_read_only") is True
     ):
         issues.append("wb_single_edit_reopen_evidence_incomplete")
@@ -1069,9 +1536,876 @@ def _common_content_protocol_issues(data: dict) -> list[str]:
     return issues
 
 
+def _is_positive_id(value: object) -> bool:
+    return type(value) is int and 0 < value <= (2**63 - 1)
+
+
+def _is_loopback_origin(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == "127.0.0.1"
+        and port is not None and 1 <= port <= 65535
+        and parsed.username is None and parsed.password is None
+        and parsed.path == "" and parsed.query == "" and parsed.fragment == ""
+    )
+
+
+def _route_receipt_valid(row: object, path: str, heading: str | None = None) -> bool:
+    if not isinstance(row, dict):
+        return False
+    valid = (
+        _is_loopback_origin(row.get("origin"))
+        and row.get("method") == "GET"
+        and row.get("path") == path
+        and type(row.get("http_status")) is int
+        and row.get("http_status") == 200
+    )
+    if heading is not None:
+        valid = valid and row.get("page_heading") == heading
+    return valid
+
+
+def _named_receipt_rows(data: dict, field: str,
+                        required_names: frozenset[str]) -> tuple[dict[str, dict], bool]:
+    rows = data.get(field)
+    if not isinstance(rows, list) or len(rows) != len(required_names):
+        return {}, False
+    by_name: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            return {}, False
+        name = row["name"]
+        if name in by_name:
+            return {}, False
+        by_name[name] = row
+    if set(by_name) != required_names:
+        return {}, False
+    return by_name, all(row.get("status") == "passed" for row in by_name.values())
+
+
+def _count_snapshot_unchanged(data: dict, field: str,
+                              expected_keys: set[str]) -> bool:
+    state = data.get(field)
+    if not isinstance(state, dict) or state.get("unchanged") is not True:
+        return False
+    before, after = state.get("before"), state.get("after")
+    return (
+        isinstance(before, dict) and isinstance(after, dict)
+        and set(before) == expected_keys and set(after) == expected_keys
+        and all(type(value) is int and value >= 0 for value in before.values())
+        and all(type(value) is int and value >= 0 for value in after.values())
+        and before == after
+    )
+
+
+def _exact_integer_count_map(actual: object, expected: dict[str, int]) -> bool:
+    return (
+        isinstance(actual, dict) and set(actual) == set(expected)
+        and all(type(value) is int for value in actual.values())
+        and actual == expected
+    )
+
+
+def _workspace_legacy_action_protocol_issues(data: dict) -> list[str]:
+    """Require separate, typed receipts for the new legacy-navigation checks."""
+    issues: list[str] = []
+    rows, passed = _named_receipt_rows(
+        data, "legacy_action_checks", WORKSPACE_LEGACY_ACTION_CHECKS,
+    )
+    if not passed:
+        issues.append("workspace_legacy_action_receipts_missing_duplicate_or_failed")
+        return issues
+    if (not isinstance(data.get("pages"), list) or len(data["pages"]) != 37
+            or not isinstance(data.get("layouts"), list) or len(data["layouts"]) != 43
+            or not isinstance(data.get("interactions"), list) or len(data["interactions"]) != 28):
+        issues.append("workspace_original_37_43_28_matrices_changed")
+
+    sidebar = rows["legacy_sidebar_keyboard_activation_reaches_exact_routes"]
+    if not (
+        _route_receipt_valid(sidebar, "/products/merge", "Объединение карточек WB")
+        and sidebar.get("activation") == "Tab+Enter"
+        and sidebar.get("label") == "Объединить карточки WB"
+    ):
+        issues.append("workspace_legacy_sidebar_route_receipt_invalid")
+
+    palette = rows["command_palette_enter_reaches_help_and_social"]
+    expected_palette_routes = {
+        ("Документация", "/docs/", "Документация"),
+        ("Социальные подключения", "/content-factory/accounts", "Подключённые аккаунты"),
+    }
+    palette_routes = palette.get("routes")
+    seen_palette_routes = set()
+    if isinstance(palette_routes, list):
+        for route in palette_routes:
+            if not isinstance(route, dict):
+                continue
+            route_identity = (route.get("label"), route.get("path"), route.get("page_heading"))
+            if all(isinstance(value, str) for value in route_identity):
+                seen_palette_routes.add(route_identity)
+            else:
+                issues.append("workspace_command_palette_route_receipt_invalid")
+                continue
+            if (route.get("activation") != "Ctrl+K+Enter"
+                    or not _route_receipt_valid(
+                        route, route.get("path"), route.get("page_heading")
+                        if isinstance(route.get("page_heading"), str) else None,
+                    )):
+                issues.append("workspace_command_palette_route_receipt_invalid")
+                break
+    if (not isinstance(palette_routes, list) or len(palette_routes) != 2
+            or seen_palette_routes != expected_palette_routes):
+        issues.append("workspace_command_palette_routes_incomplete_or_wrong")
+
+    product_actions = rows["legacy_product_actions_open_exact_product_routes"]
+    product_id = product_actions.get("product_id")
+    expected_product_actions = {
+        ("История", f"/products/{product_id}/history", "История изменений карточки"),
+        ("Обогатить", f"/products/{product_id}/enrich", "Обогащение от поставщика"),
+        ("Редактировать", f"/products/{product_id}/edit", "Редактирование карточки"),
+    } if _is_positive_id(product_id) else set()
+    action_rows = product_actions.get("actions")
+    seen_actions = set()
+    if isinstance(action_rows, list):
+        for action in action_rows:
+            if not isinstance(action, dict):
+                continue
+            label, path, heading = (
+                action.get("label"), action.get("path"), action.get("page_heading"),
+            )
+            if all(isinstance(value, str) for value in (label, path, heading)):
+                seen_actions.add((label, path, heading))
+            else:
+                issues.append("workspace_product_action_route_receipt_invalid")
+                continue
+            if (action.get("method") != "GET"
+                    or not _is_loopback_origin(action.get("origin"))
+                    or type(action.get("http_status")) is not int
+                    or action.get("http_status") != 200
+                    or action.get("title_matches") is not True):
+                issues.append("workspace_product_action_route_receipt_invalid")
+                break
+    if (not _is_positive_id(product_id)
+            or not _is_loopback_origin(product_actions.get("origin"))
+            or product_actions.get("method") != "GET"
+            or not _is_positive_id(product_actions.get("foreign_product_id"))
+            or product_actions.get("foreign_product_id") == product_id
+            or product_actions.get("foreign_scope_denial") != {
+                "method": "GET",
+                "path": f"/products/{product_actions.get('foreign_product_id')}",
+                "http_status": 404,
+            }
+            or not isinstance(action_rows, list) or len(action_rows) != 3
+            or seen_actions != expected_product_actions):
+        issues.append("workspace_product_action_routes_incomplete_or_wrong")
+    if not isinstance(data.get("expected_http_denials"), list) or data.get("expected_http_denials") != [{
+        "method": "GET",
+        "path": f"/products/{product_actions.get('foreign_product_id')}",
+        "status": 404,
+    }]:
+        issues.append("workspace_foreign_product_scope_denial_receipt_invalid")
+    denial_origin = product_actions.get("origin")
+    denial_path = f"/products/{product_actions.get('foreign_product_id')}"
+    expected_denial_console_errors = [{
+        "method": "GET",
+        "origin": denial_origin,
+        "path": denial_path,
+        "http_status": 404,
+        "text": "Failed to load resource: the server responded with a status of 404 (NOT FOUND)",
+        "location_url": f"{denial_origin}{denial_path}",
+    }]
+    denial_console_errors = data.get("expected_denial_console_errors")
+    if (not _is_loopback_origin(denial_origin)
+            or not isinstance(denial_console_errors, list)
+            or len(denial_console_errors) != 1
+            or denial_console_errors != expected_denial_console_errors):
+        issues.append("workspace_foreign_denial_console_receipt_invalid")
+
+    account = rows["command_palette_account_link_preserves_selected_account"]
+    account_id = account.get("selected_account_id")
+    downstream_query = account.get("downstream_account_query")
+    if not (
+        _route_receipt_valid(account, "/marketplaces/listings/", "Каталог маркетплейсов")
+        and account.get("palette_label") == "Карточки кабинетов"
+        and account.get("palette_href_path") == "/marketplaces/listings/"
+        and _is_positive_id(account_id)
+        and account.get("page_heading") == "Каталог маркетплейсов"
+        and account.get("rendered_account_label") == "Ozon CI 0"
+        and account.get("downstream_account_href_path") == "/marketplaces/drafts/"
+        and isinstance(downstream_query, dict)
+        and set(downstream_query) == {"account_id"}
+        and type(downstream_query.get("account_id")) is int
+        and downstream_query.get("account_id") == account_id
+        and account.get("account_context_preserved") is True
+    ):
+        issues.append("workspace_account_context_route_receipt_invalid")
+
+    tools = rows["wb_only_tool_labels_and_image_lab_source_are_distinct"]
+    if not (
+        _route_receipt_valid(tools, "/image-lab")
+        and tools.get("image_lab_page_heading") == "Фотостудия"
+        and tools.get("ozon_listing_page_heading") == "Каталог маркетплейсов"
+        and tools.get("wb_tool_heading") == "Инструменты Wildberries"
+        and tools.get("wb_merge_href_path") == "/products/merge"
+        and tools.get("ozon_listings_href_path") == "/marketplaces/listings/"
+        and isinstance(tools.get("ozon_listings_query"), dict)
+        and set(tools["ozon_listings_query"]) == {"account_id"}
+        and type(tools["ozon_listings_query"].get("account_id")) is int
+        and tools["ozon_listings_query"].get("account_id") == account_id
+        and tools.get("ozon_account_label") == "Ozon CI 0"
+        and tools.get("groups_distinct") is True
+    ):
+        issues.append("workspace_wb_ozon_tool_scope_receipt_invalid")
+
+    photo = rows["image_lab_fixture_photo_loads_with_imported_source_context"]
+    photo_product_id = photo.get("source_product_id")
+    photo_path = f"/image-lab/api/products/{photo_product_id}/original"
+    digest = photo.get("fake_photo_sha256")
+    original_get = photo.get("original_get")
+    if not (
+        _is_positive_id(photo_product_id)
+        and _route_receipt_valid(photo, "/image-lab", "Фотостудия")
+        and photo.get("page_heading") == "Фотостудия"
+        and isinstance(original_get, dict)
+        and original_get == {
+            "method": "GET", "path": photo_path, "status": 200,
+            "content_type": "image/png",
+        }
+        and photo.get("source_type") == "imported_product"
+        and photo.get("source_title") == "Synthetic imported photo source"
+        and _is_positive_id(photo.get("listing_id"))
+        and _is_positive_id(photo.get("listing_account_id"))
+        and photo.get("listing_account_id") == account_id
+        and type(photo.get("fake_transport_read_count")) is int
+        and photo.get("fake_transport_read_count") == 1
+        and isinstance(digest, str) and _valid_sha256(digest)
+        and type(photo.get("image_natural_width")) is int
+        and photo.get("image_natural_width") == 64
+        and type(photo.get("image_natural_height")) is int
+        and photo.get("image_natural_height") == 64
+    ):
+        issues.append("workspace_image_lab_known_photo_receipt_invalid")
+
+    empty_photo = rows["image_lab_empty_manual_override_suppresses_wb_fallback"]
+    experiments_before, experiments_after = (
+        empty_photo.get("experiments_before"), empty_photo.get("experiments_after"),
+    )
+    if not (
+        _is_positive_id(empty_photo.get("source_product_id"))
+        and empty_photo.get("explicit_empty_override") is True
+        and empty_photo.get("excluded_from_lab") is True
+        and type(empty_photo.get("override_schema_version")) is int
+        and empty_photo.get("override_schema_version") == 1
+        and type(empty_photo.get("content_edit_version")) is int
+        and empty_photo.get("content_edit_version") == 2
+        and type(empty_photo.get("override_photo_count")) is int
+        and empty_photo.get("override_photo_count") == 0
+        and type(empty_photo.get("effective_photo_count")) is int
+        and empty_photo.get("effective_photo_count") == 0
+        and type(empty_photo.get("inherited_source_photo_count")) is int
+        and empty_photo.get("inherited_source_photo_count") == 1
+        and _is_positive_id(empty_photo.get("wb_linked_product_id"))
+        and empty_photo.get("wb_linked_product_id") == product_id
+        and type(empty_photo.get("wb_photo_fallback_reads")) is int
+        and empty_photo.get("wb_photo_fallback_reads") == 0
+        and type(empty_photo.get("wb_photo_fallback_downloads")) is int
+        and empty_photo.get("wb_photo_fallback_downloads") == 0
+        and type(experiments_before) is int and type(experiments_after) is int
+        and experiments_before == experiments_after
+    ):
+        issues.append("workspace_empty_manual_photo_fallback_receipt_invalid")
+
+    if (data.get("legacy_domain_sql_writes") != []
+            or not _count_snapshot_unchanged(data, "legacy_domain_state", {
+                "products", "card_edit_history", "imported_products",
+                "marketplace_listings", "image_generation_experiments",
+            })
+            or type(data.get("legacy_post_count")) is not int
+            or data.get("legacy_post_count") != 0
+            or data.get("browser_mutations") != []):
+        issues.append("workspace_legacy_domain_state_changed_or_write_attempted")
+    elif type(experiments_before) is int:
+        state = data.get("legacy_domain_state", {})
+        if (experiments_before != state["before"]["image_generation_experiments"]
+                or experiments_after != state["after"]["image_generation_experiments"]):
+            issues.append("workspace_image_lab_experiment_count_mismatch")
+
+    fake_reads = data.get("image_lab_fake_reads")
+    if (not isinstance(fake_reads, list) or len(fake_reads) != 1
+            or not isinstance(fake_reads[0], dict)
+            or fake_reads[0].get("transport") != "synthetic_imported_photo"
+            or fake_reads[0].get("fake_photo_sha256") != photo.get("fake_photo_sha256")
+            or not isinstance(data.get("image_lab_wb_fallback_reads"), list)
+            or data.get("image_lab_wb_fallback_reads") != []
+            or type(data.get("image_lab_wb_fallback_downloads")) is not int
+            or data.get("image_lab_wb_fallback_downloads") != 0):
+        issues.append("workspace_image_lab_transport_reads_unexpected")
+
+    origins = [sidebar.get("origin"), account.get("origin"), tools.get("origin"), photo.get("origin")]
+    origins.extend(
+        route.get("origin") for route in palette_routes if isinstance(route, dict)
+    ) if isinstance(palette_routes, list) else None
+    origins.extend(
+        action.get("origin") for action in action_rows if isinstance(action, dict)
+    ) if isinstance(action_rows, list) else None
+    if (not all(_is_loopback_origin(origin) for origin in origins)
+            or len(set(origins)) != 1):
+        issues.append("workspace_legacy_routes_not_bound_to_one_loopback_origin")
+    return issues
+
+
+def _history_scenario_protocol_issues(data: dict) -> list[str]:
+    """Require exact, read-only receipts for the isolated 31-row WB history fixture."""
+    issues: list[str] = []
+    rows, passed = _named_receipt_rows(
+        data, "history_scenario_checks", OPERATIONS_HISTORY_SCENARIO_CHECKS,
+    )
+    if not passed:
+        issues.append("ops_history_scenario_receipts_missing_duplicate_or_failed")
+        return issues
+
+    batch = rows["wb_history_batch31_exact_rows_values_and_outcomes"]
+    bulk_id = batch.get("bulk_id")
+    product_ids = batch.get("product_ids")
+    owned_ids = batch.get("owned_product_ids")
+    foreign_id = batch.get("foreign_product_id")
+    id_lists_valid = (
+        isinstance(product_ids, list) and len(product_ids) == 31
+        and all(_is_positive_id(value) for value in product_ids)
+        and len(set(product_ids)) == 31
+        and isinstance(owned_ids, list) and len(owned_ids) == 30
+        and all(_is_positive_id(value) for value in owned_ids)
+        and len(set(owned_ids)) == 30
+        and _is_positive_id(foreign_id)
+        and foreign_id in product_ids and foreign_id not in owned_ids
+        and set(owned_ids).issubset(set(product_ids))
+        and set(product_ids) == set(owned_ids) | {foreign_id}
+        and product_ids[-2] == foreign_id
+        and product_ids[-1] in owned_ids
+    )
+    stored_status_counts = batch.get("status_counts")
+    rendered_status_counts = batch.get("rendered_status_counts")
+    expected_status_rows = batch.get("product_statuses")
+    status_scope_valid = False
+    statuses_by_id: dict[int, str] = {}
+    if id_lists_valid and isinstance(expected_status_rows, list) and len(expected_status_rows) == 31:
+        for status_row in expected_status_rows:
+            if (not isinstance(status_row, dict)
+                    or not _is_positive_id(status_row.get("product_id"))
+                    or not isinstance(status_row.get("wb_sync_status"), str)
+                    or status_row["product_id"] in statuses_by_id):
+                statuses_by_id = {}
+                break
+            statuses_by_id[status_row["product_id"]] = status_row["wb_sync_status"]
+        status_scope_valid = (
+            set(statuses_by_id) == set(product_ids)
+            and statuses_by_id.get(foreign_id) == "conflict"
+            and Counter(
+                statuses_by_id[value] for value in owned_ids
+            ) == Counter({
+                "success": 25, "failed": 1, "pending": 1,
+                "submitted": 1, "uncertain": 1, "partial": 1,
+            })
+        )
+    rendered_status_rows = batch.get("rendered_product_statuses")
+    rendered_status_scope_valid = False
+    if id_lists_valid and isinstance(rendered_status_rows, list) and len(rendered_status_rows) == 30:
+        rendered_by_id: dict[int, dict] = {}
+        for status_row in rendered_status_rows:
+            if (not isinstance(status_row, dict)
+                    or not _is_positive_id(status_row.get("product_id"))
+                    or status_row["product_id"] in rendered_by_id
+                    or not isinstance(status_row.get("wb_sync_status"), str)
+                    or not isinstance(status_row.get("readable_outcome"), str)):
+                rendered_by_id = {}
+                break
+            rendered_by_id[status_row["product_id"]] = status_row
+        rendered_status_scope_valid = (
+            set(rendered_by_id) == set(owned_ids)
+            and all(
+                rendered_by_id[product_id].get("wb_sync_status") == statuses_by_id.get(product_id)
+                and " ".join(rendered_by_id[product_id]["readable_outcome"].split())
+                == WB_HISTORY_READABLE_STATUS_TEXT.get(statuses_by_id.get(product_id))
+                for product_id in owned_ids
+            )
+        )
+    quantity_values = batch.get("owned_quantity_values")
+    quantity_scope_valid = False
+    if id_lists_valid and isinstance(quantity_values, list) and len(quantity_values) == 30:
+        quantities_by_id: dict[int, dict] = {}
+        for value in quantity_values:
+            if (not isinstance(value, dict)
+                    or not _is_positive_id(value.get("product_id"))
+                    or value["product_id"] in quantities_by_id
+                    or any(type(value.get(field)) is not int for field in ("before", "after"))
+                    or type(value.get("rendered_before")) is not str
+                    or type(value.get("rendered_after")) is not str
+                    or value.get("rendered_before") != str(value.get("before"))
+                    or value.get("rendered_after") != str(value.get("after"))):
+                quantities_by_id = {}
+                break
+            quantities_by_id[value["product_id"]] = value
+        quantity_scope_valid = set(quantities_by_id) == set(owned_ids)
+
+    pending_id = batch.get("pending_unprocessed_product_id")
+    pending_scope_valid = (
+        id_lists_valid
+        and _is_positive_id(pending_id)
+        and pending_id == product_ids[-1]
+        and pending_id in owned_ids
+        and statuses_by_id.get(pending_id) == "pending"
+    )
+    aggregate_cards = batch.get("aggregate_cards")
+    if not (
+        _is_positive_id(bulk_id)
+        and _route_receipt_valid(
+            batch, f"/bulk-history/{bulk_id}",
+            "R10 synthetic batch31 mixed WB row outcomes",
+        )
+        and batch.get("operation_status") == "in_progress"
+        and type(batch.get("operation_success_count")) is int
+        and batch.get("operation_success_count") == 29
+        and type(batch.get("operation_error_count")) is int
+        and batch.get("operation_error_count") == 1
+        and batch.get("operation_completed_at") is None
+        and batch.get("operation_duration_seconds") is None
+        and pending_scope_valid
+        and type(batch.get("total_products")) is int and batch.get("total_products") == 31
+        and type(batch.get("rendered_rows")) is int and batch.get("rendered_rows") == 31
+        and type(batch.get("owned_visible_rows")) is int and batch.get("owned_visible_rows") == 30
+        and type(batch.get("foreign_hidden_rows")) is int and batch.get("foreign_hidden_rows") == 1
+        and id_lists_valid
+        and _exact_integer_count_map(stored_status_counts, WB_HISTORY_STORED_STATUS_COUNTS)
+        and _exact_integer_count_map(rendered_status_counts, WB_HISTORY_RENDERED_STATUS_COUNTS)
+        and status_scope_valid
+        and rendered_status_scope_valid
+        and quantity_scope_valid
+        and batch.get("values_exact") is True
+        and batch.get("exact_owned_product_ids") is True
+        and _exact_integer_count_map(batch.get("aggregates"), WB_HISTORY_PARENT_AGGREGATES)
+        and aggregate_cards == WB_HISTORY_AGGREGATE_CARDS
+    ):
+        issues.append("ops_history_batch31_scope_values_or_outcomes_invalid")
+
+    owned_link = rows["wb_history_owned_fix_link_opens_exact_product"]
+    linked_id = owned_link.get("product_id")
+    if not (
+        id_lists_valid and linked_id in owned_ids
+        and _route_receipt_valid(owned_link, f"/products/{linked_id}")
+        and owned_link.get("clicked_label") == "Карточка WB"
+        and owned_link.get("title_matches") is True
+        and owned_link.get("vendor_code_matches") is True
+        and owned_link.get("nm_id_matches") is True
+    ):
+        issues.append("ops_history_owned_fix_link_scope_or_route_invalid")
+
+    foreign = rows["wb_history_foreign_fix_link_absent"]
+    if not (
+        id_lists_valid
+        and foreign.get("foreign_product_id") == foreign_id
+        and type(foreign.get("fix_link_count")) is int
+        and foreign.get("fix_link_count") == 0
+        and type(foreign.get("history_link_count")) is int
+        and foreign.get("history_link_count") == 0
+        and foreign.get("private_text_absent") is True
+    ):
+        issues.append("ops_history_foreign_fix_link_or_data_exposed")
+
+    unresolved = rows["wb_history_unresolved_rows_no_retry_or_revert"]
+    unresolved_rows = unresolved.get("unresolved_product_statuses")
+    expected_unresolved = {
+        product_id: statuses_by_id.get(product_id)
+        for product_id in owned_ids
+        if statuses_by_id.get(product_id) in {"pending", "submitted", "uncertain", "partial"}
+    } if id_lists_valid else {}
+    observed_unresolved = {}
+    if isinstance(unresolved_rows, list):
+        for row in unresolved_rows:
+            if (not isinstance(row, dict)
+                    or not _is_positive_id(row.get("product_id"))
+                    or not isinstance(row.get("wb_sync_status"), str)
+                    or row["product_id"] in observed_unresolved):
+                observed_unresolved = {}
+                break
+            observed_unresolved[row["product_id"]] = row["wb_sync_status"]
+    completed_view = unresolved.get("completed_quantity_rollback_view")
+    completed_product_id = (
+        completed_view.get("product_id") if isinstance(completed_view, dict) else None
+    )
+    before_snapshot = (
+        completed_view.get("snapshot_before") if isinstance(completed_view, dict) else None
+    )
+    after_snapshot = (
+        completed_view.get("snapshot_after") if isinstance(completed_view, dict) else None
+    )
+    rollback_note_text = (
+        completed_view.get("unsupported_note_text")
+        if isinstance(completed_view, dict) else None
+    )
+    completed_quantity_view_valid = (
+        isinstance(completed_view, dict)
+        and _is_positive_id(completed_view.get("operation_id"))
+        and completed_view.get("operation_id") != bulk_id
+        and completed_view.get("origin") == batch.get("origin")
+        and _route_receipt_valid(
+            completed_view,
+            f"/bulk-history/{completed_view.get('operation_id')}",
+            "R10 completed quantity-only rollback fixture",
+        )
+        and completed_view.get("operation_status") == "completed"
+        and type(completed_view.get("total_products")) is int
+        and completed_view.get("total_products") == 1
+        and type(completed_view.get("success_count")) is int
+        and completed_view.get("success_count") == 1
+        and type(completed_view.get("error_count")) is int
+        and completed_view.get("error_count") == 0
+        and _is_positive_id(completed_product_id)
+        and completed_product_id not in product_ids
+        and _is_positive_id(completed_view.get("operation_seller_id"))
+        and _is_positive_id(completed_view.get("product_seller_id"))
+        and completed_view.get("operation_seller_id") == completed_view.get("product_seller_id")
+        and completed_view.get("owned_identity_matches") is True
+        and type(completed_view.get("card_edit_history_count")) is int
+        and completed_view.get("card_edit_history_count") == 1
+        and isinstance(completed_view.get("product_title"), str)
+        and bool(completed_view.get("product_title").strip())
+        and isinstance(completed_view.get("vendor_code"), str)
+        and bool(completed_view.get("vendor_code").strip())
+        and _is_positive_id(completed_view.get("nm_id"))
+        and completed_view.get("title_matches") is True
+        and completed_view.get("vendor_code_matches") is True
+        and completed_view.get("nm_id_matches") is True
+        and completed_view.get("changed_fields") == ["quantity"]
+        and isinstance(before_snapshot, dict)
+        and set(before_snapshot) == {"quantity"}
+        and type(before_snapshot.get("quantity")) is int
+        and isinstance(after_snapshot, dict)
+        and set(after_snapshot) == {"quantity"}
+        and type(after_snapshot.get("quantity")) is int
+        and before_snapshot["quantity"] != after_snapshot["quantity"]
+        and completed_view.get("rendered_before") == str(before_snapshot["quantity"])
+        and completed_view.get("rendered_after") == str(after_snapshot["quantity"])
+        and completed_view.get("safe_revert_supported") is False
+        and type(completed_view.get("revert_form_count")) is int
+        and completed_view.get("revert_form_count") == 0
+        and completed_view.get("unsupported_note_visible") is True
+        and isinstance(rollback_note_text, str)
+        and " ".join(rollback_note_text.split())
+        == " ".join(WB_QUANTITY_ROLLBACK_NOTE.split())
+        and type(completed_view.get("post_count")) is int
+        and completed_view.get("post_count") == 0
+    )
+    if not (
+        id_lists_valid
+        and len(expected_unresolved) == 4
+        and observed_unresolved == expected_unresolved
+        and unresolved.get("retry_affordances_absent") is True
+        and type(unresolved.get("revert_form_count")) is int
+        and unresolved.get("revert_form_count") == 0
+        and type(unresolved.get("mutation_count")) is int
+        and unresolved.get("mutation_count") == 0
+        and type(unresolved.get("post_count")) is int
+        and unresolved.get("post_count") == 0
+        and unresolved.get("quantity_rollback_contract_supported") is False
+        and unresolved.get("unsupported_rollback_note_rendered") is False
+        and completed_quantity_view_valid
+    ):
+        issues.append("ops_history_unresolved_retry_or_revert_affordance_present")
+
+    if (data.get("history_domain_sql_writes") != []
+            or not _count_snapshot_unchanged(data, "history_domain_state", {
+                "bulk_edit_history", "card_edit_history", "products",
+            })
+            or (isinstance(data.get("history_domain_state"), dict)
+                and data["history_domain_state"].get("before") != WB_HISTORY_DOMAIN_COUNTS)
+            or data.get("writes") != []
+            or data.get("browser_mutations") != []):
+        issues.append("ops_history_domain_state_changed_or_write_attempted")
+    if (not _is_loopback_origin(batch.get("origin"))
+            or not _is_loopback_origin(owned_link.get("origin"))
+            or batch.get("origin") != owned_link.get("origin")):
+        issues.append("ops_history_routes_not_bound_to_one_loopback_origin")
+    return issues
+
+
+def _classic_draft_facts_protocol_issues(data: dict) -> list[str]:
+    """Require four separately measured, keyboard-accessible classic fact views."""
+    issues: list[str] = []
+
+    checks = data.get("checks")
+    named = []
+    if isinstance(checks, list):
+        named = [
+            row for row in checks
+            if row == CLASSIC_DRAFT_FACTS_CHECK
+            or (isinstance(row, dict) and row.get("name") == CLASSIC_DRAFT_FACTS_CHECK)
+        ]
+    if named != [CLASSIC_DRAFT_FACTS_CHECK]:
+        issues.append("journey_classic_facts_named_check_missing_duplicate_or_wrong_shape")
+
+    # Keep this new direct GET and its four measurements out of the existing
+    # page/layout/geometry matrix. The original runner records 25 visits in a
+    # fixed order (11 initial pages, beta and two listings, then the same 11
+    # pages during the macro sweep), covering 14 distinct routes and 118 rows.
+    pages = data.get("pages")
+    page_names = []
+    page_rows_valid = (
+        isinstance(pages, list)
+        and len(pages) == len(CLASSIC_JOURNEY_PAGE_VISITS)
+    )
+    if page_rows_valid:
+        for row in pages:
+            if (
+                not isinstance(row, dict)
+                or not isinstance(row.get("name"), str)
+                or row.get("status") != 200
+                or not isinstance(row.get("path"), str)
+                or not row["path"].startswith("/")
+                or urlsplit(row["path"]).scheme
+                or urlsplit(row["path"]).netloc
+            ):
+                page_rows_valid = False
+                break
+            page_names.append(row["name"])
+    if (not page_rows_valid
+            or tuple(page_names) != CLASSIC_JOURNEY_PAGE_VISITS
+            or set(page_names) != CLASSIC_JOURNEY_PAGES):
+        issues.append("journey_original_page_matrix_changed")
+
+    expected_layouts = {
+        (page, width, theme)
+        for page in CLASSIC_JOURNEY_MACRO_LAYOUT_PAGES
+        for width in (320, 390, 768, 1024, 1440)
+        for theme in ("light", "dark")
+    }
+    expected_layouts.update({
+        (page, width, theme)
+        for page in ("listing_vue", "listing_classic")
+        for width in (1440, 390)
+        for theme in ("light", "dark")
+    })
+    layouts = data.get("layouts")
+    geometry = data.get("geometry")
+    observed_layouts = []
+    matrix_valid = (
+        isinstance(layouts, list) and len(layouts) == len(expected_layouts)
+        and isinstance(geometry, list) and len(geometry) == len(expected_layouts)
+        and layouts == geometry
+    )
+    if matrix_valid:
+        for row in layouts:
+            if not isinstance(row, dict):
+                matrix_valid = False
+                break
+            page, width, theme = row.get("page"), row.get("width"), row.get("theme")
+            if (
+                not isinstance(page, str)
+                or type(width) is not int
+                or not isinstance(theme, str)
+                or row.get("actual_theme") != theme
+            ):
+                matrix_valid = False
+                break
+            observed_layouts.append((page, width, theme))
+    if (not matrix_valid or len(observed_layouts) != len(expected_layouts)
+            or len(set(observed_layouts)) != len(expected_layouts)
+            or set(observed_layouts) != expected_layouts):
+        issues.append("journey_original_layout_geometry_matrix_changed")
+
+    navigation = data.get("classic_content_navigation")
+    if not (
+        isinstance(navigation, dict)
+        and set(navigation) == {
+            "method", "status", "same_loopback_origin",
+            "exact_fixture_classic_path_match", "route_kind",
+        }
+        and navigation.get("method") == "GET"
+        and type(navigation.get("status")) is int
+        and navigation.get("status") == 200
+        and navigation.get("same_loopback_origin") is True
+        and navigation.get("exact_fixture_classic_path_match") is True
+        and navigation.get("route_kind") == "classic_draft_detail"
+    ):
+        issues.append("journey_classic_facts_navigation_receipt_invalid")
+
+    rows = data.get("classic_draft_content_layouts")
+    expected_cases = {
+        (CLASSIC_DRAFT_FACTS_PAGE, width, theme)
+        for width in CLASSIC_DRAFT_FACTS_WIDTHS
+        for theme in CLASSIC_DRAFT_FACTS_THEMES
+    }
+    observed_cases = []
+    if isinstance(rows, list) and len(rows) == len(expected_cases):
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != CLASSIC_DRAFT_FACTS_LAYOUT_KEYS:
+                continue
+            case = (row.get("page"), row.get("width"), row.get("theme"))
+            if (
+                row.get("page") != CLASSIC_DRAFT_FACTS_PAGE
+                or type(row.get("width")) is not int
+                or row.get("width") not in CLASSIC_DRAFT_FACTS_WIDTHS
+                or row.get("theme") not in CLASSIC_DRAFT_FACTS_THEMES
+                or row.get("actual_theme") != row.get("theme")
+                or row.get("navigation_receipt") != "classic_content_navigation"
+            ):
+                continue
+            width = row["width"]
+            viewport_overflows = (
+                "document_overflow_px", "body_overflow_px", "main_overflow_px",
+                "content_overflow_px", "form_overflow_px",
+            )
+            if any(type(row.get(field)) is not int or row[field] != 0
+                   for field in viewport_overflows):
+                continue
+
+            numeric = (
+                "main_left_px", "main_right_px", "focus_outline_px",
+                "focus_outline_offset_px", "keyboard_scroll_delta_px",
+            )
+            if any(type(row.get(field)) not in (int, float)
+                   or not math.isfinite(row.get(field)) for field in numeric):
+                continue
+            if not (
+                row["main_left_px"] >= -1
+                and row["main_right_px"] <= width + 1
+                and row["main_right_px"] > row["main_left_px"]
+                and row["focus_outline_px"] >= 2
+                and row["keyboard_scroll_delta_px"] > 0
+            ):
+                continue
+
+            summary_rows = row.get("details_summary_bounds_px")
+            summary_count = row.get("summary_count")
+            if (
+                type(summary_count) is not int or summary_count < 1
+                or not isinstance(summary_rows, list)
+                or len(summary_rows) != summary_count
+                or row.get("summaries_fit_viewport") is not True
+            ):
+                continue
+            summary_valid = True
+            for summary in summary_rows:
+                if (
+                    not isinstance(summary, dict)
+                    or set(summary) != {"visible", "details_open", "left", "right", "inside_viewport"}
+                    or summary.get("visible") is not True
+                    or type(summary.get("details_open")) is not bool
+                    or summary.get("inside_viewport") is not True
+                    or type(summary.get("left")) not in (int, float)
+                    or type(summary.get("right")) not in (int, float)
+                    or not math.isfinite(summary.get("left"))
+                    or not math.isfinite(summary.get("right"))
+                    or summary["left"] < -1
+                    or summary["right"] > width + 1
+                    or summary["right"] <= summary["left"]
+                ):
+                    summary_valid = False
+                    break
+            if not summary_valid:
+                continue
+
+            region_rows = row.get("region_rows")
+            if not isinstance(region_rows, list) or len(region_rows) != 3:
+                continue
+            region_valid = True
+            visible_count = 0
+            for region in region_rows:
+                if not isinstance(region, dict) or set(region) != CLASSIC_DRAFT_FACTS_REGION_KEYS:
+                    region_valid = False
+                    break
+                if type(region.get("visible")) is not bool:
+                    region_valid = False
+                    break
+                visible = region["visible"]
+                visible_count += int(visible)
+                numeric_region = (
+                    "left_px", "right_px", "client_width_px", "scroll_width_px",
+                    "min_height_px", "table_width_px", "table_min_width_px",
+                )
+                if any(type(region.get(field)) not in (int, float)
+                       or not math.isfinite(region.get(field))
+                       for field in numeric_region):
+                    region_valid = False
+                    break
+                bool_region = (
+                    "scrolls_horizontally", "overflow_x_auto", "role_region",
+                    "has_accessible_name", "table_within_bounded_width", "value_wraps",
+                )
+                if any(type(region.get(field)) is not bool for field in bool_region):
+                    region_valid = False
+                    break
+                if (
+                    type(region.get("tabindex")) is not int
+                    or region["tabindex"] != 0
+                    or type(region.get("row_count")) is not int
+                    or region["row_count"] <= 0
+                    or region["scroll_width_px"] < region["client_width_px"]
+                    or not region["role_region"]
+                    or not region["has_accessible_name"]
+                ):
+                    region_valid = False
+                    break
+                if visible:
+                    width_limit = max(region["client_width_px"], 352)
+                    if (
+                        region["client_width_px"] <= 0
+                        or region["right_px"] <= region["left_px"]
+                        or region["left_px"] < -1
+                        or region["right_px"] > width + 1
+                        or region["min_height_px"] < 44
+                        or not region["scrolls_horizontally"]
+                        or not region["overflow_x_auto"]
+                        or not region["table_within_bounded_width"]
+                        or not region["value_wraps"]
+                        or region["table_width_px"] > width_limit
+                        or region["table_min_width_px"] > width_limit
+                    ):
+                        region_valid = False
+                        break
+            if (
+                not region_valid
+                or visible_count != 2
+                or type(row.get("fact_region_count")) is not int
+                or row.get("fact_region_count") != 3
+                or type(row.get("visible_fact_region_count")) is not int
+                or row.get("visible_fact_region_count") != visible_count
+                or type(row.get("local_scroll_region_count")) is not int
+                or row.get("local_scroll_region_count") != 2
+                or row.get("all_regions_accessible") is not True
+                or row.get("all_regions_fit_viewport") is not True
+                or row.get("all_visible_regions_have_touch_height") is not True
+                or row.get("all_visible_tables_within_bounded_width") is not True
+                or row.get("all_visible_values_wrap") is not True
+            ):
+                continue
+
+            if not all(row.get(field) is True for field in (
+                "synthetic_fact_marker_visible", "full_snapshot_retains_synthetic_fact",
+                "keyboard_focus_reached", "keyboard_focus_visible",
+                "focus_outline_visible", "focus_outline_inside_viewport",
+                "classic_update_form_preserved", "classic_validate_form_preserved",
+                "classic_refresh_form_preserved",
+            )):
+                continue
+            observed_cases.append(case)
+
+    if (not isinstance(rows, list) or len(rows) != len(expected_cases)
+            or len(observed_cases) != len(expected_cases)
+            or len(set(observed_cases)) != len(expected_cases)
+            or set(observed_cases) != expected_cases):
+        issues.append("journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+    return issues
+
+
 def _operations_pricing_protocol_issues(data: dict) -> list[str]:
     """Require exact receipts for the WB prices page's read-only first load."""
-    issues: list[str] = []
+    issues: list[str] = _history_scenario_protocol_issues(data)
 
     checks = data.get("checks")
     named_checks = [
@@ -1199,7 +2533,9 @@ def summarize_browser_report(path: Path, expected_source: str,
                              minimum_interaction_count: int = 0,
                              required_interaction_fields: tuple[str, ...] = (
                                  "interactions", "checks",
-                             )) -> dict:
+                             ),
+                             require_workspace_browser: bool = False,
+                             require_classic_draft_facts: bool = False) -> dict:
     if not path.is_file():
         return {"valid": False, "reason": "browser_report_missing", "source": None,
                 "report_status": None, "error_count": 0, "blocked_count": 0,
@@ -1322,6 +2658,16 @@ def summarize_browser_report(path: Path, expected_source: str,
         _wb_edit_protocol_issues(data) if require_synthetic_wb_edit else []
     )
     missing_evidence.extend(wb_edit_protocol_issues)
+    workspace_protocol_issues = (
+        _workspace_legacy_action_protocol_issues(data)
+        if require_workspace_browser else []
+    )
+    missing_evidence.extend(workspace_protocol_issues)
+    classic_draft_protocol_issues = (
+        _classic_draft_facts_protocol_issues(data)
+        if require_classic_draft_facts else []
+    )
+    missing_evidence.extend(classic_draft_protocol_issues)
     operations_pricing_protocol_issues = (
         _operations_pricing_protocol_issues(data) if require_operations_pricing else []
     )
@@ -1350,6 +2696,8 @@ def summarize_browser_report(path: Path, expected_source: str,
         "missing_evidence": missing_evidence,
         "common_content_protocol_issues": common_protocol_issues,
         "wb_edit_protocol_issues": wb_edit_protocol_issues,
+        "workspace_protocol_issues": workspace_protocol_issues,
+        "classic_draft_protocol_issues": classic_draft_protocol_issues,
         "operations_pricing_protocol_issues": operations_pricing_protocol_issues,
     }
 
@@ -1585,6 +2933,8 @@ def execute_stage(stage: Stage, root: Path, output: Path, chromium: str) -> dict
         allow_synthetic_login=(stage.name == "listing_browser"),
         allow_synthetic_common_content=(stage.name == "common_content_browser"),
         require_synthetic_wb_edit=(stage.name == "wb_edit_browser"),
+        require_workspace_browser=(stage.name == "workspace_browser"),
+        require_classic_draft_facts=(stage.name == "journey_browser"),
         require_operations_pricing=(stage.name == "operations_pricing_browser"),
         minimum_layout_count=BROWSER_MINIMUMS.get(stage.name, {}).get("layouts", 0),
         minimum_interaction_count=BROWSER_MINIMUMS.get(stage.name, {}).get("interactions", 0),

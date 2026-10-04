@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Explicit source list excludes working data, credentials and private release artifacts.
 COPY --chown=check:check *.py *.md *.txt *.yml *.sh ./
-COPY --chown=check:check .env.example .dockerignore Dockerfile Dockerfile.agents ./
+COPY --chown=check:check .env.example .dockerignore Dockerfile Dockerfile.agents Caddyfile ./
 COPY --chown=check:check agents/ agents/
 COPY --chown=check:check routes/ routes/
 COPY --chown=check:check services/ services/

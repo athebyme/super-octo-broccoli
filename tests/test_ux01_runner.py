@@ -10,10 +10,12 @@ import base64
 import os
 import subprocess
 import sys
+from unittest.mock import patch
 
 from scripts.check_ux01 import (
     BROWSER_INTERACTION_FIELDS,
     BROWSER_MINIMUMS,
+    CLASSIC_DRAFT_FACTS_CHECK,
     COMMON_CONTENT_LAYOUT_STATES,
     COMMON_CONTENT_LAYOUT_THEMES,
     COMMON_CONTENT_LAYOUT_WIDTHS,
@@ -25,15 +27,24 @@ from scripts.check_ux01 import (
     OPERATIONS_PRICING_PAGE_LABELS,
     OPERATIONS_PRICING_LAYOUT_VARIANTS,
     OPERATIONS_PRICE_INIT_CHECK,
+    WB_HISTORY_AGGREGATE_CARDS,
+    WB_HISTORY_DOMAIN_COUNTS,
+    WB_HISTORY_PARENT_AGGREGATES,
+    WB_QUANTITY_ROLLBACK_NOTE,
     WB_EDIT_LAYOUT_THEMES,
     WB_EDIT_LAYOUT_WIDTHS,
     WB_EDIT_PAGES,
     WB_EDIT_REQUIRED_CHECKS,
+    WB_EDIT_CONTRAST_CHECK,
+    WB_EDIT_CONTRAST_THEMES,
+    WB_EDIT_CONTRAST_CONTROL_NAMES,
     REQUIRED_TESTS,
+    Stage,
     _canonical_json,
     _clean_environment,
     _safe_repo_file,
     build_stages,
+    execute_stage,
     load_manifest,
     parse_junit,
     summarize_browser_report,
@@ -98,6 +109,304 @@ def _operations_pricing_browser_report() -> dict:
         ],
         "checks": checks,
         "price_initialization": price_initialization,
+        "history_scenario_checks": _operations_history_scenario_checks(),
+        "history_domain_sql_writes": [],
+        "history_domain_state": {
+            "before": copy.deepcopy(WB_HISTORY_DOMAIN_COUNTS),
+            "after": copy.deepcopy(WB_HISTORY_DOMAIN_COUNTS),
+            "unchanged": True,
+        },
+    }
+
+
+def _operations_history_scenario_checks() -> list[dict]:
+    origin = "http://127.0.0.1:41111"
+    product_ids = list(range(20001, 20032))
+    foreign_id = product_ids[-2]
+    owned_ids = [product_id for product_id in product_ids if product_id != foreign_id]
+    owned_statuses = ["success"] * 25 + [
+        "failed", "submitted", "uncertain", "partial", "pending",
+    ]
+    status_by_id = dict(zip(owned_ids, owned_statuses))
+    status_by_id[foreign_id] = "conflict"
+    product_statuses = [
+        {"product_id": product_id, "wb_sync_status": status_by_id[product_id]}
+        for product_id in product_ids
+    ]
+    status_counts = {
+        "success": 25, "failed": 1, "pending": 1, "submitted": 1,
+        "uncertain": 1, "partial": 1, "conflict": 1,
+    }
+    rendered_status_counts = {
+        "success": 25, "failed": 1, "pending": 1, "submitted": 1,
+        "uncertain": 1, "partial": 1,
+    }
+    outcome_text = {
+        "success": "WB сообщил об успехе.",
+        "failed": "WB вернул ошибку; проверьте фактическое состояние перед новым действием.",
+        "pending": "Ожидается отправка или подтверждение.",
+        "submitted": "Изменение отправлено; итог ещё требует проверки.",
+        "uncertain": "Точный исход неизвестен. Не повторяйте изменение до сверки с WB.",
+        "partial": "WB подтвердил только часть изменения; проверьте сохранённые значения.",
+    }
+    rendered_product_statuses = [
+        {
+            "product_id": product_id,
+            "wb_sync_status": status,
+            "readable_outcome": f"Результат WB: {outcome_text[status]}",
+        }
+        for product_id, status in zip(owned_ids, owned_statuses)
+    ]
+    quantities = [
+        {
+            "product_id": product_id,
+            "before": index + 20,
+            "after": index + 21,
+            "rendered_before": str(index + 20),
+            "rendered_after": str(index + 21),
+        }
+        for index, product_id in enumerate(owned_ids)
+    ]
+    return [
+        {
+            "name": "wb_history_batch31_exact_rows_values_and_outcomes",
+            "status": "passed",
+            "bulk_id": 905,
+            "origin": origin,
+            "method": "GET",
+            "path": "/bulk-history/905",
+            "http_status": 200,
+            "page_heading": "R10 synthetic batch31 mixed WB row outcomes",
+            "total_products": 31,
+            "operation_status": "in_progress",
+            "operation_success_count": 29,
+            "operation_error_count": 1,
+            "operation_completed_at": None,
+            "operation_duration_seconds": None,
+            "pending_unprocessed_product_id": owned_ids[-1],
+            "rendered_rows": 31,
+            "owned_visible_rows": 30,
+            "foreign_hidden_rows": 1,
+            "product_ids": product_ids,
+            "owned_product_ids": owned_ids,
+            "foreign_product_id": foreign_id,
+            "status_counts": status_counts,
+            "rendered_status_counts": rendered_status_counts,
+            "product_statuses": product_statuses,
+            "rendered_product_statuses": rendered_product_statuses,
+            "owned_quantity_values": quantities,
+            "values_exact": True,
+            "exact_owned_product_ids": True,
+            "aggregates": copy.deepcopy(WB_HISTORY_PARENT_AGGREGATES),
+            "aggregate_cards": copy.deepcopy(WB_HISTORY_AGGREGATE_CARDS),
+        },
+        {
+            "name": "wb_history_owned_fix_link_opens_exact_product",
+            "status": "passed",
+            "origin": origin,
+            "method": "GET",
+            "path": f"/products/{owned_ids[0]}",
+            "http_status": 200,
+            "product_id": owned_ids[0],
+            "clicked_label": "Карточка WB",
+            "title_matches": True,
+            "vendor_code_matches": True,
+            "nm_id_matches": True,
+        },
+        {
+            "name": "wb_history_foreign_fix_link_absent",
+            "status": "passed",
+            "foreign_product_id": foreign_id,
+            "fix_link_count": 0,
+            "history_link_count": 0,
+            "private_text_absent": True,
+        },
+        {
+            "name": "wb_history_unresolved_rows_no_retry_or_revert",
+            "status": "passed",
+            "unresolved_product_statuses": [
+                {"product_id": product_id, "wb_sync_status": status}
+                for product_id, status in zip(owned_ids, owned_statuses)
+                if status in {"pending", "submitted", "uncertain", "partial"}
+            ],
+            "retry_affordances_absent": True,
+            "revert_form_count": 0,
+            "mutation_count": 0,
+            "post_count": 0,
+            "quantity_rollback_contract_supported": False,
+            "unsupported_rollback_note_rendered": False,
+            "completed_quantity_rollback_view": {
+                "operation_id": 906,
+                "origin": origin,
+                "method": "GET",
+                "path": "/bulk-history/906",
+                "http_status": 200,
+                "page_heading": "R10 completed quantity-only rollback fixture",
+                "operation_status": "completed",
+                "total_products": 1,
+                "success_count": 1,
+                "error_count": 0,
+                "operation_seller_id": 77,
+                "product_seller_id": 77,
+                "owned_identity_matches": True,
+                "card_edit_history_count": 1,
+                "product_id": 20032,
+                "product_title": "Synthetic quantity history product",
+                "vendor_code": "R10-QTY-ROLLBACK",
+                "nm_id": 70000032,
+                "title_matches": True,
+                "vendor_code_matches": True,
+                "nm_id_matches": True,
+                "changed_fields": ["quantity"],
+                "snapshot_before": {"quantity": 17},
+                "snapshot_after": {"quantity": 18},
+                "rendered_before": "17",
+                "rendered_after": "18",
+                "safe_revert_supported": False,
+                "revert_form_count": 0,
+                "unsupported_note_visible": True,
+                "unsupported_note_text": WB_QUANTITY_ROLLBACK_NOTE,
+                "post_count": 0,
+            },
+        },
+    ]
+
+
+def _workspace_browser_report() -> dict:
+    origin = "http://127.0.0.1:41112"
+    account_id = 77
+    product_id = 30101
+    photo_product_id = 30102
+    return {
+        "status": "completed",
+        "source": "worktree",
+        "provider_attempts": 0,
+        "unexpected_external_requests": [],
+        "unexpected_http_requests": [],
+        "javascript_errors": [],
+        "console_errors": [],
+        "browser_mutations": [],
+        "pages": [{} for _ in range(37)],
+        "layouts": [{} for _ in range(43)],
+        "interactions": [{} for _ in range(28)],
+        "legacy_action_checks": [
+            {
+                "name": "legacy_sidebar_keyboard_activation_reaches_exact_routes",
+                "status": "passed", "origin": origin, "method": "GET",
+                "path": "/products/merge", "http_status": 200,
+                "activation": "Tab+Enter", "label": "Объединить карточки WB",
+                "page_heading": "Объединение карточек WB",
+            },
+            {
+                "name": "command_palette_enter_reaches_help_and_social",
+                "status": "passed",
+                "routes": [
+                    {"label": "Документация", "origin": origin, "method": "GET",
+                     "path": "/docs/", "http_status": 200,
+                     "activation": "Ctrl+K+Enter", "page_heading": "Документация"},
+                    {"label": "Социальные подключения", "origin": origin, "method": "GET",
+                     "path": "/content-factory/accounts", "http_status": 200,
+                     "activation": "Ctrl+K+Enter", "page_heading": "Подключённые аккаунты"},
+                ],
+            },
+            {
+                "name": "legacy_product_actions_open_exact_product_routes",
+                "status": "passed", "origin": origin, "method": "GET", "product_id": product_id,
+                "foreign_product_id": 30104,
+                "foreign_scope_denial": {
+                    "method": "GET", "path": "/products/30104", "http_status": 404,
+                },
+                "actions": [
+                    {"label": "История", "origin": origin, "method": "GET",
+                     "path": f"/products/{product_id}/history", "http_status": 200,
+                     "page_heading": "История изменений карточки", "title_matches": True},
+                    {"label": "Обогатить", "origin": origin, "method": "GET",
+                     "path": f"/products/{product_id}/enrich", "http_status": 200,
+                     "page_heading": "Обогащение от поставщика", "title_matches": True},
+                    {"label": "Редактировать", "origin": origin, "method": "GET",
+                     "path": f"/products/{product_id}/edit", "http_status": 200,
+                     "page_heading": "Редактирование карточки", "title_matches": True},
+                ],
+            },
+            {
+                "name": "command_palette_account_link_preserves_selected_account",
+                "status": "passed", "palette_label": "Карточки кабинетов",
+                "palette_href_path": "/marketplaces/listings/", "origin": origin,
+                "method": "GET", "path": "/marketplaces/listings/", "http_status": 200,
+                "page_heading": "Каталог маркетплейсов",
+                "selected_account_id": account_id, "rendered_account_label": "Ozon CI 0",
+                "downstream_account_href_path": "/marketplaces/drafts/",
+                "downstream_account_query": {"account_id": account_id},
+                "account_context_preserved": True,
+            },
+            {
+                "name": "wb_only_tool_labels_and_image_lab_source_are_distinct",
+                "status": "passed", "origin": origin, "method": "GET",
+                "path": "/image-lab", "http_status": 200, "page_heading": "Фотостудия",
+                "wb_tool_heading": "Инструменты Wildberries",
+                "wb_merge_href_path": "/products/merge",
+                "ozon_listings_href_path": "/marketplaces/listings/",
+                "ozon_listings_query": {"account_id": account_id},
+                "ozon_listing_page_heading": "Каталог маркетплейсов",
+                "image_lab_page_heading": "Фотостудия",
+                "ozon_account_label": "Ozon CI 0", "groups_distinct": True,
+            },
+            {
+                "name": "image_lab_fixture_photo_loads_with_imported_source_context",
+                "status": "passed", "origin": origin, "method": "GET",
+                "path": "/image-lab",
+                "http_status": 200, "page_heading": "Фотостудия",
+                "source_product_id": photo_product_id,
+                "source_type": "imported_product", "source_title": "Synthetic imported photo source",
+                "listing_id": 605, "listing_account_id": account_id,
+                "fake_transport_read_count": 1, "fake_photo_sha256": "a" * 64,
+                "original_get": {
+                    "method": "GET",
+                    "path": f"/image-lab/api/products/{photo_product_id}/original",
+                    "status": 200,
+                    "content_type": "image/png",
+                },
+                "image_natural_width": 64, "image_natural_height": 64,
+            },
+            {
+                "name": "image_lab_empty_manual_override_suppresses_wb_fallback",
+                "status": "passed", "source_product_id": 30103,
+                "explicit_empty_override": True, "excluded_from_lab": True,
+                "override_schema_version": 1, "content_edit_version": 2,
+                "override_photo_count": 0, "effective_photo_count": 0,
+                "inherited_source_photo_count": 1,
+                "wb_linked_product_id": product_id,
+                "wb_photo_fallback_reads": 0, "wb_photo_fallback_downloads": 0,
+                "experiments_before": 0, "experiments_after": 0,
+            },
+        ],
+        "legacy_domain_sql_writes": [],
+        "legacy_domain_state": {
+            "before": {
+                "products": 1, "card_edit_history": 1, "imported_products": 2,
+                "marketplace_listings": 1, "image_generation_experiments": 0,
+            },
+            "after": {
+                "products": 1, "card_edit_history": 1, "imported_products": 2,
+                "marketplace_listings": 1, "image_generation_experiments": 0,
+            },
+            "unchanged": True,
+        },
+        "legacy_post_count": 0,
+        "expected_http_denials": [{
+            "method": "GET", "path": "/products/30104", "status": 404,
+        }],
+        "expected_denial_console_errors": [{
+            "method": "GET", "origin": origin, "path": "/products/30104",
+            "http_status": 404,
+            "text": "Failed to load resource: the server responded with a status of 404 (NOT FOUND)",
+            "location_url": f"{origin}/products/30104",
+        }],
+        "image_lab_fake_reads": [{
+            "transport": "synthetic_imported_photo", "fake_photo_sha256": "a" * 64,
+        }],
+        "image_lab_wb_fallback_reads": [],
+        "image_lab_wb_fallback_downloads": 0,
     }
 
 
@@ -327,6 +636,87 @@ def _common_content_browser_report() -> dict:
     }
 
 
+def _wb_contrast_control(name: str) -> dict:
+    selectors = {
+        "cancel": '.sticky.bottom-0 a[href^="/products/"]',
+        "optional_picker_label": 'label[for="wb-optional-characteristic-picker"]',
+        "optional_picker": "#wb-optional-characteristic-picker",
+        "optional_add": "#wb-add-optional-characteristic",
+        "save": 'form.space-y-6 button[type="submit"]',
+    }
+    return {
+        "name": name,
+        "selector": selectors[name],
+        "text": name,
+        "visible": True,
+        "in_viewport": True,
+        "enabled": True,
+        "disabled": False,
+        "computed_color": "rgb(0, 0, 0)",
+        "computed_background_color": "rgb(255, 255, 255)",
+        "computed_opacity": "1",
+        "opacity_product": 1.0,
+        "opacity_chain": [{"tag": "button", "id": name, "opacity": 1.0}],
+        "effective_background_rgb": [255.0, 255.0, 255.0],
+        "effective_foreground_rgb": [0.0, 0.0, 0.0],
+        "contrast_ratio_estimate": 21.0,
+        "normal_text_wcag_aa": True,
+        "background_layers": [{
+            "tag": "button", "id": name,
+            "background_color": "rgb(255, 255, 255)",
+            "background_rgb_after_compositing": [255.0, 255.0, 255.0],
+            "background_image": "none", "opacity": 1.0, "filter": "none",
+            "backdrop_filter": "none", "mix_blend_mode": "normal",
+            "has_background_image": False, "background_changed": True,
+        }],
+        "ancestor_effects": {
+            "has_background_image": False,
+            "has_filter": False,
+            "has_backdrop_filter": False,
+            "has_non_normal_blend": False,
+        },
+    }
+
+
+def _wb_contrast_diagnostic() -> list[dict]:
+    selectors = [
+        '.sticky.bottom-0 a[href^="/products/"]',
+        'label[for="wb-optional-characteristic-picker"]',
+        "#wb-optional-characteristic-picker",
+        "#wb-add-optional-characteristic",
+        'form.space-y-6 button[type="submit"]',
+    ]
+    return [
+        {
+            "requested_theme": theme,
+            "actual_theme": theme,
+            "viewport": {"width": 390, "height": 900},
+            "measurement_valid": True,
+            "appearance_stability": {
+                "settled": True,
+                "samples": 4,
+                "stable_frames": 3,
+                "elapsed_ms": 100.0,
+                "active_relevant_transitions": [],
+                "final_computed_styles": [
+                    {
+                        "selector": selector,
+                        "color": "rgb(0, 0, 0)",
+                        "background_color": "rgb(255, 255, 255)",
+                        "border_color": "rgb(0, 0, 0)",
+                        "opacity": "1",
+                        "box_shadow": "none",
+                        "outline_color": "rgb(0, 0, 0)",
+                    }
+                    for selector in selectors
+                ],
+            },
+            "controls": [_wb_contrast_control(name) for name in WB_EDIT_CONTRAST_CONTROL_NAMES],
+        }
+        for theme in WB_EDIT_CONTRAST_THEMES
+    ]
+
+
 def _wb_edit_browser_report() -> dict:
     layouts = []
     for page in WB_EDIT_PAGES:
@@ -366,12 +756,52 @@ def _wb_edit_browser_report() -> dict:
                 "name": name, "status": "passed", "http_status": 404,
                 "provider_writes": 1, "separate_browser_session": True,
             })
+        elif name == WB_EDIT_CONTRAST_CHECK:
+            required_checks.append({
+                "name": name, "status": "passed",
+                "themes": list(WB_EDIT_CONTRAST_THEMES),
+                "control_names": list(WB_EDIT_CONTRAST_CONTROL_NAMES),
+                "control_count": 10, "minimum_contrast_ratio": 4.5,
+                "all_enabled_visible": True, "all_settled": True,
+                "all_contrast_aa": True, "failures": [],
+            })
         else:
             required_checks.append({"name": name, "status": "passed"})
     generic_checks = [
         {"name": f"fixture_interaction_{index}", "status": "passed"}
         for index in range(24 - len(required_checks))
     ]
+    checks = required_checks + generic_checks
+    for check in checks:
+        if check["name"] == "single_edit_real_form_submit_reaches_fake_wb_and_persists_exact_history":
+            check.update({
+                "changed_characteristics": [202],
+                "submit_button_label": "Сохранить в WB",
+                "target_channel": "Wildberries",
+                "required_missing_value": "",
+                "required_missing_omitted_from_patch": True,
+                "direct_history_count": 1,
+                "sizes_and_sku_preserved": True,
+            })
+        elif check["name"] == "single_edit_uses_cached_country_weight_multi_schema_and_read_only_sku":
+            check.update({
+                "subject_id": 5880,
+                "schema_fields": 31,
+                "initial_visible_field_ids": [101, 303, 404, 500, 502, 506],
+                "required_missing_id": 500,
+                "stale_read_only_id": 501,
+                "stale_read_only_disclosure_keyboard": True,
+                "stale_read_only_displayed": True,
+                "stale_read_only_control_count": 0,
+                "optional_country_picker_label": "Страна производства",
+                "picker_keyboard_selection": 202,
+                "present_empty_id": 506,
+                "present_empty_visible": True,
+                "present_empty_excluded_from_picker": True,
+                "empty_add_remove_dirty": False,
+                "empty_add_no_post_or_provider": True,
+                "fake_wb_write_calls": 0,
+            })
     boundary_names = (
         "wrong_weight_unit", "non_numeric_weight_type", "unlisted_dictionary_value",
     )
@@ -380,11 +810,9 @@ def _wb_edit_browser_report() -> dict:
         "requested_fields": ["characteristics"],
         "core_fields_requested": [],
         "core_fields_changed": [],
-        "characteristic_ids": [202, 303, 404],
+        "characteristic_ids": [202],
         "characteristics": [
             {"id": 202, "value": ["Россия"]},
-            {"id": 303, "value": 125},
-            {"id": 404, "value": ["Пластик", "Металл"]},
         ],
         "full_card_read_before": True,
         "full_card_patch_merged": True,
@@ -401,7 +829,8 @@ def _wb_edit_browser_report() -> dict:
         "javascript_errors": [],
         "browser_mutations": [],
         "layouts": layouts,
-        "checks": required_checks + generic_checks,
+        "checks": checks,
+        "single_edit_contrast_diagnostic": _wb_contrast_diagnostic(),
         "fake_wb_single_write_calls": 1,
         "fake_wb_single_write_requests": [write_request],
         "fake_wb_write_calls": 2,
@@ -411,11 +840,16 @@ def _wb_edit_browser_report() -> dict:
             "form_post": {
                 "http_status": 302,
                 "path": "/products/9876/edit",
+                "submit_button_label": "Сохранить в WB",
+                "target_channel": "Wildberries",
+                "required_missing_id": 500,
+                "required_missing_value": "",
+                "required_missing_omitted_from_patch": True,
                 "normal_html_form": True,
                 "csrf_field_present": True,
                 "fake_write_count": 1,
                 "readback_and_history": {
-                    "characteristic_ids": [101, 202, 303, 404],
+                    "characteristic_ids": [101, 202, 303, 404, 501, 502, 506],
                     "size_count": 1,
                     "sku": "SYNTHETIC-WB-SKU-000",
                     "direct_history_count": 1,
@@ -448,7 +882,100 @@ def _wb_edit_browser_report() -> dict:
                 "country": "Россия",
                 "weight_grams": 125,
                 "materials": ["Пластик", "Металл"],
+                "present_empty_field_preserved": True,
                 "sku_read_only": True,
+            },
+            "progressive_ui": {
+                "initial_view": {
+                    "viewport_width": 390,
+                    "document_width": 390,
+                    "schema_field_count": 31,
+                    "visible_field_ids": [101, 303, 404, 500, 502, 506],
+                    "saved_text_input": True,
+                    "numeric_grams_input": True,
+                    "dictionary_multiple_select": True,
+                    "bounded_textarea": True,
+                    "present_empty_visible": True,
+                    "present_empty_excluded_from_picker": True,
+                    "filled_summary": "4 заполнено · 31 в схеме",
+                    "country_hidden_until_chosen": True,
+                    "picker_country_label": "Страна производства",
+                    "optional_choice_count": 25,
+                    "required_missing_visible": True,
+                    "required_missing_input_visible": True,
+                    "has_changes": False,
+                    "save_disabled": True,
+                    "picker_box": {"width": 300, "height": 44},
+                    "add_button_box": {"width": 200, "height": 44},
+                },
+                "stale_legacy_field_read_only": {
+                    "field_id": 501,
+                    "disclosure_opened_by_keyboard": True,
+                    "field_text_present": True,
+                    "saved_value_present": True,
+                    "form_control_count": 0,
+                },
+                "empty_optional_add_keyboard": {
+                    "picker_focus": {
+                        "id": "wb-optional-characteristic-picker",
+                        "focus_visible": True,
+                        "selected_value": "202",
+                    },
+                    "add_button_focus": {
+                        "text": "Добавить поле", "focus_visible": True, "box_height": 44,
+                    },
+                    "added_control_focus": {
+                        "active_id": "char_202", "field_tag": "SELECT", "focus_visible": True,
+                    },
+                },
+                "empty_add_enter_attempt": {
+                    "still_on_edit_route": True,
+                    "has_changes": False,
+                    "save_disabled": True,
+                    "post_count": 0,
+                    "fake_client_instances": 0,
+                    "fake_single_write_calls": 0,
+                    "provider_attempts": 0,
+                    "post_count_delta": 0,
+                    "fake_client_delta": 0,
+                    "fake_write_delta": 0,
+                },
+                "empty_add_request_submit_attempt": {
+                    "submit_event": {"seen": True, "default_prevented": True},
+                    "still_on_edit_route": True,
+                    "post_count": 0,
+                    "fake_client_instances": 0,
+                    "fake_single_write_calls": 0,
+                    "provider_attempts": 0,
+                    "post_count_delta": 0,
+                    "fake_client_delta": 0,
+                    "fake_write_delta": 0,
+                },
+                "empty_optional_remove_keyboard": {
+                    "has_changes": False,
+                    "picker_focused": True,
+                    "focus": {
+                        "label": "Убрать пустое поле «Страна производства»",
+                        "focus_visible": True,
+                        "box_height": 44,
+                    },
+                    "post_count_delta": 0,
+                    "fake_client_delta": 0,
+                    "fake_write_delta": 0,
+                },
+                "country_picker_add_keyboard": {
+                    "picker_focus": {
+                        "id": "wb-optional-characteristic-picker",
+                        "focus_visible": True,
+                        "selected_value": "202",
+                    },
+                    "add_button_focus": {
+                        "text": "Добавить поле", "focus_visible": True, "box_height": 44,
+                    },
+                    "added_control_focus": {
+                        "active_id": "char_202", "field_tag": "SELECT", "focus_visible": True,
+                    },
+                },
             },
             "rejections": [
                 {
@@ -501,6 +1028,127 @@ def _wb_edit_browser_report() -> dict:
             "history_product_ids": [20000, 20001],
             "history_success_count": 2,
         },
+    }
+
+
+def _classic_draft_facts_browser_report() -> dict:
+    page_names = [
+        "supplier_catalog", "supplier_products", "supplier_source_detail",
+        "internal_ozon", "drafts_vue", "drafts_classic", "draft_detail_vue",
+        "draft_detail_classic", "review", "upload_history", "upload_result",
+        "internal_beta", "listing_vue", "listing_classic",
+    ]
+    page_visits = page_names[:11] + page_names[11:] + page_names[:11]
+    macro_pages = page_names[:11]
+    layouts = [
+        {
+            "page": page, "width": width, "theme": theme,
+            "actual_theme": theme, "components": [],
+        }
+        for page in macro_pages
+        for width in (320, 390, 768, 1024, 1440)
+        for theme in ("light", "dark")
+    ]
+    layouts.extend(
+        {
+            "page": page, "width": width, "theme": theme,
+            "actual_theme": theme, "components": [],
+        }
+        for page in ("listing_vue", "listing_classic")
+        for width in (1440, 390)
+        for theme in ("light", "dark")
+    )
+    rows = []
+    for width in (320, 360):
+        for theme in ("light", "dark"):
+            client_width = width - 24
+            region_rows = []
+            for index in range(3):
+                visible = index < 2
+                region_rows.append({
+                    "visible": visible,
+                    "left_px": 8,
+                    "right_px": width - 8,
+                    "client_width_px": client_width,
+                    "scroll_width_px": client_width + (120 if visible else 0),
+                    "scrolls_horizontally": visible,
+                    "overflow_x_auto": visible,
+                    "role_region": True,
+                    "has_accessible_name": True,
+                    "tabindex": 0,
+                    "min_height_px": 44,
+                    "table_width_px": 352,
+                    "table_min_width_px": 352,
+                    "table_within_bounded_width": True,
+                    "row_count": 2,
+                    "value_wraps": True,
+                })
+            rows.append({
+                "page": "draft_detail_classic",
+                "width": width,
+                "theme": theme,
+                "actual_theme": theme,
+                "navigation_receipt": "classic_content_navigation",
+                "document_overflow_px": 0,
+                "body_overflow_px": 0,
+                "main_overflow_px": 0,
+                "content_overflow_px": 0,
+                "form_overflow_px": 0,
+                "main_left_px": 0,
+                "main_right_px": width,
+                "summary_count": 1,
+                "summaries_fit_viewport": True,
+                "details_summary_bounds_px": [{
+                    "visible": True, "details_open": True, "left": 8,
+                    "right": width - 8, "inside_viewport": True,
+                }],
+                "fact_region_count": 3,
+                "visible_fact_region_count": 2,
+                "local_scroll_region_count": 2,
+                "all_regions_accessible": True,
+                "all_regions_fit_viewport": True,
+                "all_visible_regions_have_touch_height": True,
+                "all_visible_tables_within_bounded_width": True,
+                "all_visible_values_wrap": True,
+                "synthetic_fact_marker_visible": True,
+                "full_snapshot_retains_synthetic_fact": True,
+                "keyboard_focus_reached": True,
+                "keyboard_focus_visible": True,
+                "focus_outline_px": 2,
+                "focus_outline_offset_px": 2,
+                "focus_outline_visible": True,
+                "focus_outline_inside_viewport": True,
+                "keyboard_scroll_delta_px": 36,
+                "classic_update_form_preserved": True,
+                "classic_validate_form_preserved": True,
+                "classic_refresh_form_preserved": True,
+                "region_rows": region_rows,
+            })
+    return {
+        "status": "completed",
+        "source": "worktree",
+        "provider_attempts": 0,
+        "unexpected_external_requests": [],
+        "unexpected_http": [],
+        "javascript_errors": [],
+        "browser_mutations": [],
+        "writes": [],
+        "pages": [
+            {"name": name, "path": f"/fixture/{name}?visit={index}", "status": 200}
+            for index, name in enumerate(page_visits)
+        ],
+        "layouts": layouts,
+        "geometry": copy.deepcopy(layouts),
+        "interactions": [{"name": f"existing_journey_{index}"} for index in range(22)],
+        "checks": [CLASSIC_DRAFT_FACTS_CHECK],
+        "classic_content_navigation": {
+            "method": "GET",
+            "status": 200,
+            "same_loopback_origin": True,
+            "exact_fixture_classic_path_match": True,
+            "route_kind": "classic_draft_detail",
+        },
+        "classic_draft_content_layouts": rows,
     }
 
 
@@ -667,6 +1315,155 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertFalse(missing_safety["valid"])
             self.assertEqual(missing_safety["reason"], "browser_report_safety_telemetry_missing")
 
+    def test_workspace_legacy_action_receipts_are_separate_and_strict(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            path = Path(temp_name) / "workspace.json"
+
+            def summarize(report):
+                path.write_text(json.dumps(report), encoding="utf-8")
+                return summarize_browser_report(
+                    path, "worktree", require_workspace_browser=True,
+                    minimum_layout_count=43, minimum_interaction_count=28,
+                    required_interaction_fields=("interactions",),
+                )
+
+            report = _workspace_browser_report()
+            accepted = summarize(report)
+            self.assertTrue(accepted["valid"], accepted)
+            self.assertEqual(accepted["page_count"], 37)
+            self.assertEqual(accepted["layout_count"], 43)
+            self.assertEqual(accepted["interaction_count"], 28)
+            self.assertEqual(accepted["workspace_protocol_issues"], [])
+
+            invalid_reports = []
+            missing_receipt = copy.deepcopy(report)
+            missing_receipt["legacy_action_checks"].pop()
+            invalid_reports.append(("missing legacy receipt", missing_receipt,
+                                    "workspace_legacy_action_receipts_missing_duplicate_or_failed"))
+
+            duplicate_receipt = copy.deepcopy(report)
+            duplicate_receipt["legacy_action_checks"][-1] = copy.deepcopy(
+                duplicate_receipt["legacy_action_checks"][0]
+            )
+            invalid_reports.append(("duplicate legacy receipt", duplicate_receipt,
+                                    "workspace_legacy_action_receipts_missing_duplicate_or_failed"))
+
+            failed_receipt = copy.deepcopy(report)
+            failed_receipt["legacy_action_checks"][0]["status"] = "complete"
+            invalid_reports.append(("non-passed status", failed_receipt,
+                                    "workspace_legacy_action_receipts_missing_duplicate_or_failed"))
+
+            wrong_route = copy.deepcopy(report)
+            wrong_route["legacy_action_checks"][0]["path"] = "/products/merge/confirm"
+            invalid_reports.append(("wrong exact route", wrong_route,
+                                    "workspace_legacy_sidebar_route_receipt_invalid"))
+
+            wrong_origin = copy.deepcopy(report)
+            wrong_origin["legacy_action_checks"][0]["origin"] = "https://fixture.test"
+            invalid_reports.append(("non-loopback origin", wrong_origin,
+                                    "workspace_legacy_sidebar_route_receipt_invalid"))
+
+            wrong_product_scope = copy.deepcopy(report)
+            wrong_product_scope["legacy_action_checks"][2]["actions"][1]["path"] = (
+                "/products/999999/enrich"
+            )
+            invalid_reports.append(("product action crossed fixture ID", wrong_product_scope,
+                                    "workspace_product_action_routes_incomplete_or_wrong"))
+
+            signed64_overflow_id = copy.deepcopy(report)
+            signed64_overflow_id["legacy_action_checks"][2]["product_id"] = 2**63
+            invalid_reports.append(("legacy fixture ID exceeds signed 64-bit range", signed64_overflow_id,
+                                    "workspace_product_action_routes_incomplete_or_wrong"))
+
+            wrong_foreign_scope = copy.deepcopy(report)
+            wrong_foreign_scope["legacy_action_checks"][2]["foreign_scope_denial"]["path"] = (
+                "/products/30105"
+            )
+            invalid_reports.append(("foreign denial points to another ID", wrong_foreign_scope,
+                                    "workspace_product_action_routes_incomplete_or_wrong"))
+
+            for label, field, value in (
+                ("wrong origin", "origin", "http://127.0.0.1:49999"),
+                ("wrong path", "path", "/products/30105"),
+                ("wrong method", "method", "POST"),
+                ("wrong status", "http_status", 200),
+                ("wrong text", "text", "Failed to load resource: 404"),
+            ):
+                bad_console_receipt = copy.deepcopy(report)
+                bad_console_receipt["expected_denial_console_errors"][0][field] = value
+                invalid_reports.append((
+                    f"foreign denial console {label}", bad_console_receipt,
+                    "workspace_foreign_denial_console_receipt_invalid",
+                ))
+
+            extra_console_receipt = copy.deepcopy(report)
+            extra_console_receipt["expected_denial_console_errors"].append(
+                copy.deepcopy(extra_console_receipt["expected_denial_console_errors"][0])
+            )
+            invalid_reports.append((
+                "extra foreign denial console receipt", extra_console_receipt,
+                "workspace_foreign_denial_console_receipt_invalid",
+            ))
+
+            wrong_account = copy.deepcopy(report)
+            wrong_account["legacy_action_checks"][3]["downstream_account_query"]["account_id"] = 78
+            invalid_reports.append(("account context changed", wrong_account,
+                                    "workspace_account_context_route_receipt_invalid"))
+
+            missing_known_photo_binding = copy.deepcopy(report)
+            missing_known_photo_binding["image_lab_fake_reads"][0]["fake_photo_sha256"] = "b" * 64
+            invalid_reports.append(("known photo bytes differ", missing_known_photo_binding,
+                                    "workspace_image_lab_transport_reads_unexpected"))
+
+            photo_page_is_not_image_lab = copy.deepcopy(report)
+            photo_page_is_not_image_lab["legacy_action_checks"][5]["path"] = (
+                "/image-lab/api/products/30102/original"
+            )
+            invalid_reports.append((
+                "photo page route is not Image Lab", photo_page_is_not_image_lab,
+                "workspace_image_lab_known_photo_receipt_invalid",
+            ))
+
+            photo_original_get_crossed_id = copy.deepcopy(report)
+            photo_original_get_crossed_id["legacy_action_checks"][5]["original_get"]["path"] = (
+                "/image-lab/api/products/99999/original"
+            )
+            invalid_reports.append((
+                "photo original GET crossed product ID", photo_original_get_crossed_id,
+                "workspace_image_lab_known_photo_receipt_invalid",
+            ))
+
+            fallback_used = copy.deepcopy(report)
+            fallback_used["image_lab_wb_fallback_reads"] = [{"product_id": 30103}]
+            invalid_reports.append(("WB fallback was read", fallback_used,
+                                    "workspace_image_lab_transport_reads_unexpected"))
+
+            missing_schema_proof = copy.deepcopy(report)
+            missing_schema_proof["legacy_action_checks"][6]["override_schema_version"] = 2
+            invalid_reports.append(("empty override schema differs", missing_schema_proof,
+                                    "workspace_empty_manual_photo_fallback_receipt_invalid"))
+
+            experiment_changed = copy.deepcopy(report)
+            experiment_changed["legacy_domain_state"]["after"]["image_generation_experiments"] = 1
+            invalid_reports.append(("experiment count changed", experiment_changed,
+                                    "workspace_legacy_domain_state_changed_or_write_attempted"))
+
+            post_attempted = copy.deepcopy(report)
+            post_attempted["legacy_post_count"] = 1
+            invalid_reports.append(("POST occurred", post_attempted,
+                                    "workspace_legacy_domain_state_changed_or_write_attempted"))
+
+            matrix_changed = copy.deepcopy(report)
+            matrix_changed["interactions"].append({})
+            invalid_reports.append(("legacy matrix grew", matrix_changed,
+                                    "workspace_original_37_43_28_matrices_changed"))
+
+            for label, invalid, expected_issue in invalid_reports:
+                with self.subTest(case=label):
+                    rejected = summarize(invalid)
+                    self.assertFalse(rejected["valid"], (label, rejected))
+                    self.assertIn(expected_issue, rejected["workspace_protocol_issues"])
+
     def test_operations_pricing_requires_single_load_receipts_and_original_matrix(self):
         with tempfile.TemporaryDirectory() as temp_name:
             path = Path(temp_name) / "operations-pricing.json"
@@ -786,6 +1583,153 @@ class Ux01RunnerContractTest(unittest.TestCase):
             invalid_reports.append(("exact fixture proof missing", missing_fixture_proof,
                                     "ops_price_initialization_telemetry_invalid"))
 
+            missing_history_receipt = copy.deepcopy(report)
+            missing_history_receipt["history_scenario_checks"].pop()
+            invalid_reports.append(("history named receipt missing", missing_history_receipt,
+                                    "ops_history_scenario_receipts_missing_duplicate_or_failed"))
+
+            duplicate_history_receipt = copy.deepcopy(report)
+            duplicate_history_receipt["history_scenario_checks"][-1] = copy.deepcopy(
+                duplicate_history_receipt["history_scenario_checks"][0]
+            )
+            invalid_reports.append(("history named receipt duplicated", duplicate_history_receipt,
+                                    "ops_history_scenario_receipts_missing_duplicate_or_failed"))
+
+            failed_history_receipt = copy.deepcopy(report)
+            failed_history_receipt["history_scenario_checks"][0]["status"] = "complete"
+            invalid_reports.append(("history receipt not exact passed", failed_history_receipt,
+                                    "ops_history_scenario_receipts_missing_duplicate_or_failed"))
+
+            wrong_history_route = copy.deepcopy(report)
+            wrong_history_route["history_scenario_checks"][0]["path"] = "/bulk-history/906"
+            invalid_reports.append(("history route points at another operation", wrong_history_route,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            duplicated_history_id = copy.deepcopy(report)
+            duplicated_history_id["history_scenario_checks"][0]["product_ids"][-1] = (
+                duplicated_history_id["history_scenario_checks"][0]["product_ids"][0]
+            )
+            invalid_reports.append(("history product ID duplicated", duplicated_history_id,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            foreign_wrong_status = copy.deepcopy(report)
+            foreign_wrong_status["history_scenario_checks"][0]["product_statuses"][-1][
+                "wb_sync_status"
+            ] = "failed"
+            invalid_reports.append(("foreign control status is not conflict", foreign_wrong_status,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            quantity_not_rendered = copy.deepcopy(report)
+            quantity_not_rendered["history_scenario_checks"][0]["owned_quantity_values"][0][
+                "rendered_before"
+            ] = "999"
+            invalid_reports.append(("before value differs from DOM", quantity_not_rendered,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            exposed_foreign_link = copy.deepcopy(report)
+            exposed_foreign_link["history_scenario_checks"][2]["fix_link_count"] = 1
+            invalid_reports.append(("foreign fix link exposed", exposed_foreign_link,
+                                    "ops_history_foreign_fix_link_or_data_exposed"))
+
+            retry_available = copy.deepcopy(report)
+            retry_available["history_scenario_checks"][3]["retry_affordances_absent"] = False
+            invalid_reports.append(("unresolved rows offer retry", retry_available,
+                                    "ops_history_unresolved_retry_or_revert_affordance_present"))
+
+            mismatched_rendered_status = copy.deepcopy(report)
+            mismatched_rendered_status["history_scenario_checks"][0][
+                "rendered_product_statuses"
+            ][0]["wb_sync_status"] = "failed"
+            invalid_reports.append(("DOM status differs from stored row", mismatched_rendered_status,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            unreadable_rendered_status = copy.deepcopy(report)
+            unreadable_rendered_status["history_scenario_checks"][0][
+                "rendered_product_statuses"
+            ][0]["readable_outcome"] = "The update is complete."
+            invalid_reports.append(("status semantics not rendered", unreadable_rendered_status,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            child_counter_inferred_for_parent = copy.deepcopy(report)
+            child_counter_inferred_for_parent["history_scenario_checks"][0]["aggregates"] = {
+                "total_products": 31, "success_count": 25, "error_count": 6,
+            }
+            invalid_reports.append(("parent counters replaced by child statuses", child_counter_inferred_for_parent,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            completed_parent = copy.deepcopy(report)
+            completed_parent["history_scenario_checks"][0]["operation_status"] = "completed"
+            invalid_reports.append(("parent falsely marked completed", completed_parent,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            parent_timestamped = copy.deepcopy(report)
+            parent_timestamped["history_scenario_checks"][0]["operation_completed_at"] = "2026-10-04T00:00:00"
+            invalid_reports.append(("in-progress parent has completion time", parent_timestamped,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            pending_not_last = copy.deepcopy(report)
+            pending_not_last["history_scenario_checks"][0]["pending_unprocessed_product_id"] = (
+                pending_not_last["history_scenario_checks"][0]["owned_product_ids"][0]
+            )
+            invalid_reports.append(("unprocessed pending row is not last", pending_not_last,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            aggregate_card_drift = copy.deepcopy(report)
+            aggregate_card_drift["history_scenario_checks"][0]["aggregate_cards"][2]["value"] = "6"
+            invalid_reports.append(("aggregate card differs from observed parent card", aggregate_card_drift,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            signed64_overflow_id = copy.deepcopy(report)
+            signed64_overflow_id["history_scenario_checks"][0]["product_ids"][0] = 2**63
+            invalid_reports.append(("history fixture ID exceeds signed 64-bit range", signed64_overflow_id,
+                                    "ops_history_batch31_scope_values_or_outcomes_invalid"))
+
+            nested_view_changes = [
+                ("nested operation aliases in-progress batch", "operation_id", 905,
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("nested completed route is wrong", "path", "/bulk-history/999",
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("nested page is not completed", "operation_status", "in_progress",
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("nested sample is foreign", "product_seller_id", 78,
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("nested sample owner IDs disagree", "operation_seller_id", 78,
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("nested history identity row count differs", "card_edit_history_count", 2,
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("nested rendered identity mismatches", "nm_id_matches", False,
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("nested sample has other changed fields", "changed_fields", ["quantity", "price"],
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("quantity rollback is incorrectly available", "safe_revert_supported", True,
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("unsupported rollback note hidden", "unsupported_note_visible", False,
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+                ("unsupported rollback text not observed", "unsupported_note_text", "hidden",
+                 "ops_history_unresolved_retry_or_revert_affordance_present"),
+            ]
+            for label, key, value, issue in nested_view_changes:
+                invalid = copy.deepcopy(report)
+                invalid["history_scenario_checks"][3]["completed_quantity_rollback_view"][key] = value
+                invalid_reports.append((label, invalid, issue))
+
+            nested_post = copy.deepcopy(report)
+            nested_post["history_scenario_checks"][3]["completed_quantity_rollback_view"]["post_count"] = 1
+            invalid_reports.append(("nested history receipt includes a POST", nested_post,
+                                    "ops_history_unresolved_retry_or_revert_affordance_present"))
+
+            changed_history_state = copy.deepcopy(report)
+            changed_history_state["history_domain_state"]["after"]["products"] = 1
+            invalid_reports.append(("history domain count changed", changed_history_state,
+                                    "ops_history_domain_state_changed_or_write_attempted"))
+
+            extra_history_write = copy.deepcopy(report)
+            extra_history_write["writes"].append({
+                "method": "POST", "path": "/bulk-history/905/revert",
+            })
+            invalid_reports.append(("extra history POST", extra_history_write,
+                                    "ops_history_domain_state_changed_or_write_attempted"))
+
             missing_request_failures = copy.deepcopy(report)
             missing_request_failures.pop("request_failures")
             invalid_reports.append(("fatal request-failure field missing", missing_request_failures,
@@ -904,6 +1848,144 @@ class Ux01RunnerContractTest(unittest.TestCase):
             self.assertTrue(summary["valid"])
             self.assertEqual(summary["layout_count"], 118)
             self.assertEqual(summary["interaction_count"], 22)
+
+    def test_journey_stage_requires_separate_classic_fact_navigation_and_dom_receipts(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            path = Path(temp_name) / "journey-classic.json"
+
+            def summarize(report: dict) -> dict:
+                path.write_text(json.dumps(report), encoding="utf-8")
+                return summarize_browser_report(
+                    path, "worktree", require_classic_draft_facts=True,
+                )
+
+            report = _classic_draft_facts_browser_report()
+            accepted = summarize(report)
+            self.assertTrue(accepted["valid"], accepted)
+            self.assertEqual(accepted["page_count"], 25)
+            self.assertEqual(accepted["layout_count"], 118)
+            self.assertEqual(accepted["classic_draft_protocol_issues"], [])
+
+            invalid_reports = []
+
+            def changed(label, mutation, issue):
+                invalid = copy.deepcopy(report)
+                mutation(invalid)
+                invalid_reports.append((label, invalid, issue))
+
+            changed("missing named check", lambda value: value["checks"].clear(),
+                    "journey_classic_facts_named_check_missing_duplicate_or_wrong_shape")
+            changed("duplicate named check", lambda value: value["checks"].append(CLASSIC_DRAFT_FACTS_CHECK),
+                    "journey_classic_facts_named_check_missing_duplicate_or_wrong_shape")
+            changed("fabricated object check", lambda value: value["checks"].__setitem__(0, {
+                "name": CLASSIC_DRAFT_FACTS_CHECK, "status": "passed",
+            }), "journey_classic_facts_named_check_missing_duplicate_or_wrong_shape")
+
+            changed("missing navigation receipt", lambda value: value.pop("classic_content_navigation"),
+                    "journey_classic_facts_navigation_receipt_invalid")
+            changed("navigation is not GET", lambda value: value["classic_content_navigation"].update(method="POST"),
+                    "journey_classic_facts_navigation_receipt_invalid")
+            changed("navigation status is not 200", lambda value: value["classic_content_navigation"].update(status=404),
+                    "journey_classic_facts_navigation_receipt_invalid")
+            changed("navigation claims foreign origin", lambda value: value["classic_content_navigation"].update(
+                same_loopback_origin=False), "journey_classic_facts_navigation_receipt_invalid")
+            changed("navigation does not match fixture route", lambda value: value["classic_content_navigation"].update(
+                exact_fixture_classic_path_match=False), "journey_classic_facts_navigation_receipt_invalid")
+            changed("navigation has wrong route kind", lambda value: value["classic_content_navigation"].update(
+                route_kind="draft_detail_vue"), "journey_classic_facts_navigation_receipt_invalid")
+            changed("navigation carries unreviewed fields", lambda value: value["classic_content_navigation"].update(
+                response_body="raw"), "journey_classic_facts_navigation_receipt_invalid")
+
+            changed("missing DOM case", lambda value: value["classic_draft_content_layouts"].pop(),
+                    "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("duplicate DOM case", lambda value: value["classic_draft_content_layouts"].__setitem__(
+                3, copy.deepcopy(value["classic_draft_content_layouts"][0])),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("DOM row bound to another navigation", lambda value: value[
+                "classic_draft_content_layouts"][0].update(navigation_receipt="other"),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("wrong measured theme", lambda value: value["classic_draft_content_layouts"][0].update(
+                actual_theme="dark"), "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("root viewport overflow", lambda value: value["classic_draft_content_layouts"][0].update(
+                document_overflow_px=1), "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("form overflow is missing", lambda value: value["classic_draft_content_layouts"][0].pop(
+                "form_overflow_px"), "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("summary outside viewport", lambda value: value["classic_draft_content_layouts"][0][
+                "details_summary_bounds_px"][0].update(inside_viewport=False),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("facts collapsed from three to two", lambda value: value["classic_draft_content_layouts"][0].update(
+                fact_region_count=2), "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("local scroll region is not focusable", lambda value: value[
+                "classic_draft_content_layouts"][0]["region_rows"][0].update(tabindex=-1),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("visible region loses accessible name", lambda value: value[
+                "classic_draft_content_layouts"][0]["region_rows"][0].update(has_accessible_name=False),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("touch target too small", lambda value: value[
+                "classic_draft_content_layouts"][0]["region_rows"][0].update(min_height_px=43),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("table exceeds bounded width", lambda value: value[
+                "classic_draft_content_layouts"][0]["region_rows"][0].update(table_width_px=353),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("values do not wrap", lambda value: value[
+                "classic_draft_content_layouts"][0]["region_rows"][0].update(value_wraps=False),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("full facts snapshot lost", lambda value: value["classic_draft_content_layouts"][0].update(
+                full_snapshot_retains_synthetic_fact=False),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("keyboard focus was not reached", lambda value: value["classic_draft_content_layouts"][0].update(
+                keyboard_focus_reached=False), "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("focus outline is too thin", lambda value: value["classic_draft_content_layouts"][0].update(
+                focus_outline_px=1), "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("focus did not scroll local region", lambda value: value[
+                "classic_draft_content_layouts"][0].update(keyboard_scroll_delta_px=0),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("classic update form disappeared", lambda value: value[
+                "classic_draft_content_layouts"][0].update(classic_update_form_preserved=False),
+                "journey_classic_facts_layout_receipts_missing_duplicate_or_invalid")
+            changed("extra direct GET inflated page matrix", lambda value: value["pages"].append({
+                "name": "classic_content_navigation", "path": "/fixture/classic", "status": 200,
+            }), "journey_original_page_matrix_changed")
+            changed("original repeat visit is missing", lambda value: value["pages"].pop(),
+                    "journey_original_page_matrix_changed")
+            changed("original visit order changed", lambda value: value["pages"].__setitem__(
+                slice(13, 15), [value["pages"][14], value["pages"][13]]),
+                "journey_original_page_matrix_changed")
+            changed("repeat visit duplicated over another route", lambda value: value["pages"].__setitem__(
+                14, copy.deepcopy(value["pages"][15])),
+                "journey_original_page_matrix_changed")
+            changed("repeat visit status not successful", lambda value: value["pages"][14].update(
+                status=500), "journey_original_page_matrix_changed")
+            changed("new cases appended to old layout matrix", lambda value: (
+                value["layouts"].extend(copy.deepcopy(value["classic_draft_content_layouts"])),
+                value["geometry"].extend(copy.deepcopy(value["classic_draft_content_layouts"])),
+            ), "journey_original_layout_geometry_matrix_changed")
+            changed("layout and geometry diverged", lambda value: value["geometry"].pop(),
+                    "journey_original_layout_geometry_matrix_changed")
+
+            for label, invalid, issue in invalid_reports:
+                with self.subTest(case=label):
+                    rejected = summarize(invalid)
+                    self.assertFalse(rejected["valid"], (label, rejected))
+                    self.assertIn(issue, rejected["classic_draft_protocol_issues"])
+
+    def test_journey_stage_execution_enables_classic_receipt_gate(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            root = Path(temp_name)
+            output = root / "out"
+            report_path = output / "journey_browser" / "browser-report.json"
+            stage = Stage(
+                name="journey_browser", kind="browser",
+                command=(sys.executable, "-c", "pass"), timeout_seconds=5,
+                report_path=report_path, expected_source="worktree",
+            )
+            with patch(
+                "scripts.check_ux01.summarize_browser_report",
+                return_value={"valid": True, "source": "worktree", "reason": None},
+            ) as summarize:
+                result = execute_stage(stage, root, output, "/usr/bin/chromium")
+            self.assertEqual(result["status"], "passed")
+            self.assertTrue(summarize.call_args.kwargs["require_classic_draft_facts"])
 
     def test_common_content_stage_requires_review_depth_and_exact_synthetic_write_counts(self):
         with tempfile.TemporaryDirectory() as temp_name:
@@ -1200,9 +2282,73 @@ class Ux01RunnerContractTest(unittest.TestCase):
 
             wrong_characteristic_payload = copy.deepcopy(report)
             wrong_characteristic_payload["fake_wb_single_write_requests"][0][
-                "characteristics"][1]["value"] = "125"
+                "characteristics"][0]["value"] = "Китай"
             invalid_reports.append(("provider request is not exact", wrong_characteristic_payload,
                                     "wb_single_edit_fake_request_unexpected"))
+
+            extra_characteristic_write = copy.deepcopy(report)
+            extra_characteristic_write["fake_wb_single_write_requests"][0][
+                "characteristic_ids"].append(303)
+            extra_characteristic_write["fake_wb_single_write_requests"][0][
+                "characteristics"].append({"id": 303, "value": 125})
+            invalid_reports.append(("save silently includes unchanged weight", extra_characteristic_write,
+                                    "wb_single_edit_fake_request_unexpected"))
+
+            wrong_saved_channel = copy.deepcopy(report)
+            wrong_saved_channel["single_edit_observations"]["form_post"][
+                "target_channel"] = "Ozon"
+            invalid_reports.append(("saved form reports wrong provider channel", wrong_saved_channel,
+                                    "wb_single_edit_form_and_history_evidence_incomplete"))
+
+            wrong_save_check_payload = copy.deepcopy(report)
+            next(row for row in wrong_save_check_payload["checks"]
+                 if row["name"] == "single_edit_real_form_submit_reaches_fake_wb_and_persists_exact_history")[
+                     "changed_characteristics"
+                 ] = [202, 303]
+            invalid_reports.append(("save receipt claims extra changed field", wrong_save_check_payload,
+                                    "wb_single_edit_save_receipt_details_incomplete"))
+
+            request_submit_not_canceled = copy.deepcopy(report)
+            request_submit_not_canceled["single_edit_observations"]["progressive_ui"][
+                "empty_add_request_submit_attempt"]["submit_event"]["default_prevented"] = False
+            invalid_reports.append(("empty requestSubmit is not canceled", request_submit_not_canceled,
+                                    "wb_single_edit_progressive_empty_submit_guard_incomplete"))
+
+            request_submit_causes_provider = copy.deepcopy(report)
+            request_submit_causes_provider["single_edit_observations"]["progressive_ui"][
+                "empty_add_request_submit_attempt"]["provider_attempts"] = 1
+            invalid_reports.append(("empty requestSubmit reaches provider", request_submit_causes_provider,
+                                    "wb_single_edit_progressive_empty_submit_guard_incomplete"))
+
+            empty_field_not_preserved = copy.deepcopy(report)
+            empty_field_not_preserved["single_edit_observations"]["reopen"][
+                "present_empty_field_preserved"] = False
+            invalid_reports.append(("present empty characteristic lost on readback", empty_field_not_preserved,
+                                    "wb_single_edit_reopen_evidence_incomplete"))
+
+            stale_history_field_lost = copy.deepcopy(report)
+            stale_history_field_lost["single_edit_observations"]["form_post"][
+                "readback_and_history"]["characteristic_ids"].remove(501)
+            invalid_reports.append(("historical characteristic lost from full-card readback", stale_history_field_lost,
+                                    "wb_single_edit_form_and_history_evidence_incomplete"))
+
+            stale_field_claimed_as_current_schema = copy.deepcopy(report)
+            stale_field_claimed_as_current_schema["single_edit_observations"]["progressive_ui"][
+                "initial_view"]["visible_field_ids"].insert(4, 501)
+            invalid_reports.append(("stale historical field fabricated as current schema", stale_field_claimed_as_current_schema,
+                                    "wb_single_edit_progressive_empty_submit_guard_incomplete"))
+
+            stale_field_not_disclosed_by_keyboard = copy.deepcopy(report)
+            stale_field_not_disclosed_by_keyboard["single_edit_observations"]["progressive_ui"][
+                "stale_legacy_field_read_only"]["disclosure_opened_by_keyboard"] = False
+            invalid_reports.append(("stale value disclosure was not keyboard opened", stale_field_not_disclosed_by_keyboard,
+                                    "wb_single_edit_progressive_empty_submit_guard_incomplete"))
+
+            stale_field_has_edit_control = copy.deepcopy(report)
+            stale_field_has_edit_control["single_edit_observations"]["progressive_ui"][
+                "stale_legacy_field_read_only"]["form_control_count"] = 1
+            invalid_reports.append(("stale value is editable", stale_field_has_edit_control,
+                                    "wb_single_edit_progressive_empty_submit_guard_incomplete"))
 
             bad_weight_preservation = copy.deepcopy(report)
             bad_weight_preservation["single_edit_observations"]["rejections"][0][
@@ -1244,6 +2390,52 @@ class Ux01RunnerContractTest(unittest.TestCase):
             unmeasured_layout["layouts"][0]["layout_settle"]["fonts_ready"] = False
             invalid_reports.append(("unstable measured layout", unmeasured_layout,
                                     "wb_edit_layout_matrix_incomplete_or_unmeasured"))
+
+            missing_contrast_theme = copy.deepcopy(report)
+            missing_contrast_theme["single_edit_contrast_diagnostic"].pop()
+            invalid_reports.append(("missing dark contrast observation", missing_contrast_theme,
+                                    "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"))
+
+            dark_control_below_aa = copy.deepcopy(report)
+            dark_control_below_aa["single_edit_contrast_diagnostic"][1]["controls"][0][
+                "contrast_ratio_estimate"
+            ] = 4.49
+            invalid_reports.append(("dark control below AA threshold", dark_control_below_aa,
+                                    "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"))
+
+            unsettled_contrast_theme = copy.deepcopy(report)
+            unsettled_contrast_theme["single_edit_contrast_diagnostic"][1][
+                "appearance_stability"]["settled"] = False
+            invalid_reports.append(("dark contrast sampled before settling", unsettled_contrast_theme,
+                                    "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"))
+
+            duplicate_contrast_control = copy.deepcopy(report)
+            duplicate_contrast_control["single_edit_contrast_diagnostic"][0]["controls"][4][
+                "name"
+            ] = "optional_add"
+            invalid_reports.append(("duplicate control replaces save", duplicate_contrast_control,
+                                    "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"))
+
+            contrast_ratio_not_backed_by_rgb = copy.deepcopy(report)
+            contrast_ratio_not_backed_by_rgb["single_edit_contrast_diagnostic"][0]["controls"][0][
+                "effective_foreground_rgb"
+            ] = [254.9, 254.9, 254.9]
+            invalid_reports.append(("reported contrast differs from measured RGB", contrast_ratio_not_backed_by_rgb,
+                                    "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"))
+
+            missing_final_style = copy.deepcopy(report)
+            missing_final_style["single_edit_contrast_diagnostic"][1]["appearance_stability"][
+                "final_computed_styles"
+            ].pop()
+            invalid_reports.append(("missing settled computed style", missing_final_style,
+                                    "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"))
+
+            duplicate_final_style = copy.deepcopy(report)
+            duplicate_styles = duplicate_final_style["single_edit_contrast_diagnostic"][0][
+                "appearance_stability"]["final_computed_styles"]
+            duplicate_styles[-1] = copy.deepcopy(duplicate_styles[0])
+            invalid_reports.append(("duplicate settled computed style selector", duplicate_final_style,
+                                    "wb_edit_enabled_control_contrast_aa_incomplete_or_invalid"))
 
             for label, invalid, expected_issue in invalid_reports:
                 with self.subTest(case=label):
