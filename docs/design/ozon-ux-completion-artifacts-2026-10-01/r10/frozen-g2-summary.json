@@ -1,0 +1,368 @@
+{
+  "schema_version": 1,
+  "purpose": "sanitized_local_frozen_G2_synthetic_evidence",
+  "synthetic_only": true,
+  "network": "none",
+  "production_credentials_or_database_mounted": false,
+  "source_head": "23efe2b40bb09287393480690a74ddde36ee1afd",
+  "source_manifest": "98c65de3ab23536a277d90cca5eff94431b36003de38c887bb0bda32d4040230",
+  "source_file_count": 1248,
+  "build_source_verified_after": true,
+  "ux_source_verified_before_and_after": true,
+  "runtime_image": "sha256:2d509178450ed3633a62cf4dc9278c3da6a8d0d93eff1c0e14346124afcec13f",
+  "ci_image": "sha256:f414829f8e5831082ac1409aa1e06794e0349867a9d5f3e28b289660bafb7ded",
+  "status": "passed",
+  "ux_stages": [
+    {
+      "name": "ux01_pytest",
+      "status": "passed",
+      "exit_code": 0,
+      "tests": 233,
+      "passed": 233,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "pages": null,
+      "layouts": null,
+      "interactions": null,
+      "provider_attempts": null,
+      "synthetic_auth_writes": null,
+      "synthetic_common_content_writes": null
+    },
+    {
+      "name": "analytics_browser",
+      "status": "passed",
+      "exit_code": 0,
+      "tests": null,
+      "passed": null,
+      "failures": null,
+      "errors": null,
+      "skipped": null,
+      "pages": 0,
+      "layouts": 48,
+      "interactions": 152,
+      "provider_attempts": 0,
+      "synthetic_auth_writes": 0,
+      "synthetic_common_content_writes": 0
+    },
+    {
+      "name": "listing_browser",
+      "status": "passed",
+      "exit_code": 0,
+      "tests": null,
+      "passed": null,
+      "failures": null,
+      "errors": null,
+      "skipped": null,
+      "pages": 0,
+      "layouts": 28,
+      "interactions": 10,
+      "provider_attempts": 0,
+      "synthetic_auth_writes": 1,
+      "synthetic_common_content_writes": 0
+    },
+    {
+      "name": "workspace_browser",
+      "status": "passed",
+      "exit_code": 0,
+      "tests": null,
+      "passed": null,
+      "failures": null,
+      "errors": null,
+      "skipped": null,
+      "pages": 37,
+      "layouts": 43,
+      "interactions": 28,
+      "provider_attempts": 0,
+      "synthetic_auth_writes": 0,
+      "synthetic_common_content_writes": 0
+    },
+    {
+      "name": "journey_browser",
+      "status": "passed",
+      "exit_code": 0,
+      "tests": null,
+      "passed": null,
+      "failures": null,
+      "errors": null,
+      "skipped": null,
+      "pages": 25,
+      "layouts": 118,
+      "interactions": 23,
+      "provider_attempts": 0,
+      "synthetic_auth_writes": 0,
+      "synthetic_common_content_writes": 0
+    },
+    {
+      "name": "operations_pricing_browser",
+      "status": "passed",
+      "exit_code": 0,
+      "tests": null,
+      "passed": null,
+      "failures": null,
+      "errors": null,
+      "skipped": null,
+      "pages": 32,
+      "layouts": 256,
+      "interactions": 32,
+      "provider_attempts": 0,
+      "synthetic_auth_writes": 0,
+      "synthetic_common_content_writes": 0
+    },
+    {
+      "name": "wb_edit_browser",
+      "status": "passed",
+      "exit_code": 0,
+      "tests": null,
+      "passed": null,
+      "failures": null,
+      "errors": null,
+      "skipped": null,
+      "pages": 0,
+      "layouts": 30,
+      "interactions": 49,
+      "provider_attempts": 0,
+      "synthetic_auth_writes": 0,
+      "synthetic_common_content_writes": 0
+    },
+    {
+      "name": "common_content_browser",
+      "status": "passed",
+      "exit_code": 0,
+      "tests": null,
+      "passed": null,
+      "failures": null,
+      "errors": null,
+      "skipped": null,
+      "pages": 2,
+      "layouts": 28,
+      "interactions": 33,
+      "provider_attempts": 0,
+      "synthetic_auth_writes": 0,
+      "synthetic_common_content_writes": 11
+    }
+  ],
+  "ozon_stages": [
+    {
+      "name": "contracts",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 601.31,
+      "xml_tests": 2761,
+      "testcase_nodes": 2223,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "name": "browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 53.38,
+      "named_checks": 14,
+      "layouts": 86,
+      "provider_attempts": 0,
+      "js_errors": 0
+    },
+    {
+      "name": "bulk-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 39.02,
+      "named_checks": 9,
+      "layouts": 64,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "posts": 6
+    },
+    {
+      "name": "credential-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 16.58,
+      "named_checks": 7,
+      "layouts": 25,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "posts": 3
+    },
+    {
+      "name": "account-history-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 26.73,
+      "named_checks": 8,
+      "layouts": 25,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "posts": 8,
+      "history_gets": 11
+    },
+    {
+      "name": "quarantine-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 18.77,
+      "named_checks": 10,
+      "layouts": 40,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "posts": 7
+    },
+    {
+      "name": "quarantine-commercial-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 14.12,
+      "named_checks": 4,
+      "layouts": 32,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "postcounts": {
+        "/marketplaces/commercial/batch-approve": 1
+      }
+    },
+    {
+      "name": "warehouse-read-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 34.63,
+      "named_checks": 9,
+      "layouts": 40,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "postcounts": {
+        "/marketplaces/commercial/accounts/1/warehouses/sync": 3,
+        "/marketplaces/commercial/listings/1/stocks/refresh": 2
+      }
+    },
+    {
+      "name": "vue-link-category-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 38.85,
+      "named_checks": 11,
+      "layouts": 32,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "posts": {
+        "/marketplaces/listings/1/link": 1,
+        "/marketplaces/listings/37/link": 1,
+        "/marketplaces/listings/1/unlink": 3,
+        "/marketplaces/drafts/1": 4
+      }
+    },
+    {
+      "name": "upload-two-step-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 19.16,
+      "named_checks": 8,
+      "layouts": 48,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "posts": {
+        "/marketplaces/ozon/uploads/from-drafts": 3,
+        "/marketplaces/ozon/uploads/": 2
+      }
+    },
+    {
+      "name": "draft-ai-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 15.07,
+      "named_checks": 5,
+      "layouts": 40,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "posts": {
+        "/marketplaces/api/drafts/ai-completions": 3,
+        "/marketplaces/api/drafts/1/ai-suggestions/apply": 2
+      }
+    },
+    {
+      "name": "draft-editor-photo-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 50.27,
+      "named_checks": 9,
+      "layouts": 58,
+      "provider_attempts": 0,
+      "js_errors": 0,
+      "synthetic_photo_get_events": 15
+    },
+    {
+      "name": "ozon-complete-journey-browser",
+      "status": "passed",
+      "exit_code": 0,
+      "seconds": 28.32,
+      "named_checks": 14,
+      "layouts": 32,
+      "provider_attempts": 0,
+      "js_errors": 0
+    }
+  ],
+  "ux_xml": {
+    "testsuites_tests": 457,
+    "testcase_nodes": 233,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "runner_report_tests": 233,
+    "runner_report_passed": 233,
+    "runner_report_failures": 0,
+    "runner_report_errors": 0,
+    "runner_report_skipped": 0,
+    "note": "XML tests=457 includes 224 pytest subtest cases; 233 testcase nodes correspond to the 233 runner-counted tests."
+  },
+  "ozon_contract_xml": {
+    "testsuites_tests": 2761,
+    "testcase_nodes": 2223,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "summary_contract_tests": 2761,
+    "note": "XML tests=2761 includes subtests; 2223 testcase nodes."
+  },
+  "screenshots": [
+    {
+      "file": "wb-edit-single-product-edit-light-390.png",
+      "sha256": "a55f5648e6a15cb96298c4009e30c21f532624eac61855ef8a831b6af9d5bcb9",
+      "bytes": 187774,
+      "synthetic_only": true
+    },
+    {
+      "file": "journey-worktree-draft_detail_classic_facts-light-320.png",
+      "sha256": "a774128b45d3deb80625c16c4affaf477abb21fd155ddceb2bed607f1c3efe79",
+      "bytes": 254436,
+      "synthetic_only": true
+    },
+    {
+      "file": "journey-worktree-draft_detail_classic_facts-light-360.png",
+      "sha256": "50e063351d993cd0a235334a94aff8b5f18c48f777be65eeb11797e2068d1660",
+      "bytes": 258340,
+      "synthetic_only": true
+    },
+    {
+      "file": "wb-edit-single-product-edit-dark-390.png",
+      "sha256": "1bda198f5988912206bb5e4d2f63e6d569d62b657cdbee828d1f5d24f5aa308d",
+      "bytes": 190266,
+      "synthetic_only": true
+    },
+    {
+      "file": "journey-worktree-draft_detail_classic_facts-dark-320.png",
+      "sha256": "83becda4a66bd4ca96f7864a17b4c5326af26d1191d4f2676c0eeb3555aca6eb",
+      "bytes": 258537,
+      "synthetic_only": true
+    },
+    {
+      "file": "journey-worktree-draft_detail_classic_facts-dark-360.png",
+      "sha256": "382e3326d8eb4d6b09b1f6b60b5da43c08abdbceb9cca43f12b714161504f7f8",
+      "bytes": 262188,
+      "synthetic_only": true
+    }
+  ],
+  "root_visual_review": "six synthetic full-page screenshots inspected; additional actual viewport probe confirmed WB footer overlap/320px overflow/undersize controls, follow-up open",
+  "hosted_ci_execution_claimed": false,
+  "real_create_moderation_rollback_claimed": false
+}

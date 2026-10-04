@@ -1,0 +1,605 @@
+{
+  "browser_external_rejections": 0,
+  "ci_image_sha": "sha256:f414829f8e5831082ac1409aa1e06794e0349867a9d5f3e28b289660bafb7ded",
+  "fake_provider_clients": 0,
+  "fake_provider_writes": 0,
+  "fixture_database_created_and_seeded": true,
+  "fixture_database_is_synthetic_only": true,
+  "form_submit_attempts": 0,
+  "form_submit_events": 0,
+  "javascript_error_count": 0,
+  "login_post_count": 1,
+  "network_none": true,
+  "non_login_post_attempts": 0,
+  "pinned_chromium_path": "/opt/compatible/chrome-linux/chrome",
+  "provider_attempts": 0,
+  "rows": [
+    {
+      "assistant_trigger": {
+        "bottom": 832,
+        "height": 50,
+        "left": 258,
+        "right": 308,
+        "top": 782,
+        "width": 50
+      },
+      "assistant_z_index": "90",
+      "body_scroll_width": 328,
+      "cancel": {
+        "bottom": 786.5,
+        "height": 43,
+        "left": 16,
+        "right": 135.19,
+        "top": 743.5,
+        "width": 119.19
+      },
+      "document_scroll_width": 328,
+      "footer": {
+        "bottom": 812,
+        "height": 95,
+        "left": 0,
+        "right": 320,
+        "top": 717,
+        "width": 320
+      },
+      "footer_z_index": "40",
+      "full_page_height": 3670,
+      "keyboard_focus": {
+        "focused_save_inside_viewport": true,
+        "save_focus_outline_offset": "0px",
+        "save_focus_outline_style": "auto",
+        "save_focus_outline_width": "1px",
+        "save_focus_visible": true,
+        "scroll_y": 2826,
+        "tab_from_cancel_reached_save": true
+      },
+      "label_assistant_overlap": {
+        "area": 32.96875,
+        "height": 2,
+        "width": 16.484375
+      },
+      "label_hit_tests": [
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        }
+      ],
+      "max_scroll_y": 2826,
+      "save": {
+        "bottom": 796,
+        "height": 62,
+        "left": 147.19,
+        "right": 304,
+        "top": 734,
+        "width": 156.81
+      },
+      "save_assistant_overlap": {
+        "area": 644,
+        "height": 14,
+        "width": 46
+      },
+      "save_enabled": true,
+      "save_label_text_present": true,
+      "save_label_text_rect": {
+        "bottom": 784,
+        "height": 38,
+        "left": 199.828125,
+        "right": 274.484375,
+        "top": 746,
+        "width": 74.65625
+      },
+      "scroll_y": 2826,
+      "scrollable_element": "HTML",
+      "theme": "light",
+      "viewport": {
+        "height": 844,
+        "width": 320
+      }
+    },
+    {
+      "assistant_trigger": {
+        "bottom": 832,
+        "height": 50,
+        "left": 298,
+        "right": 348,
+        "top": 782,
+        "width": 50
+      },
+      "assistant_z_index": "90",
+      "body_scroll_width": 360,
+      "cancel": {
+        "bottom": 796,
+        "height": 43,
+        "left": 16,
+        "right": 135.19,
+        "top": 753,
+        "width": 119.19
+      },
+      "document_scroll_width": 360,
+      "footer": {
+        "bottom": 812,
+        "height": 76,
+        "left": 0,
+        "right": 360,
+        "top": 736,
+        "width": 360
+      },
+      "footer_z_index": "40",
+      "full_page_height": 3354,
+      "keyboard_focus": {
+        "focused_save_inside_viewport": true,
+        "save_focus_outline_offset": "0px",
+        "save_focus_outline_style": "auto",
+        "save_focus_outline_width": "1px",
+        "save_focus_visible": true,
+        "scroll_y": 2510,
+        "tab_from_cancel_reached_save": true
+      },
+      "label_assistant_overlap": {
+        "area": 22,
+        "height": 1,
+        "width": 22
+      },
+      "label_hit_tests": [
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        }
+      ],
+      "max_scroll_y": 2510,
+      "save": {
+        "bottom": 795,
+        "height": 41,
+        "left": 154.69,
+        "right": 344,
+        "top": 754,
+        "width": 189.31
+      },
+      "save_assistant_overlap": {
+        "area": 598,
+        "height": 13,
+        "width": 46
+      },
+      "save_enabled": true,
+      "save_label_text_present": true,
+      "save_label_text_rect": {
+        "bottom": 783,
+        "height": 17,
+        "left": 206.6875,
+        "right": 320,
+        "top": 766,
+        "width": 113.3125
+      },
+      "scroll_y": 2510,
+      "scrollable_element": "HTML",
+      "theme": "light",
+      "viewport": {
+        "height": 844,
+        "width": 360
+      }
+    },
+    {
+      "assistant_trigger": {
+        "bottom": 832,
+        "height": 50,
+        "left": 328,
+        "right": 378,
+        "top": 782,
+        "width": 50
+      },
+      "assistant_z_index": "90",
+      "body_scroll_width": 390,
+      "cancel": {
+        "bottom": 796,
+        "height": 43,
+        "left": 16,
+        "right": 135.19,
+        "top": 753,
+        "width": 119.19
+      },
+      "document_scroll_width": 390,
+      "footer": {
+        "bottom": 812,
+        "height": 76,
+        "left": 0,
+        "right": 390,
+        "top": 736,
+        "width": 390
+      },
+      "footer_z_index": "40",
+      "full_page_height": 3302,
+      "keyboard_focus": {
+        "focused_save_inside_viewport": true,
+        "save_focus_outline_offset": "0px",
+        "save_focus_outline_style": "auto",
+        "save_focus_outline_width": "1px",
+        "save_focus_visible": true,
+        "scroll_y": 2458,
+        "tab_from_cancel_reached_save": true
+      },
+      "label_assistant_overlap": {
+        "area": 22,
+        "height": 1,
+        "width": 22
+      },
+      "label_hit_tests": [
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        }
+      ],
+      "max_scroll_y": 2458,
+      "save": {
+        "bottom": 795,
+        "height": 41,
+        "left": 184.69,
+        "right": 374,
+        "top": 754,
+        "width": 189.31
+      },
+      "save_assistant_overlap": {
+        "area": 598,
+        "height": 13,
+        "width": 46
+      },
+      "save_enabled": true,
+      "save_label_text_present": true,
+      "save_label_text_rect": {
+        "bottom": 783,
+        "height": 17,
+        "left": 236.6875,
+        "right": 350,
+        "top": 766,
+        "width": 113.3125
+      },
+      "scroll_y": 2458,
+      "scrollable_element": "HTML",
+      "theme": "light",
+      "viewport": {
+        "height": 844,
+        "width": 390
+      }
+    },
+    {
+      "assistant_trigger": {
+        "bottom": 832,
+        "height": 50,
+        "left": 258,
+        "right": 308,
+        "top": 782,
+        "width": 50
+      },
+      "assistant_z_index": "90",
+      "body_scroll_width": 328,
+      "cancel": {
+        "bottom": 786.5,
+        "height": 43,
+        "left": 16,
+        "right": 135.19,
+        "top": 743.5,
+        "width": 119.19
+      },
+      "document_scroll_width": 328,
+      "footer": {
+        "bottom": 812,
+        "height": 95,
+        "left": 0,
+        "right": 320,
+        "top": 717,
+        "width": 320
+      },
+      "footer_z_index": "40",
+      "full_page_height": 3670,
+      "keyboard_focus": {
+        "focused_save_inside_viewport": true,
+        "save_focus_outline_offset": "0px",
+        "save_focus_outline_style": "auto",
+        "save_focus_outline_width": "1px",
+        "save_focus_visible": true,
+        "scroll_y": 2826,
+        "tab_from_cancel_reached_save": true
+      },
+      "label_assistant_overlap": {
+        "area": 32.96875,
+        "height": 2,
+        "width": 16.484375
+      },
+      "label_hit_tests": [
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        }
+      ],
+      "max_scroll_y": 2826,
+      "save": {
+        "bottom": 796,
+        "height": 62,
+        "left": 147.19,
+        "right": 304,
+        "top": 734,
+        "width": 156.81
+      },
+      "save_assistant_overlap": {
+        "area": 644,
+        "height": 14,
+        "width": 46
+      },
+      "save_enabled": true,
+      "save_label_text_present": true,
+      "save_label_text_rect": {
+        "bottom": 784,
+        "height": 38,
+        "left": 199.828125,
+        "right": 274.484375,
+        "top": 746,
+        "width": 74.65625
+      },
+      "scroll_y": 2826,
+      "scrollable_element": "HTML",
+      "theme": "dark",
+      "viewport": {
+        "height": 844,
+        "width": 320
+      }
+    },
+    {
+      "assistant_trigger": {
+        "bottom": 832,
+        "height": 50,
+        "left": 298,
+        "right": 348,
+        "top": 782,
+        "width": 50
+      },
+      "assistant_z_index": "90",
+      "body_scroll_width": 360,
+      "cancel": {
+        "bottom": 796,
+        "height": 43,
+        "left": 16,
+        "right": 135.19,
+        "top": 753,
+        "width": 119.19
+      },
+      "document_scroll_width": 360,
+      "footer": {
+        "bottom": 812,
+        "height": 76,
+        "left": 0,
+        "right": 360,
+        "top": 736,
+        "width": 360
+      },
+      "footer_z_index": "40",
+      "full_page_height": 3354,
+      "keyboard_focus": {
+        "focused_save_inside_viewport": true,
+        "save_focus_outline_offset": "0px",
+        "save_focus_outline_style": "auto",
+        "save_focus_outline_width": "1px",
+        "save_focus_visible": true,
+        "scroll_y": 2510,
+        "tab_from_cancel_reached_save": true
+      },
+      "label_assistant_overlap": {
+        "area": 22,
+        "height": 1,
+        "width": 22
+      },
+      "label_hit_tests": [
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        }
+      ],
+      "max_scroll_y": 2510,
+      "save": {
+        "bottom": 795,
+        "height": 41,
+        "left": 154.69,
+        "right": 344,
+        "top": 754,
+        "width": 189.31
+      },
+      "save_assistant_overlap": {
+        "area": 598,
+        "height": 13,
+        "width": 46
+      },
+      "save_enabled": true,
+      "save_label_text_present": true,
+      "save_label_text_rect": {
+        "bottom": 783,
+        "height": 17,
+        "left": 206.6875,
+        "right": 320,
+        "top": 766,
+        "width": 113.3125
+      },
+      "scroll_y": 2510,
+      "scrollable_element": "HTML",
+      "theme": "dark",
+      "viewport": {
+        "height": 844,
+        "width": 360
+      }
+    },
+    {
+      "assistant_trigger": {
+        "bottom": 832,
+        "height": 50,
+        "left": 328,
+        "right": 378,
+        "top": 782,
+        "width": 50
+      },
+      "assistant_z_index": "90",
+      "body_scroll_width": 390,
+      "cancel": {
+        "bottom": 796,
+        "height": 43,
+        "left": 16,
+        "right": 135.19,
+        "top": 753,
+        "width": 119.19
+      },
+      "document_scroll_width": 390,
+      "footer": {
+        "bottom": 812,
+        "height": 76,
+        "left": 0,
+        "right": 390,
+        "top": 736,
+        "width": 390
+      },
+      "footer_z_index": "40",
+      "full_page_height": 3302,
+      "keyboard_focus": {
+        "focused_save_inside_viewport": true,
+        "save_focus_outline_offset": "0px",
+        "save_focus_outline_style": "auto",
+        "save_focus_outline_width": "1px",
+        "save_focus_visible": true,
+        "scroll_y": 2458,
+        "tab_from_cancel_reached_save": true
+      },
+      "label_assistant_overlap": {
+        "area": 22,
+        "height": 1,
+        "width": 22
+      },
+      "label_hit_tests": [
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        },
+        {
+          "point_inside_viewport": true,
+          "resolved_to_assistant_trigger": false,
+          "resolved_to_other_element": false,
+          "resolved_to_save_button": true
+        }
+      ],
+      "max_scroll_y": 2458,
+      "save": {
+        "bottom": 795,
+        "height": 41,
+        "left": 184.69,
+        "right": 374,
+        "top": 754,
+        "width": 189.31
+      },
+      "save_assistant_overlap": {
+        "area": 598,
+        "height": 13,
+        "width": 46
+      },
+      "save_enabled": true,
+      "save_label_text_present": true,
+      "save_label_text_rect": {
+        "bottom": 783,
+        "height": 17,
+        "left": 236.6875,
+        "right": 350,
+        "top": 766,
+        "width": 113.3125
+      },
+      "scroll_y": 2458,
+      "scrollable_element": "HTML",
+      "theme": "dark",
+      "viewport": {
+        "height": 844,
+        "width": 390
+      }
+    }
+  ],
+  "scope": "synthetic_wb_edit_footer_viewport_hit_test",
+  "screenshots": [
+    "screenshots/footer-320-light.png",
+    "screenshots/footer-360-light.png",
+    "screenshots/footer-390-light.png",
+    "screenshots/footer-320-dark.png",
+    "screenshots/footer-360-dark.png",
+    "screenshots/footer-390-dark.png"
+  ],
+  "status": "complete",
+  "unexpected_external_request_count": 0
+}
