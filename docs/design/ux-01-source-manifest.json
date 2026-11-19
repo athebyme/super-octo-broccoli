@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-11-19T09:51:37.156188+00:00",
+  "generated_at": "2026-11-19T10:07:52.356582+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -2645,7 +2645,7 @@
     },
     {
       "path": "static/ozon-draft-editor.js",
-      "sha256": "12a4c2dca740d88d6b11fc0088d8c9679070df61bf52ceb470d18a77e470ac35"
+      "sha256": "9deb9b136b1589e7f5a2ee16651f967e804965a0050d2aa645af4d2f10582642"
     },
     {
       "path": "static/ozon-drafts-vue.js",
@@ -5020,5 +5020,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "b8ad8b157d61b2b05c68ee645841b93cd31a58b270dcc09411a52e301712e1d6"
+  "aggregate_sha256": "00169c7a7c7a934448ffcc47e8d8806459f9172c5fc52b7a48b47ddeba29e0e7"
 }

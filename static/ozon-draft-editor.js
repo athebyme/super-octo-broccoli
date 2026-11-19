@@ -102,7 +102,7 @@
                 const addButton = [...document.querySelectorAll('[data-complex-type-id]')].find(element =>
                     element.dataset.complexTypeId === nav.complexId
                 );
-                target = focusable(addButton) ? addButton : details?.querySelector('summary');
+                target = focusable(addButton) ? addButton : details?.querySelector?.('summary');
             }
         } else if (nav.attribute) {
             const fieldElement = findAttribute(nav.attribute, null);
@@ -129,11 +129,11 @@
             target = document.getElementById(issueFieldIds[field] || (/type|category/.test(field) ? 'ode-category' : ''));
         }
 
-        const details = target?.closest('details');
+        const details = target?.closest?.('details');
         if (details) details.open = true;
-        if (!focusable(target)) target = details?.querySelector('summary') || fallbackHeading(nav.section);
-        const control = target?.dataset.attribute
-            ? target.querySelector('input:not(:disabled), select:not(:disabled), [data-issue-input]:not(:disabled)')
+        if (!focusable(target)) target = details?.querySelector?.('summary') || fallbackHeading(nav.section);
+        const control = target?.dataset?.attribute
+            ? target.querySelector?.('input:not(:disabled), select:not(:disabled), [data-issue-input]:not(:disabled)')
             : null;
         return {target, control};
     }
@@ -450,8 +450,8 @@
                     else if (navigation.attribute && navigation.attribute !== '4191') this.attrQuery = navigation.attribute;
                     this.$nextTick(() => {
                         const {target, control} = issueTarget(this, navigation);
-                        target?.scrollIntoView({behavior:'auto', block:'center'});
-                        (focusable(control) ? control : target)?.focus();
+                        target?.scrollIntoView?.({behavior:'auto', block:'center'});
+                        (focusable(control) ? control : target)?.focus?.();
                     });
                 },
                 valuesFor(def, groupIndex = null) { const rows = groupIndex === null ? this.form.attributes : this.form.complex_attributes[groupIndex].attributes; return rows.find(row => identity(row) === def.id + ':' + def.complex_id)?.values || []; },
