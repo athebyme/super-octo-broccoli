@@ -228,5 +228,25 @@
     "latest_backup_hash_rechecked_now": false,
     "last_backup_status": "failed",
     "last_backup_code": "backup_not_confirmed_no_retry"
+  },
+  "local_test_artifact_cleanup": {
+    "measured_synthetic_scratch_bytes": 77967360,
+    "removed_synthetic_scratch_directories": 6,
+    "measured_clean_duplicate_worktree_bytes": 71979008,
+    "primary_candidate_preserved": true,
+    "test_junit_files_preserved": 6,
+    "production_volume_deletions": 0,
+    "observer_after_cleanup": {
+      "observed_at_utc": "2026-11-19T10:30:06.076378+00:00",
+      "seller_platform_healthy": true,
+      "free_bytes": 18392604672,
+      "required_backup_free_bytes": 19450482688,
+      "backup_shortfall_bytes": 1057878016,
+      "reported_issues": [
+        "backup_capacity_low",
+        "backup_stale",
+        "backup_last_run_failed"
+      ]
+    }
   }
 }
