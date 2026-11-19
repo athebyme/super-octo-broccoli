@@ -1,0 +1,166 @@
+{
+  "scope": "isolated host verification; provider/browser/deployment outside this report",
+  "initial_exact_host_run": {
+    "status": "failed",
+    "head": "3497a59cb4150135e521388112b3431757494f8a",
+    "manifest_aggregate": "b8ad8b157d61b2b05c68ee645841b93cd31a58b270dcc09411a52e301712e1d6",
+    "started_at": "2026-11-19T10:00:56.064089+00:00",
+    "source_verified_before": true,
+    "stages": [
+      {
+        "scope": "ux",
+        "test_files": 23,
+        "started_at": "2026-11-19T10:00:56.391373+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "junit": {
+          "tests": 504,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "elapsed_seconds": 65.2,
+        "source_verified_after": true
+      },
+      {
+        "scope": "ozon",
+        "test_files": 177,
+        "started_at": "2026-11-19T10:02:01.953749+00:00",
+        "status": "failed",
+        "exit_code": 1,
+        "junit": {
+          "tests": 2778,
+          "failures": 2,
+          "errors": 0,
+          "skipped": 0
+        },
+        "elapsed_seconds": 639.8,
+        "source_verified_after": true
+      }
+    ],
+    "source_verified_after": true,
+    "finished_at": "2026-11-19T10:12:42.078274+00:00"
+  },
+  "initial_failure_nodes": [
+    {
+      "suite": "tests.test_marketplace_draft_editor",
+      "test": "test_current_validation_not_saved_ready_snapshot_gates_publication"
+    },
+    {
+      "suite": "tests.test_marketplace_draft_editor",
+      "test": "test_preflight_issue_navigation_uses_attribute_metadata_and_focuses_exact_field"
+    }
+  ],
+  "initial_contract_junit_sha256": "cb8fdbe65ebe153bcc2734484fae17f4d9f561528e0e6538db81db0407297a2c",
+  "cause": "navigation required closest() on direct test targets that only provide focus and scroll",
+  "corrected_targeted_host_run": {
+    "head": "4f40c5e1322b814648a37fd44e31279f5cde307e",
+    "manifest_aggregate": "00169c7a7c7a934448ffcc47e8d8806459f9172c5fc52b7a48b47ddeba29e0e7",
+    "files": [
+      "tests/test_marketplace_draft_editor.py",
+      "tests/test_ozon_draft_issue_focus.py",
+      "tests/test_ozon_complete_journey.py",
+      "tests/test_ozon_vue_link_category.py",
+      "tests/test_seller_ozon_preparation_ui.py",
+      "tests/test_ozon_quarantine_draft_context.py"
+    ],
+    "junit": {
+      "tests": 41,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "source_verified_before_and_after": true,
+    "status": "passed"
+  },
+  "local_backup_and_operations_tests": {
+    "tests": 35,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "host_observer_observation": {
+    "observed_at_utc": "2026-11-19T10:01:01.045254+00:00",
+    "scope": "existing host observer metadata",
+    "seller_platform_running": true,
+    "container_health": "healthy",
+    "reported_issues": [
+      "backup_capacity_low",
+      "backup_stale",
+      "backup_last_run_failed"
+    ],
+    "scheduler_observation": "healthy",
+    "database_bytes": 15155478528,
+    "free_bytes": 18372452352,
+    "required_backup_free_bytes": 19450445824,
+    "backup_deficit_bytes": 1077993472,
+    "backup_active": false,
+    "latest_backup": {
+      "snapshot_utc": "2026-10-29T00:18:47.924532+00:00",
+      "metadata_valid": true,
+      "compressed_bytes": 1963622720,
+      "hash_rechecked_now": false
+    },
+    "last_backup_run": {
+      "status": "failed",
+      "code": "backup_not_confirmed_no_retry",
+      "started_utc": "2026-11-19T08:14:26.605285+00:00",
+      "completed_utc": "2026-11-19T08:14:27.753415+00:00"
+    },
+    "docker_api_read_by_current_session": false,
+    "database_or_provider_write_by_current_session": false,
+    "historical_restore_cleanup": [
+      {
+        "release": "r9",
+        "observed_at_utc": "2026-10-03T23:42:44.693748+00:00",
+        "removed_bytes": 14031929344,
+        "accepted_archive_preserved": true,
+        "production_database_preserved": true,
+        "receipt_sha256": "7d9232ba3535bf3c1cef1d13c37d9b9b51a9147ee915052bd5c71fe943695a44"
+      },
+      {
+        "release": "r10",
+        "observed_at_utc": "2026-10-04T03:23:15.277310+00:00",
+        "removed_bytes": 14034292736,
+        "accepted_archive_preserved": true,
+        "production_database_preserved": true,
+        "receipt_sha256": "2874e89623f8327299aa176a4b88f4a45b428b0d44231b539fd1d84a2cd57920"
+      }
+    ]
+  },
+  "current_create_qualification": {
+    "status": "blocked_on_current_catalogue_and_provider_access",
+    "latest_exact_candidate_evidence_utc": "2026-10-04T11:39Z",
+    "evidence_kind": "historical read-only candidate qualification",
+    "historical_scan": {
+      "seller_rows_checked": 100,
+      "exact_owned_wb_links": 73,
+      "active_exact_mappings": 22,
+      "unlisted_undrafted": 2,
+      "selected_candidate_count": 1
+    },
+    "exact_historical_candidate": {
+      "owned_identity_verified": true,
+      "historical_ozon_mapping_active": true,
+      "historical_listings_and_drafts_count": 0,
+      "positive_packaging_fact_confirmed": true,
+      "historical_ozon_schema_fresh": true,
+      "tnved_required": true,
+      "marking_required": true,
+      "required_attributes_missing": 5,
+      "scratch_only_missing_credentials": true,
+      "publishable": false,
+      "draft_persisted": false,
+      "provider_write_attempted": false
+    },
+    "current_candidate_qualified": false,
+    "current_marketplace_credentials_verified_by_live_request": false,
+    "historical_source_not_used_for_current_publication": true,
+    "historical_qualification_receipt_sha256": "a451972bc1a1412b8377b57284f36afe4b5fe0fcd3eb4feadeaafb4a124bca61",
+    "split": {
+      "errors_total": 6,
+      "required_attribute_errors": 5,
+      "scratch_only_credential_errors": 1
+    }
+  }
+}
