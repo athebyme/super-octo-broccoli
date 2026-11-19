@@ -30,6 +30,113 @@
         if (typeof url !== 'string' || url.length > 2000) return '';
         try { const u = new URL(url); return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password ? url : ''; } catch (_) { return ''; }
     }
+    const issueFieldIds = {
+        'content.name':'ode-name', 'content.description':'ode-description', 'offer_id':'ode-offer',
+        'commercial.price':'ode-price', 'commercial.old_price':'ode-old-price', 'commercial.vat':'ode-vat',
+        'commercial.currency_code':'ode-currency', 'dimensions.width':'ode-width', 'dimensions.height':'ode-height',
+        'dimensions.depth':'ode-depth', 'dimensions.weight':'ode-weight', 'dimensions.dimension_unit':'ode-dimension-unit',
+        'dimensions.weight_unit':'ode-weight-unit', 'media':'ode-photo-url', 'media.images':'ode-photo-url',
+        'media.primary_image':'ode-photo-url', 'media.color_image':'ode-color-url',
+    };
+    function issueNavigation(editor, issue) {
+        const field = String(issue?.field || '');
+        const complexPath = field.match(/^complex_attributes\[(\d+)\](?:\.attributes\[(\d+)\])?/);
+        const simplePath = field.match(/^attributes\[(\d+)\](?:\.|$)/);
+        const groupIndex = complexPath ? Number(complexPath[1]) : null;
+        const complexRow = complexPath?.[2] !== undefined
+            ? editor.form?.complex_attributes?.[groupIndex]?.attributes?.[Number(complexPath[2])]
+            : null;
+        const simpleRow = simplePath ? editor.form?.attributes?.[Number(simplePath[1])] : null;
+        const attribute = String(issue?.attribute_id || complexRow?.attribute_id || simpleRow?.attribute_id || field.match(/^attributes\.(\d+)(?:\.|$)/)?.[1] || '');
+        const rowComplexId = complexRow?.complex_id || simpleRow?.complex_id;
+        const complexDefinition = (editor.data?.definitions || []).find(def =>
+            String(def.id) === attribute && String(def.complex_id || '0') !== '0'
+        );
+        const complexId = String(issue?.complex_id || rowComplexId || complexDefinition?.complex_id || '0');
+        const complex = attribute !== '4191' && (!!complexPath || complexId !== '0' && !!complexDefinition);
+        const section = attribute === '4191' ? 'content'
+            : /^(media|images?)(?:\.|\[|$)/.test(field) ? 'media'
+            : /^(commercial|dimensions|barcodes?)(?:\.|\[|$)/.test(field) || /price|weight|vat|barcode/i.test(field) ? 'delivery'
+            : /attribute/i.test(field) || attribute ? 'attributes' : 'content';
+        return {field, attribute, complex, complexId, groupIndex, section};
+    }
+    function focusable(element) {
+        return !!element && !element.disabled && !(element.matches && element.matches(':disabled'));
+    }
+    function fallbackHeading(section) {
+        const id = {content:'ode-content-heading', media:'ode-media-heading', attributes:'ode-attributes-heading', delivery:'ode-delivery-heading'}[section];
+        return document.getElementById(id) || document.getElementById('ode-section');
+    }
+    function issueTarget(editor, nav) {
+        const findAttribute = (id, groupIndex) => [...document.querySelectorAll('.ode-attribute')].find(element =>
+            element.dataset.attribute === id && (groupIndex === null
+                ? !element.dataset.complexGroupIndex
+                : element.dataset.complexGroupIndex === String(groupIndex))
+        );
+        const findGroup = index => [...document.querySelectorAll('.ode-complex-group')].find(element =>
+            element.dataset.complexGroupIndex === String(index)
+        );
+        const findMedia = predicate => [...document.querySelectorAll('.ode-media-item')].find(predicate);
+        const field = nav.field;
+        let target = null;
+
+        if (nav.attribute === '4191') {
+            target = document.getElementById('ode-description');
+        } else if (nav.complex) {
+            const details = document.getElementById('ode-complex-groups');
+            if (details) details.open = true;
+            const groups = editor.form?.complex_attributes || [];
+            let index = nav.groupIndex;
+            if (index === null && nav.attribute) {
+                index = groups.findIndex(group => (group.attributes || []).some(row =>
+                    String(row.attribute_id) === nav.attribute && String(row.complex_id || '0') === nav.complexId
+                ));
+                if (index < 0) index = groups.findIndex(group =>
+                    (group.attributes || []).some(row => String(row.complex_id || '0') === nav.complexId)
+                );
+                if (index < 0) index = null;
+            }
+            const fieldElement = nav.attribute && index !== null ? findAttribute(nav.attribute, index) : null;
+            target = fieldElement || (index !== null ? findGroup(index) : null);
+            if (!target) {
+                const addButton = [...document.querySelectorAll('[data-complex-type-id]')].find(element =>
+                    element.dataset.complexTypeId === nav.complexId
+                );
+                target = focusable(addButton) ? addButton : details?.querySelector('summary');
+            }
+        } else if (nav.attribute) {
+            const fieldElement = findAttribute(nav.attribute, null);
+            target = fieldElement;
+            if (!target) target = document.getElementById('ode-attribute-search');
+        } else if (/^barcodes?(?:\[|$)/.test(field)) {
+            const index = field.match(/^barcodes\[(\d+)\]/)?.[1];
+            target = index === undefined ? null : document.getElementById('ode-barcode-' + index);
+            target = target || document.getElementById('ode-barcode-0') || document.getElementById('ode-add-barcode');
+        } else if (/^media(?:\.|\[|$)/.test(field)) {
+            const index = field.match(/^media\.images\[(\d+)\]/)?.[1];
+            if (field === 'media.primary_image') target = findMedia(element => element.dataset.primaryImage === 'true');
+            else if (index !== undefined) {
+                const images = editor.form?.media?.images || [];
+                const url = images[Number(index)];
+                target = findMedia(element => element.dataset.imageIndex === index);
+                if (!target && url) {
+                    const firstVisibleIndex = images.indexOf(url);
+                    target = findMedia(element => element.dataset.imageIndex === String(firstVisibleIndex));
+                }
+            }
+            target = target || document.getElementById(issueFieldIds[field] || 'ode-photo-url');
+        } else {
+            target = document.getElementById(issueFieldIds[field] || (/type|category/.test(field) ? 'ode-category' : ''));
+        }
+
+        const details = target?.closest('details');
+        if (details) details.open = true;
+        if (!focusable(target)) target = details?.querySelector('summary') || fallbackHeading(nav.section);
+        const control = target?.dataset.attribute
+            ? target.querySelector('input:not(:disabled), select:not(:disabled), [data-issue-input]:not(:disabled)')
+            : null;
+        return {target, control};
+    }
     const photoComponent = {
         directives: {'image-deadline':global.mcatShared?.imageDeadline || {}},
         props: ['src', 'alt', 'compact', 'retryableCompact', 'sourceId'],
@@ -89,18 +196,18 @@
         template: `<span class="ode-image-frame"><img v-image-deadline v-if="usable && (state === 'loading' || state === 'ready')" :key="url + ':' + manualCycle" ref="photo" :src="url" :data-expected-url="url" :alt="alt || ''" width="320" height="320" loading="lazy" decoding="async" referrerpolicy="no-referrer" @load="onLoad" @error="onError"><span v-if="state === 'loading' || state === 'pending'" class="ode-image-state" :class="{'is-compact':compact}" role="status">{{ compact ? 'Ждём…' : 'Загружаем фото…' }}</span><span v-else-if="state === 'missing'" class="ode-image-state" :class="{'is-compact':compact}">{{ compact ? 'Нет фото' : 'Фото не найдено' }}</span><span v-else-if="state === 'paused'" class="ode-image-state" :class="{'is-compact':compact}" role="status">{{ compact ? 'Пауза' : 'Загрузка остановлена' }}<button v-if="!compact || retryableCompact" type="button" class="ode-text-button" :aria-label="'Продолжить загрузку фото ' + (alt || 'товара')" @click.stop="retry">{{ compact ? '↻' : 'Продолжить' }}</button></span><span v-else-if="state === 'failed'" class="ode-image-state" :class="{'is-compact':compact}" role="status">{{ compact ? 'Нет фото' : 'Фото недоступно' }}<button v-if="!compact || retryableCompact" type="button" class="ode-text-button" :aria-label="'Повторить загрузку фото ' + (alt || 'товара')" @click.stop="retry">{{ compact ? '↻' : 'Повторить' }}</button></span></span>`,
     };
     const fieldComponent = {
-        props: ['definition', 'values', 'locked', 'aiStatus'], emits: ['change', 'dictionary', 'remove'],
+        props: ['definition', 'values', 'locked', 'aiStatus', 'groupIndex'], emits: ['change', 'dictionary', 'remove'],
         methods: {
             change(index, value) { const next = clone(this.values); next[index] = {value:/^decimal$/i.test(this.definition.data_type) ? decimal(value) : value}; this.$emit('change', next); },
             remove(index) { const next = clone(this.values); next.splice(index, 1); this.$emit(next.length ? 'change' : 'remove', next); },
             add() { this.$emit('change', [...clone(this.values), {value: ''}]); },
         },
-        template: `<div class="ode-attribute" :data-attribute="definition.id" :class="{'ode-attribute--ai':aiStatus === 'proposed'}">
+        template: `<div class="ode-attribute" :data-attribute="definition.id" :data-complex-group-index="groupIndex" :class="{'ode-attribute--ai':aiStatus === 'proposed'}">
             <div class="ode-field-heading"><span>{{ definition.name }} <span v-if="definition.required" class="ode-required" aria-label="Обязательное поле">*</span></span><small v-if="aiStatus === 'proposed'" class="ode-ai-field-badge">Предложено AI · проверьте ниже</small><small v-else-if="aiStatus === 'accepted'" class="ode-ai-field-badge">Принято вами</small><small v-else-if="!definition.editable">Недоступно для изменения</small></div>
             <p v-if="definition.description" class="ode-help">{{ definition.description }}</p>
             <template v-if="definition.dictionary">
                 <div class="ode-value-chips"><span v-for="(value, index) in values" :key="index" class="ode-value-chip">{{ value.value }}<button v-if="!locked" type="button" @click="remove(index)" :aria-label="'Убрать значение ' + value.value">×</button></span><span v-if="!values.length" class="ode-muted">Значение не выбрано</span></div>
-                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="locked || !definition.dictionary_fresh" @click="$emit('dictionary')">Выбрать из справочника</button>
+                <button type="button" class="sh-btn sh-btn--secondary sh-btn--sm" :disabled="locked || !definition.dictionary_fresh" data-issue-input @click="$emit('dictionary')">Выбрать из справочника</button>
                 <p v-if="!definition.dictionary_fresh" class="ode-help">Справочник требует обновления или проверки администратором. Сохранённые значения остаются в карточке.</p>
             </template>
             <template v-else>
@@ -337,19 +444,14 @@
                     return labels[issue.code] || issue.message;
                 },
                 goToIssue(issue) {
-                    const field = issue.field || '';
-                    this.section = /media|image/.test(field) ? 'media' : /commercial|price|dimension|weight|barcode|vat/.test(field) ? 'delivery' : /attribute/.test(field) ? 'attributes' : 'content';
-                    const indexedField = field.match(/^attributes\[(\d+)\](?:\.|$)/);
-                    const indexedRow = indexedField ? this.form?.attributes?.[Number(indexedField[1])] : null;
-                    const attribute = String(issue.attribute_id || field.match(/^attributes\.(\d+)/)?.[1] || indexedRow?.attribute_id || '');
-                    if (attribute === '4191') this.section = 'content';
-                    else if (attribute) this.attrQuery = attribute;
-                    const ids = {'content.name':'ode-name', 'content.description':'ode-description', 'offer_id':'ode-offer', 'commercial.price':'ode-price', 'commercial.old_price':'ode-old-price', 'commercial.vat':'ode-vat', 'commercial.currency_code':'ode-currency', 'dimensions.width':'ode-width', 'dimensions.height':'ode-height', 'dimensions.depth':'ode-depth', 'dimensions.weight':'ode-weight', 'dimensions.dimension_unit':'ode-dimension-unit', 'dimensions.weight_unit':'ode-weight-unit', 'attributes.4191':'ode-description'};
+                    const navigation = issueNavigation(this, issue);
+                    this.section = navigation.section;
+                    if (navigation.complex) this.attrQuery = '';
+                    else if (navigation.attribute && navigation.attribute !== '4191') this.attrQuery = navigation.attribute;
                     this.$nextTick(() => {
-                        const fieldElement = attribute && attribute !== '4191' ? [...document.querySelectorAll('.ode-attribute')].find(element => element.dataset.attribute === attribute) : null;
-                        if (fieldElement?.closest('details')) fieldElement.closest('details').open = true;
-                        const target = fieldElement || document.getElementById(ids[field] || (attribute ? ids['attributes.' + attribute] : '') || (/type|category/.test(field) ? 'ode-category' : 'ode-section'));
-                        target?.scrollIntoView({behavior:'auto', block:'center'}); (fieldElement?.querySelector('input:not(:disabled), button:not(:disabled)') || target)?.focus();
+                        const {target, control} = issueTarget(this, navigation);
+                        target?.scrollIntoView({behavior:'auto', block:'center'});
+                        (focusable(control) ? control : target)?.focus();
                     });
                 },
                 valuesFor(def, groupIndex = null) { const rows = groupIndex === null ? this.form.attributes : this.form.complex_attributes[groupIndex].attributes; return rows.find(row => identity(row) === def.id + ':' + def.complex_id)?.values || []; },

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "baseline": "ba63371",
-  "generated_at": "2026-10-04T11:12:23.422227+00:00",
+  "generated_at": "2026-11-19T09:51:37.156188+00:00",
   "scope": "All source files explicitly copied by tests/ozon_release/Dockerfile, excluding Docker-ignored files and mutable UX result documents/artifacts. No runtime/test/CI inputs are excluded.",
   "excluded_result_documents": [
     "docs/design/ux-01-action-map.md",
@@ -33,7 +33,7 @@
     },
     {
       "path": "AGENTS.md",
-      "sha256": "c87d410045d3e9ba784b808fc3708390857a6b73dfba33a4869b9e01a55de933"
+      "sha256": "d8807098a3c99782dbda2c66878d615b66e0031460c065433b62de137cb3bf5a"
     },
     {
       "path": "ANALYTICS_DESIGN.md",
@@ -433,7 +433,7 @@
     },
     {
       "path": "docs/design/ozon-fulfillment-write-contracts.md",
-      "sha256": "da911717d97390f8e010252223814b26cd76835e72b5b24a7c217456b2dc6f6b"
+      "sha256": "92b1113eb11305b1074fb1e1b440c6dc160cd25c4b9eca3bb6c39058f6d6a9ed"
     },
     {
       "path": "docs/design/ozon-inbox-durable-refresh.md",
@@ -449,7 +449,7 @@
     },
     {
       "path": "docs/design/ozon-prices.md",
-      "sha256": "8fb9003d0833e14f91dd481112a3962c845e3abdcd5d3af6f81cd34ad69e9cdb"
+      "sha256": "06496c4dbe74b52b926630389a1f490a209de44fe8ccea20d573b75901584779"
     },
     {
       "path": "docs/design/ozon-quality-workspace.md",
@@ -469,7 +469,7 @@
     },
     {
       "path": "docs/design/ozon-ux-completion-plan-2026-10-01.md",
-      "sha256": "9ec0654b834c27696a8b381f71907fc92c49d10e00b3d3c5dfe0479ebd0fd4c2"
+      "sha256": "77c1e3b7eb132442be2d3f7d3012fa60242c0a11d15d7bc7caf8747f0b886382"
     },
     {
       "path": "docs/design/ozon-vue-linking-and-category-review.md",
@@ -2645,7 +2645,7 @@
     },
     {
       "path": "static/ozon-draft-editor.js",
-      "sha256": "42d7aa69b7bc41710c31749507de0b96246beedf4cdd46cea894371dff11e2b0"
+      "sha256": "12a4c2dca740d88d6b11fc0088d8c9679070df61bf52ceb470d18a77e470ac35"
     },
     {
       "path": "static/ozon-drafts-vue.js",
@@ -3121,7 +3121,7 @@
     },
     {
       "path": "templates/marketplace_draft_detail.html",
-      "sha256": "f6bcb12ed41f690bfd225e0271c8f78718978340992d60696375c5420904302f"
+      "sha256": "4b5f4da9280b38078e5c46253e582f23b5922c872c457da17664d924c1679734"
     },
     {
       "path": "templates/marketplace_draft_detail_classic.html",
@@ -4460,6 +4460,10 @@
       "sha256": "a47c387bc37cb03813f1de552a974e9e116e0aebef2c8e8cb11228d0ae66f295"
     },
     {
+      "path": "tests/test_ozon_draft_issue_focus.py",
+      "sha256": "d469574dc51b55f46cf04323313e578a8315a3b8a877cce33a01a2bd43e3a855"
+    },
+    {
       "path": "tests/test_ozon_drafts_vue.py",
       "sha256": "7199f552e6c6d0e2dc6ab4c2c470f4832148ea93d8889d2b77d4f85fad177d94"
     },
@@ -5016,5 +5020,5 @@
       "sha256": "d1b5f4b78356365aea23da981181234851af70f9d739061409c12176683ad44d"
     }
   ],
-  "aggregate_sha256": "f00c2adb53531119af540a345b48115f88513522d8d40ab59048a765c7a0b4d5"
+  "aggregate_sha256": "b8ad8b157d61b2b05c68ee645841b93cd31a58b270dcc09411a52e301712e1d6"
 }
