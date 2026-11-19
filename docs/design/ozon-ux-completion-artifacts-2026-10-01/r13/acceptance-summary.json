@@ -1,0 +1,72 @@
+{
+  "acceptance": {
+    "historical_guarded_cutover": "passed",
+    "historical_merge_push": "passed",
+    "historical_runtime_healthy": true,
+    "historical_runtime_restart_count": 0,
+    "native_editor_layouts": 8,
+    "native_editor_mobile_layouts": 6,
+    "native_editor_mobile_touch_passed": true,
+    "native_editor_status": "passed_with_restrictions",
+    "ozon_contract_results": {
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "tests": 2774
+    },
+    "ozon_stages_passed": 13,
+    "task_codes": [
+      "UX-01",
+      "UX-01.1",
+      "UX-01.2",
+      "UX-01.3",
+      "UX-01.4",
+      "UX-01.5",
+      "UX-01.6",
+      "UX-01.7",
+      "UX-01.8",
+      "UX-01.9",
+      "UX-01.10",
+      "UX-01.11",
+      "UX-01.12",
+      "WB-EDIT-01",
+      "WB-EDIT-02",
+      "WB-EDIT-03",
+      "WB-EDIT-04",
+      "CAT-EDIT-01",
+      "CAT-EDIT-02"
+    ],
+    "transport_checks_passed": 11,
+    "ux_stages_passed": 8
+  },
+  "observed_on_utc": "2026-10-04",
+  "provenance": {
+    "historical_markdown_sha256": "c03022b4dd2e23ba3e3358897c62080aff3d5fec95413dac7401ef0f536a0a2c",
+    "historical_result_commit": "b75aa9fe59f246964a6054c843d92786e28bd731",
+    "historical_scalar_bytes_verified": false,
+    "omitted_from_scalar_projection": [
+      "task_status_and_dependencies_in_report",
+      "operator_diagnostics",
+      "private_runtime_and_account_data"
+    ],
+    "receipt_sha256": {
+      "deployment": "598fa82562fe5d33e6f6cbf5d6e51f7bb745e1ff25607763c86daf521ce35cbb",
+      "merge": "27c9c5a94bc153dd0191bcbb738b0fffab8e5874ca9d54ba731ebbe21d5d2ee5",
+      "native_editor": "abfb789d16992b25e537172a25bdd87b56a660ac41c4e90784d486cdd96cafff",
+      "observer": "12043d369486cf4dcd2040e47b2162a2295ae4161fadb2a38d7a133df87373c8",
+      "ozon": "1295b456d5dedbbfe95ae051c8cdcfc1ba4984bcfd998880a28cc98796def13a",
+      "runtime_build": "a4684f0f16e13ce1f58525fdf43e15888e0631a42214996b08e3276d1ed19672",
+      "transport": "f579ccac338a9c502bc3c51e209b08b15b550220444e3198f9e9858dd1f238bd",
+      "ux": "1e90f8bc2e65fb939733b6b1dc210aed05534fde0ed800ca829b1571fb5b21a3"
+    },
+    "scalar_projection_reconstructed": true
+  },
+  "recovered_on_utc": "2026-11-19",
+  "release": "R13",
+  "runtime_image": "sha256:bf16598ffb577fddb1977a0e9f34d4660f6752fbe779e396442457d579aed690",
+  "schema_version": 1,
+  "source_commit": "a9b952853f07f42b29f223e9cdf126e649b3310a",
+  "source_file_count": 1248,
+  "source_manifest_aggregate": "f00c2adb53531119af540a345b48115f88513522d8d40ab59048a765c7a0b4d5",
+  "source_manifest_sha256": "bbd15581ca6134d7d3d7fc5ed3ba78a98bee049315d6018bf2e6d031072eb6ec"
+}

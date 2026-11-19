@@ -1,3 +1,79 @@
+# Ozon и UX: приёмка R13 и очистка диска, 04.10.2026
+
+**Состояние:** R13 прошёл проверки кода, браузерные проверки на фикстурах, проверку транспорта, merge/push и защищённое обновление production. Исправление размеров мобильных элементов Ozon подтверждено отдельным браузерным прогоном на действовавшем тогда production. Полная интеграция остаётся открытой: создание нового товара, витринная модерация и исправление, откат и реальные WB/social writes не подтверждены. После изменения профиля доступа Docker недоступен; свежая проверка текущего состояния сервера не выполнена.
+
+## Принятый выпуск
+
+Source: `a9b952853f07f42b29f223e9cdf126e649b3310a`. Manifest: 1 248 inputs, file SHA-256 `bbd15581ca6134d7d3d7fc5ed3ba78a98bee049315d6018bf2e6d031072eb6ec`, aggregate `f00c2adb53531119af540a345b48115f88513522d8d40ab59048a765c7a0b4d5`. Runtime image: `sha256:bf16598ffb577fddb1977a0e9f34d4660f6752fbe779e396442457d579aed690`.
+
+Frozen gate: UX 8/8 и Ozon 13/13, суммарно 2 462 cases + 816 subtests, XML total 3 278; failures/errors/skips=0. Ozon XML отдельно содержит 2 774 tests; это часть общего итога. Transport: 11/11. Прежние common-content 28 layouts/35 records и WB 30 layouts/50 records сохранены, включая actual form handlers, fixture save/readback/history/permissions, общий apply на 50 товаров и отказ whole-set drift без изменений. Provider в этих write-проверках заменён фикстурой. Launcher первоначального frozen gate не имел отдельной проверки неизменности своих байтов перед исполнением; source manifest и результаты suite проверены до/после. Это ограничение provenance launcher, а не новый browser run.
+
+Guarded cutover прошёл около 11:52 UTC через неизменённый `deploy_safety`: writer gate, подтверждённая остановка старого контейнера, запуск нового. Observer в 11:53 UTC подтвердил healthy/restarts=0, продвижение heartbeat, 81 завершённый startup receipt и 0 running/failed; все 77 environment entries и flags 1/1/0/1 сохранены. Caddy не пересоздавался и не перезагружался. Новых provider calls/domain writes в observer нет. R11 startup rehearsal и R10 backup/restore — **унаследованное evidence**, свежих R13 прогонов этих двух проверок нет. Эти наблюдения относятся к указанному времени; после ограничения доступа здоровье runtime не перепроверено.
+
+## Мобильный редактор и реальные сохранённые фото
+
+Native browser G2 завершился `passed_with_restrictions` около 11:57 UTC: 320/360/390/1280 px × light/dark, всего восемь строк. На шести мобильных строках измерены четыре enabled tabs и два media controls: минимум 44×44 px, keyboard outline минимум 2 px внутри viewport, переполнение документа 0. Измерение не активировало сохранение, удаление или публикацию.
+
+За весь прогон декодированы четыре различных сохранённых Ozon CDN изображения, получено 16 JPEG GET 200. Видимых decoded images на каждой мобильной строке — четыре, на каждой desktop строке — одна. Header guard проверил 16 requests: 15 обычных CDN-scoped Cookie headers и один запрос без Cookie; Authorization и protected seller-session matches — 0. Network/page/console/HTTP/unexpected/non-GET errors — 0. Owner/source/draft version/runtime/environment сохранились. Десять внешних assets предоставлены pinned fixture; вход выполнен через временную owner session, обычная login form не проверена. Source-preview GET — 0: supplier login, refresh фото и global dedupe этим прогоном не доказаны. Скриншоты и реальные фото в публичный артефакт не включены.
+
+R12 Photos touch failure (35.05 px) остаётся историческим failed evidence. R13 G1 остановился до browser/owner reads: wrapper ожидал строку вместо фактического numeric scheduler timestamp. Его failed receipt сохранён. G2 исправил эту проверку и подтвердил фактический мобильный результат.
+
+## Остаток интеграции
+
+Один штатный native AI run завершён `completed/no_evidence`: серверный ledger содержит один succeeded attempt, suggestions=0, apply/reject/cancel/publication=0. Это не независимая проверка числа wire requests или стоимости; причина отсутствия предложений не установлена, новый AI POST не делался.
+
+Предыдущая квалификация одного NEW-кандидата относится к R12. Она подтвердила упаковку и свежую type schema, но unsaved result builder не был publishable: отсутствовали обязательные характеристики, включая подтверждённые ТН ВЭД/маркировку. Нельзя объяснять весь отказ исключительно compliance-полями. `account_credentials_missing` относится к изолированному scratch и не доказывает отсутствия production-ключа. Обычный prepare/create/moderation не выполнен; обобщения о всём каталоге нет.
+
+W9 provider replies и P10 shipment/act/labels writes остаются **NOT IMPLEMENTED / NOT TESTED** до подтверждения актуального first-party контракта; локальные reply drafts и read workspace существуют. Недоступность retrieval не означает отсутствия официальной спецификации. Buyer price и скидка Ozon остаются **UNKNOWN** после ранее зафиксированного 403; причина не установлена. Seller price, old price и seller promotion не смешаны с этими неизвестными величинами.
+
+## Все 19 кодов: проверено и осталось
+
+PASSED ниже относится только к названному объёму проверки и не закрывает непроверенные внешние действия. Последний столбец сохраняет зависимости из JSON-экспорта владельца. Актуальный [план выполнения](../design/ozon-ux-completion-plan-2026-10-01.md) дополнительно связывает UX-01.2 с WB-EDIT-01 и UX-01.6 с общим CAT-редактором (`.1/CAT` в плане); эти рабочие зависимости также сохраняются, без подмены исходного экспорта.
+
+| Код | Состояние и evidence | Осталось / ограничения | Зависимости экспорта |
+| --- | --- | --- | --- |
+| UX-01 | **OPEN**; R13 gates passed | Полный Ozon create/moderation/correction/rollback и реальные WB/social writes | — |
+| UX-01.1 | **PASSED в проверенном UI**; mobile native controls ≥44×44, focus/overflow | Не полный аудит всех экранов/WCAG | — |
+| UX-01.2 | **PASSED в проверенном выборе/возврате**; прежний live Pipedream exact 25+25 сохранён | Реальный bulk apply не проверен | — |
+| UX-01.3 | **PASSED на фикстурах**; analytics/pricing matrices | Live freshness аккаунта/периода не подтверждена | — |
+| UX-01.4 | **PASSED в проверенных маршрутах**; workspace/journey | Не каждая production deep link и external action | UX-01.1 |
+| UX-01.5 | **PASSED на фикстурах**; читаемые причины/статусы и форма | Витринная модерация и исправление не подтверждены | UX-01.1, UX-01.2 |
+| UX-01.6 | **NOT TESTED: полный цикл**; R12 qualification только частичная | Обычный prepare → NEW create → moderation → correction/rollback | UX-01.1 |
+| UX-01.7 | **PASSED в истории/readback на фикстурах** | Реальный rollback/provider effect не проверен | UX-01.1 |
+| UX-01.8 | **PASSED WITH RESTRICTIONS**; saved CDN delivery/decode и mobile UI | Source-preview/full supplier flow/global dedupe не доказаны | UX-01.1 |
+| UX-01.9 | **PASSED: seller price lanes/UI** | Buyer price/marketplace discount UNKNOWN; live writes не подтверждены | UX-01.1 |
+| UX-01.10 | **PASSED: проверенные settings UI** | Реальные settings writes; W9/P10 provider actions не проверены | UX-01.1 |
+| UX-01.11 | **PASSED: R13 frozen/release matrix** | External regression не завершена; startup/restore inherited | UX-01.1 |
+| UX-01.12 | **PASSED: прежние synthetic boundary checks** | Production settings не менялись | — |
+| WB-EDIT-01 | **PASSED: exact-set fixture bulk + прежний live выбор 50** | Реальное применение в WB не проверено | — |
+| WB-EDIT-02 | **PARTIAL**; dictionary/reference UI guards passed на фикстурах | Exact seller-owned subject и fresh local schema уже используются; исходная причина «Subject не найден» для «Свечи эротик» остаётся неизвестной | — |
+| WB-EDIT-03 | **PASSED: actual form handlers с fake WB save/readback/history/rights** | Реальная WB запись не проверена | — |
+| WB-EDIT-04 | **PASSED: reviewed mixed bulk с fake provider** | Реальный effect/unknown-outcome сценарий не подтверждён | — |
+| CAT-EDIT-01 | **PASSED: общий content/channel contract** | Не полноценная PIM и не проверка всех live source facts | — |
+| CAT-EDIT-02 | **PASSED: common editor, 1/50 apply/readback и drift denial на фикстурах** | Сохранение локальное; публикация в канал — отдельное действие | CAT-EDIT-01, UX-01.1 |
+
+## Диск: причина и фактическая очистка
+
+Read-only inventory: архивы в volume — 39.761 ГБ, два старых R1 recovery — 13.970 и 14.006 ГБ, вместе **67.737 десятичных ГБ**. Рабочая база отдельно — около 14.038 ГБ. Фото-каталоги вместе — около 0.539 ГБ; Docker overlay — около 20.193 ГБ. Shared image/cache sizes нельзя складывать повторно.
+
+По прямому поручению владельца **удалены два exact ignored июльских `.db.gz` в каталоге проекта**, освобождены 1 711 509 504 allocated bytes (1.712 ГБ). До удаления проверены regular/no symlink/nlink=1, exact device/inode/size, gzip-contained SQLite header, отсутствие Git tracking и ссылок на эти имена в просмотренных runtime/scripts/operations sources. Рабочие базы и остальные пути сохранены, tracked worktree чист. Private cleanup receipt хранит только metadata и результат удаления.
+
+**Volume cleanup ещё не выполнен:** zero production-volume deletions. Подготовлен exact allowlist двух R1 recovery каталогов и 21 старого архива с 17 парными metadata файлами. План оставляет рабочие DB/WAL/SHM и два свежих verified backup pairs, переносит их в managed-daily без копирования с journal oldest→newest; неизвестные файлы сохраняются. Ожидаемое освобождение — ещё около **64.06 ГБ**. Требуются fresh locks/mounts/open-use/inode checks и hashes сохраняемых архивов перед удалением. Текущая среда разрешает запись только в repo и `/tmp`; Docker socket/volume недоступны. Разрешение владельца на очистку уже получено, новое подтверждение не требуется. Старые ad-hoc archives/recovery автоматически не вращались; manager вращает только свои owned managed-daily пары. Последний backup run был failed; удаление repo archives не делает его успешным.
+
+## Проверки, оставшиеся из-за доступа
+
+Catalog scanner G2 принят после 12 offline checks и проверки контрактов пяти actual R13 release receipts. Live scan **не выполнялся**, пригодность всего каталога не установлена. Это отдельная проверка от secret audit и она не исправляет WB-EDIT-02. WB exact-read G5 отклонён до live prepare: host ожидал поля HTTP/identity на неверном уровне actual nested receipt. Его неуспех не является provider/source failure. Оператор G7 принят root после 18 offline checks (7 execution scenarios, 3 owner-guard cases), включая actual embedded INNER receipt → host validator, запрет успеха при postflight failure и unknown/no-retry. Provider/Docker/production DB boundaries в этих проверках synthetic; live prepare/реального WB запроса нет.
+
+Финальный R13 known-secret audit подготовлен, **не исполнен**. Предыдущий R12 audit: 32 supplied/26 distinct known values, 10 517 reachable Git objects, 0 findings. Он не покрывает R13, неизвестные/unreachable/unfetched secrets, LFS/submodules. Fresh final fetch/push/secret audit и текущий health recheck заблокированы профилем доступа; ротация ключей и переписывание Git history не выполнялись.
+
+Этот result-only пакет подготовлен в отдельном локальном clone в разрешённом `/tmp`; его merge/push не выполнены. Report и scalar artifact исключены из frozen source manifest и не меняют квалифицированные executable inputs. Существующий Docker COPY может включать отчёты: новый result commit не обновляет встроенный в прежний image отчёт и сам по себе не является новым deploy.
+
+[Проверенные агрегаты R13](../design/ozon-ux-completion-artifacts-2026-10-01/r13/acceptance-summary.json) содержат release hashes, counts и layout measurements; реальных товарных/account IDs, URL фото, cookies, ключей, provider bodies и скриншотов в них нет.
+
+---
+
+Ниже сохранены исторические результаты R12/R10. Их failed/not-tested записи не заменяются новым выпуском.
+
 # Ozon и UX: приёмка r12, 04.10.2026
 
 **Состояние:** R12 G4 UX 8/8 и свежие Ozon 13/13 PASSED; source merged/pushed, exact runtime transport 11/11, guarded production deploy и runtime observer PASSED. Общий эпик остаётся открытым: новый Ozon create, storefront moderation/rollback и реальные WB/social writes не подтверждены. Runtime — image `sha256:541a896bbd23de55d7e63dc81ff55f7ce7af0d0767fabefddaf53ee1264a0c86` на source `abf3a2799a916f036e9c2557390bcb474f2d601d`.
