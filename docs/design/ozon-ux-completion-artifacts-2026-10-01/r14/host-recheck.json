@@ -1,5 +1,5 @@
 {
-  "scope": "isolated host verification; provider/browser/deployment outside this report",
+  "scope": "Isolated host verification with temporary SQLite and synthetic credentials",
   "initial_exact_host_run": {
     "status": "failed",
     "head": "3497a59cb4150135e521388112b3431757494f8a",
@@ -162,5 +162,71 @@
       "required_attribute_errors": 5,
       "scratch_only_credential_errors": 1
     }
+  },
+  "corrected_exact_host_run": {
+    "status": "passed",
+    "head": "4f40c5e1322b814648a37fd44e31279f5cde307e",
+    "manifest_aggregate": "00169c7a7c7a934448ffcc47e8d8806459f9172c5fc52b7a48b47ddeba29e0e7",
+    "environment": "isolated host tests with temporary SQLite and synthetic credentials",
+    "started_at": "2026-11-19T10:12:42.274510+00:00",
+    "source_verified_before": true,
+    "stages": [
+      {
+        "scope": "ux",
+        "test_files": 23,
+        "started_at": "2026-11-19T10:12:42.600305+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "junit": {
+          "tests": 504,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "elapsed_seconds": 64.88,
+        "source_verified_after": true
+      },
+      {
+        "scope": "ozon",
+        "test_files": 177,
+        "started_at": "2026-11-19T10:13:47.803397+00:00",
+        "status": "passed",
+        "exit_code": 0,
+        "junit": {
+          "tests": 2778,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "elapsed_seconds": 755.59,
+        "source_verified_after": true
+      }
+    ],
+    "source_verified_after": true,
+    "finished_at": "2026-11-19T10:26:23.761386+00:00"
+  },
+  "corrected_exact_junit_sha256": {
+    "ux": "1d4f84eccc0e3b20198a82e2f4d4b39b9fb1e10938e6fa5c090f461b94e9e948",
+    "ozon": "54420d92ddf6ed20ff08c18af03cd9d808b71c169a6d72870871720e8e7bb42e"
+  },
+  "host_observer_observation_after_tests": {
+    "observed_at_utc": "2026-11-19T10:26:51.767732+00:00",
+    "seller_platform_running": true,
+    "container_health": "healthy",
+    "scheduler_observation": "healthy",
+    "reported_issues": [
+      "backup_capacity_low",
+      "backup_stale",
+      "backup_last_run_failed"
+    ],
+    "database_bytes": 15155515392,
+    "free_bytes": 18245906432,
+    "required_backup_free_bytes": 19450482688,
+    "backup_deficit_bytes": 1204576256,
+    "latest_backup_snapshot_utc": "2026-10-29T00:18:47.924532+00:00",
+    "latest_backup_metadata_valid": true,
+    "latest_backup_hash_rechecked_now": false,
+    "last_backup_status": "failed",
+    "last_backup_code": "backup_not_confirmed_no_retry"
   }
 }
