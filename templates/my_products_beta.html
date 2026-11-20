@@ -4,7 +4,7 @@
 
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='sh-vue-kit.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261120-bulk-workspace') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='my-products-beta.css', v='20261120-supplier-refresh-result-1') }}">
 
 <script type="application/json" id="mp-bootstrap">{{ {
     'wbConnected': wb_connected,
@@ -50,6 +50,47 @@
             </nav>
         </div>
     </header>
+
+    <section v-if="supplierRefreshResult" ref="supplierRefreshResult"
+             class="mp-refresh-result" :class="'mp-refresh-result--' + supplierRefreshResult.kind"
+             :role="supplierRefreshResult.kind === 'complete' ? 'status' : 'alert'"
+             :aria-live="supplierRefreshResult.kind === 'complete' ? 'polite' : 'assertive'"
+             aria-atomic="true" tabindex="-1">
+        <div class="mp-refresh-result-head">
+            <div>
+                <h2>{{ supplierRefreshResult.title }}</h2>
+                <p>{{ supplierRefreshResult.summary }}</p>
+            </div>
+            <button type="button" class="mp-refresh-result-close" aria-label="Скрыть итог обновления"
+                    @click="supplierRefreshResult = null">Скрыть</button>
+        </div>
+        <dl v-if="supplierRefreshResult.updated !== undefined" class="mp-refresh-result-counts"
+            role="group" aria-label="Итоги обновления">
+            <div><dt>Обновлено</dt><dd>{{ $fmt.int(supplierRefreshResult.updated) }}</dd></div>
+            <div><dt>Без связи</dt><dd>{{ $fmt.int(supplierRefreshResult.skipped) }}</dd></div>
+            <div><dt>С ошибкой</dt><dd>{{ $fmt.int(supplierRefreshResult.errors) }}</dd></div>
+        </dl>
+        <details v-if="supplierRefreshResult.entries.length" class="mp-refresh-result-details">
+            <summary>Карточки и итог ({{ supplierRefreshResult.entries.length }})</summary>
+            <div class="mp-refresh-result-list" role="region" aria-label="Результат по выбранным карточкам" tabindex="0">
+                <ul>
+                    <li v-for="entry in supplierRefreshResult.entries" :key="entry.productId"
+                        class="mp-refresh-result-item" :class="'is-' + entry.tone">
+                        <div class="mp-refresh-result-item-head">
+                            <strong>{{ entry.label }}</strong>
+                            <span class="mp-refresh-result-status">{{ entry.statusLabel }}</span>
+                        </div>
+                        <p>{{ entry.reasonLabel }}</p>
+                        <a v-if="entry.href" :href="entry.href">Открыть карточку</a>
+                    </li>
+                </ul>
+            </div>
+        </details>
+        <button v-if="supplierRefreshResult.kind === 'unknown' || supplierRefreshResult.kind === 'rejected'" type="button"
+                class="mp-refresh-result-reload" @click="refreshListAfterSupplierResult">
+            Обновить список
+        </button>
+    </section>
 
     <sh-job-progress :job="job" :title="jobTitle" @dismiss="job = null" @retry-failed="retryFailed"></sh-job-progress>
 
@@ -250,5 +291,5 @@
 <script src="{{ url_for('static', filename='vendor/vue-3.4.38.global.prod.js') }}"></script>
 <script src="{{ url_for('static', filename='sh-vue-kit.js', v='20261120-bulk-workspace') }}"></script>
 <script src="{{ url_for('static', filename='common-product-content.js') }}"></script>
-<script src="{{ url_for('static', filename='my-products-beta.js', v='20261120-bulk-workspace') }}"></script>
+<script src="{{ url_for('static', filename='my-products-beta.js', v='20261120-supplier-refresh-result-1') }}"></script>
 {% endblock %}

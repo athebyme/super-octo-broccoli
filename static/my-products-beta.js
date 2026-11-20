@@ -57,6 +57,112 @@
         return left.every(function (id) { return rightSet.has(id); });
     }
 
+    function labelProduct(item) {
+        var title = item && typeof item.title === 'string' ? item.title.trim() : '';
+        var vendorCode = item && typeof item.vendor_code === 'string' ? item.vendor_code.trim() : '';
+        if (title && vendorCode && title !== vendorCode) return title + ' · ' + vendorCode;
+        return title || vendorCode || 'Товар из выбранного списка';
+    }
+
+    function selectedProductLabels(items, ids) {
+        var byId = new Map((items || []).map(function (item) { return [item.id, item]; }));
+        return ids.map(function (id) {
+            return { productId: id, label: labelProduct(byId.get(id)) };
+        });
+    }
+
+    function nonnegativeCount(value) {
+        return Number.isSafeInteger(value) && value >= 0;
+    }
+
+    function supplierRefreshOutcome(data, ids, labels, commonContentUrl) {
+        if (!data || data.success !== true ||
+            !['completed', 'completed_with_errors'].includes(data.status) ||
+            !nonnegativeCount(data.requested) || data.requested !== ids.length ||
+            !nonnegativeCount(data.updated) || !nonnegativeCount(data.skipped) ||
+            !nonnegativeCount(data.errors) ||
+            data.updated + data.skipped + data.errors !== data.requested ||
+            (data.status === 'completed') !== (data.errors === 0) ||
+            !Array.isArray(data.items) || data.items.length !== ids.length) return null;
+
+        var submitted = new Set(ids);
+        var rowsById = new Map();
+        var itemCounts = { updated: 0, skipped: 0, error: 0 };
+        for (var i = 0; i < data.items.length; i += 1) {
+            var item = data.items[i];
+            if (!item || !Number.isSafeInteger(item.product_id) ||
+                !submitted.has(item.product_id) || rowsById.has(item.product_id)) return null;
+
+            var row;
+            if (item.status === 'updated' && item.reason === null) {
+                row = {
+                    status: 'updated',
+                    statusLabel: 'Обновлено',
+                    reasonLabel: 'Данные поставщика сохранены в Seller Hub.',
+                    tone: 'ok',
+                };
+            } else if (item.status === 'skipped' && item.reason === 'no_supplier_link') {
+                row = {
+                    status: 'skipped',
+                    statusLabel: 'Пропущено',
+                    reasonLabel: 'Нет связи с каталогом поставщика. Данные не менялись.',
+                    tone: 'muted',
+                };
+            } else if (item.status === 'error' && item.reason === 'update_failed') {
+                row = {
+                    status: 'error',
+                    statusLabel: 'Не обновлено',
+                    reasonLabel: 'Не удалось сохранить данные. Откройте карточку и проверьте её.',
+                    tone: 'danger',
+                    href: commonContentUrl
+                        ? commonContentUrl + '?product_id=' + encodeURIComponent(item.product_id)
+                        : '',
+                };
+            } else {
+                return null;
+            }
+            itemCounts[row.status] += 1;
+            rowsById.set(item.product_id, Object.assign({
+                productId: item.product_id,
+                label: labels.find(function (entry) { return entry.productId === item.product_id; })?.label
+                    || 'Товар из выбранного списка',
+            }, row));
+        }
+
+        if (rowsById.size !== ids.length || itemCounts.updated !== data.updated ||
+            itemCounts.skipped !== data.skipped || itemCounts.error !== data.errors) return null;
+
+        var summary = 'Обновление из поставщика. В запросе товаров: ' + data.requested + '.';
+
+        var title = data.errors
+            ? 'Обновление завершено с ошибками'
+            : data.updated === 0 && data.skipped > 0
+                ? 'Нет карточек для обновления'
+                : 'Обновление из поставщика завершено';
+        return {
+            kind: data.errors ? 'partial' : 'complete',
+            title: title,
+            summary: summary,
+            requested: data.requested,
+            updated: data.updated,
+            skipped: data.skipped,
+            errors: data.errors,
+            entries: ids.map(function (id) { return rowsById.get(id); }),
+        };
+    }
+
+    function supplierRefreshNotice(kind, requested, message) {
+        var rejected = kind === 'rejected';
+        return {
+            kind: kind,
+            title: rejected ? 'Выбранные товары не обновлялись' : 'Итог обновления не подтверждён',
+            summary: 'Обновление из поставщика. В запросе товаров: '
+                + requested + '. ' + message,
+            requested: requested,
+            entries: [],
+        };
+    }
+
     var TABS = [
         { key: '', label: 'Все', countKey: 'all' },
         { key: 'pending', label: 'В работе', countKey: 'pending' },
@@ -104,10 +210,11 @@
 
                 job: null,
                 jobTitle: 'Выполняем',
+                supplierRefreshResult: null,
                 confirm: {
                     open: false, key: null, title: '', message: '',
                     details: [], label: 'Продолжить', danger: false, busy: false,
-                    productIds: [], selectionIds: [],
+                    productIds: [], selectionIds: [], labels: [],
                 },
             };
         },
@@ -488,7 +595,9 @@
                     busy: false,
                     productIds: effectIds.slice(),
                     selectionIds: selectionIds.slice(),
+                    labels: selectedProductLabels(this.items, effectIds),
                 };
+                if (action.key === 'refresh_supplier') this.supplierRefreshResult = null;
             },
             postSelectionForm: function (url, productIds) {
                 var csrf = document.querySelector('meta[name="csrf-token"]')?.content;
@@ -519,6 +628,7 @@
                 this.confirm.open = false;
                 this.confirm.productIds = [];
                 this.confirm.selectionIds = [];
+                this.confirm.labels = [];
             },
             runAction: function () {
                 var self = this;
@@ -526,22 +636,25 @@
                 var key = this.confirm.key;
                 var ids = Array.isArray(this.confirm.productIds) ? this.confirm.productIds.slice() : [];
                 var selectionAtReview = Array.isArray(this.confirm.selectionIds) ? this.confirm.selectionIds.slice() : [];
+                var labelsAtReview = Array.isArray(this.confirm.labels)
+                    ? this.confirm.labels.map(function (entry) { return Object.assign({}, entry); }) : [];
                 if (!key || !ids.length || ids.length > MAX_BULK_SELECTION) return;
                 if (!sameIds(this.selected, selectionAtReview)) {
                     this.confirm.open = false;
                     this.confirm.productIds = [];
                     this.confirm.selectionIds = [];
+                    this.confirm.labels = [];
                     this.error = 'Выбор изменился после проверки. Отметьте нужные товары и откройте действие заново.';
                     return;
                 }
                 this.confirm.busy = true;
+                if (key === 'refresh_supplier') this.supplierRefreshResult = null;
 
                 var request;
                 if (key === 'push_wb') {
                     this.jobTitle = 'Отправляем на Wildberries';
                     request = this.$api.post(this.urls.pushToWb, { product_ids: ids });
                 } else if (key === 'refresh_supplier') {
-                    this.jobTitle = 'Обновляем из каталога поставщика';
                     request = this.$api.post(this.urls.refreshFromSupplier, { product_ids: ids });
                 } else if (key === 'audit') {
                     this.jobTitle = 'Сверяем с Wildberries';
@@ -554,6 +667,24 @@
 
                 request.then(function (data) {
                     self.confirm.open = false;
+                    if (key === 'refresh_supplier') {
+                        var outcome = supplierRefreshOutcome(data, ids, labelsAtReview, self.urls.commonContent || '');
+                        if (sameIds(self.selected, selectionAtReview)) self.selected = [];
+                        if (outcome) {
+                            self.supplierRefreshResult = outcome;
+                            self.load();
+                            self.loadFacets();
+                        } else {
+                            self.supplierRefreshResult = supplierRefreshNotice(
+                                'unknown', labelsAtReview.length,
+                                'Ответ не подтвердил итог. Обновите список перед следующим запуском.',
+                            );
+                        }
+                        self.$nextTick(function () {
+                            self.$refs.supplierRefreshResult?.focus();
+                        });
+                        return;
+                    }
                     if (sameIds(self.selected, selectionAtReview)) self.selected = [];
                     if (data.job_uid || data.job_id) {
                         self.trackJob(data.job_uid || data.job_id, ids.length);
@@ -577,13 +708,34 @@
                         self.loadFacets();
                     }
                 }).catch(function (err) {
-                    self.error = err.message || 'Действие не выполнено';
                     self.confirm.open = false;
+                    if (key === 'refresh_supplier') {
+                        var rejected = Number.isInteger(err && err.status) && err.status >= 400 && err.status < 500 &&
+                            !(err && err.code === 'auth_required');
+                        if (sameIds(self.selected, selectionAtReview)) self.selected = [];
+                        self.supplierRefreshResult = supplierRefreshNotice(
+                            rejected ? 'rejected' : 'unknown',
+                            labelsAtReview.length,
+                            rejected
+                                ? 'Сервер отклонил запрос. Обновите список и выберите товары заново.'
+                                : 'Сервер не подтвердил итог. Обновите список перед следующим запуском.',
+                        );
+                        self.$nextTick(function () {
+                            self.$refs.supplierRefreshResult?.focus();
+                        });
+                    } else {
+                        self.error = err.message || 'Действие не выполнено';
+                    }
                 }).finally(function () {
                     self.confirm.busy = false;
                     self.confirm.productIds = [];
                     self.confirm.selectionIds = [];
+                    self.confirm.labels = [];
                 });
+            },
+            refreshListAfterSupplierResult: function () {
+                this.load();
+                this.loadFacets();
             },
             closeOzonDialog: function () {
                 if (this.ozonBusy) return;

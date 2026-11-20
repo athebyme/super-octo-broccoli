@@ -165,18 +165,21 @@ class RefreshFromSupplierRouteTest(unittest.TestCase):
              patch('flask_login.utils._get_user', return_value=user), \
              patch('routes.suppliers.ImportedProduct') as MockImported, \
              patch('routes.suppliers.SupplierService') as MockService:
-            MockImported.query.filter.return_value.all.return_value = []
+            MockService.update_imported_products.side_effect = ValueError(
+                'Часть выбранных карточек недоступна',
+            )
             resp = self.client.post(
                 '/my-products/refresh-from-supplier',
                 data={'selected_ids': ['5']},
             )
-            MockService.update_seller_products.assert_not_called()
+            MockService.update_imported_products.assert_called_once_with(7, [5])
         self.assertEqual(resp.status_code, 302)
 
     def test_success_keeps_updates_view_and_drops_conflicting_status(self):
         from unittest.mock import MagicMock, patch
         user = self._login()
         row = SimpleNamespace(
+            id=5,
             supplier_product_id=13,
             import_status='imported',
             product_id=99,
@@ -184,10 +187,22 @@ class RefreshFromSupplierRouteTest(unittest.TestCase):
         with patch('routes.suppliers.current_user', user), \
              patch('flask_login.utils._get_user', return_value=user), \
              patch('routes.suppliers.ImportedProduct') as MockImported, \
-             patch('routes.suppliers.SupplierService') as MockService:
+             patch('routes.suppliers.SupplierService') as MockService, \
+             patch('routes.suppliers.db.session.query') as MockQuery:
             MockImported.query.filter.return_value.all.return_value = [row]
-            MockService.update_seller_products.return_value = SimpleNamespace(
+            MockQuery.return_value.join.return_value.filter.return_value.all.return_value = [
+                (5, 99),
+            ]
+            MockService.update_imported_products.return_value = SimpleNamespace(
                 imported=1,
+                skipped=0,
+                errors=0,
+                total_requested=1,
+                item_results=[{
+                    'product_id': 5,
+                    'status': 'updated',
+                    'reason': None,
+                }],
             )
             resp = self.client.post(
                 '/my-products/refresh-from-supplier'
@@ -202,7 +217,7 @@ class RefreshFromSupplierRouteTest(unittest.TestCase):
         self.assertEqual(query['refreshed'], ['1'])
         self.assertEqual(query['wb_ready'], ['1'])
         self.assertNotIn('status', query)
-        MockService.update_seller_products.assert_called_once_with(7, [13])
+        MockService.update_imported_products.assert_called_once_with(7, [5])
 
     def test_single_delete_keeps_regular_status_and_filters(self):
         from unittest.mock import MagicMock, patch

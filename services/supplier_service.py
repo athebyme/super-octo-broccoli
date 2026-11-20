@@ -32,6 +32,12 @@ from models import (
     Notification, log_admin_action
 )
 from services.pricing_engine import extract_supplier_product_id
+from services.smart_product_parser import (
+    SmartProductParser,
+    advance_supplier_content_revisions,
+    supplier_material_input_fingerprint,
+    supplier_product_material_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +134,7 @@ class ImportResult:
     errors: int = 0
     error_messages: list = field(default_factory=list)
     imported_product_ids: list = field(default_factory=list)
+    item_results: list = field(default_factory=list)
     marketplace_drafts_created: int = 0
     marketplace_drafts_existing: int = 0
     marketplace_draft_errors: int = 0
@@ -1004,51 +1011,125 @@ class SupplierService:
                 if sp.external_id:
                     existing_map[sp.external_id] = sp
 
+            # Preserve the pre-sync final state. The raw feed commit below
+            # advances the revision from normalized upstream fields before
+            # parser postprocessing, so a crash between these phases remains
+            # visible to seller refresh. The parser phase later compares its
+            # final state to this same baseline and takes the max revision,
+            # avoiding a second bump for the same feed change.
+            revision_baselines = {}
+            raw_input_baselines = {}
+            raw_revision_targets = {}
+            products_to_parse = []
+            products_to_parse_object_ids = set()
+
+            def enqueue_for_parse(product):
+                if product is None:
+                    return
+                object_id = id(product)
+                if object_id not in products_to_parse_object_ids:
+                    products_to_parse_object_ids.add(object_id)
+                    products_to_parse.append(product)
+
+            def advance_for_raw_feed_change(product, baseline):
+                if product is None or baseline is None:
+                    return
+                baseline_revision, previous_input_fingerprint = baseline
+                current_input_fingerprint = supplier_material_input_fingerprint(
+                    product.original_data_json
+                )
+                if current_input_fingerprint != previous_input_fingerprint:
+                    product_id = product.id
+                    if product_id is not None:
+                        raw_revision_targets[product_id] = max(
+                            raw_revision_targets.get(product_id, 0),
+                            baseline_revision + 1,
+                        )
+
             # Обрабатываем каждый товар
             batch_count = 0
             for pd in parsed_products:
+                existing = None
+                baseline = None
                 try:
                     ext_id = pd['external_id']
                     existing = existing_map.get(ext_id)
 
                     if existing:
+                        if existing.id not in revision_baselines:
+                            revision = int(existing.content_revision or 1)
+                            raw_input_baselines[existing.id] = (
+                                revision,
+                                supplier_material_input_fingerprint(
+                                    existing.original_data_json
+                                ),
+                            )
+                            revision_baselines[existing.id] = (
+                                revision,
+                                supplier_product_material_fingerprint(existing),
+                            )
+                        baseline = raw_input_baselines[existing.id]
+                        enqueue_for_parse(existing)
                         # Обновляем существующий
                         _update_supplier_product(existing, pd, price_data)
+                        advance_for_raw_feed_change(existing, baseline)
+                        sp = existing
                         result.updated += 1
                     else:
                         # Создаём новый
                         sp = _create_supplier_product(supplier_id, pd, price_data)
                         db.session.add(sp)
                         result.added += 1
+                    enqueue_for_parse(sp)
 
                     batch_count += 1
                     if batch_count % 100 == 0:
                         db.session.flush()
 
                 except Exception as e:
+                    # Match the previous behavior if a raw upsert partially
+                    # applied before a row-level error: preserve any durable
+                    # feed snapshot and make that source change refreshable.
+                    if existing is not None and baseline is not None:
+                        try:
+                            advance_for_raw_feed_change(existing, baseline)
+                            enqueue_for_parse(existing)
+                        except Exception:
+                            logger.warning(
+                                "Supplier feed revision fallback failed for a row"
+                            )
                     result.errors += 1
                     result.error_messages.append(f"Товар {pd.get('external_id', '?')}: {str(e)[:100]}")
                     if len(result.error_messages) > 50:
                         result.error_messages.append("...и другие ошибки")
                         break
 
+            # Resolve newly-added row IDs while the instances are still live
+            # in this session. Reading them after commit can expire each row
+            # and turn the parser handoff into an accidental SELECT per item.
+            db.session.flush()
+            sp_ids_to_parse = []
+            seen_parse_ids = set()
+            for product in products_to_parse:
+                product_id = product.id
+                if product_id is not None and product_id not in seen_parse_ids:
+                    seen_parse_ids.add(product_id)
+                    sp_ids_to_parse.append(product_id)
+
+            advance_supplier_content_revisions(
+                raw_revision_targets,
+                products=products_to_parse,
+            )
             db.session.commit()
 
             # --- Smart Product Parser: brand resolution + characteristics ---
             try:
-                from services.smart_product_parser import SmartProductParser
                 smart_parser = SmartProductParser(supplier_id=supplier_id)
-                # Собираем ID товаров, которые нужно обогатить
-                sp_ids_to_parse = []
-                for pd in parsed_products:
-                    ext_id = pd['external_id']
-                    sp_obj = SupplierProduct.query.filter_by(
-                        supplier_id=supplier_id, external_id=ext_id
-                    ).first()
-                    if sp_obj:
-                        sp_ids_to_parse.append(sp_obj.id)
                 if sp_ids_to_parse:
-                    smart_result = smart_parser.parse_and_apply_bulk(sp_ids_to_parse)
+                    smart_result = smart_parser.parse_and_apply_bulk(
+                        sp_ids_to_parse,
+                        revision_baselines=revision_baselines,
+                    )
                     logger.info(
                         f"SmartParse {supplier.code}: "
                         f"brands={smart_result.brand_resolved_count}, "
@@ -2031,44 +2112,57 @@ class SupplierService:
         return result
 
     @staticmethod
-    def update_seller_products(seller_id: int,
-                               supplier_product_ids: List[int] = None) -> ImportResult:
-        """
-        Обновить данные у продавца из базы поставщика.
-        Обновляет ImportedProduct по связанному SupplierProduct.
-        """
-        result = ImportResult()
+    def _begin_supplier_update_transaction() -> None:
+        """Acquire SQLite's writer lock before exact revalidation/savepoints."""
+        db.session.rollback()
+        try:
+            connection = db.session.connection()
+            if connection.dialect.name == "sqlite":
+                raw_connection = connection.connection.driver_connection
+                if getattr(raw_connection, "in_transaction", False):
+                    raise RuntimeError("supplier_update_transaction_not_fresh")
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+        except Exception:
+            db.session.rollback()
+            raise
 
-        q = ImportedProduct.query.options(
-            selectinload(ImportedProduct.supplier_product)
-        ).filter(
-            ImportedProduct.seller_id == seller_id,
-            ImportedProduct.supplier_product_id.isnot(None)
-        )
-        if supplier_product_ids:
-            q = q.filter(ImportedProduct.supplier_product_id.in_(supplier_product_ids))
-
-        imported_products = q.all()
-        result.total_requested = len(imported_products)
+    @staticmethod
+    def _apply_supplier_updates(imported_products: List[ImportedProduct]) -> ImportResult:
+        """Обновить ровно переданные локальные карточки с savepoint на строку."""
+        result = ImportResult(total_requested=len(imported_products))
 
         for imp in imported_products:
-            savepoint = db.session.begin_nested()
+            if not imp.supplier_product_id or not imp.supplier_product:
+                result.skipped += 1
+                result.item_results.append({
+                    "product_id": imp.id,
+                    "status": "skipped",
+                    "reason": "no_supplier_link",
+                })
+                continue
+
             try:
-                sp = imp.supplier_product
-                if not sp:
-                    result.skipped += 1
-                    savepoint.commit()
-                    continue
-
-                _update_imported_from_supplier(imp, sp)
-                savepoint.commit()
+                with db.session.begin_nested():
+                    _update_imported_from_supplier(imp, imp.supplier_product)
                 result.imported += 1
-
-            except Exception as e:
-                if savepoint.is_active:
-                    savepoint.rollback()
+                result.item_results.append({
+                    "product_id": imp.id,
+                    "status": "updated",
+                    "reason": None,
+                })
+            except Exception as exc:
                 result.errors += 1
-                result.error_messages.append(f"ImportedProduct {imp.id}: {str(e)[:100]}")
+                result.error_messages.append("Не удалось обновить одну карточку")
+                result.item_results.append({
+                    "product_id": imp.id,
+                    "status": "error",
+                    "reason": "update_failed",
+                })
+                logger.warning(
+                    "Supplier refresh row failed for ImportedProduct %s (%s)",
+                    imp.id,
+                    type(exc).__name__,
+                )
 
         try:
             db.session.commit()
@@ -2077,8 +2171,201 @@ class SupplierService:
             # release any writer lock and discard its uncommitted row updates.
             db.session.rollback()
             raise
-        logger.info(f"Обновление продавца {seller_id}: ~{result.imported} / err={result.errors}")
+
+        logger.info(
+            "Обновление карточек из поставщика: requested=%s updated=%s "
+            "skipped=%s errors=%s",
+            result.total_requested,
+            result.imported,
+            result.skipped,
+            result.errors,
+        )
         return result
+
+    @staticmethod
+    def update_imported_products(
+        seller_id: int,
+        imported_product_ids: List[int],
+    ) -> ImportResult:
+        """Обновить exact seller-owned ImportedProduct IDs.
+
+        Пустой список означает ноль выбранных товаров и никогда не
+        расширяется до всего каталога.
+        """
+        if (
+            isinstance(seller_id, bool)
+            or not isinstance(seller_id, int)
+            or seller_id <= 0
+        ):
+            raise ValueError("Некорректный продавец")
+        if not isinstance(imported_product_ids, list):
+            raise ValueError("Ожидается точный список карточек")
+        if len(imported_product_ids) > 200:
+            raise ValueError("За один раз можно обновить не более 200 карточек")
+        if any(
+            isinstance(product_id, bool)
+            or not isinstance(product_id, int)
+            or product_id <= 0
+            for product_id in imported_product_ids
+        ):
+            raise ValueError("Список карточек содержит некорректный ID")
+        if len(set(imported_product_ids)) != len(imported_product_ids):
+            raise ValueError("Список карточек содержит повторяющиеся ID")
+        if not imported_product_ids:
+            return ImportResult()
+
+        SupplierService._begin_supplier_update_transaction()
+        try:
+            rows = ImportedProduct.query.options(
+                selectinload(ImportedProduct.supplier_product)
+            ).filter(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.id.in_(imported_product_ids),
+            ).all()
+            by_id = {row.id: row for row in rows}
+            if len(by_id) != len(imported_product_ids):
+                raise ValueError("Часть выбранных карточек недоступна")
+
+            ordered_rows = [by_id[product_id] for product_id in imported_product_ids]
+            return SupplierService._apply_supplier_updates(ordered_rows)
+        except Exception:
+            db.session.rollback()
+            raise
+
+    @staticmethod
+    def update_supplier_products(
+        seller_id: int,
+        supplier_id: int,
+        supplier_product_ids: Optional[List[int]] = None,
+    ) -> ImportResult:
+        """Обновить выбранные товары или explicit all одного поставщика.
+
+        ``None`` зарезервирован для явного режима «весь каталог» и всегда
+        ограничен текущими seller + active supplier. Пустой список означает
+        ноль выбранных товаров.
+        """
+        if (
+            isinstance(supplier_id, bool)
+            or not isinstance(supplier_id, int)
+            or supplier_id <= 0
+        ):
+            raise ValueError("Некорректный поставщик")
+        if (
+            isinstance(seller_id, bool)
+            or not isinstance(seller_id, int)
+            or seller_id <= 0
+        ):
+            raise ValueError("Некорректный продавец")
+        if supplier_product_ids is not None:
+            if not isinstance(supplier_product_ids, list):
+                raise ValueError("Ожидается точный список товаров поставщика")
+            if len(supplier_product_ids) > 200:
+                raise ValueError("За один раз можно выбрать не более 200 товаров")
+            if any(
+                isinstance(product_id, bool)
+                or not isinstance(product_id, int)
+                or product_id <= 0
+                for product_id in supplier_product_ids
+            ):
+                raise ValueError("Список товаров поставщика содержит некорректный ID")
+            if len(set(supplier_product_ids)) != len(supplier_product_ids):
+                raise ValueError("Список товаров поставщика содержит повторы")
+            if not supplier_product_ids:
+                return ImportResult()
+
+        SupplierService._begin_supplier_update_transaction()
+        try:
+            active_connection = SellerSupplier.query.filter_by(
+                seller_id=seller_id,
+                supplier_id=supplier_id,
+                is_active=True,
+            ).first()
+            if not active_connection:
+                raise ValueError("Нет активного доступа к поставщику")
+
+            if supplier_product_ids is None:
+                imported_rows = ImportedProduct.query.options(
+                    selectinload(ImportedProduct.supplier_product)
+                ).filter_by(
+                    seller_id=seller_id,
+                    supplier_id=supplier_id,
+                ).order_by(ImportedProduct.id).all()
+                if any(
+                    row.supplier_product is not None
+                    and row.supplier_product.supplier_id != supplier_id
+                    for row in imported_rows
+                ):
+                    raise ValueError("Связь карточки с поставщиком не совпадает")
+                return SupplierService._apply_supplier_updates(imported_rows)
+
+            source_rows = SupplierProduct.query.filter(
+                SupplierProduct.supplier_id == supplier_id,
+                SupplierProduct.id.in_(supplier_product_ids),
+            ).all()
+            if {row.id for row in source_rows} != set(supplier_product_ids):
+                raise ValueError("Часть товаров не относится к этому поставщику")
+
+            imported_rows = ImportedProduct.query.options(
+                selectinload(ImportedProduct.supplier_product)
+            ).filter(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.supplier_product_id.in_(supplier_product_ids),
+            ).order_by(ImportedProduct.id).all()
+            if not imported_rows:
+                raise ValueError("Выбранные товары не импортированы в ваши карточки")
+            if any(row.supplier_id != supplier_id for row in imported_rows):
+                raise ValueError("Связь карточки с поставщиком не совпадает")
+            if any(
+                row.supplier_product is None
+                or row.supplier_product.supplier_id != supplier_id
+                for row in imported_rows
+            ):
+                raise ValueError("Связь карточки с поставщиком не совпадает")
+            found_source_ids = {
+                row.supplier_product_id for row in imported_rows
+            }
+            if found_source_ids != set(supplier_product_ids):
+                raise ValueError(
+                    "Часть выбранных товаров ещё не импортирована в ваши карточки"
+                )
+            if len(imported_rows) > 200:
+                raise ValueError("Слишком много локальных копий для выбранного набора")
+
+            return SupplierService._apply_supplier_updates(imported_rows)
+        except Exception:
+            db.session.rollback()
+            raise
+
+    @staticmethod
+    def update_seller_products(seller_id: int,
+                               supplier_product_ids: List[int] = None) -> ImportResult:
+        """
+        Обновить данные у продавца из базы поставщика.
+        Обновляет ImportedProduct по связанному SupplierProduct.
+        """
+        if supplier_product_ids is not None:
+            # None is the long-standing explicit service-level "all" mode.
+            # An empty list is an exact empty selection and must not widen it.
+            if not supplier_product_ids:
+                return ImportResult()
+
+        SupplierService._begin_supplier_update_transaction()
+        try:
+            q = ImportedProduct.query.options(
+                selectinload(ImportedProduct.supplier_product)
+            ).filter(
+                ImportedProduct.seller_id == seller_id,
+                ImportedProduct.supplier_product_id.isnot(None)
+            )
+            if supplier_product_ids is not None:
+                q = q.filter(
+                    ImportedProduct.supplier_product_id.in_(supplier_product_ids)
+                )
+            imported_products = q.all()
+            return SupplierService._apply_supplier_updates(imported_products)
+        except Exception:
+            db.session.rollback()
+            raise
 
     @staticmethod
     def get_available_products_for_seller(seller_id: int, supplier_id: int,

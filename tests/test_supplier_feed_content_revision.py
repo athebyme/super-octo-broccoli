@@ -1,0 +1,350 @@
+"""Material revisions produced by the normal supplier CSV sync path."""
+
+import copy
+import json
+import unittest
+from contextlib import contextmanager
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from flask import Flask
+
+from models import (
+    ImportedProduct,
+    Marketplace,
+    MarketplaceListing,
+    MarketplaceListingSnapshot,
+    MarketplaceOperation,
+    Product,
+    Seller,
+    SellerMarketplaceAccount,
+    SellerSupplier,
+    Supplier,
+    SupplierProduct,
+    User,
+    db,
+)
+from services.smart_product_parser import SmartParseResult, SmartProductParser
+from services.supplier_service import (
+    SupplierCSVParser,
+    SupplierService,
+    _copy_to_imported_product,
+)
+
+
+class SupplierFeedContentRevisionTest(unittest.TestCase):
+    def setUp(self):
+        self.app = Flask(__name__)
+        self.app.config.update(
+            TESTING=True,
+            SECRET_KEY='supplier-feed-revision-test',
+            SQLALCHEMY_DATABASE_URI='sqlite://',
+            SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        )
+        db.init_app(self.app)
+        self.context = self.app.app_context()
+        self.context.push()
+        db.create_all()
+
+        user = User(username='feed-revision', email='feed-revision@test.local')
+        user.set_password('synthetic-password')
+        seller = Seller(user=user, company_name='Revision fixture')
+        supplier = Supplier(
+            name='Fixture supplier',
+            code='fixture-revision',
+            csv_source_url='fixture://catalog',
+        )
+        db.session.add_all([seller, supplier])
+        db.session.flush()
+        db.session.add(SellerSupplier(
+            seller_id=seller.id,
+            supplier_id=supplier.id,
+            is_active=True,
+        ))
+        db.session.commit()
+        self.seller_id = seller.id
+        self.supplier_id = supplier.id
+        self.user_id = user.id
+
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+        self.context.pop()
+
+    @staticmethod
+    def _row(**overrides):
+        row = {
+            'external_id': 'fixture-1',
+            'vendor_code': 'SKU-1',
+            'title': 'Initial item',
+            'description': 'Initial description',
+            'brand': 'Fixture brand',
+            'category': 'Household',
+            'all_categories': ['Household'],
+            'barcodes': ['4600000000001'],
+            'country': 'Россия',
+            'characteristics': {'Material': 'Cotton'},
+            'colors': [],
+            'materials': [],
+            'sizes_raw': '',
+            'dimensions': {'Width': '10'},
+            'photo_urls': [{'original': 'https://supplier.invalid/first.jpg'}],
+            'video_url': None,
+            'supplier_price': 100.0,
+            'supplier_quantity': 2,
+            'recommended_retail_price': 150.0,
+        }
+        row.update(overrides)
+        return row
+
+    @contextmanager
+    def _sync_patches(self, row, *, parser_failure=False):
+        def parse_product(_parser, product_data, existing_product=None):
+            result = SmartParseResult(readiness_score=72.0)
+            if 'blue' in (product_data.get('title') or '').casefold():
+                result.extracted_colors = ['Blue']
+            return result
+
+        patches = [
+            patch.object(SupplierCSVParser, 'fetch_csv', return_value='synthetic'),
+            patch.object(
+                SupplierCSVParser,
+                'parse_and_normalize',
+                return_value=[copy.deepcopy(row)],
+            ),
+            patch(
+                'services.csv_pre_validator.CSVPreValidator.validate',
+                return_value=SimpleNamespace(
+                    is_valid=True, warnings=[], errors=[],
+                ),
+            ),
+            patch(
+                'services.smart_category_mapper.SmartCategoryMapper.map_category',
+                return_value=(None, None, 0.0),
+            ),
+            patch(
+                'services.parsing_confidence.ParsingConfidenceScorer.score_product',
+                return_value=0.72,
+            ),
+            patch(
+                'services.photo_cache.bulk_download_supplier_photos',
+                return_value={
+                    'total_photos': 0,
+                    'already_cached': 0,
+                    'queued': 0,
+                },
+            ),
+        ]
+        if parser_failure:
+            patches.append(patch.object(
+                SmartProductParser,
+                'parse_and_apply_bulk',
+                side_effect=RuntimeError('synthetic parser failure'),
+            ))
+        else:
+            patches.append(patch.object(
+                SmartProductParser,
+                'parse_product',
+                new=parse_product,
+            ))
+
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+            yield
+
+    def _sync(self, row, *, parser_failure=False):
+        with self._sync_patches(row, parser_failure=parser_failure):
+            return SupplierService.sync_from_csv(self.supplier_id)
+
+    def _make_imported_copy_and_channel_snapshots(self, source):
+        wb_product = Product(
+            seller_id=self.seller_id,
+            nm_id=123456789,
+            title='WB title snapshot',
+            wb_audit_json='{"observed":"wb-snapshot"}',
+        )
+        db.session.add(wb_product)
+        db.session.flush()
+
+        imported = _copy_to_imported_product(self.seller_id, source)
+        imported.product_id = wb_product.id
+        imported.wb_nm_id = wb_product.nm_id
+        imported.title = 'Seller-picked title'
+        imported.content_overrides_json = json.dumps({
+            'schema_version': 1,
+            'fields': {
+                'title': {
+                    'value': 'Seller-picked title',
+                    'inherited_value': source.title,
+                    'inherited_origin': 'source',
+                    'edited_by_user_id': self.user_id,
+                    'edited_at': datetime.utcnow().isoformat(),
+                    'edit_version': 1,
+                },
+            },
+        }, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        db.session.add(imported)
+        db.session.flush()
+
+        marketplace = Marketplace(name='Ozon fixture', code='ozon')
+        db.session.add(marketplace)
+        db.session.flush()
+        account = SellerMarketplaceAccount(
+            seller_id=self.seller_id,
+            marketplace_id=marketplace.id,
+            external_account_id='synthetic-account',
+            label='Synthetic account',
+        )
+        db.session.add(account)
+        db.session.flush()
+        listing = MarketplaceListing(
+            seller_id=self.seller_id,
+            marketplace_id=marketplace.id,
+            account_id=account.id,
+            imported_product_id=imported.id,
+            offer_id='synthetic-offer',
+            external_product_id='987654321',
+            normalized_status='active',
+            sync_fingerprint='d' * 64,
+        )
+        db.session.add(listing)
+        db.session.flush()
+        operation = MarketplaceOperation(
+            seller_id=self.seller_id,
+            marketplace_id=marketplace.id,
+            account_id=account.id,
+            listing_id=listing.id,
+            operation_kind='product_update',
+            status='succeeded',
+            idempotency_key='feed-revision-fixture-op',
+            request_fingerprint='a' * 64,
+            contract_version='fixture-v1',
+        )
+        db.session.add(operation)
+        db.session.flush()
+        snapshot = MarketplaceListingSnapshot(
+            seller_id=self.seller_id,
+            marketplace_id=marketplace.id,
+            account_id=account.id,
+            operation_id=operation.id,
+            listing_id=listing.id,
+            snapshot_kind='product_update',
+            source_fingerprint='b' * 64,
+            submitted_fingerprint='c' * 64,
+            submitted_state_json='{"fixture":"submitted"}',
+            confirmed_state_json='{"fixture":"confirmed"}',
+        )
+        db.session.add(snapshot)
+        db.session.commit()
+        return imported.id, wb_product.id, listing.id, snapshot.id
+
+    def test_material_change_is_one_revision_then_stale_refresh_is_exact(self):
+        first = self._row()
+        self.assertTrue(self._sync(first).success)
+        source = SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+            external_id='fixture-1',
+        ).one()
+        initial_revision = source.content_revision
+        self.assertGreaterEqual(initial_revision, 1)
+        imported_id, wb_product_id, listing_id, snapshot_id = (
+            self._make_imported_copy_and_channel_snapshots(source)
+        )
+        copied_revision = ImportedProduct.query.get(imported_id).supplier_content_revision
+
+        changed = self._row(
+            title='Blue item',
+            description='Changed description',
+            characteristics={'Material': 'Linen'},
+            photo_urls=[{'original': 'https://supplier.invalid/second.jpg'}],
+            dimensions={'Width': '12'},
+            supplier_price=125.0,
+            supplier_quantity=7,
+            recommended_retail_price=175.0,
+        )
+        self.assertTrue(self._sync(changed).success)
+        source = db.session.get(SupplierProduct, source.id)
+        self.assertEqual(source.content_revision, initial_revision + 1)
+        self.assertEqual(json.loads(source.colors_json), ['Blue'])
+        self.assertEqual(json.loads(source.characteristics_json)['Цвет'], 'Blue')
+        self.assertEqual(json.loads(source.characteristics_json)['Material'], 'Linen')
+        self.assertEqual(json.loads(source.photo_urls_json)[0]['original'],
+                         'https://supplier.invalid/second.jpg')
+        self.assertEqual(json.loads(source.dimensions_json)['Width'], '12')
+
+        stale = SupplierService.get_available_products_for_seller(
+            self.seller_id,
+            self.supplier_id,
+            show_imported=True,
+            updates_only=True,
+        )
+        self.assertEqual([row.id for row in stale.items], [source.id])
+
+        imported_before = ImportedProduct.query.get(imported_id)
+        override_before = imported_before.content_overrides_json
+        self.assertEqual(imported_before.supplier_content_revision, copied_revision)
+        result = SupplierService.update_imported_products(
+            self.seller_id,
+            [imported_id],
+        )
+        self.assertEqual(result.imported, 1)
+        imported_after = ImportedProduct.query.get(imported_id)
+        self.assertEqual(imported_after.supplier_content_revision, initial_revision + 1)
+        self.assertEqual(imported_after.title, 'Seller-picked title')
+        overrides = json.loads(imported_after.content_overrides_json)
+        self.assertEqual(
+            overrides['fields']['title']['value'],
+            json.loads(override_before)['fields']['title']['value'],
+        )
+        self.assertEqual(imported_after.wb_nm_id, 123456789)
+        self.assertEqual(Product.query.get(wb_product_id).wb_audit_json,
+                         '{"observed":"wb-snapshot"}')
+        listing = db.session.get(MarketplaceListing, listing_id)
+        self.assertEqual(listing.imported_product_id, imported_id)
+        snapshot = db.session.get(MarketplaceListingSnapshot, snapshot_id)
+        self.assertEqual(snapshot.confirmed_state_json, '{"fixture":"confirmed"}')
+
+        # The same material snapshot plus independent price/stock changes must
+        # not repeatedly make the copy stale.
+        unchanged_material = self._row(
+            title='Blue item',
+            description='Changed description',
+            characteristics={'Material': 'Linen'},
+            photo_urls=[{'original': 'https://supplier.invalid/second.jpg'}],
+            dimensions={'Width': '12'},
+            supplier_price=160.0,
+            supplier_quantity=9,
+            recommended_retail_price=210.0,
+        )
+        self.assertTrue(self._sync(unchanged_material).success)
+        source = db.session.get(SupplierProduct, source.id)
+        self.assertEqual(source.content_revision, initial_revision + 1)
+        stale = SupplierService.get_available_products_for_seller(
+            self.seller_id,
+            self.supplier_id,
+            show_imported=True,
+            updates_only=True,
+        )
+        self.assertEqual(stale.total, 0)
+
+    def test_committed_material_change_survives_parser_failure(self):
+        self.assertTrue(self._sync(self._row()).success)
+        source = SupplierProduct.query.filter_by(
+            supplier_id=self.supplier_id,
+            external_id='fixture-1',
+        ).one()
+        initial_revision = source.content_revision
+        self.assertGreaterEqual(initial_revision, 1)
+
+        changed = self._row(
+            title='Updated before parser failure',
+            description='The raw feed phase committed this change',
+        )
+        self.assertTrue(self._sync(changed, parser_failure=True).success)
+        source = db.session.get(SupplierProduct, source.id)
+        self.assertEqual(source.title, changed['title'])
+        self.assertEqual(source.content_revision, initial_revision + 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -53,6 +53,31 @@ def _bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
     return normalized
 
 
+def _form_bulk_product_ids(raw_ids, limit=MAX_BULK_PRODUCTS):
+    """Строго разобрать exact положительные ID из обычной HTML-формы."""
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return []
+    if len(raw_ids) > limit:
+        raise ValueError(f'За один раз можно выбрать не более {limit} карточек')
+    normalized = []
+    seen = set()
+    for index, value in enumerate(raw_ids):
+        if not isinstance(value, str) or not value.isdecimal():
+            raise ValueError(
+                f'Некорректный идентификатор карточки в позиции {index + 1}'
+            )
+        product_id = int(value)
+        if product_id <= 0:
+            raise ValueError(
+                f'Некорректный идентификатор карточки в позиции {index + 1}'
+            )
+        if product_id in seen:
+            raise ValueError('В списке есть повторяющиеся карточки')
+        seen.add(product_id)
+        normalized.append(product_id)
+    return normalized
+
+
 # Обычный каталог ограничен 50 строками: legacy 200-row HTML весил >1 МБ и
 # запускал сотни image requests. Bulk-вкладка обновлений сохраняет cap 200.
 MY_PRODUCTS_PAGE_SIZE = 50
@@ -3735,44 +3760,70 @@ def register_supplier_routes(app):
         seller = current_user.seller
         supplier_id = request.form.get('supplier_id', type=int)
 
-        product_ids_raw = (
-            request.form.getlist('update_product_ids')
-            or request.form.getlist('product_ids')
-        )
-        product_ids = [int(pid) for pid in product_ids_raw if pid.isdigit()]
+        selected_ids_raw = request.form.getlist('update_product_ids')
+        fallback_ids_raw = request.form.getlist('product_ids')
+        update_all = request.form.get('update_all_for_supplier') == '1'
+        if selected_ids_raw and fallback_ids_raw:
+            flash('В форме есть два разных списка карточек. Обновите страницу.', 'warning')
+            return _redirect_seller_supplier_catalog(supplier_id)
+        product_ids_raw = selected_ids_raw or fallback_ids_raw
+        try:
+            product_ids = _form_bulk_product_ids(product_ids_raw)
+        except ValueError as exc:
+            flash(str(exc), 'warning')
+            return _redirect_seller_supplier_catalog(supplier_id)
 
-        # «Обновить весь каталог поставщика»: явный флаг вместо списка ID.
-        # Набор всегда собирается seller-scoped на сервере, browser его не задаёт.
-        if not product_ids and request.form.get('update_all_for_supplier') == '1':
-            if not supplier_id:
-                flash('Не указан поставщик для обновления', 'warning')
-                return _redirect_seller_supplier_catalog(supplier_id)
-            product_ids = [
-                row.id for row in ImportedProduct.query.with_entities(
-                    ImportedProduct.id
-                ).filter_by(
-                    seller_id=seller.id,
-                    supplier_id=supplier_id,
-                ).all()
-            ]
-            if not product_ids:
-                flash(
-                    'У этого поставщика пока нет импортированных карточек',
-                    'warning',
-                )
-                return _redirect_seller_supplier_catalog(supplier_id)
+        if update_all and product_ids:
+            flash(
+                'Выберите либо отмеченные карточки, либо весь каталог поставщика.',
+                'warning',
+            )
+            return _redirect_seller_supplier_catalog(supplier_id)
+        if not supplier_id or supplier_id <= 0:
+            flash('Не указан поставщик для обновления', 'warning')
+            return _redirect_seller_supplier_catalog(supplier_id)
 
-        if not product_ids:
+        if not product_ids and not update_all:
             flash('Не выбраны карточки для обновления', 'warning')
             return _redirect_seller_supplier_catalog(supplier_id)
 
-        result = SupplierService.update_seller_products(seller.id, product_ids)
+        try:
+            result = SupplierService.update_supplier_products(
+                seller.id,
+                supplier_id,
+                None if update_all else product_ids,
+            )
+        except ValueError:
+            flash(
+                'Не удалось проверить выбранные карточки. Обновите список и повторите выбор.',
+                'warning',
+            )
+            return _redirect_seller_supplier_catalog(supplier_id)
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception(
+                'Supplier catalog refresh did not commit for seller %s (%s)',
+                seller.id,
+                type(exc).__name__,
+            )
+            flash(
+                'Обновление не сохранено. Обновите страницу и повторите действие.',
+                'danger',
+            )
+            return _redirect_seller_supplier_catalog(supplier_id)
 
+        if update_all and result.total_requested == 0:
+            flash(
+                'У этого поставщика пока нет импортированных карточек',
+                'warning',
+            )
+            return _redirect_seller_supplier_catalog(supplier_id)
         flash(
-            f'Локально обновлено: {result.imported}, ошибок: {result.errors}. '
+            f'Локально обновлено: {result.imported}, пропущено: '
+            f'{result.skipped}, ошибок: {result.errors}. '
             'Карточки WB не менялись; опубликованные товары можно отдельно '
             'обогатить в разделе «Мои товары».',
-            'success' if result.errors == 0 else 'warning'
+            'success' if result.errors == 0 and result.skipped == 0 else 'warning'
         )
 
         return _redirect_seller_supplier_catalog(supplier_id)
@@ -3874,71 +3925,117 @@ def register_supplier_routes(app):
         # истёкшую сессию.
         wants_json = request.is_json
         if wants_json:
-            payload = request.get_json(silent=True) or {}
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                return jsonify({
+                    'success': False,
+                    'error': 'Ожидается объект с выбранными карточками',
+                }), 400
             try:
                 ids = _bulk_product_ids(payload.get('product_ids'))
             except ValueError as exc:
                 return jsonify({'success': False, 'error': str(exc)}), 400
         else:
             raw_ids = request.form.getlist('selected_ids')
-            ids = []
-            for raw in raw_ids:
-                if not raw.isdigit():
-                    flash('Некорректный выбор карточек.', 'warning')
-                    return _redirect_seller_my_products(request.args)
-                ids.append(int(raw))
-            ids = list(dict.fromkeys(ids))
-            if not ids or len(ids) > 200:
+            try:
+                ids = _form_bulk_product_ids(raw_ids)
+            except ValueError:
+                flash('Некорректный выбор карточек.', 'warning')
+                return _redirect_seller_my_products(request.args)
+            if not ids:
                 flash('Выберите от 1 до 200 карточек.', 'warning')
                 return _redirect_seller_my_products(request.args)
 
-        rows = ImportedProduct.query.filter(
-            ImportedProduct.seller_id == seller.id,
-            ImportedProduct.id.in_(ids),
-        ).all()
-        if len(rows) != len(ids):
+        try:
+            result = SupplierService.update_imported_products(seller.id, ids)
+        except ValueError as exc:
             if wants_json:
                 return jsonify({
                     'success': False,
-                    'error': 'Часть выбранных карточек недоступна — обновите список',
+                    'error': str(exc),
                 }), 400
             flash(
-                'Часть выбранных карточек недоступна. Обновите список.',
+                'Не удалось проверить выбранные карточки. Обновите список.',
                 'warning',
             )
             return _redirect_seller_my_products(request.args)
-
-        supplier_product_ids = [
-            row.supplier_product_id for row in rows if row.supplier_product_id
-        ]
-        skipped = len(rows) - len(supplier_product_ids)
-        refreshed = 0
-        if supplier_product_ids:
-            result = SupplierService.update_seller_products(
-                seller.id, supplier_product_ids,
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception(
+                'Supplier refresh did not commit for seller %s (%s)',
+                seller.id,
+                type(exc).__name__,
             )
-            refreshed = result.imported
+            if wants_json:
+                return jsonify({
+                    'success': False,
+                    'error': 'Обновление не сохранено. Повторите действие позже.',
+                }), 500
+            flash(
+                'Обновление не сохранено. Повторите действие позже.',
+                'danger',
+            )
+            return _redirect_seller_my_products(request.args)
+
+        refreshed = result.imported
+        skipped = result.skipped
+        errors = result.errors
 
         # Опубликованные на WB карточки из выбора — кандидаты на
-        # дообогащение характеристик отдельным подтверждаемым экраном
-        wb_product_ids = [
-            row.product_id for row in rows
-            if row.import_status == 'imported' and row.product_id
+        # дообогащение характеристик отдельным подтверждаемым экраном. Перед
+        # передачей читаем их заново, и только для успешно обновлённых exact IDs.
+        updated_ids = [
+            item['product_id'] for item in result.item_results
+            if item['status'] == 'updated'
         ]
+        wb_product_by_imported_id = {}
+        if updated_ids:
+            owned_wb_rows = db.session.query(
+                ImportedProduct.id,
+                Product.id,
+            ).join(
+                Product, Product.id == ImportedProduct.product_id,
+            ).filter(
+                ImportedProduct.seller_id == seller.id,
+                ImportedProduct.id.in_(updated_ids),
+                ImportedProduct.import_status == 'imported',
+                Product.seller_id == seller.id,
+                Product.nm_id > 0,
+            ).all()
+            wb_product_by_imported_id = {
+                imported_id: product_id
+                for imported_id, product_id in owned_wb_rows
+            }
+        wb_product_ids = []
+        seen_wb_product_ids = set()
+        for imported_id in updated_ids:
+            product_id = wb_product_by_imported_id.get(imported_id)
+            if product_id and product_id not in seen_wb_product_ids:
+                wb_product_ids.append(product_id)
+                seen_wb_product_ids.add(product_id)
         session['supplier_update_wb_ids'] = wb_product_ids[:200]
 
         message = f'Обновлено локальных карточек: {refreshed}.'
         if skipped:
             message += f' Без связи с каталогом поставщика: {skipped}.'
+        if errors:
+            message += f' Не удалось обновить: {errors}.'
         if wants_json:
             return jsonify({
                 'success': True,
+                'status': (
+                    'completed_with_errors' if errors
+                    else 'completed'
+                ),
+                'requested': result.total_requested,
                 'updated': refreshed,
                 'skipped': skipped,
+                'errors': errors,
+                'items': result.item_results,
                 'message': message,
                 'wb_ready': len(wb_product_ids),
             })
-        flash(message, 'success')
+        flash(message, 'warning' if errors else 'success')
         return _redirect_seller_my_products(
             request.args,
             refreshed=refreshed,

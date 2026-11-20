@@ -39,7 +39,9 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
         cls.db = db
 
     def setUp(self):
-        from models import ImportedProduct, Seller, Supplier, User
+        from models import (
+            ImportedProduct, Seller, SellerSupplier, Supplier, User,
+        )
         self.ctx = self.app.app_context()
         self.ctx.push()
         self.db.create_all()
@@ -58,6 +60,11 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
         supplier = Supplier(name='Опт', code='opt')
         self.db.session.add_all([seller, other_seller, supplier])
         self.db.session.flush()
+        self.db.session.add(SellerSupplier(
+            seller_id=seller.id,
+            supplier_id=supplier.id,
+            is_active=True,
+        ))
 
         own = [
             ImportedProduct(
@@ -109,13 +116,19 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
     def test_update_all_collects_only_own_products(self):
         captured = {}
 
-        def _fake_update(seller_id, product_ids):
+        def _fake_update(seller_id, supplier_id, source_ids):
             captured['seller_id'] = seller_id
-            captured['product_ids'] = sorted(product_ids)
-            return SimpleNamespace(imported=len(product_ids), errors=0)
+            captured['supplier_id'] = supplier_id
+            captured['source_ids'] = source_ids
+            return SimpleNamespace(
+                total_requested=len(self.own_ids),
+                imported=len(self.own_ids),
+                skipped=0,
+                errors=0,
+            )
 
         with patch(
-            'services.supplier_service.SupplierService.update_seller_products',
+            'services.supplier_service.SupplierService.update_supplier_products',
             side_effect=_fake_update,
         ):
             response = self._post({
@@ -125,12 +138,14 @@ class SupplierCatalogUpdateAllTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(captured['seller_id'], self.seller_id)
-        self.assertEqual(captured['product_ids'], self.own_ids)
-        self.assertNotIn(self.foreign_id, captured['product_ids'])
+        self.assertEqual(captured['supplier_id'], self.supplier_id)
+        self.assertIsNone(captured['source_ids'])
+        self.assertEqual(len(self.own_ids), 3)
+        self.assertNotIn(self.foreign_id, self.own_ids)
 
     def test_without_flag_and_ids_nothing_is_updated(self):
         with patch(
-            'services.supplier_service.SupplierService.update_seller_products',
+            'services.supplier_service.SupplierService.update_supplier_products',
         ) as updater:
             response = self._post({'supplier_id': str(self.supplier_id)})
         self.assertEqual(response.status_code, 302)

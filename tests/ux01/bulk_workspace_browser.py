@@ -18,6 +18,7 @@ from models import ImportedProduct, Product, Seller, SupplierProduct, db
 
 OUTPUT = Path(os.environ.get("BULK_WORKSPACE_ARTIFACTS", "/artifacts/bulk-workspace"))
 MAIN_TITLE = "Карточка WB с обновлением поставщика"
+REFRESHED_TITLE = "Обновлённое название из каталога поставщика"
 MANUAL_TITLE = "Внутренний товар без поставщика"
 LOCAL_REFRESH = "/my-products/refresh-from-supplier"
 LOCAL_OZON_PREPARE = "/marketplaces/ozon/uploads/"
@@ -30,12 +31,13 @@ def seed_bulk_selection():
         seller_id = fixture.FIXTURE["seller_id"]
         seller = db.session.get(Seller, seller_id)
         seller.wb_api_key = "synthetic-wb-key-for-bulk-workspace-only"
-        wb_product = Product(seller_id=seller_id, nm_id=4419901, vendor_code="BULK-WB-001",
+        wb_product = Product(id=4419902, seller_id=seller_id, nm_id=4419901, vendor_code="BULK-WB-001",
                              title=MAIN_TITLE, is_active=True, wb_price=600)
         db.session.add(wb_product)
         db.session.flush()
         supplier_item = db.session.get(SupplierProduct, fixture.FIXTURE["supplier_product_id"])
         supplier_item.content_revision = 2
+        supplier_item.title = REFRESHED_TITLE
         original = db.session.get(ImportedProduct, fixture.FIXTURE["source_id"])
         original.title = MAIN_TITLE
         original.product_id = wb_product.id
@@ -52,7 +54,9 @@ def seed_bulk_selection():
                                      supplier_status="in_stock", status="ready")
         db.session.add_all([manual, new_source])
         db.session.commit()
-        return {"wb_id": wb_product.id, "manual_id": manual.id, "import_id": new_source.id,
+        assert wb_product.id != original.id
+        return {"wb_id": wb_product.id, "local_id": original.id,
+                "manual_id": manual.id, "import_id": new_source.id,
                 "refresh_source_id": supplier_item.id}
 
 
@@ -62,9 +66,9 @@ def verify_bounds(page):
     assert dimensions["scroll"] <= dimensions["viewport"] + 1, dimensions
 
 
-def open_products(page):
+def open_products(page, title=MAIN_TITLE):
     fixture.wait_document(page, "bulk_workspace", "/my-products/beta")
-    page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").wait_for()
+    page.get_by_role("checkbox", name=f"Выбрать {title}").wait_for()
 
 
 def pick_action(page, name):
@@ -81,8 +85,11 @@ def run():
     layouts = []
     posts = []
     errors = []
+    refresh_response_override = None
+    refresh_response_status = 200
 
     def bridge(route):
+        nonlocal refresh_response_override, refresh_response_status
         request = route.request
         parsed = urlsplit(request.url)
         if parsed.netloc == urlsplit(fixture.BASE).netloc and request.method == "POST":
@@ -93,7 +100,15 @@ def run():
             else:
                 values = request.post_data_json
             posts.append({"path": parsed.path, "body": values})
-            route.fulfill(response=route.fetch(max_redirects=0))
+            if parsed.path == LOCAL_REFRESH and refresh_response_override is not None:
+                response_body = refresh_response_override
+                response_status = refresh_response_status
+                refresh_response_override = None
+                refresh_response_status = 200
+                route.fulfill(status=response_status, content_type="application/json",
+                              body=json.dumps(response_body))
+            else:
+                route.fulfill(response=route.fetch(max_redirects=0))
             return
         fixture.bridge(route)
 
@@ -189,10 +204,18 @@ def run():
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
         pick_action(page, "Обновить из поставщика")
         page.get_by_role("button", name="Обновить", exact=True).click()
-        page.get_by_text("Обновлено локальных карточек: 0.", exact=False).wait_for()
+        page.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
         assert posts == [{"path": LOCAL_REFRESH,
                           "body": {"product_ids": [fixture_ids["manual_id"]]}}], posts
         checks.append("ordinary_local_refresh_reports_zero_and_exact_selection")
+        refresh_result = page.locator(".mp-refresh-result")
+        refresh_result.wait_for()
+        assert refresh_result.get_by_role("heading", name="Нет карточек для обновления").count() == 1
+        refresh_result.get_by_text("Карточки и итог (1)").click()
+        refresh_result.get_by_text(MANUAL_TITLE, exact=False).wait_for()
+        refresh_result.get_by_text("Нет связи с каталогом поставщика. Данные не менялись.").wait_for()
+        assert page.locator(".shk-job").count() == 0
+        checks.append("supplier_refresh_skip_has_exact_named_reason_without_generic_job")
 
         open_products(page)
         page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
@@ -250,6 +273,147 @@ def run():
             assert db.session.get(ImportedProduct, fixture.FIXTURE["source_id"]).supplier_content_revision == 1
         checks.append("ordinary_supplier_import_saves_only_its_selected_source")
         assert len(posts) == 4 and not errors, errors
+
+        # A real local refresh uses the same fixture's linked supplier row plus
+        # an unlinked row, so the browser sees both an update and an exact skip.
+        open_products(page)
+        page.get_by_role("checkbox", name=f"Выбрать {MAIN_TITLE}").check()
+        page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        pick_action(page, "Обновить из поставщика")
+        with page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
+                                  and response.request.method == "POST") as mixed_refresh:
+            page.get_by_role("button", name="Обновить", exact=True).click()
+        assert mixed_refresh.value.status == 200
+        mixed_data = mixed_refresh.value.json()
+        assert (mixed_data["requested"], mixed_data["updated"], mixed_data["skipped"],
+                mixed_data["errors"]) == (2, 1, 1, 0), mixed_data
+        assert [entry["status"] for entry in mixed_data["items"]].count("updated") == 1
+        assert [entry["status"] for entry in mixed_data["items"]].count("skipped") == 1
+        mixed_result = page.locator(".mp-refresh-result")
+        mixed_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
+        mixed_result.get_by_text("Карточки и итог (2)").click()
+        mixed_result.get_by_text(MAIN_TITLE, exact=False).wait_for()
+        mixed_result.get_by_text("Данные поставщика сохранены в Seller Hub.").wait_for()
+        mixed_result.get_by_text("Нет связи с каталогом поставщика. Данные не менялись.").wait_for()
+        with fixture.app.app_context():
+            persisted = db.session.get(ImportedProduct, fixture_ids["local_id"])
+            assert persisted.title == REFRESHED_TITLE and persisted.supplier_content_revision == 2
+            assert db.session.get(Product, fixture_ids["wb_id"]).title == MAIN_TITLE
+        checks.append("supplier_refresh_mixed_local_update_and_skip_are_named")
+
+        page.set_viewport_size({"width": 320, "height": 900})
+        verify_bounds(page)
+        assert page.locator(".main-content").evaluate(
+            "(element) => getComputedStyle(element).marginLeft"
+        ) == "0px"
+        assert mixed_result.is_visible()
+        checks.append("seller_workspace_resize_releases_desktop_sidebar_space_immediately")
+
+
+        # Start a separate mobile browser context at 320px. Do not resize a
+        # desktop page across the shared sidebar breakpoint for this check.
+        mobile_context = browser.new_context(viewport={"width": 320, "height": 900})
+        mobile_context.add_init_script("localStorage.setItem('sh-theme', 'dark');")
+        mobile_context.add_cookies([fixture.synthetic_login_cookie()])
+        mobile_context.route("**/*", bridge)
+        mobile_page = mobile_context.new_page()
+        mobile_page.on("pageerror", lambda error: errors.append(str(error)))
+        open_products(mobile_page, REFRESHED_TITLE)
+        verify_bounds(mobile_page)
+
+        # Exercise a row-level local error using a fixed terminal API response;
+        # this tests presentation only and does not call a provider.
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {REFRESHED_TITLE}").check()
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        refresh_response_override = {
+            "success": True,
+            "status": "completed_with_errors",
+            "requested": 2,
+            "updated": 1,
+            "skipped": 0,
+            "errors": 1,
+            "items": [
+                {"product_id": fixture_ids["manual_id"], "status": "error", "reason": "update_failed"},
+                {"product_id": fixture_ids["local_id"], "status": "updated", "reason": None},
+            ],
+        }
+        pick_action(mobile_page, "Обновить из поставщика")
+        with mobile_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
+                                         and response.request.method == "POST") as partial_refresh:
+            mobile_page.get_by_role("button", name="Обновить", exact=True).click()
+        assert partial_refresh.value.status == 200
+        assert posts[-1] == {"path": LOCAL_REFRESH,
+                             "body": {"product_ids": [fixture_ids["local_id"], fixture_ids["manual_id"]]}}
+        partial_result = mobile_page.locator(".mp-refresh-result")
+        partial_result.get_by_role("heading", name="Обновление завершено с ошибками").wait_for()
+        partial_result.get_by_text("В запросе товаров: 2.", exact=False).wait_for()
+        assert [value.strip() for value in partial_result.locator(
+            ".mp-refresh-result-counts dd"
+        ).all_text_contents()] == ["1", "0", "1"]
+        partial_result.get_by_text("Карточки и итог (2)").click()
+        error_row = partial_result.locator(".mp-refresh-result-item.is-danger")
+        error_row.get_by_text(MANUAL_TITLE, exact=False).wait_for()
+        error_row.get_by_text("Не удалось сохранить данные. Откройте карточку и проверьте её.").wait_for()
+        assert error_row.get_by_role("link", name="Открыть карточку").count() == 1
+        updated_row = partial_result.locator(".mp-refresh-result-item.is-ok")
+        updated_row.get_by_text(REFRESHED_TITLE, exact=False).wait_for()
+        assert mobile_page.locator(".shk-job").count() == 0
+        assert mobile_page.get_by_role("button", name="Повторить неудачные").count() == 0
+        verify_bounds(mobile_page)
+        summary = partial_result.locator(".mp-refresh-result-details summary")
+        summary_bounds = summary.bounding_box()
+        close_bounds = partial_result.get_by_role("button", name="Скрыть итог обновления").bounding_box()
+        assert summary_bounds and summary_bounds["height"] >= 44, summary_bounds
+        assert close_bounds and close_bounds["height"] >= 44, close_bounds
+        summary.focus()
+        summary.press("Enter")
+        assert not partial_result.locator("details").evaluate("element => element.open")
+        summary.press("Enter")
+        assert partial_result.locator("details").evaluate("element => element.open")
+        checks.append("supplier_refresh_partial_error_has_owner_link_and_no_retry")
+        checks.append("supplier_refresh_result_fits_320_and_details_are_keyboard_operable")
+
+        # Unknown and rejected requests show the submitted count and refresh
+        # action once, without duplicating a generic row for every selection.
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        refresh_response_override = {
+            "success": True, "status": "completed", "requested": 1,
+            "updated": 1, "skipped": 0, "errors": 0, "items": [],
+        }
+        pick_action(mobile_page, "Обновить из поставщика")
+        with mobile_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
+                                         and response.request.method == "POST"):
+            mobile_page.get_by_role("button", name="Обновить", exact=True).click()
+        assert posts[-1] == {"path": LOCAL_REFRESH,
+                             "body": {"product_ids": [fixture_ids["manual_id"]]}}
+        unknown_result = mobile_page.locator(".mp-refresh-result")
+        unknown_result.get_by_role("heading", name="Итог обновления не подтверждён").wait_for()
+        unknown_result.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
+        assert unknown_result.locator(".mp-refresh-result-details").count() == 0
+        assert unknown_result.get_by_role("button", name="Обновить список").count() == 1
+        assert unknown_result.get_by_text(MANUAL_TITLE, exact=False).count() == 0
+        checks.append("supplier_refresh_unknown_result_has_count_and_one_refresh_action")
+
+        mobile_page.get_by_role("checkbox", name=f"Выбрать {MANUAL_TITLE}").check()
+        refresh_response_override = {"success": False, "error": "synthetic rejection"}
+        refresh_response_status = 422
+        pick_action(mobile_page, "Обновить из поставщика")
+        with mobile_page.expect_response(lambda response: urlsplit(response.url).path == LOCAL_REFRESH
+                                         and response.request.method == "POST") as rejected_refresh:
+            mobile_page.get_by_role("button", name="Обновить", exact=True).click()
+        assert rejected_refresh.value.status == 422
+        assert posts[-1] == {"path": LOCAL_REFRESH,
+                             "body": {"product_ids": [fixture_ids["manual_id"]]}}
+        rejected_result = mobile_page.locator(".mp-refresh-result")
+        rejected_result.get_by_role("heading", name="Выбранные товары не обновлялись").wait_for()
+        rejected_result.get_by_text("В запросе товаров: 1.", exact=False).wait_for()
+        assert rejected_result.locator(".mp-refresh-result-details").count() == 0
+        assert rejected_result.get_by_role("button", name="Обновить список").count() == 1
+        assert rejected_result.get_by_text(MANUAL_TITLE, exact=False).count() == 0
+        verify_bounds(mobile_page)
+        checks.append("supplier_refresh_rejected_result_has_count_and_one_refresh_action")
+        mobile_context.close()
+
         assert not fixture.REPORT["unexpected_http"] and not fixture.REPORT["unexpected_external_requests"]
         assert fixture.REPORT["provider_attempts"] == 0
         browser.close()

@@ -14,6 +14,7 @@ Pipeline вызывается:
 - При ручном парсинге конкретных товаров через UI
 - При smart-импорте к продавцу (обогащение перед копированием)
 """
+import hashlib
 import json
 import logging
 import re
@@ -23,6 +24,162 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# Price-file values deliberately stay out of the material content revision.
+# They have their own supplier_price/stock cascade to ImportedProduct.
+_MATERIAL_INPUT_FIELDS = (
+    'title', 'description', 'brand', 'category', 'all_categories',
+    'vendor_code', 'barcode', 'barcodes', 'characteristics', 'colors',
+    'materials', 'sizes', 'sizes_raw', 'country', 'gender', 'season',
+    'age_group', 'dimensions', 'photo_urls', 'video_url', 'manufacturer',
+    'model',
+)
+_MATERIAL_PRODUCT_FIELDS = (
+    'title', 'description', 'brand', 'category', 'all_categories',
+    'vendor_code', 'barcode', 'barcodes_json', 'country', 'gender',
+    'season', 'age_group', 'wb_subject_id', 'wb_subject_name',
+    'wb_category_name', 'resolved_brand_id', 'brand_status',
+    'characteristics_json', 'sizes_json', 'colors_json', 'materials_json',
+    'dimensions_json', 'photo_urls_json', 'processed_photos_json',
+    'video_url', 'ai_description', 'ai_marketplace_json',
+    'marketplace_fields_json', 'description_source',
+)
+_JSON_MATERIAL_FIELDS = frozenset({
+    'all_categories', 'barcodes_json', 'characteristics_json', 'sizes_json',
+    'colors_json', 'materials_json', 'dimensions_json', 'photo_urls_json',
+    'processed_photos_json', 'ai_marketplace_json',
+    'marketplace_fields_json',
+})
+
+
+def _material_json_value(value):
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def _material_fingerprint(payload: dict) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+        default=str,
+        allow_nan=False,
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def supplier_material_input_fingerprint(value) -> str:
+    """Fingerprint only normalized upstream product facts, not price/stock.
+
+    ``value`` may be the normalized CSV row or the previous
+    ``original_data_json`` snapshot. Ignoring arbitrary ``raw_extra`` and
+    commercial/availability fields keeps the dedicated price-file cascade
+    independent while tracking the fields that feed seller content and Ozon
+    source facts.
+    """
+    if isinstance(value, str):
+        value = _material_json_value(value)
+    if not isinstance(value, dict):
+        value = {}
+    projected = {}
+    for field_name in _MATERIAL_INPUT_FIELDS:
+        field_value = value.get(field_name)
+        if field_value in (None, '', [], {}):
+            continue
+        projected[field_name] = field_value
+    return _material_fingerprint(projected)
+
+
+def supplier_product_material_fingerprint(product) -> str:
+    """Stable material state used by supplier content revision comparisons."""
+    projected = {}
+    for field_name in _MATERIAL_PRODUCT_FIELDS:
+        value = getattr(product, field_name, None)
+        if field_name in _JSON_MATERIAL_FIELDS:
+            value = _material_json_value(value)
+        if value not in (None, '', [], {}):
+            projected[field_name] = value
+    projected['source_input'] = supplier_material_input_fingerprint(
+        getattr(product, 'original_data_json', None)
+    )
+    return _material_fingerprint(projected)
+
+
+def advance_supplier_content_revisions(revision_targets, products=()) -> int:
+    """Stage atomic revision floors on changed rows without lowering newer ones."""
+    if not isinstance(revision_targets, dict):
+        return 0
+    normalized_targets = {
+        product_id: target
+        for product_id, target in revision_targets.items()
+        if (
+            isinstance(product_id, int)
+            and not isinstance(product_id, bool)
+            and product_id > 0
+            and isinstance(target, int)
+            and not isinstance(target, bool)
+            and target > 0
+        )
+    }
+    if not normalized_targets:
+        return 0
+
+    from sqlalchemy import case
+    from models import SupplierProduct
+
+    products_by_id = {}
+    if isinstance(products, dict):
+        products_by_id = products
+    else:
+        try:
+            products_by_id = {
+                product.id: product for product in products
+                if getattr(product, 'id', None) is not None
+            }
+        except TypeError:
+            products_by_id = {}
+    for product_id in normalized_targets:
+        product = products_by_id.get(product_id)
+        if product is not None:
+            target = normalized_targets[product_id]
+            # SQLAlchemy emits this expression in the row UPDATE, so the
+            # database compares against the revision current at write time.
+            product.content_revision = case(
+                (SupplierProduct.content_revision < target, target),
+                else_=SupplierProduct.content_revision,
+            )
+    return sum(
+        1 for product_id in normalized_targets
+        if products_by_id.get(product_id) is not None
+    )
+
+
+def apply_supplier_revision_baseline(product, baseline) -> None:
+    """Apply one monotonic revision for a final state change from a baseline."""
+    if (
+        not isinstance(baseline, tuple)
+        or len(baseline) != 2
+        or isinstance(baseline[0], bool)
+        or not isinstance(baseline[0], int)
+        or baseline[0] < 1
+        or not isinstance(baseline[1], str)
+    ):
+        return
+    starting_revision, starting_fingerprint = baseline
+    if supplier_product_material_fingerprint(product) == starting_fingerprint:
+        return
+    product_id = getattr(product, 'id', None)
+    if isinstance(product_id, int) and not isinstance(product_id, bool):
+        advance_supplier_content_revisions(
+            {product_id: starting_revision + 1},
+            products={product_id: product},
+        )
 
 
 # ============================================================================
@@ -287,13 +444,25 @@ class SmartProductParser:
 
         return result
 
-    def apply_to_supplier_product(self, product, result: SmartParseResult) -> None:
+    def apply_to_supplier_product(
+        self,
+        product,
+        result: SmartParseResult,
+        *,
+        bump_revision: bool = True,
+    ) -> None:
         """
         Применить результаты SmartParse к SupplierProduct в БД.
 
         Обновляет только те поля, которые были пустые или получили
         более качественные данные (higher confidence).
         """
+        revision_before = getattr(product, 'content_revision', None)
+        material_before = (
+            supplier_product_material_fingerprint(product)
+            if bump_revision else None
+        )
+
         # Brand
         if result.brand_resolved and result.brand_id:
             product.resolved_brand_id = result.brand_id
@@ -360,6 +529,20 @@ class SmartProductParser:
         # Parsing confidence — обновляем readiness score
         product.parsing_confidence = result.readiness_score / 100.0
         product.normalization_applied = True
+
+        if (
+            bump_revision
+            and material_before is not None
+            and supplier_product_material_fingerprint(product) != material_before
+        ):
+            if isinstance(revision_before, bool) or not isinstance(
+                revision_before, int
+            ):
+                revision_before = 1
+            product.content_revision = max(
+                int(getattr(product, 'content_revision', None) or 1),
+                revision_before + 1,
+            )
 
     def _build_characteristics_json(self, product, result: SmartParseResult) -> None:
         """
@@ -446,8 +629,13 @@ class SmartProductParser:
             'product_id': product_id,
         }
 
-    def parse_and_apply_bulk(self, product_ids: List[int],
-                             batch_size: int = 100) -> BulkSmartParseResult:
+    def parse_and_apply_bulk(
+        self,
+        product_ids: List[int],
+        batch_size: int = 100,
+        *,
+        revision_baselines: Optional[Dict[int, Tuple[int, str]]] = None,
+    ) -> BulkSmartParseResult:
         """
         Массовый умный парсинг SupplierProduct.
 
@@ -465,7 +653,16 @@ class SmartProductParser:
         readiness_sum = 0.0
 
         for i, pid in enumerate(product_ids):
+            product = None
+            baseline = (
+                revision_baselines.get(pid)
+                if isinstance(revision_baselines, dict) else None
+            )
             try:
+                # Keep the original just-in-time lookup. BrandEngine may
+                # commit or roll back while resolving an item, which expires
+                # session state; preloading a whole batch would make later
+                # items unexpectedly reload after those boundaries.
                 product = SupplierProduct.query.get(pid)
                 if not product:
                     bulk_result.errors += 1
@@ -474,7 +671,13 @@ class SmartProductParser:
 
                 product_data = product.get_all_data_for_parsing()
                 result = self.parse_product(product_data, existing_product=product)
-                self.apply_to_supplier_product(product, result)
+                self.apply_to_supplier_product(
+                    product,
+                    result,
+                    bump_revision=baseline is None,
+                )
+                if baseline is not None:
+                    apply_supplier_revision_baseline(product, baseline)
                 product.updated_at = datetime.utcnow()
 
                 bulk_result.processed += 1
@@ -486,10 +689,21 @@ class SmartProductParser:
                     bulk_result.category_mapped_count += 1
 
                 # Batch commit
-                if (i + 1) % batch_size == 0:
+                if (i + 1) % max(1, int(batch_size or 1)) == 0:
                     db.session.flush()
 
             except Exception as e:
+                # Raw feed facts are committed before this pass. Even if
+                # enrichment failed partway through, keep their revision
+                # visible and account for any partial content applied.
+                if product is not None and baseline is not None:
+                    try:
+                        apply_supplier_revision_baseline(product, baseline)
+                    except Exception:
+                        logger.warning(
+                            "SmartParse revision fallback failed for product %s",
+                            pid,
+                        )
                 bulk_result.errors += 1
                 bulk_result.error_messages.append(f"ID {pid}: {str(e)[:100]}")
                 if len(bulk_result.error_messages) > 50:

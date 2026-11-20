@@ -422,7 +422,7 @@ class MarketplaceListingService:
             raise MarketplaceCatalogProtocolError(
                 "Ozon product list items must be a bounded list"
             )
-        total = cls._provider_integer(result.get("total"), "product_list.total")
+        total = cls._provider_total_count(result, "product_list")
         last_id = cls._provider_text(
             result.get("last_id", ""),
             "product_list.last_id",
@@ -1137,6 +1137,30 @@ class MarketplaceListingService:
         )
 
     @classmethod
+    def _provider_total_count(cls, source: Mapping[str, Any], field_name: str) -> int:
+        """Normalize Ozon's renamed total field without weakening validation."""
+        has_legacy = "total" in source
+        has_current = "total_items" in source
+        if not has_legacy and not has_current:
+            raise MarketplaceCatalogProtocolError(
+                f"Ozon {field_name} must include total or total_items"
+            )
+
+        legacy = (
+            cls._provider_integer(source["total"], f"{field_name}.total")
+            if has_legacy else None
+        )
+        current = (
+            cls._provider_integer(source["total_items"], f"{field_name}.total_items")
+            if has_current else None
+        )
+        if has_legacy and has_current and legacy != current:
+            raise MarketplaceCatalogProtocolError(
+                f"Ozon {field_name} total fields conflict"
+            )
+        return current if has_current else legacy
+
+    @classmethod
     def _normalize_summary_page(
         cls,
         response: Any,
@@ -1153,7 +1177,7 @@ class MarketplaceListingService:
             raise MarketplaceCatalogProtocolError(
                 f"Ozon {endpoint} page exceeds batch limit"
             )
-        total = cls._provider_integer(response.get("total"), f"{endpoint}.total")
+        total = cls._provider_total_count(response, endpoint)
         cursor = cls._provider_text(
             response.get("cursor", ""),
             f"{endpoint}.cursor",

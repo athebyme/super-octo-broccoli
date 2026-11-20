@@ -176,6 +176,28 @@ class OzonPriceContract(_Contract):
     MAX_BATCH = 100
 
     @classmethod
+    def response_total(cls, response: Mapping[str, Any]) -> int:
+        """Accept either documented Ozon total name and reject ambiguity."""
+        has_legacy = "total" in response
+        has_current = "total_items" in response
+        if not has_legacy and not has_current:
+            raise OzonCommercialProtocolError(
+                "total or total_items must be present"
+            )
+
+        legacy = (
+            cls.integer(response["total"], "total", maximum=100_000_000)
+            if has_legacy else None
+        )
+        current = (
+            cls.integer(response["total_items"], "total_items", maximum=100_000_000)
+            if has_current else None
+        )
+        if has_legacy and has_current and legacy != current:
+            raise OzonCommercialProtocolError("total and total_items conflict")
+        return current if has_current else legacy
+
+    @classmethod
     def whole_rub_price(cls, value: Any) -> str:
         """Local write policy; observed/read amounts retain their precision."""
         normalized = cls.money(value, "price")
@@ -228,7 +250,7 @@ class OzonPriceContract(_Contract):
         raw_items = response["items"]
         if len(raw_items) > 1000:
             raise OzonCommercialProtocolError("Ozon price read page is too large")
-        total = cls.integer(response.get("total"), "total", maximum=100_000_000)
+        total = cls.response_total(response)
         cursor_raw = response.get("cursor")
         cursor = "" if cursor_raw in (None, "") else cls.text(
             cursor_raw, "cursor", maximum=2000
