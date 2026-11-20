@@ -144,7 +144,7 @@ global.mcatShared={imageDeadline:{}};
  assert.equal(empty.hasCoverageForView,false);
  assert.equal(empty.resultsLabel,'Сохранённые данные');
  assert.equal(empty.emptyTitle,'Полная загрузка за выбранные даты не подтверждена');
- assert.ok(empty.emptyDescription.includes('отсутствие записей'));
+ assert.ok(empty.emptyDescription.includes('Загрузите данные из Ozon'));
  assert.ok(!empty.resultsLabel.includes('0'));
  emptyOptions.beforeUnmount.call(empty);
 })().then(()=>console.log('SCENARIO_COMPLETED')).catch(e=>{console.error(e);process.exitCode=1;});

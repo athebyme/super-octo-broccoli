@@ -942,33 +942,38 @@ def assert_bulk_editor_mobile_footer(
 def assert_bulk_schema_load_races(page) -> dict[str, object]:
     """Drive deferred responses through the rendered Alpine bulk editor method."""
     page.wait_for_function("""() => {
-        const form = document.querySelector('form[action="/products/bulk-edit"]');
-        return !!window.Alpine?.$data && !!form;
+        return !!window.Alpine?.reactive
+            && typeof window.bulkEditFormData === 'function';
     }""", timeout=5000)
     return page.evaluate("""async () => {
-        const form = document.querySelector('form[action="/products/bulk-edit"]');
-        const state = window.Alpine.$data(form);
-        const stateKeys = [
-            'operation', 'categories', 'selectedCategory', 'showCategorySelector',
-            'characteristics', 'commonCharacteristics', 'characteristicsByCategory',
-            'characteristicsLoadGeneration', 'selectedChar', 'selectedCharId',
-            'charValue', 'charValueAdd', 'selectedValues', 'selectedValuesAdd',
-            'loading', 'loadError', 'products', 'pendingChanges', 'addingCharId',
-            'addingChar', 'addingValue', 'addingSelectedValues',
-        ];
-        const originalState = Object.fromEntries(stateKeys.map(key => [key, state[key]]));
+        const source = window.bulkEditFormData();
+        const originalLoader = source.loadCharacteristics;
+        const state = window.Alpine.reactive(source);
         const originalFetch = window.fetch;
-        const originalLoader = state.loadCharacteristics;
         const requests = [];
         const loads = [];
+        const schemaPath = '/api/characteristics/multi-category';
         state.loadCharacteristics = function (...args) {
             const promise = originalLoader.apply(this, args);
             loads.push(promise);
             return promise;
         };
-        window.fetch = (url, init) => new Promise((resolve, reject) => {
-            requests.push({url: String(url), init, resolve, reject});
-        });
+        window.fetch = (url, init) => {
+            const requestUrl = new URL(
+                typeof url === 'string' ? url : url.url,
+                window.location.href,
+            );
+            if (
+                requestUrl.origin !== window.location.origin
+                || requestUrl.pathname !== schemaPath
+                || String(init?.method || 'GET').toUpperCase() !== 'POST'
+            ) {
+                return originalFetch.call(window, url, init);
+            }
+            return new Promise(resolve => {
+                requests.push({url: requestUrl.href, init, resolve});
+            });
+        };
         state.categories = [
             {subject_id: 100, name: 'Subject A'},
             {subject_id: 200, name: 'Subject B'},
@@ -1106,8 +1111,6 @@ def assert_bulk_schema_load_races(page) -> dict[str, object]:
             };
         } finally {
             window.fetch = originalFetch;
-            state.loadCharacteristics = originalLoader;
-            for (const key of stateKeys) state[key] = originalState[key];
         }
     }""")
 
