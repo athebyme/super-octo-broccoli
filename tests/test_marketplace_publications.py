@@ -41,6 +41,7 @@ from services.image_lab_service import ImageLabError
 from services.marketplace_publications import (
     MarketplacePublicationNotFound,
     MarketplacePublicationService,
+    MarketplacePublicationValidationError,
 )
 from services.ozon_api_client import (
     OzonAPIError,
@@ -79,12 +80,14 @@ class SyntheticPublicationAdapter:
         preflight_error=False,
         status="imported",
         cursor_on_exact=False,
+        credentials=SYNTHETIC_CREDENTIALS,
     ):
         self.offer_exists = offer_exists
         self.ambiguous = ambiguous
         self.preflight_error = preflight_error
         self.status = status
         self.cursor_on_exact = cursor_on_exact
+        self.credentials = credentials
         self.archived = False
         self.list_calls = []
         self.submitted_payloads = []
@@ -97,7 +100,7 @@ class SyntheticPublicationAdapter:
             raise AssertionError(f"missing capability {capability}")
 
     def list_products(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.list_calls.append(payload)
         if self.preflight_error:
             raise OzonAPIError(
@@ -127,7 +130,7 @@ class SyntheticPublicationAdapter:
         }
 
     def get_operation_limits(self, credentials):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         return {
             "operation_limits": [{
                 "operation": "product_create",
@@ -139,7 +142,7 @@ class SyntheticPublicationAdapter:
         }
 
     def submit_products(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.submitted_payloads.append(payload)
         if self.ambiguous:
             self.offer_exists = True
@@ -152,7 +155,7 @@ class SyntheticPublicationAdapter:
         return {"result": {"task_id": 456}}
 
     def get_submission(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.status_calls.append(payload)
         errors = []
         product_id = 987654 if self.status == "imported" else 0
@@ -215,10 +218,12 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         *,
         create_mode=False,
         cursor_on_exact=False,
+        credentials=SYNTHETIC_CREDENTIALS,
     ):
         super().__init__(
             offer_exists=not create_mode,
             cursor_on_exact=cursor_on_exact,
+            credentials=credentials,
         )
         self.live_payload = deepcopy(live_payload)
         self.archived = False
@@ -232,7 +237,7 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         return self.live_payload["items"][0]
 
     def list_products(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.list_calls.append(payload)
         visibility = payload["filter"]["visibility"]
         visible = self.live_payload is not None and (
@@ -253,7 +258,7 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         }
 
     def get_operation_limits(self, credentials):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         return {
             "operation_limits": [{
                 "operation": "product_update" if self.live_payload else "product_create",
@@ -264,13 +269,13 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         }
 
     def submit_products(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.submitted_payloads.append(deepcopy(payload))
         self.pending_payload = deepcopy(payload)
         return {"result": {"task_id": 456}}
 
     def get_submission(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.status_calls.append(payload)
         if self.pending_payload is not None:
             self.live_payload = self.pending_payload
@@ -290,7 +295,7 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         }
 
     def get_products(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.full_read_calls.append(("info", deepcopy(payload)))
         item = self._item()
         media = self._media(item)
@@ -311,7 +316,7 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         }]}
 
     def get_product_attributes(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.full_read_calls.append(("attributes", deepcopy(payload)))
         item = self._item()
         return {
@@ -338,7 +343,7 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         }
 
     def read_prices(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.full_read_calls.append(("prices", deepcopy(payload)))
         item = self._item()
         price = {
@@ -362,7 +367,7 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         }
 
     def get_product_pictures(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.full_read_calls.append(("pictures", deepcopy(payload)))
         media = self._media(self._item())
         return {"items": [{
@@ -374,7 +379,7 @@ class SyntheticFullStateAdapter(SyntheticPublicationAdapter):
         }]}
 
     def archive_products(self, credentials, payload):
-        assert credentials == SYNTHETIC_CREDENTIALS
+        assert credentials == self.credentials
         self.archive_calls.append(deepcopy(payload))
         self.archived = True
         return {"result": True}
@@ -584,7 +589,13 @@ class OzonPublicationFixture:
             result["update_baseline"] = baseline
         return result
 
-    def start(self, adapter, *, key="publication-key-0001"):
+    def start(
+        self,
+        adapter,
+        *,
+        key="publication-key-0001",
+        credentials=SYNTHETIC_CREDENTIALS,
+    ):
         with patch.object(
             MarketplaceDraftService,
             "_build_validation_result",
@@ -597,7 +608,7 @@ class OzonPublicationFixture:
                 idempotency_key=key,
                 created_by_user_id=self.user.id,
                 adapter=adapter,
-                credentials=SYNTHETIC_CREDENTIALS,
+                credentials=credentials,
             )
 
     def desired_payload(self):
@@ -3489,6 +3500,55 @@ class OzonBulkUploadRoutesTest(OzonPublicationFixture, unittest.TestCase):
 
 
 class MarketplacePublicationServiceTest(OzonPublicationFixture, unittest.TestCase):
+    def test_injected_foreign_or_missing_account_id_rejects_before_operation(self):
+        for index, external_account_id in enumerate(("", "another-client")):
+            credentials = MarketplaceCredentials(
+                external_account_id=external_account_id,
+                api_key=f"ram-only-test-key-{index}",
+            )
+            adapter = SyntheticPublicationAdapter(credentials=credentials)
+            with self.subTest(external_account_id=external_account_id):
+                with self.assertRaises(MarketplacePublicationValidationError):
+                    self.start(
+                        adapter,
+                        key=f"publication-account-scope-{index:02d}",
+                        credentials=credentials,
+                    )
+
+                self.assertEqual(MarketplaceOperation.query.count(), 0)
+                self.assertEqual(adapter.list_calls, [])
+                self.assertEqual(adapter.submitted_payloads, [])
+
+    def test_same_account_ram_key_can_publish_without_replacing_saved_key(self):
+        saved_envelope = "unchanged-stored-production-envelope"
+        saved_updated_at = datetime(2026, 11, 19, 12, 0, 0)
+        self.account._credentials_encrypted = saved_envelope
+        self.account.credential_version = 7
+        self.account.credentials_updated_at = saved_updated_at
+        db.session.commit()
+        saved_account_version = self.account.version
+
+        ram_credentials = MarketplaceCredentials(
+            external_account_id=self.account.external_account_id,
+            api_key="different-ram-only-test-key",
+        )
+        adapter = SyntheticPublicationAdapter(credentials=ram_credentials)
+        operation = self.start(
+            adapter,
+            key="publication-same-account-ram-key",
+            credentials=ram_credentials,
+        )
+
+        self.assertEqual(operation.status, "submitted")
+        self.assertEqual(operation.attempt_count, 1)
+        self.assertEqual(len(adapter.submitted_payloads), 1)
+        db.session.expire(self.account)
+        self.assertEqual(self.account.external_account_id, "synthetic-client")
+        self.assertEqual(self.account._credentials_encrypted, saved_envelope)
+        self.assertEqual(self.account.credential_version, 7)
+        self.assertEqual(self.account.credentials_updated_at, saved_updated_at)
+        self.assertEqual(self.account.version, saved_account_version)
+
     def test_product_write_freezes_media_before_any_ozon_call(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

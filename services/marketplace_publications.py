@@ -505,6 +505,10 @@ class MarketplacePublicationService:
                 raise MarketplacePublicationValidationError(
                     "adapter and credentials must be injected together"
                 )
+            if credentials.external_account_id != account.external_account_id:
+                raise MarketplacePublicationValidationError(
+                    "Injected Ozon credentials do not match the selected account"
+                )
             resolved_adapter = adapter
             resolved_credentials = credentials
         else:
