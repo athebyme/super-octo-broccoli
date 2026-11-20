@@ -1669,7 +1669,7 @@ class MarketplacePublicationService:
         if operation is None or operation.operation_kind not in {
             "product_update", "product_update_rollback",
         }:
-            return conflict("Для операции нет full-state update rollback")
+            return conflict("Для операции нет доступного отката полного обновления")
 
         parent = (
             operation if operation.operation_kind == "product_update"
@@ -1682,12 +1682,12 @@ class MarketplacePublicationService:
             or parent.draft is None
             or parent.listing is None
         ):
-            return conflict("Rollback snapshot или точная карточка отсутствует")
+            return conflict("Не найден снимок отката или точная карточка Ozon")
 
         try:
             rollback_state = json.loads(parent.snapshot.rollback_state_json or "")
             if not isinstance(rollback_state, dict):
-                return conflict("Rollback snapshot повреждён")
+                return conflict("Снимок отката повреждён")
             stored_payload = rollback_state.get("payload")
             parent_summary = cls._operation_summary(parent)
             if payload is None:
@@ -1702,13 +1702,13 @@ class MarketplacePublicationService:
                     stored_payload
                 ):
                     return conflict(
-                        "Rollback payload отличается от exact prior-state snapshot"
+                        "Сохранённое состояние отката отличается от исходного снимка"
                     )
         except (
             MarketplacePublicationError, OzonProductStateError,
             OzonProductImportPayloadError, TypeError, ValueError,
         ):
-            return conflict("Rollback snapshot, identity или payload повреждены")
+            return conflict("Снимок или данные для отката повреждены")
 
         draft = parent.draft
         listing = parent.listing
@@ -1745,7 +1745,7 @@ class MarketplacePublicationService:
             or listing.marketplace_id != parent.marketplace_id
             or listing.id != parent_summary.get("listing_id")
         ):
-            return conflict("Rollback identity карточки или типа изменилась")
+            return conflict("Идентификаторы карточки или типа товара изменились")
 
         with db.session.no_autoflush:
             product_type = db.session.query(MarketplaceProductType).options(
@@ -1755,7 +1755,7 @@ class MarketplacePublicationService:
                 id=expected_type_id,
             ).first()
             if product_type is None:
-                return conflict("Точный Ozon product type больше не доступен")
+                return conflict("Точный тип товара Ozon больше не доступен")
 
             category = product_type.category
             marketplace = product_type.marketplace
@@ -1772,16 +1772,16 @@ class MarketplacePublicationService:
                 != category.external_category_id
             ):
                 return conflict(
-                    "Текущая Ozon schema больше не совпадает с точным type/category "
-                    "сохранённого rollback"
+                    "Текущая схема Ozon не совпадает с категорией и типом товара "
+                    "в сохранённом откате"
                 )
             if not OzonReferenceService.reference_is_fresh(
                 product_type,
                 now=now,
             ):
                 return conflict(
-                    "Актуальная Ozon schema устарела; синхронизируйте category/type "
-                    "и schema перед rollback"
+                    "Схема Ozon устарела; обновите категории, тип и характеристики "
+                    "перед откатом"
                 )
 
             try:
@@ -1800,7 +1800,7 @@ class MarketplacePublicationService:
                 KeyError, TypeError, ValueError,
             ):
                 return conflict(
-                    "Rollback payload невозможно проверить по текущей Ozon schema"
+                    "Не удалось проверить данные отката по текущей схеме Ozon"
                 )
 
         if errors:
@@ -1813,8 +1813,8 @@ class MarketplacePublicationService:
                 if isinstance(error, dict)
             ]
             return conflict(
-                "Сохранённое rollback-состояние не проходит текущую official "
-                "Ozon schema; проверьте обязательные поля и справочники",
+                "Сохранённый снимок не соответствует требованиям текущей схемы Ozon. "
+                "Проверьте обязательные характеристики и справочники.",
                 bounded_errors,
             )
         return {"valid": True, "code": None, "message": None, "errors": []}
